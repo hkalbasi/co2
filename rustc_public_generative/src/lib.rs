@@ -29,19 +29,17 @@ use rustc_abi::ExternAbi;
 use rustc_ast::{IntTy, UintTy};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
-use rustc_data_structures::stable_hasher::StableHasher;
 use rustc_data_structures::steal::Steal;
-use rustc_hashes::Hash64;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{DefId, LocalDefId, LocalDefIdMap, StableCrateId, CRATE_DEF_ID};
+use rustc_hir::def_id::{DefId, LocalDefId, LocalDefIdMap, CRATE_DEF_ID};
 use rustc_hir::definitions::{DefPathData, Definitions, DisambiguatorState};
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
 use rustc_index::{Idx, IndexVec};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::BorrowKind;
 use rustc_middle::query::Providers as QueryProviders;
-use rustc_middle::ty::{self, AssocKind, TyCtxt};
+use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::util::Providers as UtilProviders;
 use rustc_session::config::EntryFnType;
 use rustc_span::symbol::{Ident, Symbol};
@@ -136,24 +134,6 @@ pub struct DependencyInfo {
     pub crates: Vec<DependencyCrate>,
     pub functions: Vec<DependencyFunction>,
     pub types: Vec<DependencyType>,
-    pub std_env_args: Option<FunctionId>,
-    pub std_env_args_def: Option<rustc_public::ty::FnDef>,
-    pub iter_nth: Option<FunctionId>,
-    pub iter_nth_def: Option<rustc_public::ty::FnDef>,
-    pub option_unwrap: Option<FunctionId>,
-    pub option_unwrap_def: Option<rustc_public::ty::FnDef>,
-    pub result_unwrap: Option<FunctionId>,
-    pub result_unwrap_def: Option<rustc_public::ty::FnDef>,
-    pub cstring_new: Option<FunctionId>,
-    pub cstring_new_def: Option<rustc_public::ty::FnDef>,
-    pub cstring_into_raw: Option<FunctionId>,
-    pub cstring_into_raw_def: Option<rustc_public::ty::FnDef>,
-    pub std_env_args_ty: Option<AdtDef>,
-    pub string_ty: Option<AdtDef>,
-    pub cstring_ty: Option<AdtDef>,
-    pub nul_error_ty: Option<AdtDef>,
-    pub option_ty: Option<AdtDef>,
-    pub result_ty: Option<AdtDef>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +157,7 @@ pub struct DependencyFunction {
     pub path: String,
     pub def_path_hash_hi: u64,
     pub def_path_hash_lo: u64,
+    pub fn_def: Option<rustc_public::ty::FnDef>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,8 +316,6 @@ struct GenerateGate {
 #[derive(Copy, Clone)]
 struct OriginalProviders {
     hir_crate: for<'tcx> fn(TyCtxt<'tcx>, ()) -> hir::Crate<'tcx>,
-    opt_hir_owner_nodes:
-        for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Option<&'tcx hir::OwnerNodes<'tcx>>,
     hir_owner_parent_q: for<'tcx> fn(TyCtxt<'tcx>, OwnerId) -> HirId,
     entry_fn: for<'tcx> fn(TyCtxt<'tcx>, ()) -> Option<(DefId, EntryFnType)>,
     def_kind: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> DefKind,
@@ -544,258 +523,54 @@ fn collect_dependency_info<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>) -> Depende
         id
     };
 
-    let mut register = |id: FunctionId, path: &str, hash: rustc_span::def_id::DefPathHash| {
-        let (hi, lo): (u64, u64) =
-            unsafe { std::mem::transmute::<Fingerprint, (u64, u64)>(hash.0) };
-        info.functions.push(DependencyFunction {
-            id,
-            path: path.to_string(),
-            def_path_hash_hi: hi,
-            def_path_hash_lo: lo,
-        });
-    };
-
-    let mut register_type = |adt: AdtDef, path: &str, hash: rustc_span::def_id::DefPathHash| {
-        let (hi, lo): (u64, u64) =
-            unsafe { std::mem::transmute::<Fingerprint, (u64, u64)>(hash.0) };
-        info.types.push(DependencyType {
-            adt,
-            path: path.to_string(),
-            def_path_hash_hi: hi,
-            def_path_hash_lo: lo,
-        });
-    };
-
-    let crates = tcx
-        .crates(())
-        .iter()
-        .map(|&cnum| (tcx.crate_name(cnum), cnum, tcx.stable_crate_id(cnum)))
-        .collect::<Vec<_>>();
-
-    let std_crate = crates
-        .iter()
-        .find(|(name, ..)| *name == Symbol::intern("std"));
-    let core_crate = crates
-        .iter()
-        .find(|(name, ..)| *name == Symbol::intern("core"));
-    let alloc_crate = crates
-        .iter()
-        .find(|(name, ..)| *name == Symbol::intern("alloc"));
-
-    if let Some((_, _cnum, stable_id)) = std_crate {
-        if let Some(hash) = resolve_def_path_hash(
-            *stable_id,
-            &[
-                (DefPathData::TypeNs(Symbol::intern("env")), 0),
-                (DefPathData::ValueNs(Symbol::intern("args")), 0),
-            ],
-        ) {
-            if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                let id = alloc_fn_id();
-                info.std_env_args = Some(id);
-                info.std_env_args_def = stable_fn_from_def_id(tcx, def_id);
-                register(id, "std::env::args", hash);
-            }
-        }
-
-        if let Some(hash) = resolve_def_path_hash(
-            *stable_id,
-            &[
-                (DefPathData::TypeNs(Symbol::intern("env")), 0),
-                (DefPathData::TypeNs(Symbol::intern("Args")), 0),
-            ],
-        ) {
-            if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                if let Some(adt) = stable_adt_from_def_id(tcx, def_id) {
-                    info.std_env_args_ty = Some(adt);
-                    register_type(adt, "std::env::Args", hash);
-                }
-            }
-        }
-    }
-
-    if let Some((_, _cnum, stable_id)) = alloc_crate {
-        if let Some(hash) = resolve_def_path_hash(
-            *stable_id,
-            &[
-                (DefPathData::TypeNs(Symbol::intern("ffi")), 0),
-                (DefPathData::TypeNs(Symbol::intern("c_str")), 0),
-                (DefPathData::TypeNs(Symbol::intern("CString")), 0),
-            ],
-        ) {
-            if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                if let Some(adt) = stable_adt_from_def_id(tcx, def_id) {
-                    info.cstring_ty = Some(adt);
-                    register_type(adt, "alloc::ffi::c_str::CString", hash);
-
-                    if let Some(method) = find_inherent_method(tcx, def_id, Symbol::intern("new")) {
-                        let fn_id = alloc_fn_id();
-                        info.cstring_new = Some(fn_id);
-                        info.cstring_new_def = stable_fn_from_def_id(tcx, method);
-                        register(
-                            fn_id,
-                            "alloc::ffi::c_str::CString::new",
-                            tcx.def_path_hash(method),
-                        );
-                    } else if let Some(hash) = resolve_def_path_hash_with_impl(
-                        tcx,
-                        *stable_id,
-                        &[
-                            (DefPathData::TypeNs(Symbol::intern("ffi")), 0),
-                            (DefPathData::TypeNs(Symbol::intern("c_str")), 0),
-                            (DefPathData::TypeNs(Symbol::intern("CString")), 0),
-                        ],
-                        "new",
-                    ) {
-                        let fn_id = alloc_fn_id();
-                        info.cstring_new = Some(fn_id);
-                        if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                            info.cstring_new_def = stable_fn_from_def_id(tcx, def_id);
-                        }
-                        register(fn_id, "alloc::ffi::c_str::CString::new", hash);
-                    }
-
-                    if let Some(method) =
-                        find_inherent_method(tcx, def_id, Symbol::intern("into_raw"))
-                    {
-                        let fn_id = alloc_fn_id();
-                        info.cstring_into_raw = Some(fn_id);
-                        info.cstring_into_raw_def = stable_fn_from_def_id(tcx, method);
-                        register(
-                            fn_id,
-                            "alloc::ffi::c_str::CString::into_raw",
-                            tcx.def_path_hash(method),
-                        );
-                    } else if let Some(hash) = resolve_def_path_hash_with_impl(
-                        tcx,
-                        *stable_id,
-                        &[
-                            (DefPathData::TypeNs(Symbol::intern("ffi")), 0),
-                            (DefPathData::TypeNs(Symbol::intern("c_str")), 0),
-                            (DefPathData::TypeNs(Symbol::intern("CString")), 0),
-                        ],
-                        "into_raw",
-                    ) {
-                        let fn_id = alloc_fn_id();
-                        info.cstring_into_raw = Some(fn_id);
-                        if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                            info.cstring_into_raw_def = stable_fn_from_def_id(tcx, def_id);
-                        }
-                        register(fn_id, "alloc::ffi::c_str::CString::into_raw", hash);
-                    }
-                }
-            }
-        }
-
-        if let Some(hash) = resolve_def_path_hash(
-            *stable_id,
-            &[
-                (DefPathData::TypeNs(Symbol::intern("ffi")), 0),
-                (DefPathData::TypeNs(Symbol::intern("c_str")), 0),
-                (DefPathData::TypeNs(Symbol::intern("NulError")), 0),
-            ],
-        ) {
-            if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                if let Some(adt) = stable_adt_from_def_id(tcx, def_id) {
-                    info.nul_error_ty = Some(adt);
-                    register_type(adt, "alloc::ffi::c_str::NulError", hash);
-                }
-            }
-        }
-
-        if let Some(hash) = resolve_def_path_hash(
-            *stable_id,
-            &[
-                (DefPathData::TypeNs(Symbol::intern("string")), 0),
-                (DefPathData::TypeNs(Symbol::intern("String")), 0),
-            ],
-        ) {
-            if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                if let Some(adt) = stable_adt_from_def_id(tcx, def_id) {
-                    info.string_ty = Some(adt);
-                    register_type(adt, "alloc::string::String", hash);
-                }
-            }
-        }
-    }
-
-    if let Some((_, _cnum, stable_id)) = core_crate {
-        if let Some(hash) = resolve_def_path_hash(
-            *stable_id,
-            &[
-                (DefPathData::TypeNs(Symbol::intern("iter")), 0),
-                (DefPathData::TypeNs(Symbol::intern("traits")), 0),
-                (DefPathData::TypeNs(Symbol::intern("iterator")), 0),
-                (DefPathData::TypeNs(Symbol::intern("Iterator")), 0),
-                (DefPathData::ValueNs(Symbol::intern("nth")), 0),
-            ],
-        ) {
-            if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                let id = alloc_fn_id();
-                info.iter_nth = Some(id);
-                info.iter_nth_def = stable_fn_from_def_id(tcx, def_id);
-                register(id, "core::iter::Iterator::nth", hash);
-            }
-        }
-    }
-
-    if let Some(option_def_id) = tcx.lang_items().option_type() {
-        if let Some(adt) = stable_adt_from_def_id(tcx, option_def_id) {
-            info.option_ty = Some(adt);
-            register_type(
-                adt,
-                "core::option::Option",
-                tcx.def_path_hash(option_def_id),
-            );
-        }
-
-        if let Some(method) = find_inherent_method(tcx, option_def_id, Symbol::intern("unwrap")) {
-            let fn_id = alloc_fn_id();
-            info.option_unwrap = Some(fn_id);
-            info.option_unwrap_def = stable_fn_from_def_id(tcx, method);
-            register(
-                fn_id,
-                "core::option::Option::unwrap",
-                tcx.def_path_hash(method),
-            );
-        }
-    }
-
-    if let Some((_, _cnum, stable_id)) = core_crate {
-        if let Some(hash) = resolve_def_path_hash(
-            *stable_id,
-            &[
-                (DefPathData::TypeNs(Symbol::intern("result")), 0),
-                (DefPathData::TypeNs(Symbol::intern("Result")), 0),
-            ],
-        ) {
-            if let Some(result_def_id) = tcx.def_path_hash_to_def_id(hash) {
-                if let Some(adt) = stable_adt_from_def_id(tcx, result_def_id) {
-                    info.result_ty = Some(adt);
-                    register_type(
-                        adt,
-                        "core::result::Result",
-                        tcx.def_path_hash(result_def_id),
-                    );
-
-                    if let Some(method) =
-                        find_inherent_method(tcx, result_def_id, Symbol::intern("unwrap"))
-                    {
-                        let fn_id = alloc_fn_id();
-                        info.result_unwrap = Some(fn_id);
-                        info.result_unwrap_def = stable_fn_from_def_id(tcx, method);
-                        register(
-                            fn_id,
-                            "core::result::Result::unwrap",
-                            tcx.def_path_hash(method),
-                        );
-                    }
-                }
-            }
+    for &cnum in tcx.crates(()).iter() {
+        let num_defs = tcx.num_extern_def_ids(cnum);
+        for idx in 0..num_defs {
+            let def_id = DefId {
+                krate: cnum,
+                index: rustc_span::def_id::DefIndex::from_usize(idx),
+            };
+            collect_dependency_def(tcx, def_id, &mut info, &mut alloc_fn_id);
         }
     }
 
     info
+}
+
+fn collect_dependency_def<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    info: &mut DependencyInfo,
+    alloc_fn_id: &mut impl FnMut() -> FunctionId,
+) {
+    let kind = tcx.def_kind(def_id);
+
+    if matches!(kind, DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(..)) {
+        let id = alloc_fn_id();
+        let hash = tcx.def_path_hash(def_id);
+        let (hi, lo): (u64, u64) = unsafe { std::mem::transmute::<Fingerprint, (u64, u64)>(hash.0) };
+        info.functions.push(DependencyFunction {
+            id,
+            path: tcx.def_path_str(def_id),
+            def_path_hash_hi: hi,
+            def_path_hash_lo: lo,
+            fn_def: stable_fn_from_def_id(tcx, def_id),
+        });
+    }
+
+    if matches!(kind, DefKind::Struct | DefKind::Enum | DefKind::Union) {
+        if let Some(adt) = stable_adt_from_def_id(tcx, def_id) {
+            let hash = tcx.def_path_hash(def_id);
+            let (hi, lo): (u64, u64) =
+                unsafe { std::mem::transmute::<Fingerprint, (u64, u64)>(hash.0) };
+            info.types.push(DependencyType {
+                adt,
+                path: tcx.def_path_str(def_id),
+                def_path_hash_hi: hi,
+                def_path_hash_lo: lo,
+            });
+        }
+    }
 }
 
 fn stable_adt_from_def_id<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<AdtDef> {
@@ -817,7 +592,9 @@ fn stable_fn_from_def_id<'tcx>(
     use rustc_public::rustc_internal::stable;
     use rustc_public::ty::TyKind;
 
-    let stable_ty = stable(tcx.type_of(def_id).instantiate_identity());
+    let args = ty::GenericArgs::identity_for_item(tcx, def_id);
+    let fn_ty = ty::Ty::new_fn_def(tcx, def_id, args);
+    let stable_ty = stable(fn_ty);
     match stable_ty.kind() {
         TyKind::RigidTy(RigidTy::FnDef(def, _)) => Some(def),
         _ => None,
@@ -836,61 +613,8 @@ fn function_def_stable<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> rustc_pub
     }
 }
 
-fn resolve_def_path_hash(
-    stable_crate_id: StableCrateId,
-    path: &[(DefPathData, u32)],
-) -> Option<rustc_span::def_id::DefPathHash> {
-    let mut hash = rustc_span::def_id::DefPathHash::new(
-        stable_crate_id,
-        Hash64::new(stable_crate_id.as_u64()),
-    );
-
-    for (data, disambiguator) in path {
-        let mut hasher = StableHasher::new();
-        hash.local_hash().hash(&mut hasher);
-        std::mem::discriminant(data).hash(&mut hasher);
-        if let Some(name) = data.get_opt_name() {
-            name.as_str().hash(&mut hasher);
-        }
-        disambiguator.hash(&mut hasher);
-        let local_hash = hasher.finish();
-        hash = rustc_span::def_id::DefPathHash::new(hash.stable_crate_id(), local_hash);
-    }
-
-    Some(hash)
-}
-
-fn resolve_def_path_hash_with_impl<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    stable_crate_id: StableCrateId,
-    base_path: &[(DefPathData, u32)],
-    method: &str,
-) -> Option<rustc_span::def_id::DefPathHash> {
-    for disamb in 0u32..64 {
-        let mut path = base_path.to_vec();
-        path.push((DefPathData::Impl, disamb));
-        path.push((DefPathData::ValueNs(Symbol::intern(method)), 0));
-        let hash = resolve_def_path_hash(stable_crate_id, &path)?;
-        if tcx.def_path_hash_to_def_id(hash).is_some() {
-            return Some(hash);
-        }
-    }
-    None
-}
-
 fn def_path_hash_from_parts(hi: u64, lo: u64) -> rustc_span::def_id::DefPathHash {
     rustc_span::def_id::DefPathHash(Fingerprint::new(hi, lo))
-}
-
-fn find_inherent_method<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, name: Symbol) -> Option<DefId> {
-    for impl_def in tcx.inherent_impls(def_id).iter().copied() {
-        for item in tcx.associated_items(impl_def).in_definition_order() {
-            if matches!(item.kind, AssocKind::Fn { .. }) && item.ident(tcx).name == name {
-                return Some(item.def_id);
-            }
-        }
-    }
-    None
 }
 
 fn override_queries(_sess: &rustc_session::Session, providers: &mut UtilProviders) {
@@ -909,7 +633,6 @@ fn override_providers(providers: &mut QueryProviders, gate: Arc<GenerateGate>) {
     if guard.original.is_none() {
         guard.original = Some(OriginalProviders {
             hir_crate: providers.hir_crate,
-            opt_hir_owner_nodes: providers.opt_hir_owner_nodes,
             hir_owner_parent_q: providers.hir_owner_parent_q,
             entry_fn: providers.entry_fn,
             def_kind: providers.def_kind,
@@ -933,8 +656,11 @@ fn override_providers(providers: &mut QueryProviders, gate: Arc<GenerateGate>) {
 
     providers.hir_crate = generated_hir_crate;
     // Leave hir_crate_items/hir_module_items to the original providers.
+    providers.local_def_id_to_hir_id = generated_local_def_id_to_hir_id;
     providers.opt_hir_owner_nodes = generated_opt_hir_owner_nodes;
     providers.hir_owner_parent_q = generated_hir_owner_parent_q;
+    providers.hir_attr_map = generated_hir_attr_map;
+    providers.opt_ast_lowering_delayed_lints = generated_opt_ast_lowering_delayed_lints;
     providers.entry_fn = generated_entry_fn;
     providers.def_kind = generated_def_kind;
     providers.def_span = generated_def_span;
@@ -984,7 +710,26 @@ fn generated_opt_hir_owner_nodes<'tcx>(
                 );
             }
         }
-        (original.opt_hir_owner_nodes)(tcx, key)
+        let original_crate = (original.hir_crate)(tcx, ());
+        original_crate
+            .owners
+            .get(key)
+            .and_then(|owner| owner.as_owner().map(|o| &o.nodes))
+    })
+}
+
+fn generated_local_def_id_to_hir_id<'tcx>(tcx: TyCtxt<'tcx>, key: LocalDefId) -> HirId {
+    with_generated_and_original(tcx, |generated, original| {
+        if let Some(gen) = generated {
+            if gen.def_kinds.contains_key(&key) {
+                return HirId::make_owner(key);
+            }
+        }
+        match (original.hir_crate)(tcx, ()).owners[key] {
+            hir::MaybeOwner::Owner(_) => HirId::make_owner(key),
+            hir::MaybeOwner::NonOwner(hir_id) => hir_id,
+            hir::MaybeOwner::Phantom => panic!("No HirId for {:?}", key),
+        }
     })
 }
 
@@ -994,6 +739,38 @@ fn generated_hir_owner_parent_q<'tcx>(tcx: TyCtxt<'tcx>, key: OwnerId) -> HirId 
             return gen.hir_owner_parent_q(tcx, key);
         }
         (original.hir_owner_parent_q)(tcx, key)
+    })
+}
+
+fn generated_hir_attr_map<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    key: OwnerId,
+) -> &'tcx hir::AttributeMap<'tcx> {
+    with_generated_and_original(tcx, |generated, original| {
+        if let Some(gen) = generated {
+            if gen.def_kinds.contains_key(&key.def_id) {
+                return hir::AttributeMap::EMPTY;
+            }
+        }
+        (original.hir_crate)(tcx, ()).owners[key.def_id]
+            .as_owner()
+            .map_or(hir::AttributeMap::EMPTY, |o| &o.attrs)
+    })
+}
+
+fn generated_opt_ast_lowering_delayed_lints<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    key: OwnerId,
+) -> Option<&'tcx hir::lints::DelayedLints> {
+    with_generated_and_original(tcx, |generated, original| {
+        if let Some(gen) = generated {
+            if gen.def_kinds.contains_key(&key.def_id) {
+                return None;
+            }
+        }
+        (original.hir_crate)(tcx, ()).owners[key.def_id]
+            .as_owner()
+            .map(|o| &o.delayed_lints)
     })
 }
 

@@ -34,6 +34,113 @@ fn fn_const_operand(
     })
 }
 
+fn dep_fn(deps: &gen::DependencyInfo, path: &str) -> gen::FnDef {
+    if let Some(found) = deps
+        .functions
+        .iter()
+        .find(|f| f.path == path && f.fn_def.is_some())
+        .and_then(|f| f.fn_def)
+    {
+        return found;
+    }
+
+    if let Some(found) = deps
+        .functions
+        .iter()
+        .find(|f| f.path.ends_with(path) && f.fn_def.is_some())
+        .and_then(|f| f.fn_def)
+    {
+        return found;
+    }
+
+    if let Some(last) = path.rsplit("::").next() {
+        let required_segments = path
+            .split("::")
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+        if let Some(found) = deps
+            .functions
+            .iter()
+            .find(|f| {
+                f.path.ends_with(&format!("::{last}"))
+                    && f.fn_def.is_some()
+                    && !f.path.contains("::{closure")
+                    && !f.path.contains("{{")
+                    && required_segments.iter().all(|seg| f.path.contains(seg))
+            })
+            .and_then(|f| f.fn_def)
+        {
+            return found;
+        }
+    }
+
+    let mut similar = deps
+        .functions
+        .iter()
+        .filter(|f| {
+            f.path.contains(path)
+                || path.contains(&f.path)
+                || path
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|last| f.path.ends_with(&format!("::{last}")))
+        })
+        .map(|f| format!("{} (fn_def={})", f.path, f.fn_def.is_some()))
+        .collect::<Vec<_>>();
+    similar.sort();
+    similar.truncate(20);
+    panic!(
+        "missing dependency function: {path}\nexample matches:\n{}",
+        similar.join("\n")
+    );
+}
+
+fn dep_adt(deps: &gen::DependencyInfo, path: &str) -> gen::AdtDef {
+    if let Some(found) = deps.types.iter().find(|t| t.path == path).map(|t| t.adt) {
+        return found;
+    }
+
+    if let Some(found) = deps
+        .types
+        .iter()
+        .find(|t| t.path.ends_with(path))
+        .map(|t| t.adt)
+    {
+        return found;
+    }
+
+    if let Some(last) = path.rsplit("::").next() {
+        if let Some(found) = deps
+            .types
+            .iter()
+            .find(|t| t.path.ends_with(&format!("::{last}")) && !t.path.contains("{{"))
+            .map(|t| t.adt)
+        {
+            return found;
+        }
+    }
+
+    let mut similar = deps
+        .types
+        .iter()
+        .filter(|t| {
+            t.path.contains(path)
+                || path.contains(&t.path)
+                || path
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|last| t.path.ends_with(&format!("::{last}")))
+        })
+        .map(|t| t.path.clone())
+        .collect::<Vec<_>>();
+    similar.sort();
+    similar.truncate(20);
+    panic!(
+        "missing dependency type: {path}\nexample matches:\n{}",
+        similar.join("\n")
+    );
+}
+
 fn main() {
     let item_main = gen::ItemId::new(1);
     let item_write = gen::ItemId::new(2);
@@ -168,21 +275,19 @@ fn main() {
                 .and_then(|i| i.fn_def())
                 .expect("missing free def");
 
-            let std_env_args = deps.std_env_args_def.expect("std::env::args missing");
-            let iter_nth = deps.iter_nth_def.expect("Iterator::nth missing");
-            let option_unwrap = deps.option_unwrap_def.expect("Option::unwrap missing");
-            let result_unwrap = deps.result_unwrap_def.expect("Result::unwrap missing");
-            let cstring_new = deps.cstring_new_def.expect("CString::new missing");
-            let cstring_into_raw = deps
-                .cstring_into_raw_def
-                .expect("CString::into_raw missing");
+            let std_env_args = dep_fn(&deps, "std::env::args");
+            let iter_nth = dep_fn(&deps, "std::iter::Iterator::nth");
+            let option_unwrap = dep_fn(&deps, "std::option::Option::unwrap");
+            let result_unwrap = dep_fn(&deps, "std::result::Result::unwrap");
+            let cstring_new = dep_fn(&deps, "std::ffi::CString::new");
+            let cstring_into_raw = dep_fn(&deps, "std::ffi::CString::into_raw");
 
-            let args_adt = deps.std_env_args_ty.expect("std::env::Args type missing");
-            let string_adt = deps.string_ty.expect("String type missing");
-            let cstring_adt = deps.cstring_ty.expect("CString type missing");
-            let nul_error_adt = deps.nul_error_ty.expect("NulError type missing");
-            let option_adt = deps.option_ty.expect("Option type missing");
-            let result_adt = deps.result_ty.expect("Result type missing");
+            let args_adt = dep_adt(&deps, "std::env::Args");
+            let string_adt = dep_adt(&deps, "std::string::String");
+            let cstring_adt = dep_adt(&deps, "std::ffi::CString");
+            let nul_error_adt = dep_adt(&deps, "std::ffi::NulError");
+            let option_adt = dep_adt(&deps, "std::option::Option");
+            let result_adt = dep_adt(&deps, "std::result::Result");
 
             let args_ty =
                 gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(args_adt, gen::GenericArgs(vec![])));

@@ -1,30 +1,63 @@
 # Task
 
-Create a cargo workspace, which contains a main library crate named `rustc_public_generative`. It should
-expose a function `pub fn generate(impl FnOnce(Context, DependencyInfo) -> CurrentCrateInfo)`. This function
-should act as a rustc_driver invokation, but instead of compiling the input files, it should generate
-a fake crate based on what the callback returns.
+We implemented a way to use rustc emitting a custom fake crate with mir in the `rustc_public_generative`.
+Now implement the CO2 compiler. CO2 is a C like language but supports Rust types and can import Rust
+crates directly. This is an example CO2 code:
 
-The `DependencyInfo` is
-a type that contains the information about dependencies loaded by the rustc_driver and our caller will
-use it to create `CurrentCrateInfo` which contains module structure, items, functions, and MIR of those
-functions. The context is used for allocating new IDs for spans and such things, if needed. The `generate` function
-then need to intercept rustc_driver callbacks and hook queries to
-emit binary of the fake crate instead of the original one.
+```co2
+use std::fs::File;
 
-Then also write a binary crate `fake_hello_world` which is a rustc like compiler but always generate a
-hello world printing program independent of the input. It should use the `rustc_public_generative` library.
+void main() {
+     File f = File::open("./foo");
+     for (int i = 0; i < 100; i += 1) {
+          f.do_something();
+     }
+}
+```
+
+You can learn the CO2 grammar from `./temp_ai/read_only/prior_art/chumsky_c_parser/`. You need to add
+a binary crate `co2` which uses `rustc_public_generative` and behave as a normal `rustc`, except when
+it detects a `#[language_co2]` in the Rust file, it tries to compile the `name.co2` file instead and
+uses `rustc_public_generative` to generate the co2 code as a fake crate.
+
+Use `chumsky` for your parser, like what I did in `prior_art/chumsky_c_parser`. You are allowed to
+copy from my code as much as you want.
+
+Add intermediate crates for parsing and generating hir and mir from co2 code. Except the `co2` crate, no
+other crate in the workspace should depend on `rustc_public_generative` and `#![feature(rustc_private)]` and
+they should work on stable.
+
+For parsing CO2 code, use a two phase approach. First, parse the items and jump over bodies. In the second stage
+parse each item throughly and use the data from dependencies and items of current crate to resolve names correctly. Remember
+that C grammar is context sensitive and you need a resolver to correctly parse it. Unlike C, CO2 functions can see
+functions and items defined below them and do not need forward declaration.
+
+Then test your compiler on this code:
+```co2
+int write(int, char*, int);
+
+void main() {
+    write(1, "hello world\n", 12);
+    write(1, "hello world\n", 12);
+}
+```
+and make sure it works.
+
+Finally, write a CO2 code that does the job of `fake_hello_world`. That is, read the arguments using `std::env::args()` and
+open the file `argv[1]` and print its content. Test your compiler with that code.
 
 ## Conditions
 
-* `rustc_public_generative` can use all rustc_internals crates, but it should not expose any type from them in
-  its public API except the ones defined in `rustc_public`.
-* We should prefer to reuse `rustc_public` types as much as we can, but it is incomplete and in some cases we need
-  to define our types.
-* User code should be able to load custom files and declare span for them in items and MIR.
-* Use the installed rustc nightly. Don't change the nightly version.
-* Don't do hacky things like generating a fake AST or fake source files. Hook queries to inject items directly in the
-  HIR and MIR of the compiler session.
+* Read `./temp_ai/read_only/prior_art/`, it contains many things you need, including `azhdaha` which is
+  a C compiler written in Rust by me. Try your HIR/MIR to be very similar to my design in `azhdaha`.
+* A C grammar is in `./temp_ai/read_only/prior_art/chumsky_c_parser/grammar`. You can use it for C parts of the
+  language. CO2 is just C with some additional Rust nicities.
+* Follow my style, it is fine to copy code verbatimly from `prior_art`. But don't repeat my mistakes. (I generally
+  don't make mistake but sometimes it happens).
+* Finish the job as soon as possible, I want to comment on your design. Leave things with `todo!()` and just
+  make the previous `fake_hello_world` example working, this time with a co2 code.
+* Pay attention to spans. I want correct debug info. Load the co2 file using rustc infra so that it gets
+  correct spans and also appear in the .d files emitted by the compiler.
 
 ## Notes
 * I use JJ for development. You are not allowed to do Git/JJ commits, ask me and I will do that if I feel
@@ -32,26 +65,8 @@ hello world printing program independent of the input. It should use the `rustc_
   code.
 * Ask me whether you were in doubt. I know everything about this project and Rust in general better than you.
 * Don't try to generate the perfect code in first try. Leave things with `todo!()` for future and just make
-  the `fake_hello_world` working.
-
-## FAQ
-
-* Q: Where should rustc_public come from? Is it a local path dependency, a git dependency, or a crate you already have elsewhere?
-* A: `rustc_public` is a rustc_private crate and you can use it with feature `#![feature(rustc_private)]`.
-* Q: How do you want to handle rustc_private dependencies? Should I add explicit rustc_* dependencies
-     in Cargo.toml (and if so, with what paths), or do you already have a preferred setup for building
-     with rustc-dev components?
-* A: Use `#![feature(rustc_private)]` and `cargo +nightly build`. Add rustc_* crates using `extern crate` statements
-     at the beginning of rustc.
-* Q: For the query overrides and HIR/MIR injection, is there a reference implementation or preferred
-     approach you want me to follow? I can implement via `Config::override_queries`, but I want to
-     align with your expectations and any existing patterns.
-* A: Yes use `override_queries`. Anything that works in all cases and without any hacks is fine to me, I don't
-     have preference on the design of this part. Don't use hacks, specially the hacks related to emiting fake
-     AST which can not work in all cases.
-* Q: For custom files and spans, do you already have a rustc_public type to
-     represent Span/FileName equivalents, or should I define local types and a translation layer?
-* A: Refer to the docs of rustc_private crates. I provided a copy for you at `temp_ai/read_only/rustc-private-docs`
-* Q: Is there any example for generating fake crate items from `rustc_public` apis?
-* A: No, `rustc_public` is designed mostly for analyzing Rust code, not generating it. This is a novel thing
-     that I want to propose to the stable-mir team, and this code serves as a proof of concept.
+  the example working. But don't do hacky things and don't hard code examples in your compiler. Don't try
+  to oversimplify things. Eventually I want a full compiler so if making things more complex
+  make things easier to extend in future, choose the complex option. 
+* You can use `cargo doc` for reading current workspace documentations, and I provided
+  documentation of rustc private crates in `./temp_ai/read_only/rustc-private-docs`
