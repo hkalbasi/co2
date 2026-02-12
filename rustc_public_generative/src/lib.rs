@@ -34,13 +34,10 @@ use rustc_data_structures::steal::Steal;
 use rustc_hashes::Hash64;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{
-    DefId, LocalDefId, LocalDefIdMap, LocalModDefId, StableCrateId, CRATE_DEF_ID,
-};
+use rustc_hir::def_id::{DefId, LocalDefId, LocalDefIdMap, StableCrateId, CRATE_DEF_ID};
 use rustc_hir::definitions::{DefPathData, Definitions, DisambiguatorState};
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
 use rustc_index::{Idx, IndexVec};
-use rustc_middle::hir::ModuleItems;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::BorrowKind;
 use rustc_middle::query::Providers as QueryProviders;
@@ -249,8 +246,22 @@ pub struct DefinedCrateInfo {
 pub struct DefinedItemInfo {
     pub id: ItemId,
     pub name: String,
-    pub kind: ItemKind,
-    pub fn_def: Option<rustc_public::ty::FnDef>,
+    pub kind: DefinedItemKind,
+}
+
+impl DefinedItemInfo {
+    pub fn fn_def(&self) -> Option<FnDef> {
+        match self.kind {
+            DefinedItemKind::Function(fn_def) => Some(fn_def),
+            DefinedItemKind::ForeignFunction(fn_def) => Some(fn_def),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DefinedItemKind {
+    Function(FnDef),
+    ForeignFunction(FnDef),
 }
 
 #[derive(Debug, Clone)]
@@ -813,14 +824,14 @@ fn stable_fn_from_def_id<'tcx>(
     }
 }
 
-fn function_def_stable<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Option<rustc_public::DefId> {
+fn function_def_stable<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> rustc_public::DefId {
     use rustc_public::rustc_internal::stable;
     use rustc_public::ty::TyKind;
 
     let args = ty::GenericArgs::identity_for_item(tcx, def_id);
     let fn_ty = ty::Ty::new_fn_def(tcx, def_id.to_def_id(), args);
     match stable(fn_ty).kind() {
-        TyKind::RigidTy(RigidTy::FnDef(def, _)) => Some(def.0),
+        TyKind::RigidTy(RigidTy::FnDef(def, _)) => def.0,
         _ => panic!("Failed to generate defId"),
     }
 }
@@ -1210,15 +1221,12 @@ struct GeneratedCrate {
     #[allow(dead_code)]
     crate_name: Symbol,
     context: Context,
-    dep_functions: FxHashMap<FunctionId, DefId>,
     foreign_function_ids: FxHashMap<ItemId, LocalDefId>,
     function_ids: FxHashMap<ItemId, LocalDefId>,
     foreign_function_infos: LocalDefIdMap<ForeignFunctionInfo>,
     foreign_function_sigs: LocalDefIdMap<(Vec<ty::Ty<'static>>, ty::Ty<'static>)>,
     foreign_function_symbols: LocalDefIdMap<Symbol>,
     owners: IndexVec<LocalDefId, Option<&'static hir::OwnerInfo<'static>>>,
-    crate_items: ModuleItemsSpec,
-    module_items: LocalDefIdMap<ModuleItemsSpec>,
     owner_parents: LocalDefIdMap<HirId>,
     def_kinds: LocalDefIdMap<DefKind>,
     def_spans: LocalDefIdMap<RustcSpan>,
@@ -1247,7 +1255,7 @@ impl GeneratedCrate {
         let mut foreign_functions = Vec::new();
         let mut functions = Vec::new();
         for item in &info.items {
-            match item.kind {
+            match &item.kind {
                 ItemKind::ForeignFunction(sig) => {
                     foreign_functions.push(ForeignFunctionInfo {
                         id: item.id,
@@ -1312,16 +1320,13 @@ impl GeneratedCrate {
             def_spans.insert(def_id, DUMMY_SP);
             foreign_function_infos.insert(def_id, foreign.clone());
             foreign_function_symbols.insert(def_id, Symbol::intern(&foreign.name));
-            let resolver = MirResolver {
-                dep_functions: &dep_functions,
-                foreign_functions: &foreign_function_ids,
-            };
+
             let inputs_tcx = foreign
                 .inputs
                 .iter()
-                .map(|ty| mir_ty_to_rustc(tcx, &resolver, ty))
+                .map(|ty| mir_ty_to_rustc(tcx, ty))
                 .collect::<Vec<_>>();
-            let output_tcx = mir_ty_to_rustc(tcx, &resolver, &foreign.output);
+            let output_tcx = mir_ty_to_rustc(tcx, &foreign.output);
             let inputs_static = unsafe {
                 std::mem::transmute::<Vec<ty::Ty<'tcx>>, Vec<ty::Ty<'static>>>(inputs_tcx)
             };
@@ -1487,43 +1492,6 @@ impl GeneratedCrate {
         insert_owner(&mut owners, main_def, leak(make_owner_info(main_nodes)));
         owner_parents.insert(main_def, HirId::make_owner(crate_def));
 
-        let crate_items = ModuleItemsSpec {
-            add_root: true,
-            free_items: vec![
-                hir::ItemId {
-                    owner_id: OwnerId {
-                        def_id: foreign_mod_def,
-                    },
-                },
-                hir::ItemId {
-                    owner_id: OwnerId { def_id: main_def },
-                },
-            ],
-            foreign_items: foreign_item_ids.clone(),
-            body_owners: vec![main_def],
-            delayed_lint_items: Vec::new(),
-        };
-
-        let module_items_for_root = ModuleItemsSpec {
-            add_root: false,
-            free_items: vec![
-                hir::ItemId {
-                    owner_id: OwnerId {
-                        def_id: foreign_mod_def,
-                    },
-                },
-                hir::ItemId {
-                    owner_id: OwnerId { def_id: main_def },
-                },
-            ],
-            foreign_items: foreign_item_ids.clone(),
-            body_owners: vec![main_def],
-            delayed_lint_items: Vec::new(),
-        };
-
-        let mut module_items = LocalDefIdMap::default();
-        module_items.insert(crate_def, module_items_for_root.clone());
-
         if let Some(first) = functions.first() {
             function_infos.insert(main_def, first.clone());
         }
@@ -1544,15 +1512,12 @@ impl GeneratedCrate {
         Self {
             crate_name,
             context: context.clone(),
-            dep_functions,
             foreign_function_ids,
             function_ids,
             foreign_function_infos,
             foreign_function_sigs,
             foreign_function_symbols,
             owners,
-            crate_items,
-            module_items,
             owner_parents,
             def_kinds,
             def_spans,
@@ -1575,8 +1540,7 @@ impl GeneratedCrate {
                     .get(def_id)
                     .map(|f| f.name.clone())
                     .unwrap_or_else(|| "function".to_string()),
-                kind: ItemKind::Function,
-                fn_def: fn_def.map(|f| rustc_public::ty::FnDef(f)),
+                kind: DefinedItemKind::Function(rustc_public::ty::FnDef(fn_def)),
             });
         }
 
@@ -1589,8 +1553,7 @@ impl GeneratedCrate {
                     .get(def_id)
                     .map(|f| f.name.clone())
                     .unwrap_or_else(|| "foreign".to_string()),
-                kind: ItemKind::ForeignFunction,
-                fn_def: fn_def.map(|f| rustc_public::ty::FnDef(f)),
+                kind: DefinedItemKind::ForeignFunction(rustc_public::ty::FnDef(fn_def)),
             });
         }
 
@@ -1611,11 +1574,7 @@ impl GeneratedCrate {
             let Some(def_id) = self.function_ids.get(&mir.id).copied() else {
                 continue;
             };
-            let resolver = MirResolver {
-                dep_functions: &self.dep_functions,
-                foreign_functions: &self.foreign_function_ids,
-            };
-            let body = build_mir_body(tcx, &self.context, &mir.body, &resolver, def_id);
+            let body = build_mir_body(tcx, &self.context, &mir.body, def_id);
             self.function_bodies.insert(def_id, body);
         }
     }
@@ -1638,24 +1597,6 @@ impl GeneratedCrate {
             owners,
             opt_hir_hash: None,
         }
-    }
-
-    fn hir_crate_items<'tcx>(&self, _tcx: TyCtxt<'tcx>, _key: ()) -> ModuleItems {
-        make_module_items(self.crate_items.clone())
-    }
-
-    fn hir_module_items<'tcx>(&self, _tcx: TyCtxt<'tcx>, key: LocalModDefId) -> ModuleItems {
-        let local: LocalDefId = key.into();
-        if let Some(items) = self.module_items.get(&local) {
-            return make_module_items(items.clone());
-        }
-        make_module_items(ModuleItemsSpec {
-            add_root: false,
-            free_items: Vec::new(),
-            foreign_items: Vec::new(),
-            body_owners: Vec::new(),
-            delayed_lint_items: Vec::new(),
-        })
     }
 
     fn opt_hir_owner_nodes<'tcx>(
@@ -1954,25 +1895,10 @@ fn build_owner_nodes_for_fn(
     }
 }
 
-struct MirResolver<'a> {
-    dep_functions: &'a FxHashMap<FunctionId, DefId>,
-    foreign_functions: &'a FxHashMap<ItemId, LocalDefId>,
-}
-
-impl MirResolver<'_> {
-    fn _resolve_foreign_fn(&self, id: ItemId) -> DefId {
-        if let Some(local) = self.foreign_functions.get(&id) {
-            return local.to_def_id();
-        }
-        panic!("missing function id {:?}", id);
-    }
-}
-
 fn build_mir_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &Context,
     body: &MirBody,
-    resolver: &MirResolver<'_>,
     owner: LocalDefId,
 ) -> rustc_middle::mir::Body<'static> {
     let span = to_rustc_span(context, body.span.into());
@@ -2000,7 +1926,7 @@ fn build_mir_body<'tcx>(
             local_info: rustc_middle::mir::ClearCrossCrate::Set(Box::new(
                 rustc_middle::mir::LocalInfo::Boring,
             )),
-            ty: mir_ty_to_rustc(tcx, resolver, &local.ty),
+            ty: mir_ty_to_rustc(tcx, &local.ty),
             user_ty: None,
             source_info: rustc_middle::mir::SourceInfo {
                 span,
@@ -2016,7 +1942,7 @@ fn build_mir_body<'tcx>(
             match &stmt.kind {
                 MirStatementKind::Assign(place, rvalue) => {
                     let place = mir_place_to_rustc(tcx, place);
-                    let rvalue = mir_rvalue_to_rustc(tcx, resolver, rvalue);
+                    let rvalue = mir_rvalue_to_rustc(tcx, rvalue);
                     statements.push(rustc_middle::mir::Statement::new(
                         rustc_middle::mir::SourceInfo {
                             span,
@@ -2044,11 +1970,11 @@ fn build_mir_body<'tcx>(
                 target,
                 unwind: _,
             } => {
-                let func = mir_operand_to_rustc(tcx, resolver, func);
+                let func = mir_operand_to_rustc(tcx, func);
                 let args: Box<[rustc_span::source_map::Spanned<rustc_middle::mir::Operand<'tcx>>]> =
                     args.iter()
                         .map(|arg| rustc_span::source_map::Spanned {
-                            node: mir_operand_to_rustc(tcx, resolver, arg),
+                            node: mir_operand_to_rustc(tcx, arg),
                             span,
                         })
                         .collect::<Vec<_>>()
@@ -2101,35 +2027,13 @@ fn build_mir_body<'tcx>(
     }
 }
 
-fn mir_generic_args<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    resolver: &MirResolver<'_>,
-    args: &[MirTy],
-) -> ty::GenericArgsRef<'tcx> {
-    let generic_args: Vec<ty::GenericArg<'tcx>> = args
-        .iter()
-        .map(|ty| ty::GenericArg::from(mir_ty_to_rustc(tcx, resolver, ty)))
-        .collect();
-    tcx.mk_args(&generic_args)
-}
-
-fn mir_ty_to_rustc<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    resolver: &MirResolver<'_>,
-    ty: &MirTy,
-) -> ty::Ty<'tcx> {
+fn mir_ty_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, ty: &MirTy) -> ty::Ty<'tcx> {
     use rustc_public::rustc_internal::internal;
-    let _ = resolver;
     run_with_public_context(tcx, || internal(tcx, ty))
 }
 
-fn mir_region_to_rustc<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    resolver: &MirResolver<'_>,
-    ty: &rustc_public::ty::Region,
-) -> ty::Region<'tcx> {
+fn mir_region_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, ty: &rustc_public::ty::Region) -> ty::Region<'tcx> {
     use rustc_public::rustc_internal::internal;
-    let _ = resolver;
     run_with_public_context(tcx, || internal(tcx, ty))
 }
 
@@ -2149,13 +2053,10 @@ fn mir_place_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, place: &MirPlace) -> rustc_middle
 
 fn mir_rvalue_to_rustc<'tcx>(
     tcx: TyCtxt<'tcx>,
-    resolver: &MirResolver<'_>,
     rvalue: &MirRvalue,
 ) -> rustc_middle::mir::Rvalue<'tcx> {
     match rvalue {
-        MirRvalue::Use(op) => {
-            rustc_middle::mir::Rvalue::Use(mir_operand_to_rustc(tcx, resolver, op))
-        }
+        MirRvalue::Use(op) => rustc_middle::mir::Rvalue::Use(mir_operand_to_rustc(tcx, op)),
         MirRvalue::AddressOf(raw_ptr_kind, place) => rustc_middle::mir::Rvalue::RawPtr(
             match raw_ptr_kind {
                 rustc_public::mir::RawPtrKind::Mut => rustc_middle::mir::RawPtrKind::Mut,
@@ -2167,7 +2068,7 @@ fn mir_rvalue_to_rustc<'tcx>(
             mir_place_to_rustc(tcx, place),
         ),
         MirRvalue::Ref(region, borrow_kind, place) => rustc_middle::mir::Rvalue::Ref(
-            mir_region_to_rustc(tcx, resolver, region),
+            mir_region_to_rustc(tcx, region),
             match borrow_kind {
                 rustc_public::mir::BorrowKind::Shared => BorrowKind::Shared,
                 rustc_public::mir::BorrowKind::Fake(rustc_public::mir::FakeBorrowKind::Deep) => {
@@ -2200,14 +2101,13 @@ fn mir_rvalue_to_rustc<'tcx>(
 
 fn mir_operand_to_rustc<'tcx>(
     tcx: TyCtxt<'tcx>,
-    resolver: &MirResolver<'_>,
     operand: &MirOperand,
 ) -> rustc_middle::mir::Operand<'tcx> {
     match operand {
         MirOperand::Copy(place) => rustc_middle::mir::Operand::Copy(mir_place_to_rustc(tcx, place)),
         MirOperand::Move(place) => rustc_middle::mir::Operand::Move(mir_place_to_rustc(tcx, place)),
         MirOperand::Constant(c) => {
-            rustc_middle::mir::Operand::Constant(Box::new(mir_const_to_rustc(tcx, resolver, c)))
+            rustc_middle::mir::Operand::Constant(Box::new(mir_const_to_rustc(tcx, c)))
         }
         MirOperand::RuntimeChecks(_) => todo!(),
     }
@@ -2215,11 +2115,9 @@ fn mir_operand_to_rustc<'tcx>(
 
 fn mir_const_to_rustc<'tcx>(
     tcx: TyCtxt<'tcx>,
-    resolver: &MirResolver<'_>,
     konst: &MirConst,
 ) -> rustc_middle::mir::ConstOperand<'tcx> {
     use rustc_public::rustc_internal::internal;
-    let _ = resolver;
     rustc_middle::mir::ConstOperand {
         span: to_rustc_span2(konst.span.into()),
         user_ty: None,
@@ -2257,48 +2155,6 @@ fn make_owner_info(nodes: hir::OwnerNodes<'static>) -> hir::OwnerInfo<'static> {
             opt_hash: Some(Fingerprint::ZERO),
         },
     }
-}
-
-#[repr(C)]
-struct ModuleItemsRepr {
-    add_root: bool,
-    submodules: Box<[OwnerId]>,
-    free_items: Box<[hir::ItemId]>,
-    trait_items: Box<[hir::TraitItemId]>,
-    impl_items: Box<[hir::ImplItemId]>,
-    foreign_items: Box<[hir::ForeignItemId]>,
-    opaques: Box<[LocalDefId]>,
-    body_owners: Box<[LocalDefId]>,
-    nested_bodies: Box<[LocalDefId]>,
-    delayed_lint_items: Box<[OwnerId]>,
-    eiis: Box<[LocalDefId]>,
-}
-
-#[derive(Clone)]
-struct ModuleItemsSpec {
-    add_root: bool,
-    free_items: Vec<hir::ItemId>,
-    foreign_items: Vec<hir::ForeignItemId>,
-    body_owners: Vec<LocalDefId>,
-    delayed_lint_items: Vec<OwnerId>,
-}
-
-fn make_module_items(spec: ModuleItemsSpec) -> ModuleItems {
-    let repr = ModuleItemsRepr {
-        add_root: spec.add_root,
-        submodules: Vec::new().into_boxed_slice(),
-        free_items: spec.free_items.into_boxed_slice(),
-        trait_items: Vec::new().into_boxed_slice(),
-        impl_items: Vec::new().into_boxed_slice(),
-        foreign_items: spec.foreign_items.into_boxed_slice(),
-        opaques: Vec::new().into_boxed_slice(),
-        body_owners: spec.body_owners.into_boxed_slice(),
-        nested_bodies: Vec::new().into_boxed_slice(),
-        delayed_lint_items: spec.delayed_lint_items.into_boxed_slice(),
-        eiis: Vec::new().into_boxed_slice(),
-    };
-
-    unsafe { std::mem::transmute::<ModuleItemsRepr, ModuleItems>(repr) }
 }
 
 fn insert_owner(

@@ -24,10 +24,8 @@ fn fn_const_operand(
     generic_args: Vec<gen::GenericArgKind>,
     span: gen::PublicSpan,
 ) -> gen::MirOperand {
-    let fn_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::FnDef(
-        fn_def,
-        gen::GenericArgs(generic_args),
-    ));
+    let fn_ty =
+        gen::MirTy::from_rigid_kind(gen::RigidTy::FnDef(fn_def, gen::GenericArgs(generic_args)));
     let c = gen::PublicMirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
     gen::MirOperand::Constant(gen::MirConst {
         span,
@@ -60,19 +58,12 @@ fn main() {
                         name: "main".to_string(),
                         parent: None,
                         kind: gen::ItemKind::Function,
-                        function: Some(gen::FunctionSignature {
-                            inputs: vec![],
-                            output: gen::MirTy::new_tuple(&[]),
-                            abi: gen::FunctionAbi::Rust,
-                            is_unsafe: false,
-                        }),
                     },
                     gen::ItemInfo {
                         id: item_write,
                         name: "write".to_string(),
                         parent: None,
-                        kind: gen::ItemKind::ForeignFunction,
-                        function: Some(gen::FunctionSignature {
+                        kind: gen::ItemKind::ForeignFunction(gen::FunctionSignature {
                             inputs: vec![usize_ty, ptr_i8_mut, usize_ty],
                             output: usize_ty,
                             abi: gen::FunctionAbi::C,
@@ -83,8 +74,7 @@ fn main() {
                         id: item_open,
                         name: "open".to_string(),
                         parent: None,
-                        kind: gen::ItemKind::ForeignFunction,
-                        function: Some(gen::FunctionSignature {
+                        kind: gen::ItemKind::ForeignFunction(gen::FunctionSignature {
                             inputs: vec![ptr_i8_mut, usize_ty],
                             output: usize_ty,
                             abi: gen::FunctionAbi::C,
@@ -95,8 +85,7 @@ fn main() {
                         id: item_read,
                         name: "read".to_string(),
                         parent: None,
-                        kind: gen::ItemKind::ForeignFunction,
-                        function: Some(gen::FunctionSignature {
+                        kind: gen::ItemKind::ForeignFunction(gen::FunctionSignature {
                             inputs: vec![usize_ty, ptr_i8_mut, usize_ty],
                             output: usize_ty,
                             abi: gen::FunctionAbi::C,
@@ -107,8 +96,7 @@ fn main() {
                         id: item_close,
                         name: "close".to_string(),
                         parent: None,
-                        kind: gen::ItemKind::ForeignFunction,
-                        function: Some(gen::FunctionSignature {
+                        kind: gen::ItemKind::ForeignFunction(gen::FunctionSignature {
                             inputs: vec![usize_ty],
                             output: usize_ty,
                             abi: gen::FunctionAbi::C,
@@ -119,8 +107,7 @@ fn main() {
                         id: item_malloc,
                         name: "malloc".to_string(),
                         parent: None,
-                        kind: gen::ItemKind::ForeignFunction,
-                        function: Some(gen::FunctionSignature {
+                        kind: gen::ItemKind::ForeignFunction(gen::FunctionSignature {
                             inputs: vec![usize_ty],
                             output: ptr_i8_mut,
                             abi: gen::FunctionAbi::C,
@@ -131,8 +118,7 @@ fn main() {
                         id: item_free,
                         name: "free".to_string(),
                         parent: None,
-                        kind: gen::ItemKind::ForeignFunction,
-                        function: Some(gen::FunctionSignature {
+                        kind: gen::ItemKind::ForeignFunction(gen::FunctionSignature {
                             inputs: vec![ptr_i8_mut],
                             output: gen::MirTy::new_tuple(&[]),
                             abi: gen::FunctionAbi::C,
@@ -143,49 +129,43 @@ fn main() {
             }
         },
         move |_ctx, deps, defined| {
-            let main = defined
-                .items
-                .iter()
-                .find(|i| i.id == item_main)
-                .expect("missing main item");
-            let _ = main.fn_def.expect("main fn def missing");
             let span: gen::PublicSpan = unsafe { std::mem::zeroed() };
 
             let write = defined
                 .items
                 .iter()
                 .find(|i| i.id == item_write)
-                .and_then(|i| i.fn_def)
+                .and_then(|i| i.fn_def())
                 .expect("missing write def");
             let open = defined
                 .items
                 .iter()
                 .find(|i| i.id == item_open)
-                .and_then(|i| i.fn_def)
+                .and_then(|i| i.fn_def())
                 .expect("missing open def");
             let read = defined
                 .items
                 .iter()
                 .find(|i| i.id == item_read)
-                .and_then(|i| i.fn_def)
+                .and_then(|i| i.fn_def())
                 .expect("missing read def");
             let close = defined
                 .items
                 .iter()
                 .find(|i| i.id == item_close)
-                .and_then(|i| i.fn_def)
+                .and_then(|i| i.fn_def())
                 .expect("missing close def");
             let malloc = defined
                 .items
                 .iter()
                 .find(|i| i.id == item_malloc)
-                .and_then(|i| i.fn_def)
+                .and_then(|i| i.fn_def())
                 .expect("missing malloc def");
             let free = defined
                 .items
                 .iter()
                 .find(|i| i.id == item_free)
-                .and_then(|i| i.fn_def)
+                .and_then(|i| i.fn_def())
                 .expect("missing free def");
 
             let std_env_args = deps.std_env_args_def.expect("std::env::args missing");
@@ -204,10 +184,20 @@ fn main() {
             let option_adt = deps.option_ty.expect("Option type missing");
             let result_adt = deps.result_ty.expect("Result type missing");
 
-            let args_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(args_adt, gen::GenericArgs(vec![])));
-            let string_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(string_adt, gen::GenericArgs(vec![])));
-            let cstring_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(cstring_adt, gen::GenericArgs(vec![])));
-            let nul_error_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(nul_error_adt, gen::GenericArgs(vec![])));
+            let args_ty =
+                gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(args_adt, gen::GenericArgs(vec![])));
+            let string_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(
+                string_adt,
+                gen::GenericArgs(vec![]),
+            ));
+            let cstring_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(
+                cstring_adt,
+                gen::GenericArgs(vec![]),
+            ));
+            let nul_error_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(
+                nul_error_adt,
+                gen::GenericArgs(vec![]),
+            ));
             let option_string_ty = gen::MirTy::from_rigid_kind(gen::RigidTy::Adt(
                 option_adt,
                 gen::GenericArgs(vec![gen::GenericArgKind::Type(string_ty)]),
@@ -502,7 +492,10 @@ fn main() {
             ];
 
             let body = gen::MirBody::new(blocks, locals, 0, vec![], None, span);
-            vec![gen::ItemMirInfo { id: item_main, body }]
+            vec![gen::ItemMirInfo {
+                id: item_main,
+                body,
+            }]
         },
     );
 }
