@@ -9,3 +9,6 @@ path = "src/lib.rs"
 [dependencies]
 # Using rustc_private crates from the installed nightly toolchain.
 # We intentionally avoid exposing rustc_* types in the public API.
+
+[package.metadata.rust-analyzer]
+rustc_private=true

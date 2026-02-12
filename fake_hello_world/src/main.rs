@@ -21,10 +21,22 @@ fn main() {
         let option_ty_id = deps.option_ty.expect("Option type missing");
         let result_ty_id = deps.result_ty.expect("Result type missing");
 
-        let args_ty = gen::MirTy::Adt { id: args_ty_id, args: vec![] };
-        let string_ty = gen::MirTy::Adt { id: string_ty_id, args: vec![] };
-        let cstring_ty = gen::MirTy::Adt { id: cstring_ty_id, args: vec![] };
-        let nul_error_ty = gen::MirTy::Adt { id: nul_error_ty_id, args: vec![] };
+        let args_ty = gen::MirTy::from_rigid_kind(rustc_public_generative::RigidTy::Adt(
+            args_ty_id,
+            gen::GenericArgs(vec![]),
+        ));
+        let string_ty = gen::MirTy::Adt {
+            id: string_ty_id,
+            args: vec![],
+        };
+        let cstring_ty = gen::MirTy::Adt {
+            id: cstring_ty_id,
+            args: vec![],
+        };
+        let nul_error_ty = gen::MirTy::Adt {
+            id: nul_error_ty_id,
+            args: vec![],
+        };
         let option_string_ty = gen::MirTy::Adt {
             id: option_ty_id,
             args: vec![string_ty.clone()],
@@ -34,11 +46,23 @@ fn main() {
             args: vec![cstring_ty.clone(), nul_error_ty.clone()],
         };
 
-        let args_ref_ty = gen::MirTy::Ref { mutability: gen::MirMutability::Mut, to: Box::new(args_ty.clone()) };
-        let cstring_ref_ty = gen::MirTy::Ref { mutability: gen::MirMutability::Not, to: Box::new(cstring_ty.clone()) };
+        let args_ref_ty = gen::MirTy::Ref {
+            mutability: gen::MirMutability::Mut,
+            to: Box::new(args_ty.clone()),
+        };
+        let cstring_ref_ty = gen::MirTy::Ref {
+            mutability: gen::MirMutability::Not,
+            to: Box::new(cstring_ty.clone()),
+        };
 
-        let ptr_i8_mut = gen::MirTy::Ptr { mutability: gen::MirMutability::Mut, to: Box::new(gen::MirTy::I8) };
-        let ptr_i8_const = gen::MirTy::Ptr { mutability: gen::MirMutability::Not, to: Box::new(gen::MirTy::I8) };
+        let ptr_i8_mut = gen::MirTy::Ptr {
+            mutability: gen::MirMutability::Mut,
+            to: Box::new(gen::MirTy::I8),
+        };
+        let ptr_i8_const = gen::MirTy::Ptr {
+            mutability: gen::MirMutability::Not,
+            to: Box::new(gen::MirTy::I8),
+        };
 
         let mut next_fn_id = 1_000_000u64;
         let mut fresh_fn = || {
