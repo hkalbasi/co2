@@ -239,6 +239,7 @@ pub struct CurrentCrateInfo {
     pub crate_name: String,
     pub items: Vec<ItemInfo>,
     pub entry: Option<ItemId>,
+    pub no_main: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -247,12 +248,13 @@ pub struct ItemInfo {
     pub name: String,
     pub parent: Option<ItemId>,
     pub kind: ItemKind,
+    pub no_mangle: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum ItemKind {
     Module,
-    Function,
+    Function(FunctionSignature),
     ForeignFunction(FunctionSignature),
     Struct,
     Enum,
@@ -328,6 +330,8 @@ struct ForeignFunctionInfo {
 struct FunctionInfo {
     id: ItemId,
     name: String,
+    signature: FunctionSignature,
+    no_mangle: bool,
 }
 
 /// Run rustc_driver but emit a synthetic crate described by two callbacks.
@@ -339,16 +343,22 @@ where
     D: FnOnce(Context, DependencyInfo) -> CurrentCrateInfo + Send + 'static,
     M: FnOnce(Context, DependencyInfo, DefinedCrateInfo) -> Vec<ItemMirInfo> + Send + 'static,
 {
-    let mut args: Vec<String> = std::env::args().collect();
+    generate_with_args(std::env::args().collect(), define_items, emit_mir)
+}
+
+pub fn generate_with_args<D, M>(mut args: Vec<String>, define_items: D, emit_mir: M)
+where
+    D: FnOnce(Context, DependencyInfo) -> CurrentCrateInfo + Send + 'static,
+    M: FnOnce(Context, DependencyInfo, DefinedCrateInfo) -> Vec<ItemMirInfo> + Send + 'static,
+{
     if args.len() == 1 {
         // Provide a dummy crate name if invoked programmatically without args.
         args.push(String::from("rustc"));
         args.push(String::from("--crate-name"));
         args.push(String::from("synthetic"));
         args.push(String::from("--crate-type=bin"));
-        args.push(String::from("-"));
+        args.push(String::from("/dev/null"));
     }
-
     let mut callbacks = GenerateCallbacks::new(define_items, emit_mir);
     rustc_driver::run_compiler(&args, &mut callbacks);
 }
@@ -1068,6 +1078,8 @@ struct GeneratedCrate {
     foreign_function_infos: LocalDefIdMap<ForeignFunctionInfo>,
     foreign_function_sigs: LocalDefIdMap<(Vec<ty::Ty<'static>>, ty::Ty<'static>)>,
     foreign_function_symbols: LocalDefIdMap<Symbol>,
+    function_sigs: LocalDefIdMap<(Vec<ty::Ty<'static>>, ty::Ty<'static>, hir::Safety, ExternAbi)>,
+    function_symbols: LocalDefIdMap<Symbol>,
     owners: IndexVec<LocalDefId, Option<&'static hir::OwnerInfo<'static>>>,
     owner_parents: LocalDefIdMap<HirId>,
     def_kinds: LocalDefIdMap<DefKind>,
@@ -1076,6 +1088,7 @@ struct GeneratedCrate {
     function_bodies: LocalDefIdMap<rustc_middle::mir::Body<'static>>,
     function_mir: Mutex<LocalDefIdMap<&'static Steal<rustc_middle::mir::Body<'static>>>>,
     entry_fn: Option<LocalDefId>,
+    no_main: bool,
 }
 
 impl GeneratedCrate {
@@ -1107,10 +1120,12 @@ impl GeneratedCrate {
                         output: sig.output,
                     });
                 }
-                ItemKind::Function => {
+                ItemKind::Function(sig) => {
                     functions.push(FunctionInfo {
                         id: item.id,
                         name: item.name.clone(),
+                        signature: sig.clone(),
+                        no_mangle: item.no_mangle,
                     });
                 }
                 ItemKind::Module => {}
@@ -1139,6 +1154,13 @@ impl GeneratedCrate {
         let mut foreign_function_sigs: LocalDefIdMap<(Vec<ty::Ty<'static>>, ty::Ty<'static>)> =
             LocalDefIdMap::default();
         let mut foreign_function_symbols: LocalDefIdMap<Symbol> = LocalDefIdMap::default();
+        let mut function_sigs: LocalDefIdMap<(
+            Vec<ty::Ty<'static>>,
+            ty::Ty<'static>,
+            hir::Safety,
+            ExternAbi,
+        )> = LocalDefIdMap::default();
+        let mut function_symbols: LocalDefIdMap<Symbol> = LocalDefIdMap::default();
 
         let crate_def = CRATE_DEF_ID;
         let (foreign_mod_def, main_def, foreign_function_ids) =
@@ -1239,10 +1261,15 @@ impl GeneratedCrate {
         };
         let foreign_mod_item = leak(foreign_mod_item);
 
-        let entry_name = functions.first().map(|f| f.name.as_str()).unwrap_or("main");
+        let first_function = functions.first().cloned();
+        let entry_name = first_function
+            .as_ref()
+            .map(|f| f.name.as_str())
+            .unwrap_or("main");
         let main_ident = Ident::from_str(entry_name);
+        let main_inputs: Vec<hir::Ty<'static>> = Vec::new();
         let main_fn_decl = leak(hir::FnDecl {
-            inputs: &[],
+            inputs: leak(main_inputs.into_boxed_slice()),
             output: hir::FnRetTy::DefaultReturn(DUMMY_SP),
             c_variadic: false,
             implicit_self: hir::ImplicitSelfKind::None,
@@ -1250,10 +1277,32 @@ impl GeneratedCrate {
         });
         let main_fn_sig = hir::FnSig {
             header: hir::FnHeader {
-                safety: hir::HeaderSafety::Normal(hir::Safety::Safe),
+                safety: hir::HeaderSafety::Normal(
+                    if info.no_main
+                        && first_function
+                        .as_ref()
+                        .map(|f| f.signature.is_unsafe)
+                        .unwrap_or(false)
+                    {
+                        hir::Safety::Unsafe
+                    } else {
+                        hir::Safety::Safe
+                    },
+                ),
                 constness: hir::Constness::NotConst,
                 asyncness: hir::IsAsync::NotAsync,
-                abi: ExternAbi::Rust,
+                abi: if info.no_main {
+                    match first_function
+                        .as_ref()
+                        .map(|f| f.signature.abi)
+                        .unwrap_or(FunctionAbi::Rust)
+                    {
+                        FunctionAbi::Rust => ExternAbi::Rust,
+                        FunctionAbi::C => ExternAbi::C { unwind: false },
+                    }
+                } else {
+                    ExternAbi::Rust
+                },
             },
             decl: main_fn_decl,
             span: DUMMY_SP,
@@ -1337,6 +1386,33 @@ impl GeneratedCrate {
 
         if let Some(first) = functions.first() {
             function_infos.insert(main_def, first.clone());
+            if first.no_mangle {
+                function_symbols.insert(main_def, Symbol::intern(&first.name));
+            }
+            if info.no_main {
+                let inputs_tcx = first
+                    .signature
+                    .inputs
+                    .iter()
+                    .map(|ty| mir_ty_to_rustc(tcx, ty))
+                    .collect::<Vec<_>>();
+                let output_tcx = mir_ty_to_rustc(tcx, &first.signature.output);
+                let inputs_static = unsafe {
+                    std::mem::transmute::<Vec<ty::Ty<'tcx>>, Vec<ty::Ty<'static>>>(inputs_tcx)
+                };
+                let output_static =
+                    unsafe { std::mem::transmute::<ty::Ty<'tcx>, ty::Ty<'static>>(output_tcx) };
+                let safety = if first.signature.is_unsafe {
+                    hir::Safety::Unsafe
+                } else {
+                    hir::Safety::Safe
+                };
+                let abi = match first.signature.abi {
+                    FunctionAbi::Rust => ExternAbi::Rust,
+                    FunctionAbi::C => ExternAbi::C { unwind: false },
+                };
+                function_sigs.insert(main_def, (inputs_static, output_static, safety, abi));
+            }
         }
 
         if std::env::var("GEN_DEBUG").is_ok() {
@@ -1347,10 +1423,13 @@ impl GeneratedCrate {
         if let Some(first) = functions.first() {
             function_ids.insert(first.id, main_def);
         }
-        let entry_fn = info
-            .entry
-            .and_then(|id| function_ids.get(&id).copied())
-            .or(Some(main_def));
+        let entry_fn = if info.no_main {
+            None
+        } else {
+            info.entry
+                .and_then(|id| function_ids.get(&id).copied())
+                .or(Some(main_def))
+        };
 
         Self {
             crate_name,
@@ -1360,6 +1439,8 @@ impl GeneratedCrate {
             foreign_function_infos,
             foreign_function_sigs,
             foreign_function_symbols,
+            function_sigs,
+            function_symbols,
             owners,
             owner_parents,
             def_kinds,
@@ -1368,6 +1449,7 @@ impl GeneratedCrate {
             function_bodies: LocalDefIdMap::default(),
             function_mir: Mutex::new(LocalDefIdMap::default()),
             entry_fn,
+            no_main: info.no_main,
         }
     }
 
@@ -1535,13 +1617,35 @@ impl GeneratedCrate {
         tcx: TyCtxt<'tcx>,
         def_id: LocalDefId,
     ) -> Option<ty::EarlyBinder<'tcx, ty::PolyFnSig<'tcx>>> {
-        if self.function_infos.contains_key(&def_id) {
+        if let Some(_info) = self.function_infos.get(&def_id) {
+            if !self.no_main {
+                let sig = tcx.mk_fn_sig(
+                    Vec::new(),
+                    tcx.types.unit,
+                    false,
+                    hir::Safety::Safe,
+                    ExternAbi::Rust,
+                );
+                let poly = ty::Binder::dummy(sig);
+                return Some(ty::EarlyBinder::bind(poly));
+            }
+            let Some((inputs_static, output_static, safety, abi)) = self.function_sigs.get(&def_id)
+            else {
+                return None;
+            };
+            let inputs = unsafe {
+                std::mem::transmute::<Vec<ty::Ty<'static>>, Vec<ty::Ty<'tcx>>>(
+                    inputs_static.clone(),
+                )
+            };
+            let output =
+                unsafe { std::mem::transmute::<ty::Ty<'static>, ty::Ty<'tcx>>(*output_static) };
             let sig = tcx.mk_fn_sig(
-                Vec::new(),
-                tcx.types.unit,
+                inputs,
+                output,
                 false,
-                hir::Safety::Safe,
-                ExternAbi::Rust,
+                *safety,
+                *abi,
             );
             let poly = ty::Binder::dummy(sig);
             return Some(ty::EarlyBinder::bind(poly));
@@ -1598,6 +1702,10 @@ impl GeneratedCrate {
         if self.def_kinds.contains_key(&def_id) {
             let mut attrs = rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs::new();
             if let Some(symbol) = self.foreign_function_symbols.get(&def_id) {
+                attrs.flags.insert(CodegenFnAttrFlags::NO_MANGLE);
+                attrs.symbol_name = Some(*symbol);
+            }
+            if let Some(symbol) = self.function_symbols.get(&def_id) {
                 attrs.flags.insert(CodegenFnAttrFlags::NO_MANGLE);
                 attrs.symbol_name = Some(*symbol);
             }

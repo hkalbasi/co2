@@ -1,6 +1,30 @@
 use co2_hir_mir::{MirModule, Type as HirType};
 use rustc_public_generative as rustc_gen;
 
+#[derive(Clone, Copy, Debug)]
+pub struct CompileMode {
+    pub no_main: bool,
+    pub function_abi: rustc_gen::FunctionAbi,
+    pub function_no_mangle: bool,
+    pub function_is_unsafe: bool,
+}
+
+impl CompileMode {
+    pub const RUST: Self = Self {
+        no_main: false,
+        function_abi: rustc_gen::FunctionAbi::Rust,
+        function_no_mangle: false,
+        function_is_unsafe: false,
+    };
+
+    pub const C: Self = Self {
+        no_main: true,
+        function_abi: rustc_gen::FunctionAbi::C,
+        function_no_mangle: true,
+        function_is_unsafe: false,
+    };
+}
+
 pub(crate) fn func_item_id(name: &str) -> rustc_gen::ItemId {
     let mut hash = 0u64;
     for b in name.as_bytes() {
@@ -12,6 +36,7 @@ pub(crate) fn func_item_id(name: &str) -> rustc_gen::ItemId {
 pub(crate) fn build_items(
     module: &MirModule,
     deps: rustc_gen::DependencyInfo,
+    mode: CompileMode,
 ) -> rustc_gen::CurrentCrateInfo {
     let mut items = Vec::new();
     let mut entry = None;
@@ -25,7 +50,25 @@ pub(crate) fn build_items(
             id,
             name: func.name.clone(),
             parent: None,
-            kind: rustc_gen::ItemKind::Function,
+            kind: rustc_gen::ItemKind::Function(rustc_gen::FunctionSignature {
+                inputs: if mode.no_main {
+                    vec![]
+                } else {
+                    func.sig
+                        .params
+                        .iter()
+                        .map(|t| mir_ty_from_type(t, Some(module), &deps))
+                        .collect()
+                },
+                output: if mode.no_main {
+                    rustc_gen::MirTy::new_tuple(&[])
+                } else {
+                    mir_ty_from_type(&func.sig.ret, Some(module), &deps)
+                },
+                abi: mode.function_abi,
+                is_unsafe: mode.function_is_unsafe,
+            }),
+            no_mangle: mode.function_no_mangle,
         });
     }
 
@@ -46,13 +89,15 @@ pub(crate) fn build_items(
                 abi: rustc_gen::FunctionAbi::C,
                 is_unsafe: true,
             }),
+            no_mangle: false,
         });
     }
 
     rustc_gen::CurrentCrateInfo {
         crate_name: "co2".to_owned(),
-        entry,
+        entry: if mode.no_main { None } else { entry },
         items,
+        no_main: mode.no_main,
     }
 }
 

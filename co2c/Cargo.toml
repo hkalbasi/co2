@@ -1,15 +1,14 @@
 [package]
-name = "co2"
+name = "co2c"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "co2"
+name = "co2c"
 path = "src/main.rs"
 
 [dependencies]
 co2_driver_lib = { path = "../co2_driver_lib" }
-itertools = "0.14.0"
 
 [package.metadata.rust-analyzer]
 rustc_private = true

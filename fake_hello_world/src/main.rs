@@ -159,12 +159,19 @@ fn main() {
             rustc_gen::CurrentCrateInfo {
                 crate_name: "fake_hello_world".to_string(),
                 entry: Some(item_main),
+                no_main: false,
                 items: vec![
                     rustc_gen::ItemInfo {
                         id: item_main,
                         name: "main".to_string(),
                         parent: None,
-                        kind: rustc_gen::ItemKind::Function,
+                        kind: rustc_gen::ItemKind::Function(rustc_gen::FunctionSignature {
+                            inputs: vec![],
+                            output: rustc_gen::MirTy::new_tuple(&[]),
+                            abi: rustc_gen::FunctionAbi::Rust,
+                            is_unsafe: false,
+                        }),
+                        no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
                         id: item_write,
@@ -176,6 +183,7 @@ fn main() {
                             abi: rustc_gen::FunctionAbi::C,
                             is_unsafe: true,
                         }),
+                        no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
                         id: item_open,
@@ -187,6 +195,7 @@ fn main() {
                             abi: rustc_gen::FunctionAbi::C,
                             is_unsafe: true,
                         }),
+                        no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
                         id: item_read,
@@ -198,6 +207,7 @@ fn main() {
                             abi: rustc_gen::FunctionAbi::C,
                             is_unsafe: true,
                         }),
+                        no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
                         id: item_close,
@@ -209,6 +219,7 @@ fn main() {
                             abi: rustc_gen::FunctionAbi::C,
                             is_unsafe: true,
                         }),
+                        no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
                         id: item_malloc,
@@ -220,6 +231,7 @@ fn main() {
                             abi: rustc_gen::FunctionAbi::C,
                             is_unsafe: true,
                         }),
+                        no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
                         id: item_free,
@@ -231,6 +243,7 @@ fn main() {
                             abi: rustc_gen::FunctionAbi::C,
                             is_unsafe: true,
                         }),
+                        no_mangle: false,
                     },
                 ],
             }

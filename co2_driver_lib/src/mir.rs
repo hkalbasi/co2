@@ -6,7 +6,7 @@ use rustc_public_generative as rustc_gen;
 
 use crate::types::{
     dep_adt_any, dep_fn, dep_fn_any, func_item_id, mir_ty_from_rust_path, mir_ty_from_type,
-    rust_path_generic_args,
+    rust_path_generic_args, CompileMode,
 };
 
 pub(crate) fn build_mir(
@@ -16,13 +16,18 @@ pub(crate) fn build_mir(
     defined: &rustc_gen::DefinedCrateInfo,
     ctx: &rustc_gen::Context,
     file_id: rustc_gen::FileId,
+    mode: CompileMode,
 ) -> rustc_gen::MirBody {
     let span = ctx.span_in_file(file_id, 0, 0);
 
     let mut locals = Vec::new();
-    for local in &func.locals {
+    for (idx, local) in func.locals.iter().enumerate() {
         locals.push(rustc_gen::MirLocalDecl {
-            ty: mir_ty_from_type(&local.ty, Some(module), deps),
+            ty: if mode.no_main && idx == 0 {
+                rustc_gen::MirTy::new_tuple(&[])
+            } else {
+                mir_ty_from_type(&local.ty, Some(module), deps)
+            },
             span,
             mutability: rustc_gen::MirMutability::Mut,
         });
@@ -36,6 +41,9 @@ pub(crate) fn build_mir(
     for op in &func.ops {
         match op {
             HirOp::Assign { dst, src } => {
+                if mode.no_main && *dst == 0 {
+                    continue;
+                }
                 let rvalue = rustc_gen::MirRvalue::Use(lower_operand(
                     src,
                     &locals,
@@ -46,6 +54,7 @@ pub(crate) fn build_mir(
                     &mut stmts,
                     ctx,
                     file_id,
+                    mode,
                 ));
                 stmts.push(rustc_gen::MirStatement {
                     kind: rustc_gen::MirStatementKind::Assign(place(*dst), rvalue),
@@ -71,6 +80,7 @@ pub(crate) fn build_mir(
                     file_id,
                     span,
                     defined,
+                    mode,
                 );
                 let dest_place = dest.map(place).unwrap_or_else(|| {
                     let idx = locals.len() + extra_locals.len();
@@ -354,6 +364,7 @@ fn lower_call(
     file_id: rustc_gen::FileId,
     span: rustc_gen::PublicSpan,
     defined: &rustc_gen::DefinedCrateInfo,
+    mode: CompileMode,
 ) -> (rustc_gen::MirOperand, Vec<rustc_gen::MirOperand>) {
     let (func_def, path) = match callee {
         HirCallee::Path(path) => {
@@ -417,6 +428,7 @@ fn lower_call(
             stmts,
             ctx,
             file_id,
+            mode,
         ));
     }
 
@@ -424,6 +436,9 @@ fn lower_call(
 }
 
 fn resolve_dep_fn_for_path(deps: &rustc_gen::DependencyInfo, path: &str) -> rustc_gen::FnDef {
+    if path == "printf" || path.ends_with("::printf") {
+        return dep_fn_any(deps, &["libc::printf", "libc::unix::printf"]);
+    }
     if path.ends_with("::Option::unwrap") || path.ends_with("::option::Option::unwrap") {
         return dep_fn_any(
             deps,
@@ -458,6 +473,9 @@ fn call_return_ty(
 ) -> rustc_gen::MirTy {
     match callee {
         HirCallee::Path(path) => {
+            if path == "printf" || path.ends_with("::printf") {
+                return rustc_gen::MirTy::signed_ty(rustc_gen::PublicIntTy::I32);
+            }
             if let Some(f) = module.functions.iter().find(|f| f.name == *path) {
                 return mir_ty_from_type(&f.sig.ret, Some(module), deps);
             }
@@ -480,6 +498,7 @@ fn lower_operand(
     stmts: &mut Vec<rustc_gen::MirStatement>,
     ctx: &rustc_gen::Context,
     file_id: rustc_gen::FileId,
+    mode: CompileMode,
 ) -> rustc_gen::MirOperand {
     match operand {
         HirOperand::Local(l) => rustc_gen::MirOperand::Copy(place(*l)),
@@ -538,7 +557,14 @@ fn lower_operand(
             );
 
             let i8_ty = rustc_gen::MirTy::signed_ty(rustc_gen::PublicIntTy::I8);
-            let ptr_i8_ty = rustc_gen::MirTy::new_ptr(i8_ty, rustc_gen::MirMutability::Mut);
+            let ptr_i8_ty = rustc_gen::MirTy::new_ptr(
+                i8_ty,
+                if mode.no_main {
+                    rustc_gen::MirMutability::Not
+                } else {
+                    rustc_gen::MirMutability::Mut
+                },
+            );
             let ptr_i8_local = locals.len() + extra_locals.len();
             extra_locals.push(rustc_gen::MirLocalDecl {
                 ty: ptr_i8_ty,
@@ -585,12 +611,13 @@ pub(crate) fn build_item_mir_infos(
     defined: &rustc_gen::DefinedCrateInfo,
     ctx: &rustc_gen::Context,
     file_id: rustc_gen::FileId,
+    mode: CompileMode,
 ) -> Vec<rustc_gen::ItemMirInfo> {
     module
         .functions
         .iter()
         .map(|func| {
-            let body = build_mir(func, module, deps, defined, ctx, file_id);
+            let body = build_mir(func, module, deps, defined, ctx, file_id, mode);
             rustc_gen::ItemMirInfo {
                 id: func_item_id(func.name.as_str()),
                 body,
