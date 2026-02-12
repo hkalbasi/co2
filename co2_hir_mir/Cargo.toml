@@ -1,0 +1,10 @@
+[package]
+name = "co2_hir_mir"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+co2_parser = { path = "../co2_parser" }

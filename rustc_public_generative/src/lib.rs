@@ -46,10 +46,11 @@ use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, Span as RustcSpan, SyntaxContext, DUMMY_SP};
 
 pub use rustc_public::mir::{
-    BasicBlock as MirBasicBlock, Body as MirBody, BorrowKind as MirBorrowKind,
-    ConstOperand as MirConst, LocalDecl as MirLocalDecl, MutBorrowKind as MirMutBorrowKind,
-    Mutability as MirMutability, Operand as MirOperand, Place as MirPlace,
-    ProjectionElem as MirProjection, Rvalue as MirRvalue, Statement as MirStatement,
+    AggregateKind as MirAggregateKind, BasicBlock as MirBasicBlock, Body as MirBody,
+    BorrowKind as MirBorrowKind, CastKind as MirCastKind, ConstOperand as MirConst,
+    LocalDecl as MirLocalDecl, MutBorrowKind as MirMutBorrowKind, Mutability as MirMutability,
+    Operand as MirOperand, Place as MirPlace, ProjectionElem as MirProjection,
+    RawPtrKind as MirRawPtrKind, Rvalue as MirRvalue, Statement as MirStatement,
     StatementKind as MirStatementKind, Terminator as MirTerminator,
     TerminatorKind as MirTerminatorKind, UnwindAction as MirUnwindAction,
 };
@@ -68,10 +69,12 @@ pub struct Context(Arc<ContextInner>);
 struct ContextInner {
     next_file_id: std::sync::atomic::AtomicU32,
     custom_files: Mutex<Vec<CustomFile>>,
+    registered_files: Mutex<FxHashMap<FileId, RegisteredFile>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CustomFile {
+    pub id: FileId,
     pub path: PathBuf,
     pub contents: String,
 }
@@ -102,6 +105,7 @@ impl Context {
         Self(Arc::new(ContextInner {
             next_file_id: std::sync::atomic::AtomicU32::new(1),
             custom_files: Mutex::new(Vec::new()),
+            registered_files: Mutex::new(FxHashMap::default()),
         }))
     }
 
@@ -112,6 +116,7 @@ impl Context {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut guard = self.0.custom_files.lock().unwrap();
         guard.push(CustomFile {
+            id: FileId(id),
             path: path.into(),
             contents: contents.into(),
         });
@@ -126,6 +131,63 @@ impl Context {
         let mut guard = self.0.custom_files.lock().unwrap();
         std::mem::take(&mut *guard)
     }
+
+    pub(crate) fn register_with_source_map(&self, tcx: TyCtxt<'_>) {
+        let files = self.take_custom_files();
+        if files.is_empty() {
+            return;
+        }
+        let source_map = tcx.sess.source_map();
+        let mut reg_guard = self.0.registered_files.lock().unwrap();
+        for file in files {
+            if reg_guard.contains_key(&file.id) {
+                continue;
+            }
+            let source_file = if file.path.exists() {
+                source_map
+                    .load_file(&file.path)
+                    .unwrap_or_else(|_| {
+                        let real = source_map.path_mapping().to_real_filename(
+                            source_map.working_dir(),
+                            file.path.as_path(),
+                        );
+                        source_map.new_source_file(
+                            rustc_span::FileName::Real(real),
+                            file.contents.clone(),
+                        )
+                    })
+            } else {
+                source_map.new_source_file(
+                    rustc_span::FileName::Custom(file.path.display().to_string()),
+                    file.contents.clone(),
+                )
+            };
+            reg_guard.insert(
+                file.id,
+                RegisteredFile {
+                    start: source_file.start_pos,
+                    end: source_file.end_position(),
+                },
+            );
+        }
+    }
+
+    pub fn span_in_file(&self, file: FileId, lo: u32, hi: u32) -> rustc_public::ty::Span {
+        let guard = self.0.registered_files.lock().unwrap();
+        let file = guard
+            .get(&file)
+            .unwrap_or_else(|| panic!("file id {file:?} not registered"));
+        let lo = file.start + BytePos(lo);
+        let hi = file.start + BytePos(hi);
+        let span = RustcSpan::new(lo, hi, SyntaxContext::root(), None);
+        rustc_public::rustc_internal::stable(span)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RegisteredFile {
+    start: BytePos,
+    end: BytePos,
 }
 
 /// Summary of crates loaded as dependencies by rustc.
@@ -1023,6 +1085,7 @@ impl GeneratedCrate {
         if std::env::var("GEN_DEBUG").is_ok() {
             eprintln!("GeneratedCrate::build");
         }
+        context.register_with_source_map(tcx);
         let crate_name = if info.crate_name.is_empty() {
             Symbol::intern("synthetic")
         } else {
@@ -1678,7 +1741,9 @@ fn build_mir_body<'tcx>(
     body: &MirBody,
     owner: LocalDefId,
 ) -> rustc_middle::mir::Body<'static> {
-    let span = to_rustc_span(context, body.span.into());
+    let span = run_with_public_context(tcx, || {
+        rustc_public::rustc_internal::internal(tcx, body.span)
+    });
     let source_scope = rustc_middle::mir::SourceScope::from_usize(0);
     let source_scopes = IndexVec::from_iter([rustc_middle::mir::SourceScopeData {
         span,
@@ -1844,6 +1909,90 @@ fn mir_rvalue_to_rustc<'tcx>(
             },
             mir_place_to_rustc(tcx, place),
         ),
+        MirRvalue::Aggregate(kind, ops) => {
+            let kind = match kind {
+                rustc_public::mir::AggregateKind::Array(ty) => {
+                    rustc_middle::mir::AggregateKind::Array(mir_ty_to_rustc(tcx, ty))
+                }
+                rustc_public::mir::AggregateKind::Tuple => {
+                    rustc_middle::mir::AggregateKind::Tuple
+                }
+                rustc_public::mir::AggregateKind::RawPtr(ty, mutability) => {
+                    rustc_middle::mir::AggregateKind::RawPtr(
+                        mir_ty_to_rustc(tcx, ty),
+                        match mutability {
+                            rustc_public::mir::Mutability::Mut => rustc_middle::mir::Mutability::Mut,
+                            rustc_public::mir::Mutability::Not => rustc_middle::mir::Mutability::Not,
+                        },
+                    )
+                }
+                _ => todo!("aggregate kind not supported yet"),
+            };
+            rustc_middle::mir::Rvalue::Aggregate(
+                Box::new(kind),
+                ops.iter().map(|op| mir_operand_to_rustc(tcx, op)).collect(),
+            )
+        }
+        MirRvalue::Cast(kind, operand, ty) => {
+            let kind = match kind {
+                rustc_public::mir::CastKind::PointerExposeAddress => {
+                    rustc_middle::mir::CastKind::PointerExposeProvenance
+                }
+                rustc_public::mir::CastKind::PointerWithExposedProvenance => {
+                    rustc_middle::mir::CastKind::PointerWithExposedProvenance
+                }
+                rustc_public::mir::CastKind::PointerCoercion(coercion) => {
+                    rustc_middle::mir::CastKind::PointerCoercion(
+                        match coercion {
+                        rustc_public::mir::PointerCoercion::ReifyFnPointer(safety) => {
+                            rustc_middle::ty::adjustment::PointerCoercion::ReifyFnPointer(
+                                match safety {
+                                    rustc_public::mir::Safety::Safe => rustc_hir::Safety::Safe,
+                                    rustc_public::mir::Safety::Unsafe => rustc_hir::Safety::Unsafe,
+                                },
+                            )
+                        }
+                        rustc_public::mir::PointerCoercion::UnsafeFnPointer => {
+                            rustc_middle::ty::adjustment::PointerCoercion::UnsafeFnPointer
+                        }
+                        rustc_public::mir::PointerCoercion::ClosureFnPointer(safety) => {
+                            rustc_middle::ty::adjustment::PointerCoercion::ClosureFnPointer(
+                                match safety {
+                                    rustc_public::mir::Safety::Safe => rustc_hir::Safety::Safe,
+                                    rustc_public::mir::Safety::Unsafe => rustc_hir::Safety::Unsafe,
+                                },
+                            )
+                        }
+                        rustc_public::mir::PointerCoercion::MutToConstPointer => {
+                            rustc_middle::ty::adjustment::PointerCoercion::MutToConstPointer
+                        }
+                        rustc_public::mir::PointerCoercion::ArrayToPointer => {
+                            rustc_middle::ty::adjustment::PointerCoercion::ArrayToPointer
+                        }
+                        rustc_public::mir::PointerCoercion::Unsize => {
+                            rustc_middle::ty::adjustment::PointerCoercion::Unsize
+                        }
+                    },
+                        rustc_middle::mir::CoercionSource::AsCast,
+                    )
+                }
+                rustc_public::mir::CastKind::IntToInt => rustc_middle::mir::CastKind::IntToInt,
+                rustc_public::mir::CastKind::FloatToInt => rustc_middle::mir::CastKind::FloatToInt,
+                rustc_public::mir::CastKind::FloatToFloat => {
+                    rustc_middle::mir::CastKind::FloatToFloat
+                }
+                rustc_public::mir::CastKind::IntToFloat => rustc_middle::mir::CastKind::IntToFloat,
+                rustc_public::mir::CastKind::PtrToPtr => rustc_middle::mir::CastKind::PtrToPtr,
+                rustc_public::mir::CastKind::FnPtrToPtr => rustc_middle::mir::CastKind::FnPtrToPtr,
+                rustc_public::mir::CastKind::Transmute => rustc_middle::mir::CastKind::Transmute,
+                rustc_public::mir::CastKind::Subtype => rustc_middle::mir::CastKind::Subtype,
+            };
+            rustc_middle::mir::Rvalue::Cast(
+                kind,
+                mir_operand_to_rustc(tcx, operand),
+                mir_ty_to_rustc(tcx, ty),
+            )
+        }
         MirRvalue::Ref(region, borrow_kind, place) => rustc_middle::mir::Rvalue::Ref(
             mir_region_to_rustc(tcx, region),
             match borrow_kind {
@@ -1896,7 +2045,7 @@ fn mir_const_to_rustc<'tcx>(
 ) -> rustc_middle::mir::ConstOperand<'tcx> {
     use rustc_public::rustc_internal::internal;
     rustc_middle::mir::ConstOperand {
-        span: to_rustc_span2(konst.span.into()),
+        span: run_with_public_context(tcx, || internal(tcx, konst.span)),
         user_ty: None,
         const_: run_with_public_context(tcx, || internal(tcx, konst.const_.clone())),
     }
@@ -1910,10 +2059,12 @@ fn to_rustc_span2(span: Span) -> RustcSpan {
 }
 
 fn to_rustc_span(context: &Context, span: Span) -> RustcSpan {
-    let files = context.take_custom_files();
-    let _ = files; // TODO: Use SourceMap to register files and map spans.
-    let lo = BytePos(span.lo);
-    let hi = BytePos(span.hi);
+    let guard = context.0.registered_files.lock().unwrap();
+    let file = guard
+        .get(&span.file)
+        .unwrap_or_else(|| panic!("file id {:?} not registered", span.file));
+    let lo = file.start + BytePos(span.lo);
+    let hi = file.start + BytePos(span.hi);
     RustcSpan::new(lo, hi, SyntaxContext::root(), None)
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "co2_parser"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ariadne = "0.6.0"
+chumsky = "0.11"
+itertools = "0.14.0"
+la-arena = "0.3.1"
