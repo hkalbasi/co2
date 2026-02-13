@@ -13,7 +13,12 @@ pub use types::CompileMode;
 
 pub fn compile_co2_file(mode: CompileMode, co2_file: &Path) {
     let src = std::fs::read_to_string(co2_file).expect("failed to read co2 file");
-    compile_co2_source(mode, co2_file.to_path_buf(), src, std::env::args().collect());
+    compile_co2_source(
+        mode,
+        co2_file.to_path_buf(),
+        src,
+        std::env::args().collect(),
+    );
 }
 
 pub fn compile_co2_source(
@@ -46,7 +51,10 @@ pub fn compile_co2_source(
             let file_id_cell = file_id_cell.clone();
             move |ctx, deps, defined| {
                 debug_defined(&module, &defined);
-                let file_id = file_id_cell.lock().unwrap().expect("missing registered file");
+                let file_id = file_id_cell
+                    .lock()
+                    .unwrap()
+                    .expect("missing registered file");
                 mir::build_item_mir_infos(&module, &deps, &defined, &ctx, file_id, mode)
             }
         },

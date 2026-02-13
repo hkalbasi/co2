@@ -77,8 +77,7 @@ impl Callbacks for DetectCallbacks {
                     panic!("File was not real");
                 };
 
-                let original_file =
-                    original_file.path(rustc_span::RemapPathScopeComponents::MACRO);
+                let original_file = original_file.path(rustc_span::RemapPathScopeComponents::MACRO);
                 let co2_file = original_file.with_extension("co2");
                 drop(files_lock);
                 self.co2_file = Some(co2_file);
@@ -98,9 +97,8 @@ pub(crate) enum DetectResult {
 pub(crate) fn detect_co2(args: &[String]) -> DetectResult {
     let mut callbacks = DetectCallbacks::new();
 
-    let exit_code = rustc_driver::catch_with_exit_code(|| {
-        rustc_driver::run_compiler(args, &mut callbacks)
-    });
+    let exit_code =
+        rustc_driver::catch_with_exit_code(|| rustc_driver::run_compiler(args, &mut callbacks));
 
     if !callbacks.enabled {
         return DetectResult::Continue(exit_code);

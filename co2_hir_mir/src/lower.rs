@@ -6,7 +6,9 @@ use co2_parser::{
     parse_items,
 };
 
-use crate::ir::{Callee, ExternFunction, FuncSig, Function, LocalDecl, MirModule, MirOp, Operand, Type};
+use crate::ir::{
+    Callee, ExternFunction, FuncSig, Function, LocalDecl, MirModule, MirOp, Operand, Type,
+};
 use crate::resolver::Resolver;
 
 pub fn parse_and_lower(filename: String, src: &'static str) -> Result<MirModule, String> {
@@ -49,7 +51,8 @@ fn lower_state(filename: String, src: &'static str, state: State) -> Result<MirM
             }
             Item::Function { name, sig, body } => {
                 let sig = lower_sig(&sig)?;
-                let func = lower_function(filename.clone(), src, &resolver, name.0, sig, body, span)?;
+                let func =
+                    lower_function(filename.clone(), src, &resolver, name.0, sig, body, span)?;
                 functions.push(func);
             }
             Item::TypeDef { .. } | Item::Static { .. } | Item::Struct { .. } => {
@@ -145,7 +148,8 @@ fn lower_function(
         });
     }
 
-    let Some((compound, _)) = parse_compound_statement(&body.tokens.0, filename.clone(), src) else {
+    let Some((compound, _)) = parse_compound_statement(&body.tokens.0, filename.clone(), src)
+    else {
         return Err("failed to parse function body".to_owned());
     };
 
@@ -227,7 +231,8 @@ fn lower_decl(
                             });
                         }
                         other => {
-                            let (operand, mut pre) = lower_expr((other, init.1), locals, locals_map)?;
+                            let (operand, mut pre) =
+                                lower_expr((other, init.1), locals, locals_map)?;
                             ops.append(&mut pre);
                             ops.push(MirOp::Assign {
                                 dst: local,
@@ -308,7 +313,10 @@ fn lower_expr(
             if let Some(&local) = locals_map.get(&name) {
                 Ok((Operand::Local(local), Vec::new()))
             } else {
-                Ok((Operand::Local(insert_temp(locals, locals_map, &name)), Vec::new()))
+                Ok((
+                    Operand::Local(insert_temp(locals, locals_map, &name)),
+                    Vec::new(),
+                ))
             }
         }
         Expression::Constant(c) => match c {

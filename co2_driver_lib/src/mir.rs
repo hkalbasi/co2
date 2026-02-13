@@ -5,8 +5,8 @@ use co2_hir_mir::{
 use rustc_public_generative as rustc_gen;
 
 use crate::types::{
-    dep_adt_any, dep_fn, dep_fn_any, func_item_id, mir_ty_from_rust_path, mir_ty_from_type,
-    rust_path_generic_args, CompileMode,
+    CompileMode, dep_adt_any, dep_fn, dep_fn_any, func_item_id, mir_ty_from_rust_path,
+    mir_ty_from_type, rust_path_generic_args,
 };
 
 pub(crate) fn build_mir(
@@ -382,8 +382,11 @@ fn lower_call(
         if path.ends_with("::Iterator::nth") && idx == 1 {
             if let HirOperand::ConstInt(v, sp) = arg {
                 let arg_span = ctx.span_in_file(file_id, sp.start as u32, sp.end as u32);
-                let c = rustc_gen::PublicMirConst::try_from_uint(*v as u128, rustc_gen::PublicUintTy::Usize)
-                    .expect("failed to build usize const");
+                let c = rustc_gen::PublicMirConst::try_from_uint(
+                    *v as u128,
+                    rustc_gen::PublicUintTy::Usize,
+                )
+                .expect("failed to build usize const");
                 arg_ops.push(rustc_gen::MirOperand::Constant(rustc_gen::MirConst {
                     span: arg_span,
                     user_ty: None,
@@ -435,13 +438,19 @@ fn resolve_dep_fn_for_path(deps: &rustc_gen::DependencyInfo, path: &str) -> rust
     if path.ends_with("::Option::unwrap") || path.ends_with("::option::Option::unwrap") {
         return dep_fn_any(
             deps,
-            &["core::option::Option::unwrap", "std::option::Option::unwrap"],
+            &[
+                "core::option::Option::unwrap",
+                "std::option::Option::unwrap",
+            ],
         );
     }
     if path.ends_with("::Result::unwrap") || path.ends_with("::result::Result::unwrap") {
         return dep_fn_any(
             deps,
-            &["core::result::Result::unwrap", "std::result::Result::unwrap"],
+            &[
+                "core::result::Result::unwrap",
+                "std::result::Result::unwrap",
+            ],
         );
     }
     if path.ends_with("::Vec::as_mut_ptr") {
@@ -497,8 +506,9 @@ fn lower_operand(
         HirOperand::Local(l) => rustc_gen::MirOperand::Copy(place(*l)),
         HirOperand::ConstInt(v, sp) => {
             let span = ctx.span_in_file(file_id, sp.start as u32, sp.end as u32);
-            let c = rustc_gen::PublicMirConst::try_from_uint(*v as u128, rustc_gen::PublicUintTy::U32)
-                .expect("failed to build int const");
+            let c =
+                rustc_gen::PublicMirConst::try_from_uint(*v as u128, rustc_gen::PublicUintTy::U32)
+                    .expect("failed to build int const");
             let const_op = rustc_gen::MirOperand::Constant(rustc_gen::MirConst {
                 span,
                 user_ty: None,

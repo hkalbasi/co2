@@ -58,7 +58,9 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
             "-I" | "-D" | "-U" | "-include" | "-isystem" | "-iquote" => {
                 let flag = arg.clone();
                 i += 1;
-                let val = args.get(i).ok_or_else(|| format!("missing argument after {flag}"))?;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| format!("missing argument after {flag}"))?;
                 cpp_args.push(flag);
                 cpp_args.push(val.clone());
             }

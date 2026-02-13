@@ -51,7 +51,10 @@ pub enum Callee {
 
 #[derive(Clone, Debug)]
 pub enum MirOp {
-    Assign { dst: usize, src: Operand },
+    Assign {
+        dst: usize,
+        src: Operand,
+    },
     Call {
         func: Callee,
         args: Vec<Operand>,

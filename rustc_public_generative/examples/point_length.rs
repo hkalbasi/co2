@@ -11,10 +11,7 @@ fn place(local: usize) -> rustc_gen::MirPlace {
     }
 }
 
-fn place_fields(
-    local: usize,
-    fields: &[(usize, rustc_gen::MirTy)],
-) -> rustc_gen::MirPlace {
+fn place_fields(local: usize, fields: &[(usize, rustc_gen::MirTy)]) -> rustc_gen::MirPlace {
     rustc_gen::MirPlace {
         local,
         projection: fields
@@ -24,8 +21,13 @@ fn place_fields(
     }
 }
 
-fn const_uint(value: u128, ty: rustc_gen::PublicUintTy, span: rustc_gen::PublicSpan) -> rustc_gen::MirOperand {
-    let c = rustc_gen::PublicMirConst::try_from_uint(value, ty).expect("failed to build uint const");
+fn const_uint(
+    value: u128,
+    ty: rustc_gen::PublicUintTy,
+    span: rustc_gen::PublicSpan,
+) -> rustc_gen::MirOperand {
+    let c =
+        rustc_gen::PublicMirConst::try_from_uint(value, ty).expect("failed to build uint const");
     rustc_gen::MirOperand::Constant(rustc_gen::MirConst {
         span,
         user_ty: None,
@@ -57,154 +59,197 @@ fn variant_idx(value: usize) -> rustc_gen::VariantIdx {
 static FILE_ID: OnceLock<rustc_gen::FileId> = OnceLock::new();
 
 fn main() {
-    let item_point = rustc_gen::ItemId::new(1);
-    let item_human = rustc_gen::ItemId::new(2);
-    let item_length = rustc_gen::ItemId::new(3);
-    let item_main = rustc_gen::ItemId::new(4);
-    let item_write = rustc_gen::ItemId::new(5);
-
     rustc_gen::generate(
         move |ctx, _deps| {
             let file_id = ctx.add_custom_file("/tmp/point_length.rs", "fn main()");
             _ = FILE_ID.set(file_id);
             rustc_gen::CurrentCrateInfo {
                 crate_name: "point_length_fake".to_string(),
-                entry: Some(item_main),
                 no_main: false,
                 items: vec![
                     rustc_gen::ItemInfo {
-                        id: item_point,
                         name: "Point".to_string(),
-                        parent: None,
-                        kind: rustc_gen::ItemKind::Struct,
+                        kind: rustc_gen::ItemKind::Struct(vec!["x".to_string(), "y".to_string()]),
                         no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
-                        id: item_human,
                         name: "Human".to_string(),
-                        parent: None,
-                        kind: rustc_gen::ItemKind::Struct,
+                        kind: rustc_gen::ItemKind::Struct(vec![
+                            "location".to_string(),
+                            "age".to_string(),
+                        ]),
                         no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
-                        id: item_length,
                         name: "length".to_string(),
-                        parent: None,
                         kind: rustc_gen::ItemKind::Function,
                         no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
-                        id: item_main,
                         name: "main".to_string(),
-                        parent: None,
                         kind: rustc_gen::ItemKind::Function,
                         no_mangle: false,
                     },
                     rustc_gen::ItemInfo {
-                        id: item_write,
                         name: "write".to_string(),
-                        parent: None,
                         kind: rustc_gen::ItemKind::ForeignFunction,
                         no_mangle: false,
                     },
                 ],
             }
         },
-        move |_ctx, _deps, defined| {
+        move |ctx, _deps, defined| {
+            let file_id = *FILE_ID.get().unwrap();
+            let span = ctx.span_in_file(file_id, 2, 5);
+
             let point_adt = defined
                 .items
                 .iter()
-                .find(|i| i.id == item_point)
+                .find(|i| i.name == "Point")
                 .and_then(|i| i.adt_def())
                 .expect("missing point adt");
             let human_adt = defined
                 .items
                 .iter()
-                .find(|i| i.id == item_human)
+                .find(|i| i.name == "Human")
                 .and_then(|i| i.adt_def())
                 .expect("missing human adt");
-            let usize_ty = rustc_gen::MirTy::usize_ty();
-            let u32_ty = rustc_gen::MirTy::unsigned_ty(rustc_gen::PublicUintTy::U32);
-            let u8_ty = rustc_gen::MirTy::unsigned_ty(rustc_gen::PublicUintTy::U8);
-            let ptr_u8_mut = rustc_gen::MirTy::new_ptr(u8_ty, rustc_gen::MirMutability::Mut);
-            let point_ty = rustc_gen::MirTy::from_rigid_kind(rustc_gen::RigidTy::Adt(
-                point_adt,
-                rustc_gen::GenericArgs(vec![]),
-            ));
-            let human_ty = rustc_gen::MirTy::from_rigid_kind(rustc_gen::RigidTy::Adt(
-                human_adt,
-                rustc_gen::GenericArgs(vec![]),
-            ));
+            let usize_ty = || rustc_gen::HirTy::usize_ty(span);
+            let u32_ty = rustc_gen::HirTy::unsigned_ty(rustc_gen::PublicUintTy::U32, span);
+            let u8_ty = rustc_gen::HirTy::unsigned_ty(rustc_gen::PublicUintTy::U8, span);
+            let ptr_u8_mut = rustc_gen::HirTy::new_ptr(u8_ty, rustc_gen::MirMutability::Mut, span);
+            let point_ty = rustc_gen::HirTy::adt(point_adt, vec![], span);
+            let human_ty = rustc_gen::HirTy::adt(human_adt, vec![], span);
+
+            let length_fn = defined
+                .items
+                .iter()
+                .find(|i| i.name == "length")
+                .and_then(|i| i.fn_def())
+                .expect("missing length");
+
+            let main_fn = defined
+                .items
+                .iter()
+                .find(|i| i.name == "main")
+                .and_then(|i| i.fn_def())
+                .expect("missing main");
+            let write_fn = defined
+                .items
+                .iter()
+                .find(|i| i.name == "write")
+                .and_then(|i| i.fn_def())
+                .expect("missing write");
+
+            let x_field = defined
+                .items
+                .iter()
+                .find(|i| i.name == "x")
+                .map(|i| i.def_id())
+                .expect("missing x");
+            let y_field = defined
+                .items
+                .iter()
+                .find(|i| i.name == "y")
+                .map(|i| i.def_id())
+                .expect("missing y");
+            let location_field = defined
+                .items
+                .iter()
+                .find(|i| i.name == "location")
+                .map(|i| i.def_id())
+                .expect("missing location");
+            let age_field = defined
+                .items
+                .iter()
+                .find(|i| i.name == "age")
+                .map(|i| i.def_id())
+                .expect("missing age");
+
             vec![
                 rustc_gen::ItemSignatureInfo {
-                    id: item_point,
+                    id: point_adt.0,
                     kind: rustc_gen::ItemSignatureKind::Struct(vec![
                         rustc_gen::StructField {
-                            name: "x".to_string(),
-                            ty: usize_ty,
+                            id: x_field,
+                            ty: usize_ty(),
                         },
                         rustc_gen::StructField {
-                            name: "y".to_string(),
-                            ty: usize_ty,
+                            id: y_field,
+                            ty: usize_ty(),
                         },
                     ]),
+                    span,
                 },
                 rustc_gen::ItemSignatureInfo {
-                    id: item_human,
+                    id: human_adt.0,
                     kind: rustc_gen::ItemSignatureKind::Struct(vec![
                         rustc_gen::StructField {
-                            name: "location".to_string(),
+                            id: location_field,
                             ty: point_ty,
                         },
                         rustc_gen::StructField {
-                            name: "age".to_string(),
+                            id: age_field,
                             ty: u32_ty,
                         },
                     ]),
+                    span,
                 },
                 rustc_gen::ItemSignatureInfo {
-                    id: item_length,
-                    kind: rustc_gen::ItemSignatureKind::Function(rustc_gen::FunctionSignature {
-                        inputs: vec![human_ty],
-                        output: usize_ty,
-                        abi: rustc_gen::FunctionAbi::Rust,
-                        is_unsafe: false,
-                    }),
+                    id: length_fn.0,
+                    kind: rustc_gen::ItemSignatureKind::Function {
+                        sig: rustc_gen::FunctionSignature {
+                            inputs: vec![human_ty],
+                            output: usize_ty(),
+                            abi: rustc_gen::FunctionAbi::Rust,
+                            is_unsafe: false,
+                        },
+                        no_mangle: false,
+                    },
+                    span,
                 },
                 rustc_gen::ItemSignatureInfo {
-                    id: item_main,
-                    kind: rustc_gen::ItemSignatureKind::Function(rustc_gen::FunctionSignature {
-                        inputs: vec![],
-                        output: rustc_gen::MirTy::new_tuple(&[]),
-                        abi: rustc_gen::FunctionAbi::Rust,
-                        is_unsafe: false,
-                    }),
+                    id: main_fn.0,
+                    kind: rustc_gen::ItemSignatureKind::Function {
+                        sig: rustc_gen::FunctionSignature {
+                            inputs: vec![],
+                            output: rustc_gen::HirTy::new_tuple(vec![], span),
+                            abi: rustc_gen::FunctionAbi::Rust,
+                            is_unsafe: false,
+                        },
+                        no_mangle: false,
+                    },
+                    span,
                 },
                 rustc_gen::ItemSignatureInfo {
-                    id: item_write,
+                    id: write_fn.0,
                     kind: rustc_gen::ItemSignatureKind::ForeignFunction(
                         rustc_gen::FunctionSignature {
-                            inputs: vec![usize_ty, ptr_u8_mut, usize_ty],
-                            output: usize_ty,
+                            inputs: vec![usize_ty(), ptr_u8_mut, usize_ty()],
+                            output: usize_ty(),
                             abi: rustc_gen::FunctionAbi::C,
                             is_unsafe: true,
                         },
                     ),
+                    span,
                 },
             ]
         },
         move |ctx, _deps, defined| {
+            let file_id = *FILE_ID.get().unwrap();
+            let span = ctx.span_in_file(file_id, 2, 5);
+
             let span: rustc_gen::PublicSpan = ctx.span_in_file(*FILE_ID.get().unwrap(), 0, 2);
             let point_adt = defined
                 .items
                 .iter()
-                .find(|i| i.id == item_point)
+                .find(|i| i.name == "Point")
                 .and_then(|i| i.adt_def())
                 .expect("missing point adt");
             let human_adt = defined
                 .items
                 .iter()
-                .find(|i| i.id == item_human)
+                .find(|i| i.name == "Human")
                 .and_then(|i| i.adt_def())
                 .expect("missing human adt");
             let usize_ty = rustc_gen::MirTy::usize_ty();
@@ -224,13 +269,20 @@ fn main() {
             let length_fn = defined
                 .items
                 .iter()
-                .find(|i| i.id == item_length)
+                .find(|i| i.name == "length")
                 .and_then(|i| i.fn_def())
                 .expect("missing length fn def");
+            // dbg!(length_fn.fn_sig());
             let write_fn = defined
                 .items
                 .iter()
-                .find(|i| i.id == item_write)
+                .find(|i| i.name == "write")
+                .and_then(|i| i.fn_def())
+                .expect("missing write fn def");
+            let main_fn = defined
+                .items
+                .iter()
+                .find(|i| i.name == "main")
                 .and_then(|i| i.fn_def())
                 .expect("missing write fn def");
 
@@ -272,20 +324,18 @@ fn main() {
                         rustc_gen::MirStatement {
                             kind: rustc_gen::MirStatementKind::Assign(
                                 place(2),
-                                rustc_gen::MirRvalue::Use(rustc_gen::MirOperand::Move(place_fields(
-                                    1,
-                                    &[(0, point_ty), (0, usize_ty)],
-                                ))),
+                                rustc_gen::MirRvalue::Use(rustc_gen::MirOperand::Move(
+                                    place_fields(1, &[(0, point_ty), (0, usize_ty)]),
+                                )),
                             ),
                             span,
                         },
                         rustc_gen::MirStatement {
                             kind: rustc_gen::MirStatementKind::Assign(
                                 place(3),
-                                rustc_gen::MirRvalue::Use(rustc_gen::MirOperand::Move(place_fields(
-                                    1,
-                                    &[(0, point_ty), (1, usize_ty)],
-                                ))),
+                                rustc_gen::MirRvalue::Use(rustc_gen::MirOperand::Move(
+                                    place_fields(1, &[(0, point_ty), (1, usize_ty)]),
+                                )),
                             ),
                             span,
                         },
@@ -336,7 +386,7 @@ fn main() {
                     rustc_gen::MirLocalDecl {
                         ty: rustc_gen::MirTy::new_tuple(&[]),
                         span,
-                        mutability: rustc_gen::MirMutability::Not,
+                        mutability: rustc_gen::MirMutability::Mut,
                     },
                     rustc_gen::MirLocalDecl {
                         ty: point_ty,
@@ -493,11 +543,11 @@ fn main() {
 
             vec![
                 rustc_gen::ItemMirInfo {
-                    id: item_length,
+                    id: length_fn.0,
                     body: length_body,
                 },
                 rustc_gen::ItemMirInfo {
-                    id: item_main,
+                    id: main_fn.0,
                     body: main_body,
                 },
             ]

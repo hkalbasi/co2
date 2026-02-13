@@ -26,17 +26,16 @@ use std::sync::{Arc, Mutex};
 use std::sync::{Condvar, OnceLock};
 
 use rustc_abi::ExternAbi;
-use rustc_ast::{IntTy, LitIntType, LitKind, UintTy};
+use rustc_ast::{IntTy, UintTy};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::steal::Steal;
 use rustc_hir as hir;
-use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{CRATE_DEF_ID, DefId, LocalDefId, LocalDefIdMap};
+use rustc_hir::def::{CtorKind, DefKind, Res};
+use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefIdMap};
 use rustc_hir::definitions::{DefPathData, Definitions, DisambiguatorState};
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
 use rustc_index::{Idx, IndexVec};
-use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::BorrowKind;
 use rustc_middle::query::Providers as QueryProviders;
 use rustc_middle::ty::{self, TyCtxt};
@@ -45,7 +44,7 @@ use rustc_session::config::EntryFnType;
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
 
-pub use rustc_public::CrateDef;
+pub use hir_ty::{HirGenericArg, HirTy, HirTyKind};
 pub use rustc_public::mir::{
     AggregateKind as MirAggregateKind, BasicBlock as MirBasicBlock, BinOp as MirBinOp,
     Body as MirBody, BorrowKind as MirBorrowKind, CastKind as MirCastKind,
@@ -60,6 +59,9 @@ pub use rustc_public::ty::{
     Region, RegionKind, RigidTy, Span as PublicSpan, Ty as MirTy, UintTy as PublicUintTy,
     VariantIdx,
 };
+pub use rustc_public::{CrateDef, DefId};
+
+mod hir_ty;
 
 /// Context passed to the user callback. Used for allocating new IDs and
 /// registering custom source files.
@@ -212,15 +214,12 @@ pub struct DependencyType {
 pub struct CurrentCrateInfo {
     pub crate_name: String,
     pub items: Vec<ItemInfo>,
-    pub entry: Option<ItemId>,
     pub no_main: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct ItemInfo {
-    pub id: ItemId,
     pub name: String,
-    pub parent: Option<ItemId>,
     pub kind: ItemKind,
     pub no_mangle: bool,
 }
@@ -230,58 +229,37 @@ pub enum ItemKind {
     Module,
     Function,
     ForeignFunction,
-    Struct,
+    Struct(Vec<String>),
     Enum,
 }
 
 #[derive(Debug, Clone)]
 pub struct StructField {
-    pub name: String,
-    pub ty: MirTy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ItemId(u64);
-
-impl ItemId {
-    pub fn new(value: u64) -> Self {
-        Self(value)
-    }
-}
-
-const LOCAL_ADT_TAG: usize = 1usize << (usize::BITS as usize - 1);
-
-fn encode_local_item_adt(item: ItemId) -> AdtDef {
-    let raw = (item.0 as usize) | LOCAL_ADT_TAG;
-    let def_id = unsafe { std::mem::transmute::<usize, rustc_public::DefId>(raw) };
-    AdtDef(def_id)
-}
-
-pub fn local_adt(item: ItemId) -> AdtDef {
-    encode_local_item_adt(item)
-}
-
-pub fn local_adt_ty(item: ItemId) -> MirTy {
-    MirTy::from_rigid_kind(RigidTy::Adt(local_adt(item), GenericArgs(vec![])))
+    pub id: DefId,
+    pub ty: HirTy,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
-    pub inputs: Vec<MirTy>,
-    pub output: MirTy,
+    pub inputs: Vec<HirTy>,
+    pub output: HirTy,
     pub abi: FunctionAbi,
     pub is_unsafe: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct ItemSignatureInfo {
-    pub id: ItemId,
+    pub id: rustc_public::DefId,
     pub kind: ItemSignatureKind,
+    pub span: PublicSpan,
 }
 
 #[derive(Debug, Clone)]
 pub enum ItemSignatureKind {
-    Function(FunctionSignature),
+    Function {
+        sig: FunctionSignature,
+        no_mangle: bool,
+    },
     ForeignFunction(FunctionSignature),
     Struct(Vec<StructField>),
 }
@@ -294,24 +272,622 @@ pub enum FunctionAbi {
 
 #[derive(Debug, Clone)]
 pub struct DefinedCrateInfo {
-    pub crate_name: String,
     pub items: Vec<DefinedItemInfo>,
-    pub entry: Option<ItemId>,
+}
+
+impl DefinedCrateInfo {
+    fn owners<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        signatures: &[ItemSignatureInfo],
+        foreign_mod_def: LocalDefId,
+    ) -> IndexVec<LocalDefId, hir::MaybeOwner<'static>> {
+        static RESULT: OnceLock<IndexVec<LocalDefId, hir::MaybeOwner<'static>>> = OnceLock::new();
+
+        if let Some(r) = RESULT.get() {
+            return r.clone();
+        }
+
+        let mut owners: IndexVec<LocalDefId, hir::MaybeOwner<'static>> = IndexVec::new();
+        let mut owner_parents: LocalDefIdMap<HirId> = LocalDefIdMap::default();
+        let mut foreign_function_symbols: LocalDefIdMap<Symbol> = LocalDefIdMap::default();
+        let mut function_symbols: LocalDefIdMap<Symbol> = LocalDefIdMap::default();
+
+        let crate_def = CRATE_DEF_ID;
+
+        let mut foreign_item_ids = Vec::new();
+        let mut foreign_items_hir = Vec::new();
+
+        for (my_def_id, foreign) in signatures.iter().filter_map(|item| match &item.kind {
+            ItemSignatureKind::ForeignFunction(function_signature) => {
+                Some((item.id, function_signature))
+            }
+            _ => None,
+        }) {
+            let name = &self
+                .items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .unwrap()
+                .name;
+            let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+            foreign_function_symbols.insert(def_id, Symbol::intern(name));
+
+            let foreign_item_id = hir::ForeignItemId {
+                owner_id: OwnerId { def_id },
+            };
+            foreign_item_ids.push(foreign_item_id);
+
+            let fn_sig = generate_sig(tcx, def_id, &foreign.inputs, &foreign.output, true);
+
+            let foreign_item = hir::ForeignItem {
+                ident: Ident::from_str(name),
+                kind: hir::ForeignItemKind::Fn(
+                    fn_sig,
+                    leak(vec![None; 0].into_boxed_slice()),
+                    hir::Generics::empty(),
+                ),
+                owner_id: OwnerId { def_id },
+                span: DUMMY_SP,
+                vis_span: DUMMY_SP,
+                has_delayed_lints: false,
+            };
+            foreign_items_hir.push((def_id, leak(unsafe { std::mem::transmute(foreign_item) })));
+        }
+
+        let foreign_items = leak(foreign_item_ids.clone().into_boxed_slice());
+
+        let foreign_mod_item = hir::Item {
+            owner_id: OwnerId {
+                def_id: foreign_mod_def,
+            },
+            kind: hir::ItemKind::ForeignMod {
+                abi: ExternAbi::C { unwind: false },
+                items: foreign_items,
+            },
+            span: DUMMY_SP,
+            vis_span: DUMMY_SP,
+            has_delayed_lints: false,
+            eii: false,
+        };
+        let foreign_mod_item = leak(foreign_mod_item);
+
+        let mut struct_items_hir = Vec::new();
+        for (my_def_id, strukt) in signatures.iter().filter_map(|item| match &item.kind {
+            ItemSignatureKind::Struct(fields) => Some((item.id, fields)),
+            _ => None,
+        }) {
+            let name = &self
+                .items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .unwrap()
+                .name;
+            let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+
+            let fields_hir: &'static [hir::FieldDef<'static>] = leak(
+                strukt
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, field)| {
+                        let field_def_id = my_def_id_to_rustc_def_id(tcx, field.id).expect_local();
+
+                        let hir_id = HirId {
+                            owner: OwnerId { def_id },
+                            local_id: ItemLocalId::new(idx + 1),
+                        };
+                        let hir_field_def = hir::FieldDef {
+                            span: DUMMY_SP,
+                            vis_span: DUMMY_SP,
+                            ident: Ident::from_str(
+                                &self
+                                    .items
+                                    .iter()
+                                    .find(|item| item.def_id() == field.id)
+                                    .unwrap()
+                                    .name,
+                            ),
+                            hir_id,
+                            def_id: field_def_id,
+                            ty: leak(hir_ty_to_rustc(tcx, def_id, &field.ty)),
+                            safety: hir::Safety::Safe,
+                            default: None,
+                        };
+
+                        insert_non_owner(
+                            &mut owners,
+                            field_def_id,
+                            hir::MaybeOwner::NonOwner(hir_id),
+                        );
+
+                        hir_field_def
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
+            let item = hir::Item {
+                owner_id: OwnerId { def_id },
+                kind: hir::ItemKind::Struct(
+                    Ident::from_str(name),
+                    hir::Generics::empty(),
+                    hir::VariantData::Struct {
+                        fields: fields_hir,
+                        recovered: rustc_ast::Recovered::No,
+                    },
+                ),
+                span: DUMMY_SP,
+                vis_span: DUMMY_SP,
+                has_delayed_lints: false,
+                eii: false,
+            };
+            struct_items_hir.push((def_id, leak(item), fields_hir));
+        }
+
+        let mut function_items_hir = Vec::new();
+        for (my_def_id, function, no_mangle) in
+            signatures.iter().filter_map(|item| match &item.kind {
+                ItemSignatureKind::Function { sig, no_mangle } => Some((item.id, sig, no_mangle)),
+                _ => None,
+            })
+        {
+            let name = &self
+                .items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .unwrap()
+                .name;
+            let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+
+            if *no_mangle {
+                function_symbols.insert(def_id, Symbol::intern(name));
+            }
+
+            let fn_sig = generate_sig(tcx, def_id, &function.inputs, &function.output, false);
+            let loop_expr = leak(hir::Block {
+                    stmts: &[],
+                    expr: None,
+                    hir_id: HirId {
+                        owner: OwnerId { def_id },
+                        local_id: ItemLocalId::new(2),
+                    },
+                    rules: rustc_hir::BlockCheckMode::DefaultBlock,
+                    span: DUMMY_SP,
+                    targeted_by_break: false,
+                });
+            let body_kind = hir::ExprKind::Loop(
+                loop_expr,
+                None,
+                rustc_hir::LoopSource::Loop,
+                DUMMY_SP,
+            );
+            let body_expr = leak(hir::Expr {
+                hir_id: HirId {
+                    owner: OwnerId { def_id },
+                    local_id: ItemLocalId::new(1),
+                },
+                kind: body_kind,
+                span: DUMMY_SP,
+            });
+            let body = leak(hir::Body {
+                params: &[],
+                value: body_expr,
+            });
+            let item = hir::Item {
+                owner_id: OwnerId { def_id },
+                kind: hir::ItemKind::Fn {
+                    sig: fn_sig,
+                    ident: Ident::from_str(name),
+                    generics: hir::Generics::empty(),
+                    body: body.id(),
+                    has_body: true,
+                },
+                span: DUMMY_SP,
+                vis_span: DUMMY_SP,
+                has_delayed_lints: false,
+                eii: false,
+            };
+            function_items_hir.push((def_id, leak(item), body, body_expr, loop_expr));
+        }
+
+        let mut root_item_ids =
+            Vec::with_capacity(1 + struct_items_hir.len() + function_items_hir.len());
+        root_item_ids.push(hir::ItemId {
+            owner_id: OwnerId {
+                def_id: foreign_mod_def,
+            },
+        });
+        for (def_id, _, _) in &struct_items_hir {
+            root_item_ids.push(hir::ItemId {
+                owner_id: OwnerId { def_id: *def_id },
+            });
+        }
+        for (def_id, _, _, _, _) in &function_items_hir {
+            root_item_ids.push(hir::ItemId {
+                owner_id: OwnerId { def_id: *def_id },
+            });
+        }
+
+        let root_mod = leak(hir::Mod {
+            spans: hir::ModSpans {
+                inner_span: DUMMY_SP,
+                inject_use_span: DUMMY_SP,
+            },
+            item_ids: leak(root_item_ids.into_boxed_slice()),
+        });
+
+        let crate_owner_nodes = build_owner_nodes_for_crate(root_mod);
+        insert_owner(
+            &mut owners,
+            crate_def,
+            leak(make_owner_info(crate_owner_nodes)),
+        );
+        owner_parents.insert(crate_def, HirId::make_owner(crate_def));
+
+        let foreign_mod_nodes = build_owner_nodes_for_item(foreign_mod_item);
+        insert_owner(
+            &mut owners,
+            foreign_mod_def,
+            leak(make_owner_info(foreign_mod_nodes)),
+        );
+        owner_parents.insert(foreign_mod_def, HirId::make_owner(crate_def));
+
+        for (def_id, foreign_item) in foreign_items_hir {
+            let foreign_nodes = build_owner_nodes_for_foreign_item(foreign_item);
+            insert_owner(&mut owners, def_id, leak(make_owner_info(foreign_nodes)));
+            owner_parents.insert(def_id, HirId::make_owner(foreign_mod_def));
+        }
+
+        for (def_id, item, fields) in struct_items_hir {
+            let nodes = build_owner_nodes_for_struct(item, fields);
+            insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
+            owner_parents.insert(def_id, HirId::make_owner(crate_def));
+        }
+
+        for (def_id, item, body, body_expr, loop_expr) in function_items_hir {
+            let nodes = build_owner_nodes_for_fn(item, body, body_expr, loop_expr);
+            insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
+            owner_parents.insert(def_id, HirId::make_owner(crate_def));
+        }
+
+        if std::env::var("GEN_DEBUG").is_ok() {
+            eprintln!("GeneratedCrate::build: owners len {}", owners.len());
+        }
+
+        RESULT.set(owners.clone()).unwrap();
+
+        owners
+    }
+}
+
+fn generate_sig<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: LocalDefId,
+    inputs: &[HirTy],
+    output: &HirTy,
+    is_c: bool,
+) -> rustc_hir::FnSig<'static> {
+    let fn_decl = leak(hir::FnDecl {
+        inputs: leak(
+            inputs
+                .iter()
+                .map(|ty| hir_ty_to_rustc(tcx, owner, ty))
+                .collect::<Vec<_>>(),
+        ),
+        output: hir::FnRetTy::Return(leak(hir_ty_to_rustc(tcx, owner, output))),
+        c_variadic: false,
+        implicit_self: hir::ImplicitSelfKind::None,
+        lifetime_elision_allowed: true,
+    });
+
+    let fn_sig = hir::FnSig {
+        header: hir::FnHeader {
+            safety: if is_c {
+                hir::HeaderSafety::Normal(hir::Safety::Unsafe)
+            } else {
+                hir::HeaderSafety::Normal(hir::Safety::Safe)
+            },
+            constness: hir::Constness::NotConst,
+            asyncness: hir::IsAsync::NotAsync,
+            abi: if is_c {
+                ExternAbi::C { unwind: false }
+            } else {
+                ExternAbi::Rust
+            },
+        },
+        decl: fn_decl,
+        span: DUMMY_SP,
+    };
+    fn_sig
+}
+
+fn my_def_id_to_rustc_def_id<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> RustcDefId {
+    rustc_public::rustc_internal::internal(tcx, def_id)
+}
+
+impl DefinedCrateState {
+    fn stage_id(&self) -> i32 {
+        match self {
+            DefinedCrateState::Stage0 => 0,
+            DefinedCrateState::Stage1(..) => 1,
+            DefinedCrateState::Stage2(..) => 2,
+            DefinedCrateState::Stage3(..) => 3,
+        }
+    }
+
+    fn hir_crate<'tcx>(&self, tcx: TyCtxt<'tcx>, key: ()) -> rustc_hir::Crate<'tcx> {
+        let (DefinedCrateState::Stage2(defined_crate, signatures, foreign_def_id)
+        | DefinedCrateState::Stage3(defined_crate, signatures, foreign_def_id, _)) = self
+        else {
+            panic!("hir_crate query in stage {}", self.stage_id());
+        };
+        let owners = defined_crate.owners(tcx, signatures, *foreign_def_id);
+        // let owners: IndexVec<LocalDefId, hir::MaybeOwner<'tcx>> =
+        //     IndexVec::from_iter(owners.iter().map(|opt| match opt {
+        //         Some(info) => {
+        //             let info = unsafe {
+        //                 std::mem::transmute::<
+        //                     &'static hir::OwnerInfo<'static>,
+        //                     &'tcx hir::OwnerInfo<'tcx>,
+        //                 >(*info)
+        //             };
+        //             hir::MaybeOwner::Owner(info)
+        //         }
+        //         None => hir::MaybeOwner::Phantom,
+        //     }));
+        hir::Crate {
+            owners,
+            opt_hir_hash: Some(random_fingerprint()),
+        }
+    }
+
+    #[cfg(false)]
+    fn opt_hir_owner_nodes<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        key: LocalDefId,
+    ) -> Option<&'tcx hir::OwnerNodes<'tcx>> {
+        let (DefinedCrateState::Stage2(defined_crate, signatures, foreign_def_id)
+        | DefinedCrateState::Stage3(defined_crate, signatures, foreign_def_id, _)) = self
+        else {
+            panic!("hir_crate query in stage {}", self.stage_id());
+        };
+        let owners = defined_crate.owners(tcx, signatures, *foreign_def_id);
+        let r = owners
+            .get(key)
+            .and_then(|opt| *opt)
+            .map(|info| unsafe {
+                if std::env::var("GEN_DEBUG").is_ok() {
+                    eprintln!(
+                        "generated_crate.opt_hir_owner_nodes {:?} => {:?}",
+                        key,
+                        info.nodes.node()
+                    );
+                }
+                std::mem::transmute::<&hir::OwnerNodes<'static>, &'tcx hir::OwnerNodes<'tcx>>(
+                    &info.nodes,
+                )
+            })
+            .or_else(|| {
+                if std::env::var("GEN_DEBUG").is_ok() {
+                    eprintln!(
+                        "generated_crate.opt_hir_owner_nodes {:?} => None (len {})",
+                        key,
+                        owners.len()
+                    );
+                }
+                None
+            });
+        r
+    }
+
+    fn contains_key<'tcx>(&self, tcx: TyCtxt<'tcx>, key: &LocalDefId) -> bool {
+        match self {
+            DefinedCrateState::Stage0 => false,
+            DefinedCrateState::Stage1(defined_crate_info)
+            | DefinedCrateState::Stage2(defined_crate_info, _, _)
+            | DefinedCrateState::Stage3(defined_crate_info, _, _, _) => defined_crate_info
+                .items
+                .iter()
+                .any(|item| my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() == Some(*key)),
+        }
+    }
+
+    fn hir_owner_parent_q<'tcx>(&self, tcx: TyCtxt<'tcx>, key: OwnerId) -> HirId {
+        todo!()
+    }
+
+    fn entry_fn<'tcx>(&self, tcx: TyCtxt<'tcx>, key: ()) -> Option<(RustcDefId, EntryFnType)> {
+        let entry_fn = match self {
+            DefinedCrateState::Stage0 => panic!("Can't eval entry_fn at stage0"),
+            DefinedCrateState::Stage1(defined_crate_info)
+            | DefinedCrateState::Stage2(defined_crate_info, _, _)
+            | DefinedCrateState::Stage3(defined_crate_info, _, _, _) => defined_crate_info
+                .items
+                .iter()
+                .find(|item| item.name == "main")
+                .map(|item| item.def_id()),
+        };
+
+        entry_fn.map(|def| {
+            (
+                my_def_id_to_rustc_def_id(tcx, def),
+                EntryFnType::Main {
+                    sigpipe: rustc_session::config::sigpipe::DEFAULT,
+                },
+            )
+        })
+    }
+
+    fn def_kind<'tcx>(&self, tcx: TyCtxt<'tcx>, key: LocalDefId) -> DefKind {
+        let (DefinedCrateState::Stage2(items, _, _) | DefinedCrateState::Stage3(items, _, _, _)) =
+            self
+        else {
+            panic!("def_kind query in stage {}", self.stage_id());
+        };
+        let key = rustc_def_to_my_def(tcx, key.to_def_id());
+        let kind = items
+            .items
+            .iter()
+            .find(|item| item.def_id() == key)
+            .unwrap()
+            .kind;
+        match kind {
+            DefinedItemKind::CrateRoot(_) => DefKind::Mod,
+            DefinedItemKind::ForeignMod(_) => DefKind::ForeignMod,
+            DefinedItemKind::Function(_) => DefKind::Fn,
+            DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
+            DefinedItemKind::Struct(_) => DefKind::Struct,
+            DefinedItemKind::Field(_) => DefKind::Field,
+        }
+    }
+
+    fn def_span<'tcx>(&self, _tcx: TyCtxt<'tcx>, _key: LocalDefId) -> Option<RustcSpan> {
+        // let DefinedCrateState::Stage2(_, signatures, _) = self else {
+        //     panic!("hir_crate query in stage {}", self.stage_id());
+        // };
+        // let key = rustc_def_to_my_def(tcx, key.to_def_id());
+        // signatures.iter().find(|item| {
+        //     item.id == key
+        // }).unwrap();
+        Some(DUMMY_SP)
+    }
+
+    fn generics_of<'tcx>(&self, tcx: TyCtxt<'tcx>, key: LocalDefId) -> Option<ty::Generics> {
+        if self.contains_key(tcx, &key) {
+            let generics = ty::Generics {
+                parent: None,
+                parent_count: 0,
+                own_params: Vec::new(),
+                param_def_id_to_index: FxHashMap::default(),
+                has_self: false,
+                has_late_bound_regions: None,
+            };
+            return Some(generics);
+        }
+        None
+    }
+
+    fn type_of<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        def_id: LocalDefId,
+    ) -> Option<ty::EarlyBinder<'tcx, ty::Ty<'tcx>>> {
+        todo!()
+    }
+
+    fn fn_sig<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        def_id: LocalDefId,
+    ) -> Option<ty::EarlyBinder<'tcx, ty::PolyFnSig<'tcx>>> {
+        todo!()
+    }
+
+    fn predicates_of<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        key: RustcDefId,
+    ) -> Option<ty::GenericPredicates<'tcx>> {
+        todo!()
+    }
+
+    fn explicit_predicates_of<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        key: LocalDefId,
+    ) -> Option<ty::GenericPredicates<'tcx>> {
+        todo!()
+    }
+
+    fn codegen_fn_attrs<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        key: LocalDefId,
+    ) -> Option<rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs> {
+        todo!()
+    }
+
+    fn mir_built<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        def_id: LocalDefId,
+    ) -> Option<&'tcx Steal<rustc_middle::mir::Body<'tcx>>> {
+        let DefinedCrateState::Stage3(defined_crate, signatures, _, mirs) = self else {
+            panic!("hir_crate query in stage {}", self.stage_id());
+        };
+
+        let key = rustc_def_to_my_def(tcx, def_id.to_def_id());
+        let mir = mirs.iter().find(|item| item.id == key).unwrap();
+
+        let body = build_mir_body(tcx, &mir.body, def_id);
+
+        Some(unsafe { std::mem::transmute(leak(Steal::new(body))) })
+    }
+
+    fn mir_for_ctfe<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        key: LocalDefId,
+    ) -> Option<&'tcx rustc_middle::mir::Body<'tcx>> {
+        todo!()
+    }
+
+    fn mir_drops_elaborated_and_const_checked<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        key: LocalDefId,
+    ) -> Option<&'tcx Steal<rustc_middle::mir::Body<'tcx>>> {
+        todo!()
+    }
+
+    fn to_stage1(&mut self, defined_crate: DefinedCrateInfo) {
+        let DefinedCrateState::Stage0 = self else {
+            panic!("Moving to stage1 from stage {}", self.stage_id());
+        };
+        *self = DefinedCrateState::Stage1(defined_crate);
+    }
+
+    fn to_stage2(&mut self, sigs: Vec<ItemSignatureInfo>, foreign_mod_def: LocalDefId) {
+        let this = std::mem::replace(self, DefinedCrateState::Stage0);
+        let DefinedCrateState::Stage1(defined_crate) = this else {
+            panic!("Moving to stage1 from stage {}", this.stage_id());
+        };
+        *self = DefinedCrateState::Stage2(defined_crate, sigs, foreign_mod_def);
+    }
+
+    fn to_stage3(&mut self, mirs: Vec<ItemMirInfo>) {
+        let this = std::mem::replace(self, DefinedCrateState::Stage0);
+        let DefinedCrateState::Stage2(defined_crate, sigs, foreign) = this else {
+            panic!("Moving to stage3 from stage {}", this.stage_id());
+        };
+        *self = DefinedCrateState::Stage3(defined_crate, sigs, foreign, mirs);
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct DefinedItemInfo {
-    pub id: ItemId,
     pub name: String,
     pub kind: DefinedItemKind,
 }
 
 impl DefinedItemInfo {
+    pub fn def_id(&self) -> rustc_public::DefId {
+        match self.kind {
+            DefinedItemKind::Function(fn_def) | DefinedItemKind::ForeignFunction(fn_def) => {
+                fn_def.0
+            }
+            DefinedItemKind::Struct(adt_def) => adt_def.0,
+            DefinedItemKind::CrateRoot(def_id)
+            | DefinedItemKind::ForeignMod(def_id)
+            | DefinedItemKind::Field(def_id) => def_id,
+        }
+    }
+
     pub fn fn_def(&self) -> Option<FnDef> {
         match self.kind {
             DefinedItemKind::Function(fn_def) => Some(fn_def),
             DefinedItemKind::ForeignFunction(fn_def) => Some(fn_def),
-            DefinedItemKind::Struct(_) => None,
+            _ => None,
         }
     }
 
@@ -323,35 +899,35 @@ impl DefinedItemInfo {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum DefinedItemKind {
+    CrateRoot(DefId),
+    ForeignMod(DefId),
     Function(FnDef),
     ForeignFunction(FnDef),
     Struct(AdtDef),
+    Field(DefId),
 }
 
 #[derive(Debug, Clone)]
 pub struct ItemMirInfo {
-    pub id: ItemId,
+    pub id: rustc_public::DefId,
     pub body: MirBody,
 }
 
 #[derive(Debug, Clone)]
 struct ForeignFunctionInfo {
-    id: ItemId,
     name: String,
 }
 
 #[derive(Debug, Clone)]
 struct FunctionInfo {
-    id: ItemId,
     name: String,
     no_mangle: bool,
 }
 
 #[derive(Debug, Clone)]
 struct StructInfo {
-    id: ItemId,
     name: String,
 }
 
@@ -403,9 +979,23 @@ struct GenerateCallbacks<D, S, M> {
     gate: Arc<GenerateGate>,
 }
 
+#[derive(Debug, Default, Clone)]
+enum DefinedCrateState {
+    #[default]
+    Stage0,
+    Stage1(DefinedCrateInfo),
+    Stage2(DefinedCrateInfo, Vec<ItemSignatureInfo>, LocalDefId),
+    Stage3(
+        DefinedCrateInfo,
+        Vec<ItemSignatureInfo>,
+        LocalDefId,
+        Vec<ItemMirInfo>,
+    ),
+}
+
 #[derive(Default)]
 struct GenerateState {
-    generated: Option<GeneratedCrate>,
+    defined_crate: DefinedCrateState,
     original: Option<OriginalProviders>,
     define_items: Option<Box<dyn FnOnce(Context, DependencyInfo) -> CurrentCrateInfo + Send>>,
     define_signatures: Option<
@@ -428,15 +1018,15 @@ struct GenerateGate {
 struct OriginalProviders {
     hir_crate: for<'tcx> fn(TyCtxt<'tcx>, ()) -> hir::Crate<'tcx>,
     hir_owner_parent_q: for<'tcx> fn(TyCtxt<'tcx>, OwnerId) -> HirId,
-    entry_fn: for<'tcx> fn(TyCtxt<'tcx>, ()) -> Option<(DefId, EntryFnType)>,
+    entry_fn: for<'tcx> fn(TyCtxt<'tcx>, ()) -> Option<(RustcDefId, EntryFnType)>,
     def_kind: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> DefKind,
     def_span: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> RustcSpan,
     def_ident_span: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Option<RustcSpan>,
-    visibility: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> ty::Visibility<DefId>,
+    visibility: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> ty::Visibility<RustcDefId>,
     generics_of: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> ty::Generics,
     type_of: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> ty::EarlyBinder<'tcx, ty::Ty<'tcx>>,
     fn_sig: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> ty::EarlyBinder<'tcx, ty::PolyFnSig<'tcx>>,
-    predicates_of: for<'tcx> fn(TyCtxt<'tcx>, DefId) -> ty::GenericPredicates<'tcx>,
+    predicates_of: for<'tcx> fn(TyCtxt<'tcx>, RustcDefId) -> ty::GenericPredicates<'tcx>,
     explicit_predicates_of: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> ty::GenericPredicates<'tcx>,
     codegen_fn_attrs: for<'tcx> fn(
         TyCtxt<'tcx>,
@@ -456,42 +1046,39 @@ unsafe impl Sync for GenerateGate {}
 unsafe impl Send for GenerateGate {}
 
 fn run_with_public_context<'tcx, T>(tcx: TyCtxt<'tcx>, f: impl FnOnce() -> T) -> T {
-    let mut f = Some(f);
-    match rustc_public::rustc_internal::run(tcx, || (f.take().expect("closure missing"))()) {
-        Ok(value) => value,
-        Err(_) => (f.take().expect("closure missing"))(),
-    }
+    f()
 }
 
 fn with_generated_and_original<'tcx, R>(
     tcx: TyCtxt<'tcx>,
-    f: impl FnOnce(Option<&GeneratedCrate>, OriginalProviders) -> R,
+    f: impl FnOnce(DefinedCrateState, OriginalProviders) -> R,
 ) -> R {
     let state = GENERATE_STATE
         .get()
         .cloned()
         .expect("generate state missing");
-    ensure_generated(tcx, &state);
+    // ensure_generated(tcx, &state);
     let (generated_ptr, original) = {
         let guard = state.state.lock().unwrap();
         let original = guard.original.expect("original providers missing");
-        let generated_ptr = guard.generated.as_ref().map(|g| g as *const GeneratedCrate);
-        (generated_ptr, original)
+        // let generated_ptr = guard.generated.as_ref().map(|g| g as *const GeneratedCrate);
+        (guard.defined_crate.clone(), original)
     };
-    if std::env::var("GEN_DEBUG").is_ok() {
-        eprintln!(
-            "with_generated_and_original: generated={}",
-            if generated_ptr.is_some() {
-                "some"
-            } else {
-                "none"
-            }
-        );
-    }
-    let generated: Option<&GeneratedCrate> = generated_ptr.map(|ptr| unsafe { &*ptr });
-    f(generated, original)
+    // if std::env::var("GEN_DEBUG").is_ok() {
+    //     eprintln!(
+    //         "with_generated_and_original: generated={}",
+    //         if generated_ptr.is_some() {
+    //             "some"
+    //         } else {
+    //             "none"
+    //         }
+    //     );
+    // }
+    // let generated: Option<&GeneratedCrate> = generated_ptr.map(|ptr| unsafe { &*ptr });
+    f(generated_ptr, original)
 }
 
+#[cfg(false)]
 fn ensure_generated<'tcx>(tcx: TyCtxt<'tcx>, gate: &Arc<GenerateGate>) {
     let mut guard = gate.state.lock().unwrap();
     if guard.generated.is_some() {
@@ -533,37 +1120,41 @@ fn ensure_generated<'tcx>(tcx: TyCtxt<'tcx>, gate: &Arc<GenerateGate>) {
     rustc_public::rustc_internal::run(tcx, || {
         let dependency_info = collect_dependency_info(tcx);
         let crate_info = define_items(context.clone(), dependency_info.clone());
-        let generated = GeneratedCrate::build(tcx, &context, dependency_info.clone(), crate_info);
 
-        {
-            let mut guard = gate.state.lock().unwrap();
-            guard.generated = Some(generated);
-        }
+        // let generated = GeneratedCrate::build(tcx, &context, dependency_info.clone(), crate_info);
 
-        let generated_ptr = {
-            let guard = gate.state.lock().unwrap();
-            guard
-                .generated
-                .as_ref()
-                .map(|g| g as *const GeneratedCrate)
-                .expect("generated crate missing")
-        };
-        let generated_mut_ptr = generated_ptr as *mut GeneratedCrate;
+        // {
+        //     let mut guard = gate.state.lock().unwrap();
+        //     guard.generated = Some(generated);
+        // }
 
-        let defined_for_signatures = unsafe { (&*generated_ptr).defined_info(tcx, false) };
+        // let generated_ptr = {
+        //     let guard = gate.state.lock().unwrap();
+        //     guard
+        //         .generated
+        //         .as_ref()
+        //         .map(|g| g as *const GeneratedCrate)
+        //         .expect("generated crate missing")
+        // };
+        // let generated_mut_ptr = generated_ptr as *mut GeneratedCrate;
+
+        // let defined_for_signatures = unsafe { (&*generated_ptr).defined_info(tcx, false) };
+
+        let defined_crate = allocate_ids_for_crate(crate_info);
+
         let signatures = define_signatures(
             context.clone(),
             dependency_info.clone(),
-            defined_for_signatures,
+            defined_crate.clone(),
         );
 
         // Avoid holding gate mutex while phase callbacks run: they may re-enter
         // query providers that also try to acquire this mutex.
-        unsafe { (&mut *generated_mut_ptr).install_signatures(tcx, signatures) };
+        // unsafe { (&mut *generated_mut_ptr).install_signatures(tcx, signatures) };
 
-        let defined_for_mir = unsafe { (&*generated_ptr).defined_info(tcx, true) };
-        let item_mir = emit_mir(context.clone(), dependency_info, defined_for_mir);
-        unsafe { (&mut *generated_mut_ptr).install_mir(tcx, item_mir) };
+        // let defined_for_mir = unsafe { (&*generated_ptr).defined_info(tcx, true) };
+        let item_mir = emit_mir(context.clone(), dependency_info, defined_crate);
+        // unsafe { (&mut *generated_mut_ptr).install_mir(tcx, item_mir) };
     })
     .expect("failed to run rustc_public context");
 
@@ -571,6 +1162,123 @@ fn ensure_generated<'tcx>(tcx: TyCtxt<'tcx>, gate: &Arc<GenerateGate>) {
     guard.building = false;
     guard.building_thread = None;
     gate.cvar.notify_all();
+}
+
+#[allow(invalid_reference_casting)]
+fn allocate_def_ids_for_crate<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    crate_info: CurrentCrateInfo,
+) -> (DefinedCrateInfo, LocalDefId) {
+    let defs_guard = tcx.definitions_untracked();
+    let defs_mut = unsafe { &mut *(&*defs_guard as *const Definitions as *mut Definitions) };
+    let mut disamb =
+        DisambiguatorState::with(CRATE_DEF_ID, DefPathData::ValueNs(Symbol::intern("gen")), 1);
+    let foreign_mod = defs_mut.create_def(CRATE_DEF_ID, DefPathData::ForeignMod, &mut disamb);
+
+    let mut result = DefinedCrateInfo {
+        items: vec![
+            DefinedItemInfo {
+                name: crate_info.crate_name,
+                kind: DefinedItemKind::CrateRoot(rustc_def_to_my_def(
+                    tcx,
+                    CRATE_DEF_ID.to_def_id(),
+                )),
+            },
+            DefinedItemInfo {
+                name: "".to_owned(),
+                kind: DefinedItemKind::ForeignMod(rustc_def_to_my_def(
+                    tcx,
+                    foreign_mod.to_def_id(),
+                )),
+            },
+        ],
+    };
+
+    for item in crate_info.items {
+        let info = DefinedItemInfo {
+            kind: match item.kind {
+                ItemKind::Module => todo!(),
+                ItemKind::ForeignFunction => {
+                    let def_id = defs_mut.create_def(
+                        foreign_mod,
+                        DefPathData::ValueNs(Symbol::intern(&item.name)),
+                        &mut disamb,
+                    );
+                    DefinedItemKind::ForeignFunction(FnDef(rustc_def_to_my_def(
+                        tcx,
+                        def_id.to_def_id(),
+                    )))
+                }
+                ItemKind::Function => {
+                    let def_id = defs_mut.create_def(
+                        CRATE_DEF_ID,
+                        DefPathData::ValueNs(Symbol::intern(&item.name)),
+                        &mut disamb,
+                    );
+                    DefinedItemKind::Function(FnDef(rustc_def_to_my_def(tcx, def_id.to_def_id())))
+                }
+                ItemKind::Struct(fields) => {
+                    let def_id = defs_mut.create_def(
+                        CRATE_DEF_ID,
+                        DefPathData::TypeNs(Symbol::intern(&item.name)),
+                        &mut disamb,
+                    );
+                    for field in fields {
+                        let field_id = defs_mut.create_def(
+                            def_id,
+                            DefPathData::TypeNs(Symbol::intern(&field)),
+                            &mut disamb,
+                        );
+                        result.items.push(DefinedItemInfo {
+                            name: field,
+                            kind: DefinedItemKind::Field(rustc_def_to_my_def(
+                                tcx,
+                                field_id.to_def_id(),
+                            )),
+                        });
+                    }
+                    DefinedItemKind::Struct(AdtDef(rustc_def_to_my_def(tcx, def_id.to_def_id())))
+                }
+                ItemKind::Enum => todo!(),
+            },
+            name: item.name,
+        };
+        result.items.push(info)
+    }
+
+    // for strukt in structs {
+    //     let def_id = defs_mut.create_def(
+    //         CRATE_DEF_ID,
+    //         DefPathData::TypeNs(Symbol::intern(&strukt.name)),
+    //         &mut disamb,
+    //     );
+    //     struct_ids.insert(strukt.id, def_id);
+    // }
+    // let mut function_ids = FxHashMap::default();
+    // for function in functions {
+    //     let def_id = defs_mut.create_def(
+    //         CRATE_DEF_ID,
+    //         DefPathData::ValueNs(Symbol::intern(&function.name)),
+    //         &mut disamb,
+    //     );
+    //     function_ids.insert(function.id, def_id);
+    // }
+    // let mut foreign_function_ids = FxHashMap::default();
+    // for foreign in foreign_functions {
+    //     let def_id = defs_mut.create_def(
+    //         foreign_mod,
+    //         DefPathData::ValueNs(Symbol::intern(&foreign.name)),
+    //         &mut disamb,
+    //     );
+    //     foreign_function_ids.insert(foreign.id, def_id);
+    // }
+    (result, foreign_mod)
+}
+
+fn rustc_def_to_my_def<'tcx>(tcx: TyCtxt<'tcx>, def_id: RustcDefId) -> DefId {
+    rustc_public::compiler_interface::with(|cx| unsafe {
+        (*cx.tables.as_ptr()).def_ids.create_or_fetch(def_id)
+    })
 }
 
 impl<D, S, M> GenerateCallbacks<D, S, M>
@@ -621,6 +1329,7 @@ where
         config.override_queries = Some(override_queries);
 
         if let Some(gate) = GENERATE_STATE.get() {
+            dbg!("locked");
             let mut guard = gate.state.lock().unwrap();
             if std::env::var("GEN_DEBUG").is_ok() {
                 eprintln!("callbacks.config: storing callback");
@@ -630,6 +1339,59 @@ where
             guard.emit_mir = Some(Box::new(emit_mir));
             guard.context = Some(self.context.clone());
         }
+    }
+
+    fn after_expansion<'tcx>(
+        &mut self,
+        _compiler: &rustc_interface::interface::Compiler,
+        tcx: TyCtxt<'tcx>,
+    ) -> rustc_driver::Compilation {
+        rustc_public::rustc_internal::run(tcx, || {
+            let dependency_info = collect_dependency_info(tcx);
+
+            let gate = GENERATE_STATE.get().unwrap();
+            let (define_sigs, context, defined_crate, foreign_mod_def) = {
+                let mut guard = gate.state.lock().unwrap();
+
+                let context = guard.context.clone().unwrap();
+
+                let current_crate_info =
+                    guard.define_items.take().unwrap()(context.clone(), dependency_info.clone());
+
+                context.register_with_source_map(tcx);
+
+                let (defined_crate, foreign_mod_def) =
+                    allocate_def_ids_for_crate(tcx, current_crate_info);
+
+                guard.defined_crate.to_stage1(defined_crate.clone());
+
+                (
+                    guard.define_signatures.take().unwrap(),
+                    context,
+                    defined_crate,
+                    foreign_mod_def,
+                )
+            };
+            let sigs = define_sigs(
+                context.clone(),
+                dependency_info.clone(),
+                defined_crate.clone(),
+            );
+            let emit_mir = {
+                let mut guard = gate.state.lock().unwrap();
+                guard.defined_crate.to_stage2(sigs, foreign_mod_def);
+
+                guard.emit_mir.take().unwrap()
+            };
+
+            tcx.hir_crate(());
+
+            let mirs = emit_mir(context, dependency_info, defined_crate);
+
+            let mut guard = gate.state.lock().unwrap();
+            guard.defined_crate.to_stage3(mirs);
+        });
+        rustc_driver::Compilation::Continue
     }
 }
 
@@ -655,7 +1417,7 @@ fn collect_dependency_info<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>) -> Depende
     for &cnum in tcx.crates(()).iter() {
         let num_defs = tcx.num_extern_def_ids(cnum);
         for idx in 0..num_defs {
-            let def_id = DefId {
+            let def_id = RustcDefId {
                 krate: cnum,
                 index: rustc_span::def_id::DefIndex::from_usize(idx),
             };
@@ -667,7 +1429,7 @@ fn collect_dependency_info<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>) -> Depende
     // structs/functions from the current compilation unit.
     let local_count = tcx.definitions_untracked().def_index_count();
     for idx in 0..local_count {
-        let def_id = DefId {
+        let def_id = RustcDefId {
             krate: rustc_hir::def_id::LOCAL_CRATE,
             index: rustc_span::def_id::DefIndex::from_usize(idx),
         };
@@ -679,13 +1441,16 @@ fn collect_dependency_info<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>) -> Depende
 
 fn collect_dependency_def<'tcx>(
     tcx: TyCtxt<'tcx>,
-    def_id: DefId,
+    def_id: RustcDefId,
     info: &mut DependencyInfo,
     alloc_fn_id: &mut impl FnMut() -> FunctionId,
 ) {
     let kind = tcx.def_kind(def_id);
 
-    if matches!(kind, DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(..)) {
+    if matches!(
+        kind,
+        DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(_, CtorKind::Fn)
+    ) {
         let id = alloc_fn_id();
         let hash = tcx.def_path_hash(def_id);
         let (hi, lo): (u64, u64) =
@@ -714,7 +1479,7 @@ fn collect_dependency_def<'tcx>(
     }
 }
 
-fn stable_adt_from_def_id<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<AdtDef> {
+fn stable_adt_from_def_id<'tcx>(tcx: TyCtxt<'tcx>, def_id: RustcDefId) -> Option<AdtDef> {
     use rustc_public::rustc_internal::stable;
     use rustc_public::ty::{RigidTy, TyKind};
 
@@ -728,7 +1493,7 @@ fn stable_adt_from_def_id<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<AdtD
 
 fn stable_fn_from_def_id<'tcx>(
     tcx: TyCtxt<'tcx>,
-    def_id: DefId,
+    def_id: RustcDefId,
 ) -> Option<rustc_public::ty::FnDef> {
     use rustc_public::rustc_internal::stable;
     use rustc_public::ty::TyKind;
@@ -770,6 +1535,7 @@ fn override_queries(_sess: &rustc_session::Session, providers: &mut UtilProvider
 }
 
 fn override_providers(providers: &mut QueryProviders, gate: Arc<GenerateGate>) {
+    dbg!("locked");
     let mut guard = gate.state.lock().unwrap();
     if guard.original.is_none() {
         guard.original = Some(OriginalProviders {
@@ -797,8 +1563,8 @@ fn override_providers(providers: &mut QueryProviders, gate: Arc<GenerateGate>) {
 
     providers.hir_crate = generated_hir_crate;
     // Leave hir_crate_items/hir_module_items to the original providers.
-    providers.local_def_id_to_hir_id = generated_local_def_id_to_hir_id;
-    providers.opt_hir_owner_nodes = generated_opt_hir_owner_nodes;
+    // providers.local_def_id_to_hir_id = generated_local_def_id_to_hir_id;
+    // providers.opt_hir_owner_nodes = generated_opt_hir_owner_nodes;
     providers.hir_owner_parent_q = generated_hir_owner_parent_q;
     providers.hir_attr_map = generated_hir_attr_map;
     providers.opt_ast_lowering_delayed_lints = generated_opt_ast_lowering_delayed_lints;
@@ -807,93 +1573,66 @@ fn override_providers(providers: &mut QueryProviders, gate: Arc<GenerateGate>) {
     providers.def_span = generated_def_span;
     providers.def_ident_span = generated_def_ident_span;
     providers.visibility = generated_visibility;
-    providers.generics_of = generated_generics_of;
-    providers.type_of = generated_type_of;
-    providers.fn_sig = generated_fn_sig;
-    providers.predicates_of = generated_predicates_of;
-    providers.explicit_predicates_of = generated_explicit_predicates_of;
-    providers.codegen_fn_attrs = generated_codegen_fn_attrs;
+    // providers.generics_of = generated_generics_of;
+    // providers.type_of = generated_type_of;
+    // providers.fn_sig = generated_fn_sig;
+    // providers.predicates_of = generated_predicates_of;
+    // providers.explicit_predicates_of = generated_explicit_predicates_of;
+    // providers.codegen_fn_attrs = generated_codegen_fn_attrs;
     providers.mir_built = generated_mir_built;
-    providers.mir_for_ctfe = generated_mir_for_ctfe;
-    providers.mir_drops_elaborated_and_const_checked =
-        generated_mir_drops_elaborated_and_const_checked;
-    providers.optimized_mir = generated_optimized_mir;
+    // providers.mir_for_ctfe = generated_mir_for_ctfe;
+    // providers.mir_drops_elaborated_and_const_checked =
+    //     generated_mir_drops_elaborated_and_const_checked;
+    // providers.optimized_mir = generated_optimized_mir;
 }
 
 fn generated_hir_crate<'tcx>(tcx: TyCtxt<'tcx>, key: ()) -> hir::Crate<'tcx> {
     if std::env::var("GEN_DEBUG").is_ok() {
         eprintln!("generated_hir_crate");
     }
-    with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            return generated_crate.hir_crate(tcx, key);
-        }
-        (original.hir_crate)(tcx, key)
-    })
+    with_generated_and_original(tcx, |generated, _| generated.hir_crate(tcx, key))
 }
 
+#[cfg(false)]
 fn generated_opt_hir_owner_nodes<'tcx>(
     tcx: TyCtxt<'tcx>,
     key: LocalDefId,
 ) -> Option<&'tcx hir::OwnerNodes<'tcx>> {
+    dbg!(std::panic::Location::caller());
     if std::env::var("GEN_DEBUG").is_ok() {
         eprintln!("generated_opt_hir_owner_nodes {:?}", key);
     }
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(nodes) = generated_crate.opt_hir_owner_nodes(tcx, key) {
-                return Some(nodes);
-            }
-            if std::env::var("GEN_DEBUG").is_ok() {
-                eprintln!(
-                    "generated_opt_hir_owner_nodes: fallback to original {:?}",
-                    key
-                );
-            }
-        }
-        let original_crate = (original.hir_crate)(tcx, ());
-        original_crate
-            .owners
-            .get(key)
-            .and_then(|owner| owner.as_owner().map(|o| &o.nodes))
+        generated.opt_hir_owner_nodes(tcx, key)
+        // original.opt_hir_owner_nodes
     })
 }
 
 fn generated_local_def_id_to_hir_id<'tcx>(tcx: TyCtxt<'tcx>, key: LocalDefId) -> HirId {
-    with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if generated_crate.def_kinds.contains_key(&key) {
-                return HirId::make_owner(key);
+    with_generated_and_original(tcx, |generated, original| match generated {
+        DefinedCrateState::Stage0 => panic!("Invalid"),
+        DefinedCrateState::Stage1(defined_crate_info)
+        | DefinedCrateState::Stage2(defined_crate_info, _, _)
+        | DefinedCrateState::Stage3(defined_crate_info, _, _, _) => {
+            let item_id = defined_crate_info
+                .items
+                .iter()
+                .find(|item| my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() == Some(key))
+                .unwrap();
+            match &item_id.kind {
+                DefinedItemKind::Field(field_id) => todo!(),
+                _ => HirId::make_owner(key),
             }
-        }
-        match (original.hir_crate)(tcx, ()).owners[key] {
-            hir::MaybeOwner::Owner(_) => HirId::make_owner(key),
-            hir::MaybeOwner::NonOwner(hir_id) => hir_id,
-            hir::MaybeOwner::Phantom => panic!("No HirId for {:?}", key),
         }
     })
 }
 
 fn generated_hir_owner_parent_q<'tcx>(tcx: TyCtxt<'tcx>, key: OwnerId) -> HirId {
-    with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            return generated_crate.hir_owner_parent_q(tcx, key);
-        }
-        (original.hir_owner_parent_q)(tcx, key)
-    })
+    with_generated_and_original(tcx, |generated, _| generated.hir_owner_parent_q(tcx, key))
 }
 
 fn generated_hir_attr_map<'tcx>(tcx: TyCtxt<'tcx>, key: OwnerId) -> &'tcx hir::AttributeMap<'tcx> {
-    with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if generated_crate.def_kinds.contains_key(&key.def_id) {
-                return hir::AttributeMap::EMPTY;
-            }
-        }
-        (original.hir_crate)(tcx, ()).owners[key.def_id]
-            .as_owner()
-            .map_or(hir::AttributeMap::EMPTY, |o| &o.attrs)
-    })
+    return hir::AttributeMap::EMPTY;
 }
 
 fn generated_opt_ast_lowering_delayed_lints<'tcx>(
@@ -901,10 +1640,8 @@ fn generated_opt_ast_lowering_delayed_lints<'tcx>(
     key: OwnerId,
 ) -> Option<&'tcx hir::lints::DelayedLints> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if generated_crate.def_kinds.contains_key(&key.def_id) {
-                return None;
-            }
+        if generated.contains_key(tcx, &key.def_id) {
+            return None;
         }
         (original.hir_crate)(tcx, ()).owners[key.def_id]
             .as_owner()
@@ -912,69 +1649,47 @@ fn generated_opt_ast_lowering_delayed_lints<'tcx>(
     })
 }
 
-fn generated_entry_fn<'tcx>(tcx: TyCtxt<'tcx>, key: ()) -> Option<(DefId, EntryFnType)> {
-    with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            return generated_crate.entry_fn(tcx, key);
-        }
-        (original.entry_fn)(tcx, key)
-    })
+fn generated_entry_fn<'tcx>(tcx: TyCtxt<'tcx>, key: ()) -> Option<(RustcDefId, EntryFnType)> {
+    with_generated_and_original(tcx, |generated, original| generated.entry_fn(tcx, key))
 }
 
 fn generated_def_kind<'tcx>(tcx: TyCtxt<'tcx>, key: LocalDefId) -> DefKind {
     if std::env::var("GEN_DEBUG").is_ok() {
         eprintln!("generated_def_kind {:?}", key);
     }
-    with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(kind) = generated_crate.def_kind(key) {
-                return kind;
-            }
-        }
-        (original.def_kind)(tcx, key)
-    })
+    with_generated_and_original(tcx, |generated, original| generated.def_kind(tcx, key))
 }
 
 fn generated_def_span<'tcx>(tcx: TyCtxt<'tcx>, key: LocalDefId) -> RustcSpan {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(span) = generated_crate.def_span(key) {
-                return span;
-            }
+        if let Some(span) = generated.def_span(tcx, key) {
+            return span;
         }
+
         (original.def_span)(tcx, key)
     })
 }
 
 fn generated_def_ident_span<'tcx>(tcx: TyCtxt<'tcx>, key: LocalDefId) -> Option<RustcSpan> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(span) = generated_crate.def_span(key) {
-                return Some(span);
-            }
+        if let Some(span) = generated.def_span(tcx, key) {
+            return Some(span);
         }
+
         (original.def_ident_span)(tcx, key)
     })
 }
 
-fn generated_visibility<'tcx>(tcx: TyCtxt<'tcx>, key: LocalDefId) -> ty::Visibility<DefId> {
-    with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if generated_crate.def_kinds.contains_key(&key) {
-                return ty::Visibility::Public;
-            }
-        }
-        (original.visibility)(tcx, key)
-    })
+fn generated_visibility<'tcx>(_tcx: TyCtxt<'tcx>, _key: LocalDefId) -> ty::Visibility<RustcDefId> {
+    ty::Visibility::Public
 }
 
 fn generated_generics_of<'tcx>(tcx: TyCtxt<'tcx>, key: LocalDefId) -> ty::Generics {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(generics) = generated_crate.generics_of(tcx, key) {
-                return generics;
-            }
+        if let Some(generics) = generated.generics_of(tcx, key) {
+            return generics;
         }
+
         (original.generics_of)(tcx, key)
     })
 }
@@ -984,11 +1699,10 @@ fn generated_type_of<'tcx>(
     key: LocalDefId,
 ) -> ty::EarlyBinder<'tcx, ty::Ty<'tcx>> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(ty) = generated_crate.type_of(tcx, key) {
-                return ty;
-            }
+        if let Some(ty) = generated.type_of(tcx, key) {
+            return ty;
         }
+
         (original.type_of)(tcx, key)
     })
 }
@@ -998,22 +1712,23 @@ fn generated_fn_sig<'tcx>(
     key: LocalDefId,
 ) -> ty::EarlyBinder<'tcx, ty::PolyFnSig<'tcx>> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(sig) = generated_crate.fn_sig(tcx, key) {
-                return sig;
-            }
+        if let Some(sig) = generated.fn_sig(tcx, key) {
+            return sig;
         }
+
         (original.fn_sig)(tcx, key)
     })
 }
 
-fn generated_predicates_of<'tcx>(tcx: TyCtxt<'tcx>, key: DefId) -> ty::GenericPredicates<'tcx> {
+fn generated_predicates_of<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    key: RustcDefId,
+) -> ty::GenericPredicates<'tcx> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(preds) = generated_crate.predicates_of(tcx, key) {
-                return preds;
-            }
+        if let Some(preds) = generated.predicates_of(tcx, key) {
+            return preds;
         }
+
         (original.predicates_of)(tcx, key)
     })
 }
@@ -1023,11 +1738,10 @@ fn generated_explicit_predicates_of<'tcx>(
     key: LocalDefId,
 ) -> ty::GenericPredicates<'tcx> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(preds) = generated_crate.explicit_predicates_of(tcx, key) {
-                return preds;
-            }
+        if let Some(preds) = generated.explicit_predicates_of(tcx, key) {
+            return preds;
         }
+
         (original.explicit_predicates_of)(tcx, key)
     })
 }
@@ -1037,11 +1751,10 @@ fn generated_codegen_fn_attrs<'tcx>(
     key: LocalDefId,
 ) -> rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(attrs) = generated_crate.codegen_fn_attrs(tcx, key) {
-                return attrs;
-            }
+        if let Some(attrs) = generated.codegen_fn_attrs(tcx, key) {
+            return attrs;
         }
+
         (original.codegen_fn_attrs)(tcx, key)
     })
 }
@@ -1051,11 +1764,10 @@ fn generated_mir_built<'tcx>(
     key: LocalDefId,
 ) -> &'tcx Steal<rustc_middle::mir::Body<'tcx>> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(body) = generated_crate.mir_built(tcx, key) {
-                return body;
-            }
+        if let Some(body) = generated.mir_built(tcx, key) {
+            return body;
         }
+
         (original.mir_built)(tcx, key)
     })
 }
@@ -1065,11 +1777,10 @@ fn generated_mir_for_ctfe<'tcx>(
     key: LocalDefId,
 ) -> &'tcx rustc_middle::mir::Body<'tcx> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(body) = generated_crate.mir_for_ctfe(tcx, key) {
-                return body;
-            }
+        if let Some(body) = generated.mir_for_ctfe(tcx, key) {
+            return body;
         }
+
         (original.mir_for_ctfe)(tcx, key)
     })
 }
@@ -1079,11 +1790,10 @@ fn generated_mir_drops_elaborated_and_const_checked<'tcx>(
     key: LocalDefId,
 ) -> &'tcx Steal<rustc_middle::mir::Body<'tcx>> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(body) = generated_crate.mir_drops_elaborated_and_const_checked(tcx, key) {
-                return body;
-            }
+        if let Some(body) = generated.mir_drops_elaborated_and_const_checked(tcx, key) {
+            return body;
         }
+
         (original.mir_drops_elaborated_and_const_checked)(tcx, key)
     })
 }
@@ -1093,15 +1803,16 @@ fn generated_optimized_mir<'tcx>(
     key: LocalDefId,
 ) -> &'tcx rustc_middle::mir::Body<'tcx> {
     with_generated_and_original(tcx, |generated, original| {
-        if let Some(generated_crate) = generated {
-            if let Some(body) = generated_crate.optimized_mir(tcx, key) {
-                return body;
-            }
-        }
+        // if let Some(generated_crate) = generated {
+        //     if let Some(body) = generated_crate.optimized_mir(tcx, key) {
+        //         return body;
+        //     }
+        // }
         (original.optimized_mir)(tcx, key)
     })
 }
 
+#[cfg(false)]
 #[allow(invalid_reference_casting)]
 fn allocate_def_ids<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -1149,35 +1860,11 @@ fn allocate_def_ids<'tcx>(
     (foreign_mod, struct_ids, function_ids, foreign_function_ids)
 }
 
-#[allow(invalid_reference_casting)]
-fn allocate_struct_field_def_ids<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    struct_def: LocalDefId,
-    fields: &[StructField],
-) -> Vec<LocalDefId> {
-    let defs_guard = tcx.definitions_untracked();
-    let defs_mut = unsafe { &mut *(&*defs_guard as *const Definitions as *mut Definitions) };
-    let mut disamb =
-        DisambiguatorState::with(struct_def, DefPathData::ValueNs(Symbol::intern("field")), 1);
-    fields
-        .iter()
-        .map(|field| {
-            defs_mut.create_def(
-                struct_def,
-                DefPathData::ValueNs(Symbol::intern(&field.name)),
-                &mut disamb,
-            )
-        })
-        .collect()
-}
-
+#[cfg(false)]
 struct GeneratedCrate {
     #[allow(dead_code)]
     crate_name: Symbol,
     context: Context,
-    struct_ids: FxHashMap<ItemId, LocalDefId>,
-    foreign_function_ids: FxHashMap<ItemId, LocalDefId>,
-    function_ids: FxHashMap<ItemId, LocalDefId>,
     struct_infos: LocalDefIdMap<StructInfo>,
     foreign_function_infos: LocalDefIdMap<ForeignFunctionInfo>,
     foreign_function_sigs: LocalDefIdMap<(
@@ -1206,954 +1893,6 @@ struct GeneratedCrate {
     no_main: bool,
 }
 
-impl GeneratedCrate {
-    fn build<'tcx>(
-        tcx: TyCtxt<'tcx>,
-        context: &Context,
-        dependency_info: DependencyInfo,
-        info: CurrentCrateInfo,
-    ) -> Self {
-        if std::env::var("GEN_DEBUG").is_ok() {
-            eprintln!("GeneratedCrate::build");
-        }
-        context.register_with_source_map(tcx);
-        let crate_name = if info.crate_name.is_empty() {
-            Symbol::intern("synthetic")
-        } else {
-            Symbol::intern(&info.crate_name)
-        };
-
-        let mut foreign_functions = Vec::new();
-        let mut functions = Vec::new();
-        let mut structs = Vec::new();
-        for item in &info.items {
-            match &item.kind {
-                ItemKind::ForeignFunction => {
-                    foreign_functions.push(ForeignFunctionInfo {
-                        id: item.id,
-                        name: item.name.clone(),
-                    });
-                }
-                ItemKind::Function => {
-                    functions.push(FunctionInfo {
-                        id: item.id,
-                        name: item.name.clone(),
-                        no_mangle: item.no_mangle,
-                    });
-                }
-                ItemKind::Module => {}
-                ItemKind::Struct => {
-                    structs.push(StructInfo {
-                        id: item.id,
-                        name: item.name.clone(),
-                    });
-                }
-                ItemKind::Enum => {
-                    todo!("item kind {:?} is not implemented yet", item.kind)
-                }
-            }
-        }
-
-        let mut dep_functions = FxHashMap::default();
-        for func in &dependency_info.functions {
-            let hash = def_path_hash_from_parts(func.def_path_hash_hi, func.def_path_hash_lo);
-            if let Some(def_id) = tcx.def_path_hash_to_def_id(hash) {
-                dep_functions.insert(func.id, def_id);
-            }
-        }
-
-        let mut owners: IndexVec<LocalDefId, Option<&'static hir::OwnerInfo<'static>>> =
-            IndexVec::new();
-        let mut owner_parents: LocalDefIdMap<HirId> = LocalDefIdMap::default();
-        let mut def_kinds: LocalDefIdMap<DefKind> = LocalDefIdMap::default();
-        let mut def_spans: LocalDefIdMap<RustcSpan> = LocalDefIdMap::default();
-        let mut struct_infos: LocalDefIdMap<StructInfo> = LocalDefIdMap::default();
-        let mut function_infos: LocalDefIdMap<FunctionInfo> = LocalDefIdMap::default();
-        let mut foreign_function_infos: LocalDefIdMap<ForeignFunctionInfo> =
-            LocalDefIdMap::default();
-        let mut foreign_function_sigs: LocalDefIdMap<(
-            Vec<ty::Ty<'static>>,
-            ty::Ty<'static>,
-            hir::Safety,
-            ExternAbi,
-        )> = LocalDefIdMap::default();
-        let mut foreign_function_symbols: LocalDefIdMap<Symbol> = LocalDefIdMap::default();
-        let mut function_sigs: LocalDefIdMap<(
-            Vec<ty::Ty<'static>>,
-            ty::Ty<'static>,
-            hir::Safety,
-            ExternAbi,
-        )> = LocalDefIdMap::default();
-        let mut function_symbols: LocalDefIdMap<Symbol> = LocalDefIdMap::default();
-        let field_types: LocalDefIdMap<ty::Ty<'static>> = LocalDefIdMap::default();
-
-        let crate_def = CRATE_DEF_ID;
-        let (foreign_mod_def, struct_ids, function_ids, foreign_function_ids) =
-            allocate_def_ids(tcx, &structs, &functions, &foreign_functions);
-
-        def_kinds.insert(crate_def, DefKind::Mod);
-        def_kinds.insert(foreign_mod_def, DefKind::ForeignMod);
-        for def_id in struct_ids.values().copied() {
-            def_kinds.insert(def_id, DefKind::Struct);
-            def_spans.insert(def_id, DUMMY_SP);
-        }
-
-        def_spans.insert(crate_def, DUMMY_SP);
-        def_spans.insert(foreign_mod_def, DUMMY_SP);
-        for def_id in function_ids.values().copied() {
-            def_kinds.insert(def_id, DefKind::Fn);
-            def_spans.insert(def_id, DUMMY_SP);
-        }
-
-        let mut foreign_item_ids = Vec::new();
-        let mut foreign_items_hir = Vec::new();
-
-        for foreign in &foreign_functions {
-            let def_id = *foreign_function_ids
-                .get(&foreign.id)
-                .expect("foreign function id missing");
-            def_kinds.insert(def_id, DefKind::Fn);
-            def_spans.insert(def_id, DUMMY_SP);
-            foreign_function_infos.insert(def_id, foreign.clone());
-            foreign_function_symbols.insert(def_id, Symbol::intern(&foreign.name));
-
-            let inputs_tcx = Vec::new();
-            let output_tcx = tcx.types.unit;
-            let inputs_static = unsafe {
-                std::mem::transmute::<Vec<ty::Ty<'tcx>>, Vec<ty::Ty<'static>>>(inputs_tcx)
-            };
-            let output_static =
-                unsafe { std::mem::transmute::<ty::Ty<'tcx>, ty::Ty<'static>>(output_tcx) };
-            foreign_function_sigs.insert(
-                def_id,
-                (
-                    inputs_static,
-                    output_static,
-                    hir::Safety::Unsafe,
-                    ExternAbi::C { unwind: false },
-                ),
-            );
-
-            let foreign_item_id = hir::ForeignItemId {
-                owner_id: OwnerId { def_id },
-            };
-            foreign_item_ids.push(foreign_item_id);
-
-            let inputs: Vec<hir::Ty<'static>> = Vec::new();
-            let fn_decl = leak(hir::FnDecl {
-                inputs: leak(inputs.into_boxed_slice()),
-                output: hir::FnRetTy::DefaultReturn(DUMMY_SP),
-                c_variadic: false,
-                implicit_self: hir::ImplicitSelfKind::None,
-                lifetime_elision_allowed: true,
-            });
-
-            let fn_sig = hir::FnSig {
-                header: hir::FnHeader {
-                    safety: hir::HeaderSafety::Normal(hir::Safety::Unsafe),
-                    constness: hir::Constness::NotConst,
-                    asyncness: hir::IsAsync::NotAsync,
-                    abi: ExternAbi::C { unwind: false },
-                },
-                decl: fn_decl,
-                span: DUMMY_SP,
-            };
-
-            let foreign_item = hir::ForeignItem {
-                ident: Ident::from_str(&foreign.name),
-                kind: hir::ForeignItemKind::Fn(
-                    fn_sig,
-                    leak(vec![None; 0].into_boxed_slice()),
-                    hir::Generics::empty(),
-                ),
-                owner_id: OwnerId { def_id },
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
-                has_delayed_lints: false,
-            };
-            foreign_items_hir.push((def_id, leak(foreign_item)));
-        }
-
-        let foreign_items = leak(foreign_item_ids.clone().into_boxed_slice());
-
-        let foreign_mod_item = hir::Item {
-            owner_id: OwnerId {
-                def_id: foreign_mod_def,
-            },
-            kind: hir::ItemKind::ForeignMod {
-                abi: ExternAbi::C { unwind: false },
-                items: foreign_items,
-            },
-            span: DUMMY_SP,
-            vis_span: DUMMY_SP,
-            has_delayed_lints: false,
-            eii: false,
-        };
-        let foreign_mod_item = leak(foreign_mod_item);
-
-        let mut struct_items_hir = Vec::new();
-        for strukt in &structs {
-            let def_id = *struct_ids
-                .get(&strukt.id)
-                .expect("struct id missing in allocation");
-            struct_infos.insert(def_id, strukt.clone());
-            let fields_hir: &'static [hir::FieldDef<'static>] = leak(Vec::new().into_boxed_slice());
-            let item = hir::Item {
-                owner_id: OwnerId { def_id },
-                kind: hir::ItemKind::Struct(
-                    Ident::from_str(&strukt.name),
-                    hir::Generics::empty(),
-                    hir::VariantData::Struct {
-                        fields: fields_hir,
-                        recovered: rustc_ast::Recovered::No,
-                    },
-                ),
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
-                has_delayed_lints: false,
-                eii: false,
-            };
-            struct_items_hir.push((def_id, leak(item)));
-        }
-
-        let mut function_items_hir = Vec::new();
-        for function in &functions {
-            let def_id = *function_ids
-                .get(&function.id)
-                .expect("function id missing in allocation");
-            function_infos.insert(def_id, function.clone());
-            if function.no_mangle {
-                function_symbols.insert(def_id, Symbol::intern(&function.name));
-            }
-
-            let inputs_tcx = Vec::new();
-            let output_tcx = tcx.types.unit;
-            let inputs_static = unsafe {
-                std::mem::transmute::<Vec<ty::Ty<'tcx>>, Vec<ty::Ty<'static>>>(inputs_tcx)
-            };
-            let output_static =
-                unsafe { std::mem::transmute::<ty::Ty<'tcx>, ty::Ty<'static>>(output_tcx) };
-            let safety = hir::Safety::Safe;
-            let abi = ExternAbi::Rust;
-            function_sigs.insert(def_id, (inputs_static, output_static, safety, abi));
-
-            let inputs_hir = Vec::new();
-            let output_hir = hir::FnRetTy::DefaultReturn(DUMMY_SP);
-            let fn_decl = leak(hir::FnDecl {
-                inputs: leak(inputs_hir.into_boxed_slice()),
-                output: output_hir,
-                c_variadic: false,
-                implicit_self: hir::ImplicitSelfKind::None,
-                lifetime_elision_allowed: true,
-            });
-            let fn_sig = hir::FnSig {
-                header: hir::FnHeader {
-                    safety: hir::HeaderSafety::Normal(safety),
-                    constness: hir::Constness::NotConst,
-                    asyncness: hir::IsAsync::NotAsync,
-                    abi,
-                },
-                decl: fn_decl,
-                span: DUMMY_SP,
-            };
-            let body_kind = hir::ExprKind::Tup(&[]);
-            let body_expr = leak(hir::Expr {
-                hir_id: HirId {
-                    owner: OwnerId { def_id },
-                    local_id: ItemLocalId::new(1),
-                },
-                kind: body_kind,
-                span: DUMMY_SP,
-            });
-            let body = leak(hir::Body {
-                params: &[],
-                value: body_expr,
-            });
-            let item = hir::Item {
-                owner_id: OwnerId { def_id },
-                kind: hir::ItemKind::Fn {
-                    sig: fn_sig,
-                    ident: Ident::from_str(&function.name),
-                    generics: hir::Generics::empty(),
-                    body: body.id(),
-                    has_body: true,
-                },
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
-                has_delayed_lints: false,
-                eii: false,
-            };
-            function_items_hir.push((def_id, leak(item), body, body_expr));
-        }
-
-        let mut root_item_ids =
-            Vec::with_capacity(1 + struct_items_hir.len() + function_items_hir.len());
-        root_item_ids.push(hir::ItemId {
-            owner_id: OwnerId {
-                def_id: foreign_mod_def,
-            },
-        });
-        for (def_id, _) in &struct_items_hir {
-            root_item_ids.push(hir::ItemId {
-                owner_id: OwnerId { def_id: *def_id },
-            });
-        }
-        for (def_id, _, _, _) in &function_items_hir {
-            root_item_ids.push(hir::ItemId {
-                owner_id: OwnerId { def_id: *def_id },
-            });
-        }
-
-        let root_mod = leak(hir::Mod {
-            spans: hir::ModSpans {
-                inner_span: DUMMY_SP,
-                inject_use_span: DUMMY_SP,
-            },
-            item_ids: leak(root_item_ids.into_boxed_slice()),
-        });
-
-        let crate_owner_nodes = build_owner_nodes_for_crate(root_mod);
-        insert_owner(
-            &mut owners,
-            crate_def,
-            leak(make_owner_info(crate_owner_nodes)),
-        );
-        owner_parents.insert(crate_def, HirId::make_owner(crate_def));
-
-        let foreign_mod_nodes = build_owner_nodes_for_item(foreign_mod_item);
-        insert_owner(
-            &mut owners,
-            foreign_mod_def,
-            leak(make_owner_info(foreign_mod_nodes)),
-        );
-        owner_parents.insert(foreign_mod_def, HirId::make_owner(crate_def));
-
-        for (def_id, foreign_item) in foreign_items_hir {
-            let foreign_nodes = build_owner_nodes_for_foreign_item(foreign_item);
-            insert_owner(&mut owners, def_id, leak(make_owner_info(foreign_nodes)));
-            owner_parents.insert(def_id, HirId::make_owner(foreign_mod_def));
-        }
-
-        for (def_id, item) in struct_items_hir {
-            let nodes = build_owner_nodes_for_item(item);
-            insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
-            owner_parents.insert(def_id, HirId::make_owner(crate_def));
-        }
-
-        for (def_id, item, body, body_expr) in function_items_hir {
-            let nodes = build_owner_nodes_for_fn(item, body, body_expr);
-            insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
-            owner_parents.insert(def_id, HirId::make_owner(crate_def));
-        }
-
-        if std::env::var("GEN_DEBUG").is_ok() {
-            eprintln!("GeneratedCrate::build: owners len {}", owners.len());
-        }
-
-        let entry_fn = if info.no_main {
-            None
-        } else {
-            info.entry
-                .and_then(|id| function_ids.get(&id).copied())
-                .or_else(|| {
-                    functions
-                        .first()
-                        .and_then(|f| function_ids.get(&f.id).copied())
-                })
-        };
-
-        Self {
-            crate_name,
-            context: context.clone(),
-            struct_ids,
-            foreign_function_ids,
-            function_ids,
-            struct_infos,
-            foreign_function_infos,
-            foreign_function_sigs,
-            foreign_function_symbols,
-            function_sigs,
-            function_symbols,
-            field_types,
-            owners,
-            owner_parents,
-            def_kinds,
-            def_spans,
-            function_infos,
-            function_bodies: LocalDefIdMap::default(),
-            function_mir: Mutex::new(LocalDefIdMap::default()),
-            entry_fn,
-            no_main: info.no_main,
-        }
-    }
-
-    fn defined_info<'tcx>(&self, tcx: TyCtxt<'tcx>, _use_real_adts: bool) -> DefinedCrateInfo {
-        let mut items = Vec::new();
-
-        for (id, def_id) in &self.function_ids {
-            let fn_def = function_def_stable(tcx, *def_id);
-            items.push(DefinedItemInfo {
-                id: *id,
-                name: self
-                    .function_infos
-                    .get(def_id)
-                    .map(|f| f.name.clone())
-                    .unwrap_or_else(|| "function".to_string()),
-                kind: DefinedItemKind::Function(rustc_public::ty::FnDef(fn_def)),
-            });
-        }
-
-        for (id, def_id) in &self.foreign_function_ids {
-            let fn_def = function_def_stable(tcx, *def_id);
-            items.push(DefinedItemInfo {
-                id: *id,
-                name: self
-                    .foreign_function_infos
-                    .get(def_id)
-                    .map(|f| f.name.clone())
-                    .unwrap_or_else(|| "foreign".to_string()),
-                kind: DefinedItemKind::ForeignFunction(rustc_public::ty::FnDef(fn_def)),
-            });
-        }
-
-        for (id, def_id) in &self.struct_ids {
-            let adt = stable_adt_from_def_id(tcx, def_id.to_def_id())
-                .unwrap_or_else(|| panic!("failed to resolve generated ADT for {:?}", def_id));
-            items.push(DefinedItemInfo {
-                id: *id,
-                name: self
-                    .struct_infos
-                    .get(def_id)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_else(|| "struct".to_string()),
-                kind: DefinedItemKind::Struct(adt),
-            });
-        }
-
-        DefinedCrateInfo {
-            crate_name: self.crate_name.as_str().to_string(),
-            items,
-            entry: self.entry_fn.and_then(|entry| {
-                self.function_ids
-                    .iter()
-                    .find(|(_, d)| **d == entry)
-                    .map(|(id, _)| *id)
-            }),
-        }
-    }
-
-    fn install_mir<'tcx>(&mut self, tcx: TyCtxt<'tcx>, item_mir: Vec<ItemMirInfo>) {
-        for mir in item_mir {
-            let Some(def_id) = self.function_ids.get(&mir.id).copied() else {
-                continue;
-            };
-            let body = build_mir_body(tcx, &self.context, &mir.body, def_id);
-            self.function_bodies.insert(def_id, body);
-        }
-    }
-
-    fn install_signatures<'tcx>(&mut self, tcx: TyCtxt<'tcx>, signatures: Vec<ItemSignatureInfo>) {
-        for sig in signatures {
-            match sig.kind {
-                ItemSignatureKind::Struct(fields) => {
-                    let Some(def_id) = self.struct_ids.get(&sig.id).copied() else {
-                        continue;
-                    };
-                    let Some(info) = self.struct_infos.get(&def_id).cloned() else {
-                        continue;
-                    };
-                    let field_def_ids = allocate_struct_field_def_ids(tcx, def_id, &fields);
-                    for field_def in &field_def_ids {
-                        self.def_kinds.insert(*field_def, DefKind::Field);
-                        self.def_spans.insert(*field_def, DUMMY_SP);
-                        self.owner_parents
-                            .insert(*field_def, HirId::make_owner(def_id));
-                    }
-                    let fields_hir = fields
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, field)| {
-                            let ty = mir_ty_to_rustc(tcx, &field.ty);
-                            let ty =
-                                unsafe { std::mem::transmute::<ty::Ty<'tcx>, ty::Ty<'static>>(ty) };
-                            self.field_types.insert(field_def_ids[idx], ty);
-                            hir::FieldDef {
-                                span: DUMMY_SP,
-                                vis_span: DUMMY_SP,
-                                ident: Ident::from_str(&field.name),
-                                hir_id: HirId {
-                                    owner: OwnerId { def_id },
-                                    local_id: ItemLocalId::new(idx + 1),
-                                },
-                                def_id: field_def_ids[idx],
-                                ty: leak(mir_ty_to_hir(tcx, def_id, &field.ty)),
-                                safety: hir::Safety::Safe,
-                                default: None,
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    let fields_hir: &'static [hir::FieldDef<'static>] =
-                        leak(fields_hir.into_boxed_slice());
-                    let item = hir::Item {
-                        owner_id: OwnerId { def_id },
-                        kind: hir::ItemKind::Struct(
-                            Ident::from_str(&info.name),
-                            hir::Generics::empty(),
-                            hir::VariantData::Struct {
-                                fields: fields_hir,
-                                recovered: rustc_ast::Recovered::No,
-                            },
-                        ),
-                        span: DUMMY_SP,
-                        vis_span: DUMMY_SP,
-                        has_delayed_lints: false,
-                        eii: false,
-                    };
-                    let item = leak(item);
-                    let nodes = build_owner_nodes_for_item(item);
-                    insert_owner(&mut self.owners, def_id, leak(make_owner_info(nodes)));
-                    for (idx, field) in fields_hir.iter().enumerate() {
-                        let nodes = build_owner_nodes_for_field(field);
-                        insert_owner(
-                            &mut self.owners,
-                            field_def_ids[idx],
-                            leak(make_owner_info(nodes)),
-                        );
-                    }
-                }
-                ItemSignatureKind::Function(fn_sig) => {
-                    let Some(def_id) = self.function_ids.get(&sig.id).copied() else {
-                        continue;
-                    };
-                    let inputs_tcx = fn_sig
-                        .inputs
-                        .iter()
-                        .map(|ty| mir_ty_to_rustc(tcx, ty))
-                        .collect::<Vec<_>>();
-                    let output_tcx = mir_ty_to_rustc(tcx, &fn_sig.output);
-                    let inputs_static = unsafe {
-                        std::mem::transmute::<Vec<ty::Ty<'tcx>>, Vec<ty::Ty<'static>>>(inputs_tcx)
-                    };
-                    let output_static =
-                        unsafe { std::mem::transmute::<ty::Ty<'tcx>, ty::Ty<'static>>(output_tcx) };
-                    let safety = if fn_sig.is_unsafe {
-                        hir::Safety::Unsafe
-                    } else {
-                        hir::Safety::Safe
-                    };
-                    let abi = match fn_sig.abi {
-                        FunctionAbi::Rust => ExternAbi::Rust,
-                        FunctionAbi::C => ExternAbi::C { unwind: false },
-                    };
-                    self.function_sigs
-                        .insert(def_id, (inputs_static, output_static, safety, abi));
-
-                    if let Some(info) = self.function_infos.get(&def_id) {
-                        let inputs_hir = fn_sig
-                            .inputs
-                            .iter()
-                            .map(|ty| mir_ty_to_hir(tcx, def_id, ty))
-                            .collect::<Vec<_>>();
-                        let output_hir = if fn_sig.output == MirTy::new_tuple(&[]) {
-                            hir::FnRetTy::DefaultReturn(DUMMY_SP)
-                        } else {
-                            hir::FnRetTy::Return(leak(mir_ty_to_hir(tcx, def_id, &fn_sig.output)))
-                        };
-                        let decl = leak(hir::FnDecl {
-                            inputs: leak(inputs_hir.into_boxed_slice()),
-                            output: output_hir,
-                            c_variadic: false,
-                            implicit_self: hir::ImplicitSelfKind::None,
-                            lifetime_elision_allowed: true,
-                        });
-                        let sig_hir = hir::FnSig {
-                            header: hir::FnHeader {
-                                safety: hir::HeaderSafety::Normal(safety),
-                                constness: hir::Constness::NotConst,
-                                asyncness: hir::IsAsync::NotAsync,
-                                abi,
-                            },
-                            decl,
-                            span: DUMMY_SP,
-                        };
-                        let body_kind = if fn_sig.output == MirTy::new_tuple(&[]) {
-                            hir::ExprKind::Tup(&[])
-                        } else {
-                            hir::ExprKind::Lit(hir::Lit {
-                                node: LitKind::Int(0u128.into(), LitIntType::Unsuffixed),
-                                span: DUMMY_SP,
-                            })
-                        };
-                        let body_expr = leak(hir::Expr {
-                            hir_id: HirId {
-                                owner: OwnerId { def_id },
-                                local_id: ItemLocalId::new(1),
-                            },
-                            kind: body_kind,
-                            span: DUMMY_SP,
-                        });
-                        let body = leak(hir::Body {
-                            params: &[],
-                            value: body_expr,
-                        });
-                        let item = hir::Item {
-                            owner_id: OwnerId { def_id },
-                            kind: hir::ItemKind::Fn {
-                                sig: sig_hir,
-                                ident: Ident::from_str(&info.name),
-                                generics: hir::Generics::empty(),
-                                body: body.id(),
-                                has_body: true,
-                            },
-                            span: DUMMY_SP,
-                            vis_span: DUMMY_SP,
-                            has_delayed_lints: false,
-                            eii: false,
-                        };
-                        let item = leak(item);
-                        let nodes = build_owner_nodes_for_fn(item, body, body_expr);
-                        insert_owner(&mut self.owners, def_id, leak(make_owner_info(nodes)));
-                    }
-                }
-                ItemSignatureKind::ForeignFunction(fn_sig) => {
-                    let Some(def_id) = self.foreign_function_ids.get(&sig.id).copied() else {
-                        continue;
-                    };
-                    let inputs_tcx = fn_sig
-                        .inputs
-                        .iter()
-                        .map(|ty| mir_ty_to_rustc(tcx, ty))
-                        .collect::<Vec<_>>();
-                    let output_tcx = mir_ty_to_rustc(tcx, &fn_sig.output);
-                    let inputs_static = unsafe {
-                        std::mem::transmute::<Vec<ty::Ty<'tcx>>, Vec<ty::Ty<'static>>>(inputs_tcx)
-                    };
-                    let output_static =
-                        unsafe { std::mem::transmute::<ty::Ty<'tcx>, ty::Ty<'static>>(output_tcx) };
-                    let safety = if fn_sig.is_unsafe {
-                        hir::Safety::Unsafe
-                    } else {
-                        hir::Safety::Safe
-                    };
-                    let abi = match fn_sig.abi {
-                        FunctionAbi::Rust => ExternAbi::Rust,
-                        FunctionAbi::C => ExternAbi::C { unwind: false },
-                    };
-                    self.foreign_function_sigs
-                        .insert(def_id, (inputs_static, output_static, safety, abi));
-
-                    if let Some(info) = self.foreign_function_infos.get(&def_id) {
-                        let inputs_hir = fn_sig
-                            .inputs
-                            .iter()
-                            .map(|ty| mir_ty_to_hir(tcx, def_id, ty))
-                            .collect::<Vec<_>>();
-                        let output_hir = if fn_sig.output == MirTy::new_tuple(&[]) {
-                            hir::FnRetTy::DefaultReturn(DUMMY_SP)
-                        } else {
-                            hir::FnRetTy::Return(leak(mir_ty_to_hir(tcx, def_id, &fn_sig.output)))
-                        };
-                        let decl = leak(hir::FnDecl {
-                            inputs: leak(inputs_hir.into_boxed_slice()),
-                            output: output_hir,
-                            c_variadic: false,
-                            implicit_self: hir::ImplicitSelfKind::None,
-                            lifetime_elision_allowed: true,
-                        });
-                        let sig_hir = hir::FnSig {
-                            header: hir::FnHeader {
-                                safety: hir::HeaderSafety::Normal(safety),
-                                constness: hir::Constness::NotConst,
-                                asyncness: hir::IsAsync::NotAsync,
-                                abi,
-                            },
-                            decl,
-                            span: DUMMY_SP,
-                        };
-                        let item = hir::ForeignItem {
-                            ident: Ident::from_str(&info.name),
-                            kind: hir::ForeignItemKind::Fn(
-                                sig_hir,
-                                leak(vec![None; fn_sig.inputs.len()].into_boxed_slice()),
-                                hir::Generics::empty(),
-                            ),
-                            owner_id: OwnerId { def_id },
-                            span: DUMMY_SP,
-                            vis_span: DUMMY_SP,
-                            has_delayed_lints: false,
-                        };
-                        let item = leak(item);
-                        let nodes = build_owner_nodes_for_foreign_item(item);
-                        insert_owner(&mut self.owners, def_id, leak(make_owner_info(nodes)));
-                    }
-                }
-            }
-        }
-    }
-
-    fn hir_crate<'tcx>(&self, _tcx: TyCtxt<'tcx>, _key: ()) -> hir::Crate<'tcx> {
-        let owners: IndexVec<LocalDefId, hir::MaybeOwner<'tcx>> =
-            IndexVec::from_iter(self.owners.iter().map(|opt| match opt {
-                Some(info) => {
-                    let info = unsafe {
-                        std::mem::transmute::<
-                            &'static hir::OwnerInfo<'static>,
-                            &'tcx hir::OwnerInfo<'tcx>,
-                        >(*info)
-                    };
-                    hir::MaybeOwner::Owner(info)
-                }
-                None => hir::MaybeOwner::Phantom,
-            }));
-        hir::Crate {
-            owners,
-            opt_hir_hash: None,
-        }
-    }
-
-    fn opt_hir_owner_nodes<'tcx>(
-        &self,
-        _tcx: TyCtxt<'tcx>,
-        key: LocalDefId,
-    ) -> Option<&'tcx hir::OwnerNodes<'tcx>> {
-        self.owners
-            .get(key)
-            .and_then(|opt| *opt)
-            .map(|info| unsafe {
-                if std::env::var("GEN_DEBUG").is_ok() {
-                    eprintln!(
-                        "generated_crate.opt_hir_owner_nodes {:?} => {:?}",
-                        key,
-                        info.nodes.node()
-                    );
-                }
-                std::mem::transmute::<&hir::OwnerNodes<'static>, &'tcx hir::OwnerNodes<'tcx>>(
-                    &info.nodes,
-                )
-            })
-            .or_else(|| {
-                if std::env::var("GEN_DEBUG").is_ok() {
-                    eprintln!(
-                        "generated_crate.opt_hir_owner_nodes {:?} => None (len {})",
-                        key,
-                        self.owners.len()
-                    );
-                }
-                None
-            })
-    }
-
-    fn hir_owner_parent_q<'tcx>(&self, _tcx: TyCtxt<'tcx>, key: OwnerId) -> HirId {
-        self.owner_parents
-            .get(&key.def_id)
-            .copied()
-            .unwrap_or_else(|| HirId::make_owner(key.def_id))
-    }
-
-    fn entry_fn<'tcx>(&self, _tcx: TyCtxt<'tcx>, _key: ()) -> Option<(DefId, EntryFnType)> {
-        self.entry_fn.map(|def| {
-            (
-                def.to_def_id(),
-                EntryFnType::Main {
-                    sigpipe: rustc_session::config::sigpipe::DEFAULT,
-                },
-            )
-        })
-    }
-
-    fn def_kind(&self, def_id: LocalDefId) -> Option<DefKind> {
-        self.def_kinds.get(&def_id).copied()
-    }
-
-    fn def_span(&self, def_id: LocalDefId) -> Option<RustcSpan> {
-        self.def_spans.get(&def_id).copied()
-    }
-
-    fn generics_of<'tcx>(&self, _tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Option<ty::Generics> {
-        if self.def_kinds.contains_key(&def_id) {
-            let generics = ty::Generics {
-                parent: None,
-                parent_count: 0,
-                own_params: Vec::new(),
-                param_def_id_to_index: FxHashMap::default(),
-                has_self: false,
-                has_late_bound_regions: None,
-            };
-            return Some(generics);
-        }
-        None
-    }
-
-    fn type_of<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        def_id: LocalDefId,
-    ) -> Option<ty::EarlyBinder<'tcx, ty::Ty<'tcx>>> {
-        if self.struct_infos.contains_key(&def_id) {
-            let adt = tcx.adt_def(def_id);
-            let args = ty::GenericArgs::identity_for_item(tcx, def_id);
-            let ty = ty::Ty::new_adt(tcx, adt, args);
-            return Some(ty::EarlyBinder::bind(ty));
-        }
-        if let Some(field_ty_static) = self.field_types.get(&def_id) {
-            let field_ty =
-                unsafe { std::mem::transmute::<ty::Ty<'static>, ty::Ty<'tcx>>(*field_ty_static) };
-            return Some(ty::EarlyBinder::bind(field_ty));
-        }
-        if self.function_infos.contains_key(&def_id)
-            || self.foreign_function_infos.contains_key(&def_id)
-        {
-            let args = ty::GenericArgs::identity_for_item(tcx, def_id);
-            let ty = ty::Ty::new_fn_def(tcx, def_id.to_def_id(), args);
-            return Some(ty::EarlyBinder::bind(ty));
-        }
-        None
-    }
-
-    fn fn_sig<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        def_id: LocalDefId,
-    ) -> Option<ty::EarlyBinder<'tcx, ty::PolyFnSig<'tcx>>> {
-        if let Some(_info) = self.function_infos.get(&def_id) {
-            let Some((inputs_static, output_static, safety, abi)) = self.function_sigs.get(&def_id)
-            else {
-                return None;
-            };
-            let inputs = unsafe {
-                std::mem::transmute::<Vec<ty::Ty<'static>>, Vec<ty::Ty<'tcx>>>(
-                    inputs_static.clone(),
-                )
-            };
-            let output =
-                unsafe { std::mem::transmute::<ty::Ty<'static>, ty::Ty<'tcx>>(*output_static) };
-            let sig = tcx.mk_fn_sig(inputs, output, false, *safety, *abi);
-            let poly = ty::Binder::dummy(sig);
-            return Some(ty::EarlyBinder::bind(poly));
-        }
-        if let Some((inputs_static, output_static, safety, abi)) =
-            self.foreign_function_sigs.get(&def_id)
-        {
-            let inputs = unsafe {
-                std::mem::transmute::<Vec<ty::Ty<'static>>, Vec<ty::Ty<'tcx>>>(
-                    inputs_static.clone(),
-                )
-            };
-            let output =
-                unsafe { std::mem::transmute::<ty::Ty<'static>, ty::Ty<'tcx>>(*output_static) };
-            let sig = tcx.mk_fn_sig(inputs, output, false, *safety, *abi);
-            let poly = ty::Binder::dummy(sig);
-            return Some(ty::EarlyBinder::bind(poly));
-        }
-        None
-    }
-
-    fn predicates_of<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        def_id: DefId,
-    ) -> Option<ty::GenericPredicates<'tcx>> {
-        let local = def_id.as_local()?;
-        if self.def_kinds.contains_key(&local) {
-            return Some(ty::GenericPredicates {
-                parent: None,
-                predicates: tcx.arena.alloc_from_iter([]),
-            });
-        }
-        None
-    }
-
-    fn explicit_predicates_of<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        def_id: LocalDefId,
-    ) -> Option<ty::GenericPredicates<'tcx>> {
-        self.predicates_of(tcx, def_id.to_def_id())
-    }
-
-    fn codegen_fn_attrs<'tcx>(
-        &self,
-        _tcx: TyCtxt<'tcx>,
-        def_id: LocalDefId,
-    ) -> Option<rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs> {
-        if self.def_kinds.contains_key(&def_id) {
-            let mut attrs = rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs::new();
-            if let Some(symbol) = self.foreign_function_symbols.get(&def_id) {
-                attrs.flags.insert(CodegenFnAttrFlags::NO_MANGLE);
-                attrs.symbol_name = Some(*symbol);
-            }
-            if let Some(symbol) = self.function_symbols.get(&def_id) {
-                attrs.flags.insert(CodegenFnAttrFlags::NO_MANGLE);
-                attrs.symbol_name = Some(*symbol);
-            }
-            return Some(attrs);
-        }
-        None
-    }
-
-    fn mir_built<'tcx>(
-        &self,
-        _tcx: TyCtxt<'tcx>,
-        def_id: LocalDefId,
-    ) -> Option<&'tcx Steal<rustc_middle::mir::Body<'tcx>>> {
-        {
-            let guard = self.function_mir.lock().unwrap();
-            if let Some(body) = guard.get(&def_id) {
-                return Some(unsafe {
-                    std::mem::transmute::<
-                        &'static Steal<rustc_middle::mir::Body<'static>>,
-                        &'tcx Steal<rustc_middle::mir::Body<'tcx>>,
-                    >(*body)
-                });
-            }
-        }
-
-        let body = self.function_bodies.get(&def_id)?;
-        let steal = leak(Steal::new(body.clone()));
-
-        let mut guard = self.function_mir.lock().unwrap();
-        guard.insert(def_id, steal);
-        Some(unsafe {
-            std::mem::transmute::<
-                &'static Steal<rustc_middle::mir::Body<'static>>,
-                &'tcx Steal<rustc_middle::mir::Body<'tcx>>,
-            >(steal)
-        })
-    }
-
-    fn mir_for_ctfe<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        def_id: LocalDefId,
-    ) -> Option<&'tcx rustc_middle::mir::Body<'tcx>> {
-        let mut body = self.function_bodies.get(&def_id)?.clone();
-        body.set_required_consts(Vec::new());
-        body.set_mentioned_items(Vec::new());
-        let owned = unsafe {
-            std::mem::transmute::<rustc_middle::mir::Body<'static>, rustc_middle::mir::Body<'tcx>>(
-                body,
-            )
-        };
-        Some(tcx.arena.alloc(owned))
-    }
-
-    fn mir_drops_elaborated_and_const_checked<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        def_id: LocalDefId,
-    ) -> Option<&'tcx Steal<rustc_middle::mir::Body<'tcx>>> {
-        self.mir_built(tcx, def_id)
-    }
-
-    fn optimized_mir<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        def_id: LocalDefId,
-    ) -> Option<&'tcx rustc_middle::mir::Body<'tcx>> {
-        self.mir_for_ctfe(tcx, def_id)
-    }
-}
-
 fn build_owner_nodes_for_crate(root: &'static hir::Mod<'static>) -> hir::OwnerNodes<'static> {
     let mut nodes: IndexVec<ItemLocalId, hir::ParentedNode<'static>> = IndexVec::new();
     nodes.push(hir::ParentedNode {
@@ -2162,7 +1901,38 @@ fn build_owner_nodes_for_crate(root: &'static hir::Mod<'static>) -> hir::OwnerNo
     });
 
     hir::OwnerNodes {
-        opt_hash_including_bodies: None,
+        opt_hash_including_bodies: Some(random_fingerprint()),
+        nodes,
+        bodies: rustc_data_structures::sorted_map::SortedMap::new(),
+    }
+}
+
+fn random_fingerprint() -> Fingerprint {
+    Fingerprint::new::<u64, u64>(rand::random(), rand::random())
+}
+
+fn build_owner_nodes_for_struct(
+    item: &'static hir::Item<'static>,
+    fields: &'static [hir::FieldDef<'static>],
+) -> hir::OwnerNodes<'static> {
+    let mut nodes: IndexVec<ItemLocalId, hir::ParentedNode<'static>> = IndexVec::new();
+
+    // Node 0: the struct item itself
+    nodes.push(hir::ParentedNode {
+        parent: ItemLocalId::INVALID,
+        node: hir::Node::Item(item),
+    });
+
+    // Nodes 1..N: the fields as children with parent = 0
+    for (idx, field) in fields.iter().enumerate() {
+        nodes.push(hir::ParentedNode {
+            parent: ItemLocalId::ZERO, // Parent is the struct item (index 0)
+            node: hir::Node::Field(field),
+        });
+    }
+
+    hir::OwnerNodes {
+        opt_hash_including_bodies: Some(random_fingerprint()),
         nodes,
         bodies: rustc_data_structures::sorted_map::SortedMap::new(),
     }
@@ -2176,7 +1946,7 @@ fn build_owner_nodes_for_item(item: &'static hir::Item<'static>) -> hir::OwnerNo
     });
 
     hir::OwnerNodes {
-        opt_hash_including_bodies: None,
+        opt_hash_including_bodies: Some(random_fingerprint()),
         nodes,
         bodies: rustc_data_structures::sorted_map::SortedMap::new(),
     }
@@ -2192,7 +1962,7 @@ fn build_owner_nodes_for_foreign_item(
     });
 
     hir::OwnerNodes {
-        opt_hash_including_bodies: None,
+        opt_hash_including_bodies: Some(random_fingerprint()),
         nodes,
         bodies: rustc_data_structures::sorted_map::SortedMap::new(),
     }
@@ -2206,7 +1976,7 @@ fn build_owner_nodes_for_field(field: &'static hir::FieldDef<'static>) -> hir::O
     });
 
     hir::OwnerNodes {
-        opt_hash_including_bodies: None,
+        opt_hash_including_bodies: Some(random_fingerprint()),
         nodes,
         bodies: rustc_data_structures::sorted_map::SortedMap::new(),
     }
@@ -2216,6 +1986,7 @@ fn build_owner_nodes_for_fn(
     item: &'static hir::Item<'static>,
     body: &'static hir::Body<'static>,
     expr: &'static hir::Expr<'static>,
+    loop_expr: &'static hir::Block<'static>,
 ) -> hir::OwnerNodes<'static> {
     let mut nodes: IndexVec<ItemLocalId, hir::ParentedNode<'static>> = IndexVec::new();
     nodes.push(hir::ParentedNode {
@@ -2226,12 +1997,16 @@ fn build_owner_nodes_for_fn(
         parent: ItemLocalId::ZERO,
         node: hir::Node::Expr(expr),
     });
+    nodes.push(hir::ParentedNode {
+        parent: ItemLocalId::ZERO,
+        node: hir::Node::Block(loop_expr),
+    });
 
     let mut bodies = rustc_data_structures::sorted_map::SortedMap::new();
     bodies.insert(ItemLocalId::new(1), body);
 
     hir::OwnerNodes {
-        opt_hash_including_bodies: None,
+        opt_hash_including_bodies: Some(random_fingerprint()),
         nodes,
         bodies,
     }
@@ -2239,7 +2014,6 @@ fn build_owner_nodes_for_fn(
 
 fn build_mir_body<'tcx>(
     tcx: TyCtxt<'tcx>,
-    _context: &Context,
     body: &MirBody,
     owner: LocalDefId,
 ) -> rustc_middle::mir::Body<'static> {
@@ -2441,7 +2215,7 @@ fn mir_rvalue_to_rustc<'tcx>(
                     user_ty,
                     active_field,
                 ) => {
-                    let adt_def_id = mir_adt_to_rustc(tcx, *adt).did();
+                    let adt_def_id = my_def_id_to_rustc_def_id(tcx, adt.0);
                     let args = generic_args_to_rustc_with_locals(tcx, args);
                     rustc_middle::mir::AggregateKind::Adt(
                         adt_def_id,
@@ -2666,15 +2440,23 @@ fn make_owner_info(nodes: hir::OwnerNodes<'static>) -> hir::OwnerInfo<'static> {
     }
 }
 
+fn insert_non_owner(
+    owners: &mut IndexVec<LocalDefId, hir::MaybeOwner<'static>>,
+    def_id: LocalDefId,
+    info: hir::MaybeOwner<'static>,
+) {
+    if def_id.index() >= owners.len() {
+        owners.resize(def_id.index() + 1, hir::MaybeOwner::Phantom);
+    }
+    owners[def_id] = info;
+}
+
 fn insert_owner(
-    owners: &mut IndexVec<LocalDefId, Option<&'static hir::OwnerInfo<'static>>>,
+    owners: &mut IndexVec<LocalDefId, hir::MaybeOwner<'static>>,
     def_id: LocalDefId,
     info: &'static hir::OwnerInfo<'static>,
 ) {
-    if def_id.index() >= owners.len() {
-        owners.resize(def_id.index() + 1, None);
-    }
-    owners[def_id] = Some(info);
+    insert_non_owner(owners, def_id, hir::MaybeOwner::Owner(info));
 }
 
 fn make_prim_ty(owner: LocalDefId, prim: hir::PrimTy) -> hir::Ty<'static> {
@@ -2719,7 +2501,7 @@ fn make_unit_ty(owner: LocalDefId) -> hir::Ty<'static> {
 
 fn make_adt_ty<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, adt: AdtDef) -> hir::Ty<'static> {
     let (def_id, kind) = {
-        let def_id = mir_adt_to_rustc(tcx, adt).did();
+        let def_id = my_def_id_to_rustc_def_id(tcx, adt.0);
         let kind = match tcx.def_kind(def_id) {
             DefKind::Struct => DefKind::Struct,
             DefKind::Union => DefKind::Union,
@@ -2743,11 +2525,9 @@ fn make_adt_ty<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, adt: AdtDef) -> hir::
     }
 }
 
-fn mir_ty_to_hir<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, ty: &MirTy) -> hir::Ty<'static> {
-    use rustc_public::ty::{RigidTy, TyKind};
-
-    match ty.kind() {
-        TyKind::RigidTy(RigidTy::Int(int_ty)) => {
+fn hir_ty_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, ty: &HirTy) -> hir::Ty<'static> {
+    match &ty.kind {
+        HirTyKind::Int(int_ty) => {
             let int_ty = match int_ty {
                 rustc_public::ty::IntTy::Isize => IntTy::Isize,
                 rustc_public::ty::IntTy::I8 => IntTy::I8,
@@ -2758,7 +2538,7 @@ fn mir_ty_to_hir<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, ty: &MirTy) -> hir:
             };
             make_prim_ty(owner, hir::PrimTy::Int(int_ty))
         }
-        TyKind::RigidTy(RigidTy::Uint(int_ty)) => {
+        HirTyKind::Uint(int_ty) => {
             let int_ty = match int_ty {
                 rustc_public::ty::UintTy::Usize => UintTy::Usize,
                 rustc_public::ty::UintTy::U8 => UintTy::U8,
@@ -2769,8 +2549,8 @@ fn mir_ty_to_hir<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, ty: &MirTy) -> hir:
             };
             make_prim_ty(owner, hir::PrimTy::Uint(int_ty))
         }
-        TyKind::RigidTy(RigidTy::RawPtr(to, mutability)) => {
-            let pointee = leak(mir_ty_to_hir(tcx, owner, &to));
+        HirTyKind::RawPtr(mutability, to) => {
+            let pointee = leak(hir_ty_to_rustc(tcx, owner, &to));
             make_ptr_ty(
                 owner,
                 pointee,
@@ -2780,8 +2560,8 @@ fn mir_ty_to_hir<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, ty: &MirTy) -> hir:
                 },
             )
         }
-        TyKind::RigidTy(RigidTy::Adt(adt, _args)) => make_adt_ty(tcx, owner, adt),
-        TyKind::RigidTy(RigidTy::Tuple(elems)) if elems.is_empty() => make_unit_ty(owner),
+        HirTyKind::Adt(adt, _args) => make_adt_ty(tcx, owner, *adt),
+        HirTyKind::Tuple(elems) if elems.is_empty() => make_unit_ty(owner),
         _ => todo!("hir type support for {:?}", ty),
     }
 }

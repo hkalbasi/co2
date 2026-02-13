@@ -20,7 +20,9 @@ fn main() {
         DetectResult::Co2(file) => file,
     };
 
-    if let Err(payload) = std::panic::catch_unwind(|| compile_co2_file(CompileMode::RUST, &co2_file)) {
+    if let Err(payload) =
+        std::panic::catch_unwind(|| compile_co2_file(CompileMode::RUST, &co2_file))
+    {
         if let Some(msg) = payload.downcast_ref::<String>() {
             eprintln!("co2 panic: {msg}");
         } else if let Some(msg) = payload.downcast_ref::<&str>() {

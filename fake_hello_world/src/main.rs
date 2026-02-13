@@ -24,8 +24,10 @@ fn fn_const_operand(
     generic_args: Vec<rustc_gen::GenericArgKind>,
     span: rustc_gen::PublicSpan,
 ) -> rustc_gen::MirOperand {
-    let fn_ty =
-        rustc_gen::MirTy::from_rigid_kind(rustc_gen::RigidTy::FnDef(fn_def, rustc_gen::GenericArgs(generic_args)));
+    let fn_ty = rustc_gen::MirTy::from_rigid_kind(rustc_gen::RigidTy::FnDef(
+        fn_def,
+        rustc_gen::GenericArgs(generic_args),
+    ));
     let c = rustc_gen::PublicMirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
     rustc_gen::MirOperand::Constant(rustc_gen::MirConst {
         span,
@@ -302,8 +304,10 @@ fn main() {
             let option_adt = dep_adt(&deps, "std::option::Option");
             let result_adt = dep_adt(&deps, "std::result::Result");
 
-            let args_ty =
-                rustc_gen::MirTy::from_rigid_kind(rustc_gen::RigidTy::Adt(args_adt, rustc_gen::GenericArgs(vec![])));
+            let args_ty = rustc_gen::MirTy::from_rigid_kind(rustc_gen::RigidTy::Adt(
+                args_adt,
+                rustc_gen::GenericArgs(vec![]),
+            ));
             let string_ty = rustc_gen::MirTy::from_rigid_kind(rustc_gen::RigidTy::Adt(
                 string_adt,
                 rustc_gen::GenericArgs(vec![]),

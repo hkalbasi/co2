@@ -301,7 +301,12 @@ pub(crate) fn dep_adt(deps: &rustc_gen::DependencyInfo, path: &str) -> rustc_gen
         return found;
     }
 
-    if let Some(found) = deps.types.iter().find(|t| t.path.ends_with(path)).map(|t| t.adt) {
+    if let Some(found) = deps
+        .types
+        .iter()
+        .find(|t| t.path.ends_with(path))
+        .map(|t| t.adt)
+    {
         return found;
     }
 
@@ -324,7 +329,12 @@ pub(crate) fn dep_adt_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> r
         if let Some(found) = deps.types.iter().find(|t| t.path == *path).map(|t| t.adt) {
             return found;
         }
-        if let Some(found) = deps.types.iter().find(|t| t.path.ends_with(path)).map(|t| t.adt) {
+        if let Some(found) = deps
+            .types
+            .iter()
+            .find(|t| t.path.ends_with(path))
+            .map(|t| t.adt)
+        {
             return found;
         }
     }
