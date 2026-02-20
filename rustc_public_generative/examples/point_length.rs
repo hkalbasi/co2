@@ -1,9 +1,7 @@
 #![feature(rustc_private)]
 
-use std::sync::OnceLock;
-
 use rustc_public_generative::{
-    CrateGeneratorState, DependencyInfo, FileId, ForeignModItem, FunctionAbi, FunctionSignature,
+    CrateGeneratorState, FileId, ForeignModItem, FunctionAbi, FunctionSignature,
     HirAdtKind, HirModule, HirModuleItem, HirStructure, HirStructureCtx, HirTy, StructField,
     generate,
     rustc_public::{
@@ -75,52 +73,6 @@ fn fn_const_operand(fn_def: FnDef, generic_args: Vec<GenericArgKind>, span: Span
     })
 }
 
-fn dep_adt(deps: &DependencyInfo, path: &str) -> AdtDef {
-    if let Some(found) = deps.types.iter().find(|t| t.path == path).map(|t| t.adt) {
-        return found;
-    }
-
-    if let Some(found) = deps
-        .types
-        .iter()
-        .find(|t| t.path.ends_with(path))
-        .map(|t| t.adt)
-    {
-        return found;
-    }
-
-    if let Some(last) = path.rsplit("::").next() {
-        if let Some(found) = deps
-            .types
-            .iter()
-            .find(|t| t.path.ends_with(&format!("::{last}")) && !t.path.contains("{{"))
-            .map(|t| t.adt)
-        {
-            return found;
-        }
-    }
-
-    let mut similar = deps
-        .types
-        .iter()
-        .filter(|t| {
-            t.path.contains(path)
-                || path.contains(&t.path)
-                || path
-                    .rsplit("::")
-                    .next()
-                    .is_some_and(|last| t.path.ends_with(&format!("::{last}")))
-        })
-        .map(|t| t.path.clone())
-        .collect::<Vec<_>>();
-    similar.sort();
-    similar.truncate(20);
-    panic!(
-        "missing dependency type: {path}\nexample matches:\n{}",
-        similar.join("\n")
-    );
-}
-
 struct State {
     file_id: FileId,
 
@@ -129,11 +81,6 @@ struct State {
     length_fn: FnDef,
     main_fn: FnDef,
     write_fn: FnDef,
-
-    x_field: DefId,
-    y_field: DefId,
-    location_field: DefId,
-    age_field: DefId,
 }
 
 unsafe impl Send for State {}
@@ -318,11 +265,6 @@ fn main() {
                 length_fn: length_fn_def,
                 main_fn: main_fn_def,
                 write_fn: write_fn_def,
-
-                x_field,
-                y_field,
-                location_field,
-                age_field,
             },
             hir_structure,
         )
