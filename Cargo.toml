@@ -2,7 +2,8 @@
 members = [
   "rustc_public_generative",
   "co2_parser",
-  "co2_hir_mir",
+  "co2_hir",
+  "co2_mir",
   "co2_driver_lib",
   "co2",
   "co2c",

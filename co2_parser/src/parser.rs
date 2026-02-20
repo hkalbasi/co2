@@ -137,18 +137,27 @@ pub enum Expression {
     Empty,
     Constant(Constant),
     Identifier(Spanned<RustPath>),
+    Field(Box<Spanned<Expression>>, Spanned<String>),
+    InitList(Vec<Spanned<Expression>>),
     Subscript(Box<Spanned<Expression>>, Box<Spanned<Expression>>),
     Call {
         func: Box<Spanned<Expression>>,
         params: Vec<Spanned<Expression>>,
     },
-    BinOp(Box<Spanned<Expression>>, Box<Spanned<Expression>>),
+    BinOp(Box<Spanned<Expression>>, BinOp, Box<Spanned<Expression>>),
 }
 
 impl Expression {
     fn dummy() -> Box<Spanned<Expression>> {
         Box::new((Expression::Empty, SimpleSpan::from(0..0)))
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
 }
 
 fn expression<'src, I>()
@@ -165,6 +174,11 @@ where
                 Token::FloatLit(i, _) => Expression::Constant(Constant::Int(i.parse().unwrap())),
                 Token::StringLit(s) => Expression::Constant(Constant::String(s)),
             },
+            rec.clone()
+                .separated_by(just(Token::Comma))
+                .collect()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .map(Expression::InitList),
             rec.clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .map(|x: (Expression, SimpleSpan)| x.0),
@@ -184,6 +198,9 @@ where
                             params,
                         })
                         .delimited_by(just(Token::LParen), just(Token::RParen)),
+                    just(Token::Dot)
+                        .ignore_then(identifier())
+                        .map(|ident| Expression::Field(Expression::dummy(), ident)),
                 ))
                 .repeated()
                 .collect::<Vec<_>>(),
@@ -195,6 +212,7 @@ where
                         Expression::Empty
                         | Expression::Identifier(_)
                         | Expression::Constant(_)
+                        | Expression::InitList(_)
                         | Expression::BinOp(..) => {
                             unreachable!()
                         }
@@ -202,28 +220,49 @@ where
                         | Expression::Call {
                             func: target,
                             params: _,
-                        } => **target = main,
+                        }
+                        | Expression::Field(target, _) => **target = main,
                     }
                     main = (post, span);
                 }
                 main
             });
 
-        let binary_expression = postfix_expression
-            .separated_by(one_of([Token::Plus, Token::Minus, Token::Star]))
-            .at_least(1)
-            .collect::<Vec<_>>()
-            .map(|mut elems| {
-                let mut elems = elems.drain(..);
-                let (mut base, span) = elems.next().unwrap();
-                for other in elems {
-                    base = Expression::BinOp(Box::new((base, span)), Box::new(other));
-                }
-                base
-            })
-            .map_with(|r, e| (r, e.span()));
+        let mul = just(Token::Star).to(BinOp::Mul);
+        let add = just(Token::Plus).to(BinOp::Add);
+        let sub = just(Token::Minus).to(BinOp::Sub);
 
-        binary_expression
+        let multiplicative = postfix_expression
+            .clone()
+            .then(mul.then(postfix_expression).repeated().collect::<Vec<_>>())
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            });
+
+        let additive = multiplicative
+            .clone()
+            .then(
+                choice((add, sub))
+                    .then(multiplicative)
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            })
+            .map_with(|r, e| (r.0, e.span()));
+
+        additive
     })
 }
 
@@ -279,6 +318,24 @@ impl RustPath {
         RustPath {
             segments: vec![(RustPathSegment::Ident(ident), span)],
         }
+    }
+
+    pub fn to_pretty(&self) -> String {
+        self.segments
+            .iter()
+            .map(|seg| match &seg.0 {
+                RustPathSegment::Ident(s) => s.clone(),
+                RustPathSegment::Generics(parts) => {
+                    let inner = parts
+                        .iter()
+                        .map(|p| p.0.to_pretty())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("<{inner}>")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("::")
     }
 }
 

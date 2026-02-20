@@ -1,5 +1,5 @@
 [package]
-name = "co2_hir_mir"
+name = "co2_hir"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,3 +8,5 @@ path = "src/lib.rs"
 
 [dependencies]
 co2_parser = { path = "../co2_parser" }
+rustc_public_generative = { path = "../rustc_public_generative" }
+la-arena = "0.3.1"

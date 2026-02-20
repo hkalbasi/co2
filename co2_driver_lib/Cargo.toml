@@ -9,7 +9,8 @@ path = "src/lib.rs"
 
 [dependencies]
 rustc_public_generative = { path = "../rustc_public_generative" }
-co2_hir_mir = { path = "../co2_hir_mir" }
+co2_hir = { path = "../co2_hir" }
+co2_mir = { path = "../co2_mir" }
 co2_parser = { path = "../co2_parser" }
 
 [package.metadata.rust-analyzer]

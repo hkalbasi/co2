@@ -1,0 +1,11 @@
+[package]
+name = "co2_mir"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+co2_hir = { path = "../co2_hir" }
+rustc_public_generative = { path = "../rustc_public_generative" }

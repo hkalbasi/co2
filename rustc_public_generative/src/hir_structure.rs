@@ -28,6 +28,12 @@ pub enum HirModuleItem {
         kind: HirAdtKind,
         span: Span,
     },
+    TypeDef {
+        name: String,
+        id: DefId,
+        ty: HirTy,
+        span: Span,
+    },
     ForeignMod {
         id: DefId,
         items: Vec<ForeignModItem>,

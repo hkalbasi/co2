@@ -4,31 +4,32 @@ use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::{Parser as _, input::Input as _};
 
 use crate::{
-    diagnostic::{RaiseErrorPanicPayload, report_error, take_errors},
+    diagnostic::{report_error, take_errors},
     lexer::lexer,
-    parser::translation_unit,
+    parser::{TranslationUnit, translation_unit},
 };
 
 mod diagnostic;
 mod exp;
-pub mod hir;
 mod lexer;
 mod parser;
-mod rust_ast;
-pub mod type_ir;
 
 pub use lexer::Token;
 pub use parser::{
-    CompoundStatement, Constant, Declaration, DeclarationSpecifier, Expression, InitDeclarator,
-    LazyCompoundStatement, RustPath, RustPathSegment, Statement, StatementOrDeclaration,
+    BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier, Declarator, Expression,
+    InitDeclarator, LazyCompoundStatement, RustPath, RustPathSegment, Statement,
+    StatementOrDeclaration, StorageClassSpecifier, StructDeclarator, StructOrUnionField,
+    StructOrUnionSpecifier, TranslationUnit as ParsedTranslationUnit, TypeSpecifier, UseItem,
 };
-pub use rust_ast::{Field, FnSig, Item, RustType, State};
 
 // Type definitions
 pub type Span = SimpleSpan<usize>;
 pub type Spanned<T> = (T, Span);
 
-pub fn parse_items(filename: String, src: &'static str) -> Option<State> {
+pub fn parse_translation_unit(
+    filename: String,
+    src: &'static str,
+) -> Option<Spanned<TranslationUnit>> {
     let (tokens, errs) = lexer().parse(src).into_output_errors();
 
     if let Some(tokens) = tokens {
@@ -40,22 +41,7 @@ pub fn parse_items(filename: String, src: &'static str) -> Option<State> {
 
         if parse_errs.is_empty() {
             if let Some(ast) = ast {
-                let panic_payload = std::panic::catch_unwind(|| {
-                    let mut state = State::default();
-                    state.collect_translation_unit(ast.0.0);
-                    state
-                });
-                match panic_payload {
-                    Err(panic_payload) => {
-                        if panic_payload
-                            .downcast_ref::<RaiseErrorPanicPayload>()
-                            .is_none()
-                        {
-                            std::panic::resume_unwind(panic_payload);
-                        }
-                    }
-                    Ok(state) => return Some(state),
-                }
+                return Some(ast.0);
             }
         } else {
             for err in parse_errs {
@@ -65,6 +51,10 @@ pub fn parse_items(filename: String, src: &'static str) -> Option<State> {
     }
 
     print_errors_and_terminate(filename, src, errs);
+}
+
+pub fn parse_items(filename: String, src: &'static str) -> Option<Spanned<TranslationUnit>> {
+    parse_translation_unit(filename, src)
 }
 
 pub fn parse_compound_statement(

@@ -3,6 +3,8 @@ use rustc_public::{
     ty::{AdtDef, FloatTy, IntTy, Span, UintTy},
 };
 
+use crate::FunctionSignature;
+
 #[derive(Clone, Debug)]
 pub enum HirTyKind {
     Bool,
@@ -13,7 +15,12 @@ pub enum HirTyKind {
     Adt(AdtDef, Vec<HirGenericArg>),
     Tuple(Vec<HirTy>),
     RawPtr(Mutability, Box<HirTy>),
+    FnPtr(Box<FunctionSignature>),
+    Path(HirPath),
 }
+
+#[derive(Clone, Debug)]
+pub struct HirPath {}
 
 #[derive(Clone, Debug)]
 pub struct HirTy {

@@ -1,9 +1,8 @@
 #![feature(rustc_private)]
 
 use rustc_public_generative::{
-    CrateGeneratorState, FileId, ForeignModItem, FunctionAbi, FunctionSignature,
-    HirAdtKind, HirModule, HirModuleItem, HirStructure, HirStructureCtx, HirTy, StructField,
-    generate,
+    CrateGeneratorState, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind,
+    HirModule, HirModuleItem, HirStructure, HirStructureCtx, HirTy, StructField, generate,
     rustc_public::{
         DefId,
         mir::{

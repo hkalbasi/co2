@@ -101,16 +101,27 @@ dependencies = [
 name = "co2_driver_lib"
 version = "0.1.0"
 dependencies = [
- "co2_hir_mir",
+ "co2_hir",
+ "co2_mir",
  "co2_parser",
  "rustc_public_generative",
 ]
 
 [[package]]
-name = "co2_hir_mir"
+name = "co2_hir"
 version = "0.1.0"
 dependencies = [
  "co2_parser",
+ "la-arena",
+ "rustc_public_generative",
+]
+
+[[package]]
+name = "co2_mir"
+version = "0.1.0"
+dependencies = [
+ "co2_hir",
+ "rustc_public_generative",
 ]
 
 [[package]]
