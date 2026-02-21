@@ -1784,6 +1784,19 @@ fn build_mir_body<'tcx>(
                 scope: source_scope,
             },
             kind: match &block.terminator.kind {
+                MirTerminatorKind::Goto { target } => rustc_middle::mir::TerminatorKind::Goto {
+                    target: rustc_middle::mir::BasicBlock::from_usize(*target),
+                },
+                MirTerminatorKind::SwitchInt { discr, targets } => {
+                    let discr = mir_operand_to_rustc(tcx, discr);
+                    let targets = rustc_middle::mir::SwitchTargets::new(
+                        targets
+                            .branches()
+                            .map(|(v, bb)| (v, rustc_middle::mir::BasicBlock::from_usize(bb))),
+                        rustc_middle::mir::BasicBlock::from_usize(targets.otherwise()),
+                    );
+                    rustc_middle::mir::TerminatorKind::SwitchInt { discr, targets }
+                }
                 MirTerminatorKind::Return => rustc_middle::mir::TerminatorKind::Return,
                 MirTerminatorKind::Call {
                     func,

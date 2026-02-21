@@ -4,7 +4,7 @@ use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::{Parser as _, input::Input as _};
 
 use crate::{
-    diagnostic::{report_error, take_errors},
+    diagnostic::take_errors,
     lexer::lexer,
     parser::{TranslationUnit, translation_unit},
 };
@@ -19,22 +19,36 @@ pub use parser::{
     BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier, Declarator, Expression,
     InitDeclarator, LazyCompoundStatement, RustPath, RustPathSegment, Statement,
     StatementOrDeclaration, StorageClassSpecifier, StructDeclarator, StructOrUnionField,
-    StructOrUnionSpecifier, TranslationUnit as ParsedTranslationUnit, TypeSpecifier, UseItem,
+    StructOrUnionSpecifier, TranslationUnit as ParsedTranslationUnit, TypeQueryResult,
+    TypeSpecifier, UnaryOp, UseItem,
 };
 
 // Type definitions
 pub type Span = SimpleSpan<usize>;
 pub type Spanned<T> = (T, Span);
 
+pub trait TypeResolver {
+    fn classify_path(&self, path: &RustPath) -> TypeQueryResult;
+}
+
+pub struct AllowAllTypes;
+
+impl TypeResolver for AllowAllTypes {
+    fn classify_path(&self, _path: &RustPath) -> TypeQueryResult {
+        TypeQueryResult::Type
+    }
+}
+
 pub fn parse_translation_unit(
     filename: String,
     src: &'static str,
+    resolver: &dyn TypeResolver,
 ) -> Option<Spanned<TranslationUnit>> {
     let (tokens, errs) = lexer().parse(src).into_output_errors();
 
     if let Some(tokens) = tokens {
         let tokens = tokens.leak();
-        let (ast, parse_errs) = translation_unit()
+        let (ast, parse_errs) = translation_unit(resolver)
             .map_with(|ast, e| (ast, e.span()))
             .parse(tokens.map((src.len()..src.len()).into(), |(t, s)| (t, s)))
             .into_output_errors();
@@ -45,8 +59,25 @@ pub fn parse_translation_unit(
             }
         } else {
             for err in parse_errs {
-                report_error(err);
+                let e = err.map_token(|tok| tok.to_string());
+                Report::build(ReportKind::Error, (filename.clone(), e.span().into_range()))
+                    .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+                    .with_message(e.to_string())
+                    .with_label(
+                        Label::new((filename.clone(), e.span().into_range()))
+                            .with_message(e.reason().to_string())
+                            .with_color(Color::Red),
+                    )
+                    .with_labels(e.contexts().map(|(label, span)| {
+                        Label::new((filename.clone(), span.into_range()))
+                            .with_message(format!("while parsing this {label}"))
+                            .with_color(Color::Yellow)
+                    }))
+                    .finish()
+                    .print(sources([(filename.clone(), src.to_owned())]))
+                    .unwrap();
             }
+            std::process::exit(5);
         }
     }
 
@@ -54,15 +85,16 @@ pub fn parse_translation_unit(
 }
 
 pub fn parse_items(filename: String, src: &'static str) -> Option<Spanned<TranslationUnit>> {
-    parse_translation_unit(filename, src)
+    parse_translation_unit(filename, src, &AllowAllTypes)
 }
 
 pub fn parse_compound_statement(
     tokens: &[Spanned<Token>],
     filename: String,
     src: &'static str,
+    resolver: &dyn TypeResolver,
 ) -> Option<Spanned<CompoundStatement>> {
-    let (ast, parse_errs) = parser::compound_statement()
+    let (ast, parse_errs) = parser::compound_statement(resolver)
         .parse(tokens.map((src.len()..src.len()).into(), |(t, s)| (t, s)))
         .into_output_errors();
 

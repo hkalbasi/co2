@@ -7,8 +7,9 @@ use rustc_public_generative::rustc_public::{
     mir::{
         AggregateKind, BasicBlock as MirBasicBlock, BinOp as MirBinOp, Body, BorrowKind, CastKind,
         ConstOperand, LocalDecl as MirLocalDecl, MutBorrowKind, Mutability, Operand as MirOperand,
-        Place as MirPlace, ProjectionElem as MirProjection, Rvalue, Statement as MirStatement,
-        StatementKind as MirStatementKind, Terminator as MirTerminator, TerminatorKind,
+        Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind, Rvalue,
+        Statement as MirStatement,
+        StatementKind as MirStatementKind, SwitchTargets, Terminator as MirTerminator, TerminatorKind,
         UnwindAction,
     },
     ty::{
@@ -223,7 +224,54 @@ impl Builder<'_, '_> {
                     self.push_terminator(TerminatorKind::Return, self.hir_span(*span));
                 }
             }
+            HirStmt::If {
+                cond,
+                then_stmts,
+                else_stmts,
+                span,
+            } => {
+                self.lower_if_stmt(cond, then_stmts, else_stmts, *span);
+            }
         }
+    }
+
+    fn lower_if_stmt(
+        &mut self,
+        cond: &HirExpr,
+        then_stmts: &[HirStmt],
+        else_stmts: &[HirStmt],
+        span: co2_hir::Span,
+    ) {
+        let cond_op = self.lower_expr_to_operand(cond);
+        let entry_span = self.hir_span(span);
+        let entry_idx = self.blocks.len();
+        self.blocks.push(MirBasicBlock {
+            statements: std::mem::take(&mut self.stmts),
+            terminator: MirTerminator {
+                kind: TerminatorKind::SwitchInt {
+                    discr: cond_op,
+                    targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+                },
+                span: entry_span,
+            },
+        });
+
+        let then_bb = self.blocks.len();
+        for stmt in then_stmts {
+            self.lower_stmt(stmt);
+        }
+        let then_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, entry_span);
+
+        let else_bb = self.blocks.len();
+        for stmt in else_stmts {
+            self.lower_stmt(stmt);
+        }
+        let else_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, entry_span);
+
+        let join_bb = self.blocks.len();
+        self.patch_goto_target(then_exit, join_bb);
+        self.patch_goto_target(else_exit, join_bb);
+        self.patch_switch_targets(entry_idx, then_bb, else_bb);
     }
 
     fn terminate_fallthrough(&mut self) {
@@ -323,6 +371,37 @@ impl Builder<'_, '_> {
             HirExprKind::Call { func, args } => {
                 self.lower_call_expr(func, args, expr.span, expr.ty)
             }
+            HirExprKind::Assign { lhs, rhs } => {
+                let lhs_place = self
+                    .lower_expr_to_place(lhs)
+                    .expect("assignment lhs should be place-expressible");
+                let rhs_value = self.lower_expr_to_operand(rhs);
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(rhs_value)),
+                    span: self.hir_span(expr.span),
+                });
+                MirOperand::Copy(lhs_place)
+            }
+            HirExprKind::AddrOf(inner) => {
+                let target_place = self
+                    .lower_expr_to_place(inner)
+                    .expect("address-of target should be place-expressible");
+                let tmp = self.new_temp(expr.ty, Mutability::Mut, self.hir_span(expr.span));
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(
+                        place(tmp),
+                        Rvalue::AddressOf(RawPtrKind::Mut, target_place),
+                    ),
+                    span: self.hir_span(expr.span),
+                });
+                MirOperand::Copy(place(tmp))
+            }
+            HirExprKind::Deref(_) => {
+                let place = self
+                    .lower_expr_to_place(expr)
+                    .expect("deref expression should be place-expressible");
+                MirOperand::Copy(place)
+            }
         }
     }
 
@@ -336,6 +415,21 @@ impl Builder<'_, '_> {
                     .push(MirProjection::Field(*index, expr.ty));
                 Some(base_place)
             }
+            HirExprKind::Deref(inner) => {
+                let mut base_place = if let Some(place) = self.lower_expr_to_place(inner) {
+                    place
+                } else {
+                    let tmp = self.new_temp(inner.ty, Mutability::Mut, self.hir_span(inner.span));
+                    let value = self.lower_expr_to_operand(inner);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
+                        span: self.hir_span(inner.span),
+                    });
+                    place(tmp)
+                };
+                base_place.projection.push(MirProjection::Deref);
+                Some(base_place)
+            }
             _ => None,
         }
     }
@@ -345,6 +439,7 @@ impl Builder<'_, '_> {
             HirBinOp::Add => MirBinOp::Add,
             HirBinOp::Sub => MirBinOp::Sub,
             HirBinOp::Mul => MirBinOp::Mul,
+            HirBinOp::Or => MirBinOp::BitOr,
         }
     }
 
@@ -587,11 +682,29 @@ impl Builder<'_, '_> {
         );
     }
 
-    fn push_terminator(&mut self, kind: TerminatorKind, span: RustSpan) {
+    fn push_terminator(&mut self, kind: TerminatorKind, span: RustSpan) -> usize {
+        let idx = self.blocks.len();
         self.blocks.push(MirBasicBlock {
             statements: std::mem::take(&mut self.stmts),
             terminator: MirTerminator { kind, span },
         });
+        idx
+    }
+
+    fn patch_goto_target(&mut self, block_idx: usize, target: usize) {
+        match &mut self.blocks[block_idx].terminator.kind {
+            TerminatorKind::Goto { target: goto_target } => *goto_target = target,
+            _ => panic!("expected goto terminator at block {block_idx}"),
+        }
+    }
+
+    fn patch_switch_targets(&mut self, block_idx: usize, then_bb: usize, else_bb: usize) {
+        match &mut self.blocks[block_idx].terminator.kind {
+            TerminatorKind::SwitchInt { targets, .. } => {
+                *targets = SwitchTargets::new(vec![(0, else_bb)], then_bb);
+            }
+            _ => panic!("expected switchint terminator at block {block_idx}"),
+        }
     }
 
     fn new_temp(&mut self, ty: Ty, mutability: Mutability, span: RustSpan) -> usize {

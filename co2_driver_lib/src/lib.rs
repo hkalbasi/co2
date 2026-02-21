@@ -7,7 +7,8 @@ use std::sync::{Mutex, OnceLock};
 use co2_hir::{GlobalResolver, ResolvedValue};
 use co2_parser::{
     Declaration, DeclarationSpecifier, Declarator, InitDeclarator, StorageClassSpecifier,
-    StructDeclarator, StructOrUnionField, StructOrUnionSpecifier, TypeSpecifier,
+    StructDeclarator, StructOrUnionField, StructOrUnionSpecifier, TypeQueryResult, TypeResolver,
+    TypeSpecifier,
 };
 use rustc_public_generative::rustc_public::{
     DefId,
@@ -59,6 +60,7 @@ struct Co2GeneratorState {
     pending_functions: Vec<PendingFunction>,
     point_length: Option<PointLengthSpecial>,
     typedefs: HashMap<String, DefId>,
+    typedef_tys: HashMap<String, Ty>,
     local_value_map: HashMap<String, ResolvedValue>,
     uses: Vec<String>,
     source_name: String,
@@ -77,6 +79,7 @@ unsafe impl Sync for Co2GeneratorState {}
 
 struct DriverResolver<'a> {
     typedefs: &'a HashMap<String, DefId>,
+    typedef_tys: &'a HashMap<String, Ty>,
     values: &'a HashMap<String, ResolvedValue>,
     deps: &'a rustc_gen::DependencyInfo,
     uses: &'a [String],
@@ -102,6 +105,14 @@ impl GlobalResolver for DriverResolver<'_> {
 
     fn resolve_type(&self, path: &str) -> Option<Ty> {
         for candidate in resolve_candidates(path, self.uses) {
+            if let Some(ty) = self.typedef_tys.get(&candidate) {
+                return Some(*ty);
+            }
+            if let Some(last) = candidate.rsplit("::").next()
+                && let Some(ty) = self.typedef_tys.get(last)
+            {
+                return Some(*ty);
+            }
             if let Some(ty) = resolve_ty_candidate(&candidate, self.typedefs, self.deps, self.uses)
             {
                 return Some(ty);
@@ -125,7 +136,16 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let deps = ctx.dependencies();
         let source_name = pending.source_path.to_string_lossy().into_owned();
         let src_static: &'static str = Box::leak(pending.source.into_boxed_str());
-        let tu = co2_parser::parse_translation_unit(source_name.clone(), src_static)
+        struct TranslationUnitParseResolver;
+        impl TypeResolver for TranslationUnitParseResolver {
+            fn classify_path(&self, path: &co2_parser::RustPath) -> TypeQueryResult {
+                let _ = path;
+                TypeQueryResult::Unsure
+            }
+        }
+
+        let parse_resolver = TranslationUnitParseResolver;
+        let tu = co2_parser::parse_translation_unit(source_name.clone(), src_static, &parse_resolver)
             .expect("failed to parse co2 source")
             .0;
         let items = tu.items;
@@ -145,6 +165,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let root_crate = ctx.root_crate_def_id();
 
         let mut typedefs: HashMap<String, DefId> = HashMap::new();
+        let mut typedef_tys: HashMap<String, Ty> = HashMap::new();
 
         let mut pending_functions = Vec::new();
         let mut externs: HashMap<String, FunctionSignature> = HashMap::new();
@@ -310,6 +331,9 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                 declarator.clone(),
                                 &typedefs,
                             ) {
+                                if let Some(concrete_ty) = hir_ty_to_ty(&ty) {
+                                    typedef_tys.insert(name.clone(), concrete_ty);
+                                }
                                 if let rustc_gen::HirTyKind::Adt(adt, _) = ty.kind {
                                     typedefs.insert(name, adt.0);
                                 } else {
@@ -405,6 +429,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 pending_functions,
                 point_length: None,
                 typedefs,
+                typedef_tys,
                 local_value_map,
                 uses,
                 source_name,
@@ -432,6 +457,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
 
         let resolver = DriverResolver {
             typedefs: &self.typedefs,
+            typedef_tys: &self.typedef_tys,
             values: &self.local_value_map,
             deps: &self.deps,
             uses: &self.uses,
@@ -639,6 +665,19 @@ fn find_dep_adt(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<AdtDef> 
     }
 
     None
+}
+
+fn hir_ty_to_ty(ty: &rustc_gen::HirTy) -> Option<Ty> {
+    match &ty.kind {
+        rustc_gen::HirTyKind::Int(i) => Some(Ty::signed_ty(*i)),
+        rustc_gen::HirTyKind::Uint(u) => Some(Ty::unsigned_ty(*u)),
+        rustc_gen::HirTyKind::Tuple(parts) if parts.is_empty() => Some(Ty::new_tuple(&[])),
+        rustc_gen::HirTyKind::RawPtr(mutbl, inner) => {
+            let inner = hir_ty_to_ty(inner)?;
+            Some(Ty::new_ptr(inner, *mutbl))
+        }
+        _ => None,
+    }
 }
 
 fn find_dep_adt_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> Option<AdtDef> {

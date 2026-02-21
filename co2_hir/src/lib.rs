@@ -5,8 +5,10 @@ use std::collections::HashMap;
 pub use co2_parser::Span;
 use co2_parser::{
     BinOp as ParsedBinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier,
-    Declarator, Expression, InitDeclarator, Spanned, Statement,
+    Declarator, Expression, InitDeclarator, RustPath, Spanned, Statement,
     StatementOrDeclaration, Token, TypeSpecifier, parse_compound_statement,
+    TypeQueryResult, TypeResolver as ParserTypeResolver,
+    UnaryOp as ParsedUnaryOp,
 };
 use la_arena::{Arena, Idx};
 use rustc_public_generative::rustc_public::{
@@ -53,6 +55,12 @@ pub enum HirStmt {
     Decl(HirDecl),
     Expr(HirExpr),
     Return(Option<HirExpr>, Span),
+    If {
+        cond: HirExpr,
+        then_stmts: Vec<HirStmt>,
+        else_stmts: Vec<HirStmt>,
+        span: Span,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +99,12 @@ pub enum HirExprKind {
         func: Box<HirExpr>,
         args: Vec<HirExpr>,
     },
+    Assign {
+        lhs: Box<HirExpr>,
+        rhs: Box<HirExpr>,
+    },
+    AddrOf(Box<HirExpr>),
+    Deref(Box<HirExpr>),
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -98,6 +112,7 @@ pub enum HirBinOp {
     Add,
     Sub,
     Mul,
+    Or,
 }
 
 pub fn lower_function_body(
@@ -108,9 +123,31 @@ pub fn lower_function_body(
     param_names: &[String],
     resolver: &dyn GlobalResolver,
 ) -> Result<HirBody, String> {
-    let parsed = parse_compound_statement(tokens, source_name.to_owned(), source)
+    struct BodyParseResolver<'a> {
+        inner: &'a dyn GlobalResolver,
+    }
+    impl ParserTypeResolver for BodyParseResolver<'_> {
+        fn classify_path(&self, path: &RustPath) -> TypeQueryResult {
+            let path = path.to_pretty();
+            if self.inner.resolve_type(&path).is_some() {
+                TypeQueryResult::Type
+            } else {
+                TypeQueryResult::Expr
+            }
+        }
+    }
+
+    let parse_resolver = BodyParseResolver { inner: resolver };
+    let parsed = parse_compound_statement(tokens, source_name.to_owned(), source, &parse_resolver)
         .ok_or_else(|| "failed to parse function body".to_owned())?;
-    lower_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names, resolver)
+    lower_compound_statement(
+        parsed,
+        source_name,
+        source,
+        &def.fn_sig().skip_binder(),
+        param_names,
+        resolver,
+    )
 }
 
 // pub fn lower_function_signature(
@@ -140,6 +177,8 @@ fn lower_value_decl_type(
 
 fn lower_compound_statement(
     (compound, span): Spanned<CompoundStatement>,
+    source_name: &str,
+    source: &'static str,
     sig: &FnSig,
     param_names: &[String],
     resolver: &dyn GlobalResolver,
@@ -167,30 +206,15 @@ fn lower_compound_statement(
     }
 
     let mut stmts = Vec::new();
-    for (stmt_or_decl, stmt_span) in compound.statements {
-        match stmt_or_decl {
-            StatementOrDeclaration::Statement((stmt, span)) => {
-                lower_stmt(
-                    stmt,
-                    span,
-                    &mut stmts,
-                    &mut locals,
-                    &mut local_map,
-                    resolver,
-                )?;
-            }
-            StatementOrDeclaration::Declaration((decl, _)) => {
-                lower_decl(
-                    decl,
-                    stmt_span,
-                    &mut stmts,
-                    &mut locals,
-                    &mut local_map,
-                    resolver,
-                )?;
-            }
-        }
-    }
+    lower_compound_items(
+        compound,
+        source_name,
+        source,
+        &mut stmts,
+        &mut locals,
+        &mut local_map,
+        resolver,
+    )?;
 
     Ok(HirBody {
         locals,
@@ -200,9 +224,42 @@ fn lower_compound_statement(
     })
 }
 
+fn lower_compound_items(
+    compound: CompoundStatement,
+    source_name: &str,
+    source: &'static str,
+    out: &mut Vec<HirStmt>,
+    locals: &mut Arena<HirLocal>,
+    local_map: &mut HashMap<String, LocalId>,
+    resolver: &dyn GlobalResolver,
+) -> Result<(), String> {
+    for (stmt_or_decl, stmt_span) in compound.statements {
+        match stmt_or_decl {
+            StatementOrDeclaration::Statement((stmt, span)) => {
+                lower_stmt(
+                    stmt,
+                    span,
+                    source_name,
+                    source,
+                    out,
+                    locals,
+                    local_map,
+                    resolver,
+                )?;
+            }
+            StatementOrDeclaration::Declaration((decl, _)) => {
+                lower_decl(decl, stmt_span, out, locals, local_map, resolver)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn lower_stmt(
     stmt: Statement,
     span: Span,
+    source_name: &str,
+    source: &'static str,
     out: &mut Vec<HirStmt>,
     locals: &mut Arena<HirLocal>,
     local_map: &mut HashMap<String, LocalId>,
@@ -220,6 +277,77 @@ fn lower_stmt(
         Statement::Expression(expr) => {
             let expr = lower_expr(expr, locals, local_map, resolver)?;
             out.push(HirStmt::Expr(expr));
+        }
+        Statement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            let cond = lower_expr(cond, locals, local_map, resolver)?;
+            if !is_condition_ty(cond.ty) {
+                return Err(format!("if condition must be scalar-like, got {:?}", cond.ty));
+            }
+
+            let mut then_map = local_map.clone();
+            let mut then_stmts = Vec::new();
+            lower_stmt(
+                then_branch.0,
+                then_branch.1,
+                source_name,
+                source,
+                &mut then_stmts,
+                locals,
+                &mut then_map,
+                resolver,
+            )?;
+
+            let mut else_stmts = Vec::new();
+            if let Some(else_branch) = else_branch {
+                let mut else_map = local_map.clone();
+                lower_stmt(
+                    else_branch.0,
+                    else_branch.1,
+                    source_name,
+                    source,
+                    &mut else_stmts,
+                    locals,
+                    &mut else_map,
+                    resolver,
+                )?;
+            }
+
+            out.push(HirStmt::If {
+                cond,
+                then_stmts,
+                else_stmts,
+                span,
+            });
+        }
+        Statement::Compound((lazy, _)) => {
+            struct BodyParseResolver<'a> {
+                inner: &'a dyn GlobalResolver,
+            }
+            impl ParserTypeResolver for BodyParseResolver<'_> {
+                fn classify_path(&self, path: &RustPath) -> TypeQueryResult {
+                    let path = path.to_pretty();
+                    if self.inner.resolve_type(&path).is_some() {
+                        TypeQueryResult::Type
+                    } else {
+                        TypeQueryResult::Expr
+                    }
+                }
+            }
+            let parse_resolver = BodyParseResolver { inner: resolver };
+            let nested = parse_compound_statement(
+                &lazy.tokens.0,
+                source_name.to_owned(),
+                source,
+                &parse_resolver,
+            )
+            .ok_or_else(|| "failed to parse nested compound statement".to_owned())?;
+            let outer_scope = local_map.clone();
+            lower_compound_items(nested.0, source_name, source, out, locals, local_map, resolver)?;
+            *local_map = outer_scope;
         }
     }
     Ok(())
@@ -466,6 +594,28 @@ fn lower_expr(
             })
         }
         Expression::BinOp(lhs, op, rhs) => {
+            if matches!(op, ParsedBinOp::Assign) {
+                let lhs = lower_expr(*lhs, locals, local_map, resolver)?;
+                if !is_place_expr(&lhs) {
+                    return Err("assignment target is not assignable".to_owned());
+                }
+                let rhs = lower_expr(*rhs, locals, local_map, resolver)?;
+                if !ty_matches_expected(lhs.ty, rhs.ty) {
+                    return Err(format!(
+                        "assignment type mismatch: lhs={:?}, rhs={:?}",
+                        lhs.ty, rhs.ty
+                    ));
+                }
+                return Ok(HirExpr {
+                    kind: HirExprKind::Assign {
+                        lhs: Box::new(lhs.clone()),
+                        rhs: Box::new(rhs),
+                    },
+                    ty: lhs.ty,
+                    span,
+                });
+            }
+
             let lhs = lower_expr(*lhs, locals, local_map, resolver)?;
             let rhs = lower_expr(*rhs, locals, local_map, resolver)?;
             if lhs.ty != rhs.ty {
@@ -475,9 +625,11 @@ fn lower_expr(
                 ));
             }
             let op = match op {
+                ParsedBinOp::Assign => unreachable!(),
                 ParsedBinOp::Add => HirBinOp::Add,
                 ParsedBinOp::Sub => HirBinOp::Sub,
                 ParsedBinOp::Mul => HirBinOp::Mul,
+                ParsedBinOp::Or => HirBinOp::Or,
             };
             Ok(HirExpr {
                 kind: HirExprKind::Binary {
@@ -489,10 +641,72 @@ fn lower_expr(
                 span,
             })
         }
+        Expression::UnaryOp(op, expr) => {
+            let inner = lower_expr(*expr, locals, local_map, resolver)?;
+            match op {
+                ParsedUnaryOp::AddrOf => {
+                    if !is_place_expr(&inner) {
+                        return Err("cannot take address of non-place expression".to_owned());
+                    }
+                    Ok(HirExpr {
+                        kind: HirExprKind::AddrOf(Box::new(inner.clone())),
+                        ty: Ty::new_ptr(inner.ty, Mutability::Mut),
+                        span,
+                    })
+                }
+                ParsedUnaryOp::Deref => {
+                    let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = inner.ty.kind() else {
+                        return Err(format!("cannot dereference non-pointer type: {:?}", inner.ty));
+                    };
+                    Ok(HirExpr {
+                        kind: HirExprKind::Deref(Box::new(inner)),
+                        ty: pointee,
+                        span,
+                    })
+                }
+                ParsedUnaryOp::Plus => Ok(inner),
+                ParsedUnaryOp::Minus => {
+                    if !is_integer_ty(inner.ty) {
+                        return Err("unary `-` expects integer expression".to_owned());
+                    }
+                    Ok(HirExpr {
+                        kind: HirExprKind::Binary {
+                            op: HirBinOp::Sub,
+                            lhs: Box::new(HirExpr {
+                                kind: HirExprKind::ConstInt(0),
+                                ty: inner.ty,
+                                span,
+                            }),
+                            rhs: Box::new(inner.clone()),
+                        },
+                        ty: inner.ty,
+                        span,
+                    })
+                }
+            }
+        }
         Expression::InitList(_) => Err("initializer list is only valid in declarations".to_owned()),
         Expression::Subscript(_, _) => Err("subscript is not supported yet".to_owned()),
         Expression::Empty => Err("empty expression is invalid here".to_owned()),
     }
+}
+
+fn is_place_expr(expr: &HirExpr) -> bool {
+    match &expr.kind {
+        HirExprKind::Local(_) => true,
+        HirExprKind::Field { base, .. } => is_place_expr(base),
+        HirExprKind::Deref(_) => true,
+        _ => false,
+    }
+}
+
+fn is_condition_ty(ty: Ty) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::RigidTy(RigidTy::Int(_))
+            | TyKind::RigidTy(RigidTy::Uint(_))
+            | TyKind::RigidTy(RigidTy::RawPtr(_, _))
+    )
 }
 
 fn call_arg_type_compatible(expected: Ty, actual: Ty) -> bool {

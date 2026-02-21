@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{Span, Spanned, lexer::Token};
+use crate::{Span, Spanned, TypeResolver, lexer::Token};
 use chumsky::{
     input::{SliceInput, ValueInput},
     prelude::*,
@@ -70,13 +70,15 @@ pub struct CompoundStatement {
     pub statements: Vec<Spanned<StatementOrDeclaration>>,
 }
 
-pub fn compound_statement<'src, I>()
+pub fn compound_statement<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+)
 -> impl Parser<'src, I, Spanned<CompoundStatement>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    statement_or_declaration()
+    statement_or_declaration(resolver)
         .repeated()
         .collect()
         .map(|statements| CompoundStatement { statements })
@@ -90,15 +92,17 @@ pub enum StatementOrDeclaration {
     Statement(Spanned<Statement>),
 }
 
-fn statement_or_declaration<'src, I>()
+fn statement_or_declaration<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+)
 -> impl Parser<'src, I, Spanned<StatementOrDeclaration>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    declaration()
+    declaration(resolver)
         .map(StatementOrDeclaration::Declaration)
-        .or(statement().map(StatementOrDeclaration::Statement))
+        .or(statement(resolver).map(StatementOrDeclaration::Statement))
         .map_with(|r, e| (r, e.span()))
 }
 
@@ -106,24 +110,47 @@ where
 pub enum Statement {
     Return(Option<Spanned<Expression>>),
     Expression(Spanned<Expression>),
+    Compound(Spanned<LazyCompoundStatement>),
+    If {
+        cond: Spanned<Expression>,
+        then_branch: Box<Spanned<Statement>>,
+        else_branch: Option<Box<Spanned<Statement>>>,
+    },
 }
 
-fn statement<'src, I>()
+fn statement<'src, 'r: 'src, I>(
+    _resolver: &'r dyn TypeResolver,
+)
 -> impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    let jump_statement = just(Token::Return)
-        .ignore_then(expression().or_not())
-        .map(|exp| Statement::Return(exp))
-        .then_ignore(just(Token::Semicolon));
+    recursive(|stmt_rec| {
+        let jump_statement = just(Token::Return)
+            .ignore_then(expression().or_not())
+            .map(|exp| Statement::Return(exp))
+            .then_ignore(just(Token::Semicolon));
 
-    let expression_statement = expression()
-        .map(Statement::Expression)
-        .then_ignore(just(Token::Semicolon));
+        let expression_statement = expression()
+            .map(Statement::Expression)
+            .then_ignore(just(Token::Semicolon));
 
-    choice((jump_statement, expression_statement)).map_with(|r, e| (r, e.span()))
+        let compound = lazy_compound_statement().map(Statement::Compound);
+
+        let if_statement = just(Token::If)
+            .ignore_then(expression().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .then(stmt_rec.clone())
+            .then(just(Token::Else).ignore_then(stmt_rec).or_not())
+            .map(|((cond, then_branch), else_branch)| Statement::If {
+                cond,
+                then_branch: Box::new(then_branch),
+                else_branch: else_branch.map(Box::new),
+            });
+
+        choice((if_statement, jump_statement, expression_statement, compound))
+            .map_with(|r, e| (r, e.span()))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +171,16 @@ pub enum Expression {
         func: Box<Spanned<Expression>>,
         params: Vec<Spanned<Expression>>,
     },
+    UnaryOp(UnaryOp, Box<Spanned<Expression>>),
     BinOp(Box<Spanned<Expression>>, BinOp, Box<Spanned<Expression>>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum UnaryOp {
+    AddrOf,
+    Deref,
+    Plus,
+    Minus,
 }
 
 impl Expression {
@@ -155,6 +191,8 @@ impl Expression {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinOp {
+    Assign,
+    Or,
     Add,
     Sub,
     Mul,
@@ -191,7 +229,8 @@ where
                     rec.clone()
                         .delimited_by(just(Token::LBracket), just(Token::RBracket))
                         .map(|sub| Expression::Subscript(Expression::dummy(), Box::new(sub))),
-                    rec.separated_by(just(Token::Comma))
+                    rec.clone()
+                        .separated_by(just(Token::Comma))
                         .collect()
                         .map(|params| Expression::Call {
                             func: Expression::dummy(),
@@ -213,6 +252,7 @@ where
                         | Expression::Identifier(_)
                         | Expression::Constant(_)
                         | Expression::InitList(_)
+                        | Expression::UnaryOp(..)
                         | Expression::BinOp(..) => {
                             unreachable!()
                         }
@@ -228,13 +268,33 @@ where
                 main
             });
 
+        let unary_op = choice((
+            just(Token::Amp).to(UnaryOp::AddrOf),
+            just(Token::Star).to(UnaryOp::Deref),
+            just(Token::Plus).to(UnaryOp::Plus),
+            just(Token::Minus).to(UnaryOp::Minus),
+        ));
+
+        let unary_expression = unary_op
+            .repeated()
+            .collect::<Vec<_>>()
+            .then(postfix_expression)
+            .map(|(ops, mut expr)| {
+                for op in ops.into_iter().rev() {
+                    let span = expr.1;
+                    expr = (Expression::UnaryOp(op, Box::new(expr)), span);
+                }
+                expr
+            });
+
         let mul = just(Token::Star).to(BinOp::Mul);
         let add = just(Token::Plus).to(BinOp::Add);
         let sub = just(Token::Minus).to(BinOp::Sub);
+        let logical_or = just(Token::Or).to(BinOp::Or);
 
-        let multiplicative = postfix_expression
+        let multiplicative = unary_expression
             .clone()
-            .then(mul.then(postfix_expression).repeated().collect::<Vec<_>>())
+            .then(mul.then(unary_expression).repeated().collect::<Vec<_>>())
             .map(|(head, tails)| {
                 let mut expr = head;
                 for (op, rhs) in tails {
@@ -259,10 +319,34 @@ where
                     expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
                 }
                 expr
+            });
+
+        let logical_or_expr = additive
+            .clone()
+            .then(logical_or.then(additive).repeated().collect::<Vec<_>>())
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            });
+
+        let assignment = logical_or_expr
+            .clone()
+            .then(just(Token::Assign).ignore_then(rec.clone()).or_not())
+            .map(|(lhs, rhs)| {
+                if let Some(rhs) = rhs {
+                    let span = lhs.1;
+                    (Expression::BinOp(Box::new(lhs), BinOp::Assign, Box::new(rhs)), span)
+                } else {
+                    lhs
+                }
             })
             .map_with(|r, e| (r.0, e.span()));
 
-        additive
+        assignment
     })
 }
 
@@ -311,6 +395,13 @@ pub enum RustPathSegment {
 #[derive(Debug, Clone)]
 pub struct RustPath {
     pub segments: Vec<Spanned<RustPathSegment>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeQueryResult {
+    Type,
+    Expr,
+    Unsure,
 }
 
 impl RustPath {
@@ -439,7 +530,7 @@ where
     )
 }
 
-fn struct_or_union_fields<'src, I>(
+fn struct_or_union_fields<'src, 'r, I>(
     type_specifier_rec: impl Parser<
         'src,
         I,
@@ -493,10 +584,11 @@ pub enum StructOrUnionKind {
     Union,
 }
 
-fn type_specifier<'src, I>(
+fn type_specifier<'src, 'r: 'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
     + 'src,
+    resolver: &'r dyn TypeResolver,
 ) -> impl Parser<'src, I, Spanned<TypeSpecifier>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -530,7 +622,16 @@ where
             just(Token::Unsigned).to(TypeSpecifier::Unsigned),
         ])
         .or(struct_or_union_specifier)
-        .or(rust_path().map(TypeSpecifier::TypedefName))
+        .or(
+            rust_path()
+                .filter(move |path| {
+                    matches!(
+                        resolver.classify_path(&path.0),
+                        TypeQueryResult::Type | TypeQueryResult::Unsure
+                    )
+                })
+                .map(TypeSpecifier::TypedefName),
+        )
         .map_with(|r, e| (r, e.span()))
         .labelled("Type specifier")
     })
@@ -593,17 +694,18 @@ pub enum DeclarationSpecifier {
     StorageSpecifier(Spanned<StorageClassSpecifier>),
 }
 
-fn declaration_specifier<'src, I>(
+fn declaration_specifier<'src, 'r: 'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
     + 'src,
+    resolver: &'r dyn TypeResolver,
 ) -> impl Parser<'src, I, Spanned<DeclarationSpecifier>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     choice((
-        type_specifier(declarator_rec).map(DeclarationSpecifier::TypeSpecifier),
+        type_specifier(declarator_rec, resolver).map(DeclarationSpecifier::TypeSpecifier),
         type_qualifier().map(DeclarationSpecifier::TypeQualifier),
         storage_class_specifier().map(DeclarationSpecifier::StorageSpecifier),
     ))
@@ -642,10 +744,11 @@ pub struct ParameterList {
     pub ellipsis: bool,
 }
 
-fn parameter_type_list<'src, I>(
+fn parameter_type_list<'src, 'r: 'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
     + 'src,
+    resolver: &'r dyn TypeResolver,
 ) -> impl Parser<'src, I, ParameterList, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -655,7 +758,7 @@ where
         declarator_rec
             .clone()
             .then_ignore(look_ahead(Token::RParen).or(look_ahead(Token::Comma))),
-        declaration_specifier(declarator_rec),
+        declaration_specifier(declarator_rec, resolver),
     );
     single
         .separated_by(just(Token::Comma))
@@ -686,7 +789,9 @@ pub enum Declarator {
     },
 }
 
-fn declarator<'src, I>()
+fn declarator<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+)
 -> impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -698,7 +803,7 @@ where
             .or(empty().to(Declarator::Abstract))
             .map_with(|r, e| (r, e.span()));
 
-        let param_list = parameter_type_list(rec).map(Err);
+        let param_list = parameter_type_list(rec, resolver).map(Err);
         let subscription = lazy_subscription().map(Ok);
 
         let direct_declarator = ident
@@ -768,13 +873,16 @@ pub struct InitDeclarator {
     pub initializer: Option<Spanned<Expression>>,
 }
 
-fn init_declarator_list<'src, I>()
+fn init_declarator_list<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+)
 -> impl Parser<'src, I, Vec<Spanned<InitDeclarator>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    declarator()
+    declarator(resolver)
+        .filter(|decl| declarator_has_name(&decl.0))
         .then(just(Token::Assign).ignore_then(expression()).or_not())
         .map(|(declarator, initializer)| InitDeclarator {
             declarator,
@@ -783,6 +891,16 @@ where
         .map_with(|r, e| (r, e.span()))
         .separated_by(just(Token::Comma))
         .collect()
+}
+
+fn declarator_has_name(decl: &Declarator) -> bool {
+    match decl {
+        Declarator::Identifier(_) => true,
+        Declarator::Abstract => false,
+        Declarator::FunctionDeclarator { declarator, .. } => declarator_has_name(&declarator.0),
+        Declarator::PointerDeclarator { declarator, .. } => declarator_has_name(&declarator.0),
+        Declarator::ArrayDeclarator { declarator, .. } => declarator_has_name(&declarator.0),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -798,7 +916,9 @@ pub enum Declaration {
     },
 }
 
-fn declaration<'src, I>()
+fn declaration<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+)
 -> impl Parser<'src, I, Spanned<Declaration>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -807,10 +927,10 @@ where
     let function = left_recursion(
         group((
             identifier(),
-            parameter_type_list(declarator()),
+            parameter_type_list(declarator(resolver), resolver),
             lazy_compound_statement(),
         )),
-        declaration_specifier(declarator()),
+        declaration_specifier(declarator(resolver), resolver),
     )
     .map(
         |(declaration_specifiers, ((ident, ident_span), params, body))| {
@@ -832,8 +952,8 @@ where
     );
 
     let simple = left_recursion(
-        init_declarator_list().then_ignore(just(Token::Semicolon)),
-        declaration_specifier(declarator()),
+        init_declarator_list(resolver).then_ignore(just(Token::Semicolon)),
+        declaration_specifier(declarator(resolver), resolver),
     )
     .map(
         |(declaration_specifiers, declarators)| Declaration::Declaration {
@@ -873,7 +993,9 @@ pub struct TranslationUnit {
     pub items: Vec<Spanned<Declaration>>,
 }
 
-pub fn translation_unit<'src, I>()
+pub fn translation_unit<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+)
 -> impl Parser<'src, I, Spanned<TranslationUnit>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -882,7 +1004,7 @@ where
     use_item()
         .repeated()
         .collect()
-        .then(declaration().repeated().collect())
+        .then(declaration(resolver).repeated().collect())
         .map_with(|(rust_use_items, items), e| {
             (
                 TranslationUnit {
