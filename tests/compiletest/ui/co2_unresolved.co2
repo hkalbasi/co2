@@ -1,0 +1,6 @@
+//@ mode: co2
+//@ ui-error: unresolved value path: missing
+
+int main() {
+    return missing;
+}

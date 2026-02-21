@@ -1,0 +1,9 @@
+[package]
+name = "co2_test_harness"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+shlex = "1"

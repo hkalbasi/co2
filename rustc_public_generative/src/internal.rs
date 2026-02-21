@@ -184,7 +184,7 @@ impl ItemSignatureInfo {
                         })
                     }
                 },
-                crate::HirModuleItem::TypeDef { name, id, ty, span } => {
+                crate::HirModuleItem::TypeDef { id, span, ty, name: _ } => {
                     result.push(ItemSignatureInfo {
                         id: *id,
                         kind: ItemSignatureKind::TypeDef(ty.clone()),
@@ -527,7 +527,7 @@ impl DefinedCrateInfo {
                         },
                     });
                 }
-                crate::HirModuleItem::TypeDef { name, id, ty, span } => {
+                crate::HirModuleItem::TypeDef { name, id, .. } => {
                     items.push(DefinedItemInfo {
                         name,
                         kind: DefinedItemKind::TypeDef(id),
@@ -2122,11 +2122,7 @@ fn hir_ty_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, ty: &HirTy) -> hi
             }
         }
         HirTyKind::FnPtr(_) => todo!(),
-        HirTyKind::Path(path) => hir::Ty {
-            hir_id: HirId::make_owner(owner),
-            span: DUMMY_SP,
-            kind: hir::TyKind::Path(rustc_hir::QPath::Resolved(None, todo!())),
-        },
+        HirTyKind::Path(_) => todo!(),
     }
 }
 

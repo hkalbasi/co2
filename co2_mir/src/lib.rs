@@ -1,6 +1,6 @@
 #![feature(rustc_private)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
@@ -12,7 +12,7 @@ use rustc_public_generative::rustc_public::{
         UnwindAction,
     },
     ty::{
-        FnDef, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
+        FnDef, GenericArgKind, GenericArgs, IntTy, MirConst, RigidTy,
         Span as RustSpan, Ty, TyKind, UintTy, VariantIdx,
     },
 };
@@ -309,7 +309,8 @@ impl Builder<'_, '_> {
             }
             HirExprKind::ConstStr(s) => self.lower_const_string(s, expr.span),
             HirExprKind::Path(path) => {
-                if let ResolvedValue::Fn(fn_def) = path {
+                let ResolvedValue::Fn(fn_def) = path;
+                {
                     let fn_ty = Ty::from_rigid_kind(RigidTy::FnDef(*fn_def, GenericArgs(vec![])));
                     let c = MirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
                     MirOperand::Constant(ConstOperand {
@@ -317,8 +318,6 @@ impl Builder<'_, '_> {
                         user_ty: None,
                         const_: c,
                     })
-                } else {
-                    panic!("non-callable path in value position: {:?}", path);
                 }
             }
             HirExprKind::Call { func, args } => {
@@ -373,24 +372,67 @@ impl Builder<'_, '_> {
             HirExprKind::Path(ResolvedValue::Fn(fn_def)) => *fn_def,
             _ => panic!("unsupported call target: {:?}", func.kind),
         };
+        let sig = func
+            .ty
+            .kind()
+            .fn_sig()
+            .expect("call target has no fn signature")
+            .skip_binder();
 
         let mut arg_ops = Vec::with_capacity(args.len());
-        for arg in args {
-            let op = if let HirExprKind::Local(local) = arg.kind {
-                MirOperand::Move(place(self.local_to_index(local)))
-            } else {
-                self.lower_expr_to_operand(arg)
-            };
+        for (idx, arg) in args.iter().enumerate() {
+            let expected_ty = sig.inputs()[idx];
+            let op = self.lower_call_arg(arg, expected_ty);
             arg_ops.push(op);
         }
+        let generic_args = infer_fn_generic_args(&sig, args);
 
         let _ = ret_ty;
         self.emit_call_block(
-            fn_const_operand(fn_def, vec![], self.hir_span(span)),
+            fn_const_operand(fn_def, generic_args, self.hir_span(span)),
             arg_ops,
             destination,
             self.hir_span(span),
         );
+    }
+
+    fn lower_call_arg(&mut self, arg: &HirExpr, expected_ty: Ty) -> MirOperand {
+        let TyKind::RigidTy(RigidTy::Ref(region, inner, mutability)) = expected_ty.kind() else {
+            return self.lower_expr_to_operand(arg);
+        };
+
+        if !matches!(inner.kind(), TyKind::Param(_)) && inner != arg.ty {
+            return self.lower_expr_to_operand(arg);
+        }
+
+        let borrowed_place = if let Some(place) = self.lower_expr_to_place(arg) {
+            place
+        } else {
+            let tmp = self.new_temp(arg.ty, Mutability::Mut, self.hir_span(arg.span));
+            let value = self.lower_expr_to_operand(arg);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
+                span: self.hir_span(arg.span),
+            });
+            place(tmp)
+        };
+
+        let borrow_kind = if mutability == Mutability::Mut {
+            BorrowKind::Mut {
+                kind: MutBorrowKind::Default,
+            }
+        } else {
+            BorrowKind::Shared
+        };
+        let ref_local = self.new_temp(expected_ty, Mutability::Not, self.hir_span(arg.span));
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(
+                place(ref_local),
+                Rvalue::Ref(region.clone(), borrow_kind, borrowed_place),
+            ),
+            span: self.hir_span(arg.span),
+        });
+        MirOperand::Move(place(ref_local))
     }
 
     #[cfg(false)]
@@ -607,19 +649,6 @@ fn variant_idx(id: usize) -> VariantIdx {
     unsafe { std::mem::transmute::<usize, VariantIdx>(id) }
 }
 
-fn generic_args_from_ty(ty: Ty) -> Vec<GenericArgKind> {
-    match ty.kind() {
-        TyKind::RigidTy(RigidTy::Adt(_, GenericArgs(args))) => args
-            .iter()
-            .filter_map(|arg| match arg {
-                GenericArgKind::Type(ty) => Some(GenericArgKind::Type(*ty)),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 fn fn_const_operand(
     fn_def: FnDef,
     generic_args: Vec<GenericArgKind>,
@@ -634,6 +663,42 @@ fn fn_const_operand(
     })
 }
 
+fn infer_fn_generic_args(
+    sig: &rustc_public_generative::rustc_public::ty::FnSig,
+    args: &[HirExpr],
+) -> Vec<GenericArgKind> {
+    let mut by_index: BTreeMap<u32, Ty> = BTreeMap::new();
+    for (expected, actual) in sig.inputs().iter().zip(args.iter()) {
+        collect_param_bindings(*expected, actual.ty, &mut by_index);
+    }
+    by_index
+        .into_values()
+        .map(GenericArgKind::Type)
+        .collect::<Vec<_>>()
+}
+
+fn collect_param_bindings(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>) {
+    match (expected.kind(), actual.kind()) {
+        (TyKind::Param(param), _) => {
+            out.entry(param.index).or_insert(actual);
+        }
+        (TyKind::RigidTy(RigidTy::Ref(_, expected_inner, _)), _) => {
+            collect_param_bindings(expected_inner, actual, out);
+        }
+        (
+            TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
+            TyKind::RigidTy(RigidTy::Adt(actual_adt, actual_args)),
+        ) if expected_adt == actual_adt && expected_args.0.len() == actual_args.0.len() => {
+            for (e, a) in expected_args.0.iter().zip(actual_args.0.iter()) {
+                if let (GenericArgKind::Type(et), GenericArgKind::Type(at)) = (e, a) {
+                    collect_param_bindings(*et, *at, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn dep_fn_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> FnDef {
     for path in paths {
         if let Some(found) = find_dep_fn(deps, path) {
@@ -641,68 +706,6 @@ fn dep_fn_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> FnDef {
         }
     }
     panic!("missing dependency function (any of): {}", paths.join(", "));
-}
-
-fn dep_fn_for_path(deps: &rustc_gen::DependencyInfo, path: &str) -> FnDef {
-    if path == "printf" || path.ends_with("::printf") {
-        return dep_fn_any(deps, &["libc::printf", "libc::unix::printf"]);
-    }
-    if path.ends_with("::Option::unwrap") || path.ends_with("::option::Option::unwrap") {
-        return dep_fn_any(
-            deps,
-            &[
-                "std::option::Option::unwrap",
-                "core::option::Option::unwrap",
-            ],
-        );
-    }
-    if path.ends_with("::Result::unwrap") || path.ends_with("::result::Result::unwrap") {
-        return dep_fn_any(
-            deps,
-            &[
-                "std::result::Result::unwrap",
-                "core::result::Result::unwrap",
-            ],
-        );
-    }
-    if path.ends_with("::Iterator::nth") {
-        return dep_fn_any(
-            deps,
-            &[
-                "std::iter::Iterator::nth",
-                "core::iter::traits::iterator::Iterator::nth",
-            ],
-        );
-    }
-    if path.ends_with("::Iterator::next") {
-        return dep_fn_any(
-            deps,
-            &[
-                "std::iter::Iterator::next",
-                "core::iter::traits::iterator::Iterator::next",
-            ],
-        );
-    }
-    if path.ends_with("::Vec::as_mut_ptr") {
-        return dep_fn_any(
-            deps,
-            &["std::vec::Vec::as_mut_ptr", "alloc::vec::Vec::as_mut_ptr"],
-        );
-    }
-    if path.ends_with("::Vec::as_ptr") {
-        return dep_fn_any(deps, &["std::vec::Vec::as_ptr", "alloc::vec::Vec::as_ptr"]);
-    }
-    if path.ends_with("::Vec::len") {
-        return dep_fn_any(deps, &["std::vec::Vec::len", "alloc::vec::Vec::len"]);
-    }
-    dep_fn(deps, path)
-}
-
-fn dep_fn(deps: &rustc_gen::DependencyInfo, path: &str) -> FnDef {
-    if let Some(found) = find_dep_fn(deps, path) {
-        return found;
-    }
-    panic!("missing dependency function: {path}");
 }
 
 fn find_dep_fn(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<FnDef> {

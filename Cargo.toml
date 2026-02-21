@@ -7,5 +7,6 @@ members = [
   "co2_driver_lib",
   "co2",
   "co2c",
+  "co2_test_harness",
 ]
 resolver = "2"

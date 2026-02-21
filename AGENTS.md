@@ -37,11 +37,9 @@ Core pipeline:
 ## Useful commands
 - Check everything:
   - `cargo check -q`
-- Run Rust mode:
-  - `cargo run -q -r -p co2 -- playground/fake_hello_world.rs`
-- Run C mode:
-  - `cargo run -q -r -p co2c -- playground/hello.c`
-  - `cargo run -q -r -p co2c -- playground/point_length.c`
+- Run compiletest harness:
+  - `cargo run -q --locked -p co2_test_harness -- all`
+- Don't try mise, you don't have it.
 
 ## Known expectations
 - `co2c` should preserve C-style return-code behavior for `main`.

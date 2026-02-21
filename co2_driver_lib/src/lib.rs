@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use co2_hir::{GlobalResolver, HirBody, ResolvedValue};
+use co2_hir::{GlobalResolver, ResolvedValue};
 use co2_parser::{
-    Declaration, DeclarationSpecifier, Declarator, InitDeclarator, Spanned, StorageClassSpecifier,
+    Declaration, DeclarationSpecifier, Declarator, InitDeclarator, StorageClassSpecifier,
     StructDeclarator, StructOrUnionField, StructOrUnionSpecifier, TypeSpecifier,
 };
 use rustc_public_generative::rustc_public::{
@@ -18,11 +18,11 @@ use rustc_public_generative::rustc_public::{
         Terminator as MirTerminator, TerminatorKind, UnwindAction,
     },
     ty::{
-        AdtDef, FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Ty, TyKind, UintTy,
+        AdtDef, FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Ty, UintTy,
         VariantIdx,
     },
 };
-use rustc_public_generative::{self as rustc_gen, FunctionSignature, HirTy};
+use rustc_public_generative::{self as rustc_gen, FunctionSignature};
 
 mod hir_ty;
 mod span;
@@ -31,7 +31,7 @@ mod types;
 pub use types::CompileMode;
 
 use crate::hir_ty::{lower_function_signature, lower_value_decl_type};
-use crate::span::{FILE_ID, co2_span_to_rustc};
+use crate::span::{FILE_ID};
 
 struct PendingCompile {
     mode: CompileMode,
@@ -42,12 +42,6 @@ struct PendingCompile {
 fn pending_compile_cell() -> &'static Mutex<Option<PendingCompile>> {
     static CELL: OnceLock<Mutex<Option<PendingCompile>>> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(None))
-}
-
-struct LoweredFunction {
-    name: String,
-    def: FnDef,
-    body: HirBody,
 }
 
 struct PendingFunction {
@@ -151,7 +145,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let root_crate = ctx.root_crate_def_id();
 
         let mut typedefs: HashMap<String, DefId> = HashMap::new();
-        let empty_values = HashMap::new();
 
         let mut pending_functions = Vec::new();
         let mut externs: HashMap<String, FunctionSignature> = HashMap::new();
@@ -160,11 +153,10 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         struct PendingStructDef {
             alias: String,
             fields: Vec<co2_parser::Spanned<StructOrUnionField>>,
-            span: co2_parser::Span,
         }
 
         let mut pending_structs = Vec::new();
-        for (item, span) in &items {
+        for (item, _) in &items {
             let Declaration::Declaration {
                 declaration_specifiers,
                 declarators,
@@ -208,7 +200,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     pending_structs.push(PendingStructDef {
                         alias,
                         fields: fields.clone(),
-                        span: init.1,
                     });
                 }
             }
@@ -240,12 +231,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                         .map(DeclarationSpecifier::TypeSpecifier)
                         .map(|spec| (spec, field_span))
                         .collect::<Vec<_>>();
-                    let resolver = DriverResolver {
-                        typedefs: &typedefs,
-                        values: &empty_values,
-                        deps: &deps,
-                        uses: &uses,
-                    };
                     let (_, field_ty) =
                         lower_value_decl_type(&ctx, specs, decl.declarator.clone(), &typedefs)
                             .unwrap_or_else(|e| {
@@ -280,12 +265,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     declarator,
                     body,
                 } => {
-                    let resolver = DriverResolver {
-                        typedefs: &typedefs,
-                        values: &empty_values,
-                        deps: &deps,
-                        uses: &uses,
-                    };
                     let (name, sig, param_names) = lower_function_signature(
                         &ctx,
                         declaration_specifiers,
@@ -324,13 +303,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                             declarator,
                             initializer: _,
                         } = init.0;
-                        let resolver = DriverResolver {
-                            typedefs: &typedefs,
-                            values: &empty_values,
-                            deps: &deps,
-                            uses: &uses,
-                        };
-
                         if is_typedef {
                             if let Ok((name, ty)) = lower_value_decl_type(
                                 &ctx,
@@ -712,6 +684,15 @@ fn find_dep_fn(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<FnDef> {
             .split("::")
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>();
+        let required_tail = required_segments
+            .iter()
+            .rev()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
         if let Some(found) = deps
             .functions
             .iter()
@@ -721,22 +702,23 @@ fn find_dep_fn(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<FnDef> {
                     && f.fn_def.is_some()
                     && !f.path.contains("::{closure")
                     && !f.path.contains("{{")
-                    && required_segments.iter().all(|seg| normalized.contains(seg))
+                    && required_tail.iter().all(|seg| normalized.contains(seg))
             })
             .and_then(|f| f.fn_def)
         {
             return Some(found);
         }
-        if let Some(found) = deps
-            .functions
-            .iter()
-            .find(|f| {
-                f.path.ends_with(&format!("::{last}"))
-                    && f.fn_def.is_some()
-                    && !f.path.contains("::{closure")
-                    && !f.path.contains("{{")
-            })
-            .and_then(|f| f.fn_def)
+        if !path.contains("::")
+            && let Some(found) = deps
+                .functions
+                .iter()
+                .find(|f| {
+                    f.path.ends_with(&format!("::{last}"))
+                        && f.fn_def.is_some()
+                        && !f.path.contains("::{closure")
+                        && !f.path.contains("{{")
+                })
+                .and_then(|f| f.fn_def)
         {
             return Some(found);
         }
@@ -784,12 +766,6 @@ fn declarator_name(decl: &Declarator) -> Option<String> {
 
 fn struct_declarator_name(decl: &StructDeclarator) -> Option<String> {
     declarator_name(&decl.declarator.0)
-}
-
-fn looks_like_point_length(src: &str) -> bool {
-    src.contains("typedef struct PointStruct")
-        && src.contains("typedef struct HumanStruct")
-        && src.contains("usize length(Human h)")
 }
 
 fn place(local: usize) -> MirPlace {

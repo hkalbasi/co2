@@ -5,13 +5,12 @@ use std::collections::HashMap;
 pub use co2_parser::Span;
 use co2_parser::{
     BinOp as ParsedBinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier,
-    Declarator, Expression, InitDeclarator, RustPath, RustPathSegment, Spanned, Statement,
+    Declarator, Expression, InitDeclarator, Spanned, Statement,
     StatementOrDeclaration, Token, TypeSpecifier, parse_compound_statement,
 };
 use la_arena::{Arena, Idx};
 use rustc_public_generative::rustc_public::{
-    CrateDefType, DefId,
-    mir::Mutability,
+    CrateDefType,     mir::Mutability,
     mir::Safety,
     ty::{Abi, Binder, FnDef, FnSig, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx},
 };
@@ -436,7 +435,7 @@ fn lower_expr(
             for (idx, (expected, actual)) in
                 sig.inputs().iter().zip(lowered_args.iter()).enumerate()
             {
-                if expected != &actual.ty {
+                if !call_arg_type_compatible(*expected, actual.ty) {
                     return Err(format!(
                         "call argument type mismatch at index {idx}: expected {expected:?}, got {:?}",
                         actual.ty
@@ -493,6 +492,44 @@ fn lower_expr(
         Expression::InitList(_) => Err("initializer list is only valid in declarations".to_owned()),
         Expression::Subscript(_, _) => Err("subscript is not supported yet".to_owned()),
         Expression::Empty => Err("empty expression is invalid here".to_owned()),
+    }
+}
+
+fn call_arg_type_compatible(expected: Ty, actual: Ty) -> bool {
+    if expected == actual {
+        return true;
+    }
+    ty_matches_expected(expected, actual)
+}
+
+fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
+    if expected == actual {
+        return true;
+    }
+    match (expected.kind(), actual.kind()) {
+        (TyKind::Param(_), _) => true,
+        (TyKind::RigidTy(RigidTy::Ref(_, exp_inner, _)), _) => {
+            ty_matches_expected(exp_inner, actual)
+        }
+        (
+            TyKind::RigidTy(RigidTy::Adt(exp_adt, exp_args)),
+            TyKind::RigidTy(RigidTy::Adt(act_adt, act_args)),
+        ) => {
+            if exp_adt != act_adt || exp_args.0.len() != act_args.0.len() {
+                return false;
+            }
+            exp_args
+                .0
+                .iter()
+                .zip(act_args.0.iter())
+                .all(|(e, a)| match (e, a) {
+                    (rustc_public_generative::rustc_public::ty::GenericArgKind::Type(et), rustc_public_generative::rustc_public::ty::GenericArgKind::Type(at)) => {
+                        ty_matches_expected(*et, *at)
+                    }
+                    _ => e == a,
+                })
+        }
+        _ => false,
     }
 }
 

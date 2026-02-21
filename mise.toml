@@ -1,0 +1,15 @@
+[tasks.test]
+description = "Run all co2 compiletest suites"
+run = "cargo run -q --locked -p co2_test_harness -- all"
+
+[tasks.test-ui]
+description = "Run compiletest UI suite"
+run = "cargo run -q --locked -p co2_test_harness -- ui"
+
+[tasks.test-run]
+description = "Run compiletest run suite"
+run = "cargo run -q --locked -p co2_test_harness -- run"
+
+[tasks.test-debuginfo]
+description = "Run compiletest debuginfo suite"
+run = "cargo run -q --locked -p co2_test_harness -- debuginfo"

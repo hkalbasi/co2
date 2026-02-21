@@ -1,0 +1,11 @@
+//@ mode: co2
+//@ debugger: gdb
+//@ debug-command: break main
+//@ debug-command: run
+//@ debug-command: next
+//@ debug-command: print x
+//@ debug-check: = 42
+
+void main() {
+    int x = 42;
+}

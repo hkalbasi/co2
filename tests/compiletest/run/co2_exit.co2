@@ -1,0 +1,9 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-stdout: co2\n
+
+int write(int fd, char* buf, int len);
+
+void main() {
+    write(1, "co2\n", 4);
+}
