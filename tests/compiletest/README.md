@@ -8,7 +8,7 @@ Supported suites:
 - `tests/compiletest/debuginfo`: debugger script checks (`gdb`/`lldb`).
 
 Common directives:
-- `//@ mode: c|co2`
+- `//@ mode: c|co2|rust`
 - `//@ compile-flags: ...` (repeatable, shell-split)
 - `//@ skip: <reason>` (skip test unconditionally)
 
@@ -23,6 +23,9 @@ Run directives:
 - `//@ run-stderr: <exact text>` (`\\n` escapes are supported)
 - `//@ run-stdout-contains: <substring>` (repeatable)
 - `//@ run-stderr-contains: <substring>` (repeatable)
+- `//@ aux-lib: <crate_name> <relative_path>` (repeatable, Rust mode only)
+  Compiles each listed `.rs` or `.co2` file as an `rlib` using `co2` and links it into the Rust test binary.
+  Helper source files can use `.aux.rs` or `.aux.co2` suffix to avoid being collected as standalone tests.
 
 Debuginfo directives:
 - `//@ debugger: gdb|lldb` (default `gdb`)

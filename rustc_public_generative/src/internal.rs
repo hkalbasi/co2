@@ -379,6 +379,33 @@ impl DefinedCrateInfo {
             struct_items_hir.push((def_id, leak(item), fields_hir));
         }
 
+        let mut typedef_items_hir = Vec::new();
+        for (my_def_id, alias_ty) in signatures.iter().filter_map(|item| match &item.kind {
+            ItemSignatureKind::TypeDef(ty) => Some((item.id, ty)),
+            _ => None,
+        }) {
+            let name = &self
+                .items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .unwrap()
+                .name;
+            let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+            let item = hir::Item {
+                owner_id: OwnerId { def_id },
+                kind: hir::ItemKind::TyAlias(
+                    Ident::from_str(name),
+                    hir::Generics::empty(),
+                    leak(hir_ty_to_rustc(tcx, def_id, alias_ty)),
+                ),
+                span: DUMMY_SP,
+                vis_span: DUMMY_SP,
+                has_delayed_lints: false,
+                eii: false,
+            };
+            typedef_items_hir.push((def_id, leak(item)));
+        }
+
         let mut function_items_hir = Vec::new();
         for (my_def_id, function, no_mangle) in
             signatures.iter().filter_map(|item| match &item.kind {
@@ -441,14 +468,20 @@ impl DefinedCrateInfo {
             function_items_hir.push((def_id, leak(item), body, body_expr, loop_expr));
         }
 
-        let mut root_item_ids =
-            Vec::with_capacity(1 + struct_items_hir.len() + function_items_hir.len());
+        let mut root_item_ids = Vec::with_capacity(
+            1 + struct_items_hir.len() + typedef_items_hir.len() + function_items_hir.len(),
+        );
         root_item_ids.push(hir::ItemId {
             owner_id: OwnerId {
                 def_id: foreign_mod_def,
             },
         });
         for (def_id, _, _) in &struct_items_hir {
+            root_item_ids.push(hir::ItemId {
+                owner_id: OwnerId { def_id: *def_id },
+            });
+        }
+        for (def_id, _) in &typedef_items_hir {
             root_item_ids.push(hir::ItemId {
                 owner_id: OwnerId { def_id: *def_id },
             });
@@ -491,6 +524,12 @@ impl DefinedCrateInfo {
 
         for (def_id, item, fields) in struct_items_hir {
             let nodes = build_owner_nodes_for_struct(item, fields);
+            insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
+            owner_parents.insert(def_id, HirId::make_owner(crate_def));
+        }
+
+        for (def_id, item) in typedef_items_hir {
+            let nodes = build_owner_nodes_for_item(item);
             insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
             owner_parents.insert(def_id, HirId::make_owner(crate_def));
         }
@@ -912,8 +951,11 @@ struct GenerateGate {
 #[derive(Copy, Clone)]
 struct OriginalProviders {
     hir_crate: for<'tcx> fn(TyCtxt<'tcx>, ()) -> hir::Crate<'tcx>,
+    resolutions: for<'tcx> fn(TyCtxt<'tcx>, ()) -> &'tcx rustc_middle::ty::ResolverGlobalCtxt,
     def_span: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> RustcSpan,
     def_ident_span: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Option<RustcSpan>,
+    reachable_set:
+        for<'tcx> fn(TyCtxt<'tcx>, ()) -> rustc_data_structures::unord::UnordSet<LocalDefId>,
     mir_built: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<rustc_middle::mir::Body<'tcx>>,
 }
 
@@ -1261,14 +1303,17 @@ fn override_providers<S: CrateGeneratorState>(
     if guard.original.is_none() {
         guard.original = Some(OriginalProviders {
             hir_crate: providers.hir_crate,
+            resolutions: providers.resolutions,
             def_span: providers.def_span,
             def_ident_span: providers.def_ident_span,
+            reachable_set: providers.reachable_set,
             mir_built: providers.mir_built,
         });
     }
     drop(guard);
 
     providers.hir_crate = generated_hir_crate;
+    providers.resolutions = generated_resolutions;
     // Leave hir_crate_items/hir_module_items to the original providers.
     // providers.local_def_id_to_hir_id = generated_local_def_id_to_hir_id;
     // providers.opt_hir_owner_nodes = generated_opt_hir_owner_nodes;
@@ -1280,6 +1325,7 @@ fn override_providers<S: CrateGeneratorState>(
     providers.def_span = generated_def_span;
     providers.def_ident_span = generated_def_ident_span;
     providers.visibility = generated_visibility;
+    providers.reachable_set = generated_reachable_set;
     // providers.generics_of = generated_generics_of;
     // providers.type_of = generated_type_of;
     // providers.fn_sig = generated_fn_sig;
@@ -1298,6 +1344,90 @@ fn generated_hir_crate<'tcx>(tcx: TyCtxt<'tcx>, key: ()) -> hir::Crate<'tcx> {
         eprintln!("generated_hir_crate");
     }
     with_generated_and_original(tcx, |generated, _| generated.hir_crate(tcx, key))
+}
+
+fn generated_resolutions<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    (): (),
+) -> &'tcx rustc_middle::ty::ResolverGlobalCtxt {
+    with_generated_and_original(tcx, |generated, original| {
+        let r = (original.resolutions)(tcx, ());
+        let DefinedCrateState::Stage2(defined_crate, _, _, _) = generated else {
+            return r;
+        };
+
+        let mut foreign_mod_local = None;
+        for item in &defined_crate.items {
+            if let DefinedItemKind::ForeignMod(def_id) = item.kind {
+                foreign_mod_local = my_def_id_to_rustc_def_id(tcx, def_id).as_local();
+                break;
+            }
+        }
+
+        let mut root_children = Vec::new();
+        let mut foreign_children = Vec::new();
+        for item in &defined_crate.items {
+            let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local()
+            else {
+                continue;
+            };
+            let (res, is_root_child, is_foreign_child) = match item.kind {
+                DefinedItemKind::Function { .. } => (
+                    Res::Def(DefKind::Fn, local_def_id.to_def_id()),
+                    true,
+                    false,
+                ),
+                DefinedItemKind::Struct(_) => (
+                    Res::Def(DefKind::Struct, local_def_id.to_def_id()),
+                    true,
+                    false,
+                ),
+                DefinedItemKind::TypeDef(_) => (
+                    Res::Def(DefKind::TyAlias, local_def_id.to_def_id()),
+                    true,
+                    false,
+                ),
+                DefinedItemKind::ForeignFunction(_) => (
+                    Res::Def(DefKind::Fn, local_def_id.to_def_id()),
+                    false,
+                    true,
+                ),
+                _ => continue,
+            };
+            let child = rustc_middle::metadata::ModChild {
+                ident: Ident::from_str(&item.name),
+                res,
+                vis: ty::Visibility::Public,
+                reexport_chain: Default::default(),
+            };
+            if is_root_child {
+                root_children.push(child);
+            } else if is_foreign_child {
+                foreign_children.push(child);
+            }
+        }
+
+        unsafe {
+            let r_ptr = r as *const rustc_middle::ty::ResolverGlobalCtxt
+                as *mut rustc_middle::ty::ResolverGlobalCtxt;
+            (*r_ptr).module_children.insert(CRATE_DEF_ID, root_children);
+            if let Some(foreign_mod_local) = foreign_mod_local {
+                (*r_ptr)
+                    .module_children
+                    .insert(foreign_mod_local, foreign_children);
+            }
+            (*r_ptr).effective_visibilities.public_at_level(CRATE_DEF_ID);
+            for item in &defined_crate.items {
+                let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local()
+                else {
+                    continue;
+                };
+                (*r_ptr).effective_visibilities.public_at_level(local_def_id);
+            }
+        }
+
+        r
+    })
 }
 
 #[cfg(false)]
@@ -1369,6 +1499,26 @@ fn generated_def_ident_span<'tcx>(tcx: TyCtxt<'tcx>, key: LocalDefId) -> Option<
 
 fn generated_visibility<'tcx>(_tcx: TyCtxt<'tcx>, _key: LocalDefId) -> ty::Visibility<RustcDefId> {
     ty::Visibility::Public
+}
+
+fn generated_reachable_set<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    (): (),
+) -> rustc_data_structures::unord::UnordSet<LocalDefId> {
+    with_generated_and_original(tcx, |generated, original| {
+        let mut reachable = (original.reachable_set)(tcx, ());
+        let DefinedCrateState::Stage2(defined_crate, _, _, _) = generated else {
+            return reachable;
+        };
+        for item in &defined_crate.items {
+            let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local()
+            else {
+                continue;
+            };
+            reachable.insert(local_def_id);
+        }
+        reachable
+    })
 }
 
 fn generated_mir_built<'tcx, S: CrateGeneratorState>(

@@ -1,0 +1,14 @@
+typedef struct {
+    int x;
+    int y;
+} Point;
+
+typedef Point* PointPtr;
+
+int add(int a, int b) {
+    return a + b;
+}
+
+int hypot(Point p) {
+    return p.x * p.x + p.y * p.y;
+}

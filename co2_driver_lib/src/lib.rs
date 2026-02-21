@@ -312,6 +312,15 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                             ) {
                                 if let rustc_gen::HirTyKind::Adt(adt, _) = ty.kind {
                                     typedefs.insert(name, adt.0);
+                                } else {
+                                    let type_def =
+                                        ctx.allocate_def_id(root_crate, rustc_gen::DefData::TypeNs(name.clone()));
+                                    hir_items.push(rustc_gen::HirModuleItem::TypeDef {
+                                        name,
+                                        id: type_def,
+                                        span,
+                                        ty,
+                                    });
                                 }
                             }
                             continue;

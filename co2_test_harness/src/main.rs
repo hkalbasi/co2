@@ -55,6 +55,7 @@ fn suites_from_arg(arg: SuiteArg) -> Vec<Suite> {
 enum Mode {
     C,
     Co2,
+    Rust,
 }
 
 impl Mode {
@@ -62,6 +63,7 @@ impl Mode {
         match s {
             "c" => Ok(Self::C),
             "co2" => Ok(Self::Co2),
+            "rust" => Ok(Self::Rust),
             _ => bail!("unknown mode: {s}"),
         }
     }
@@ -171,7 +173,7 @@ fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
         test.directives
             .get("mode")
             .and_then(|v| v.first())
-            .context("missing `//@ mode: c|co2` directive")?,
+            .context("missing `//@ mode: c|co2|rust` directive")?,
     )?;
 
     let compile = compile_test(root, suite, mode, test)?;
@@ -241,6 +243,56 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
                 .args(compile_flags);
             cmd.output().context("failed to execute co2")?
         }
+        Mode::Rust => {
+            let rust_src = temp_path.join(test.path.file_name().context("missing Rust test filename")?);
+            fs::copy(&test.path, &rust_src).context("failed to copy Rust test source")?;
+
+            let mut aux_externs = Vec::new();
+            for raw in test.directives.get("aux-lib").cloned().unwrap_or_default() {
+                let parts = shlex::split(&raw)
+                    .with_context(|| format!("failed to parse `aux-lib` from `{raw}`"))?;
+                if parts.len() != 2 {
+                    bail!("`aux-lib` expects exactly 2 args: `<crate_name> <path>`; got `{raw}`");
+                }
+                let crate_name = &parts[0];
+                let rel_path = &parts[1];
+                let src_path = test
+                    .path
+                    .parent()
+                    .context("test has no parent directory")?
+                    .join(rel_path);
+                if !src_path.exists() {
+                    bail!("aux-lib source does not exist: {}", src_path.display());
+                }
+                let aux_src = temp_path.join(
+                    Path::new(rel_path)
+                        .file_name()
+                        .context("aux-lib path has no filename")?,
+                );
+                fs::copy(&src_path, &aux_src).with_context(|| {
+                    format!(
+                        "failed to copy aux-lib source {} -> {}",
+                        src_path.display(),
+                        aux_src.display()
+                    )
+                })?;
+                let rlib_path = temp_path.join(format!("lib{crate_name}.rlib"));
+                compile_aux_lib(root, crate_name, &aux_src, &rlib_path)?;
+                aux_externs.push((crate_name.to_owned(), rlib_path));
+            }
+
+            let mut cmd = Command::new(root.join("target").join("debug").join("co2"));
+            cmd.arg("--edition=2024")
+                .arg(&rust_src)
+                .arg("-o")
+                .arg(&exe_path)
+                .args(compile_flags);
+            for (crate_name, rlib_path) in aux_externs {
+                cmd.arg("--extern")
+                    .arg(format!("{crate_name}={}", rlib_path.display()));
+            }
+            cmd.output().context("failed to execute co2 for Rust test")?
+        }
     };
 
     Ok(CompileResult {
@@ -248,6 +300,64 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
         exe_path,
         _temp: temp,
     })
+}
+
+fn compile_aux_lib(root: &Path, crate_name: &str, aux_src: &Path, rlib_path: &Path) -> Result<()> {
+    let ext = aux_src
+        .extension()
+        .and_then(OsStr::to_str)
+        .context("aux-lib path has no extension")?;
+    match ext {
+        "rs" => {
+            let output = Command::new(root.join("target").join("debug").join("co2"))
+                .arg("--crate-type=lib")
+                .arg("--crate-name")
+                .arg(crate_name)
+                .arg("--edition=2024")
+                .arg(aux_src)
+                .arg("-o")
+                .arg(rlib_path)
+                .output()
+                .with_context(|| format!("failed to execute co2 for aux-lib `{crate_name}`"))?;
+            if !output.status.success() {
+                bail!(
+                    "aux-lib compilation failed for `{crate_name}`\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+        "co2" => {
+            let shim = aux_src.with_extension("rs");
+            fs::write(
+                &shim,
+                "#![feature(register_tool)]\n#![feature(custom_inner_attributes)]\n#![register_tool(co2)]\n#![co2::language]\n",
+            )
+            .context("failed to write co2 aux-lib shim rust file")?;
+            let output = Command::new(root.join("target").join("debug").join("co2"))
+                .arg(&shim)
+                .arg("--crate-type=lib")
+                .arg("--crate-name")
+                .arg(crate_name)
+                .arg("--edition=2024")
+                .arg("-o")
+                .arg(rlib_path)
+                .output()
+                .with_context(|| format!("failed to execute co2 for aux-lib `{crate_name}`"))?;
+            if !output.status.success() {
+                bail!(
+                    "co2 aux-lib compilation failed for `{crate_name}`\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+        _ => bail!(
+            "unsupported aux-lib extension `.{ext}` for {}; expected .rs or .co2",
+            aux_src.display()
+        ),
+    }
+    Ok(())
 }
 
 fn check_ui(test: &TestCase, output: &Output) -> Result<()> {
@@ -507,7 +617,13 @@ fn collect_tests_inner(dir: &Path, filter: Option<&str>, out: &mut Vec<TestCase>
         let Some(ext) = path.extension().and_then(OsStr::to_str) else {
             continue;
         };
-        if ext != "c" && ext != "co2" {
+        if ext != "c" && ext != "co2" && ext != "rs" {
+            continue;
+        }
+        if path.file_name().and_then(OsStr::to_str).is_some_and(|f| {
+            f.ends_with(".aux.rs") || f.ends_with(".aux.co2") || f.ends_with(".aux.c")
+        })
+        {
             continue;
         }
         if let Some(f) = filter && !path.to_string_lossy().contains(f) {
