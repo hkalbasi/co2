@@ -1,5 +1,4 @@
 //@ mode: co2
-//@ skip: requires generic method-call + monomorphization support for Iterator::nth/String/Vec methods
 //@ run-status: 0
 //@ run-args: hello-arg
 //@ run-stdout: hello-arg
@@ -11,10 +10,11 @@ int write(int, u8*, usize);
 
 void main() {
     std::env::Args args = std::env::args();
-    core::option::Option<alloc::string::String> opt = std::iter::Iterator::nth(args, 1);
-    alloc::string::String arg = core::option::Option::unwrap(opt);
+    core::option::Option<alloc::string::String> skip0 = std::iter::Iterator<std::env::Args>::next(args);
+    core::option::Option<alloc::string::String> opt = std::iter::Iterator<std::env::Args>::next(args);
+    alloc::string::String arg = core::option::Option<alloc::string::String>::unwrap(opt);
+    usize len = std::string::String::len(arg);
     alloc::vec::Vec<u8> bytes = std::string::String::into_bytes(arg);
-    u8* ptr = alloc::vec::Vec::as_mut_ptr(bytes);
-    usize len = alloc::vec::Vec::len(bytes);
+    u8* ptr = alloc::vec::Vec<u8>::as_mut_ptr(bytes);
     write(1, ptr, len);
 }

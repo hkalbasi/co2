@@ -401,7 +401,7 @@ impl Builder<'_, '_> {
             return self.lower_expr_to_operand(arg);
         };
 
-        if !matches!(inner.kind(), TyKind::Param(_)) && inner != arg.ty {
+        if !ty_matches_expected(inner, arg.ty) {
             return self.lower_expr_to_operand(arg);
         }
 
@@ -424,7 +424,8 @@ impl Builder<'_, '_> {
         } else {
             BorrowKind::Shared
         };
-        let ref_local = self.new_temp(expected_ty, Mutability::Not, self.hir_span(arg.span));
+        let concrete_ref_ty = Ty::new_ref(region.clone(), arg.ty, mutability);
+        let ref_local = self.new_temp(concrete_ref_ty, Mutability::Not, self.hir_span(arg.span));
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(
                 place(ref_local),
@@ -696,6 +697,33 @@ fn collect_param_bindings(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>)
             }
         }
         _ => {}
+    }
+}
+
+fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
+    match (expected.kind(), actual.kind()) {
+        (TyKind::Param(_), _) => true,
+        (TyKind::RigidTy(RigidTy::Ref(_, expected_inner, _)), _) => {
+            ty_matches_expected(expected_inner, actual)
+        }
+        (
+            TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
+            TyKind::RigidTy(RigidTy::Adt(actual_adt, actual_args)),
+        ) => {
+            expected_adt == actual_adt
+                && expected_args.0.len() == actual_args.0.len()
+                && expected_args
+                    .0
+                    .iter()
+                    .zip(actual_args.0.iter())
+                    .all(|(e, a)| match (e, a) {
+                        (GenericArgKind::Type(et), GenericArgKind::Type(at)) => {
+                            ty_matches_expected(*et, *at)
+                        }
+                        _ => e == a,
+                    })
+        }
+        _ => expected == actual,
     }
 }
 
