@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use co2_hir::{GlobalResolver, ResolvedValue};
+use co2_hir::{HirCtx, ResolvedValue};
 use co2_parser::{
     Declaration, DeclarationSpecifier, Declarator, InitDeclarator, StorageClassSpecifier,
     StructDeclarator, StructOrUnionField, StructOrUnionSpecifier, TypeQueryResult, TypeResolver,
@@ -85,7 +85,7 @@ struct DriverResolver<'a> {
     uses: &'a [String],
 }
 
-impl GlobalResolver for DriverResolver<'_> {
+impl DriverResolver<'_> {
     fn resolve_value(&self, path: &str) -> Option<ResolvedValue> {
         for candidate in resolve_candidates(path, self.uses) {
             if let Some(v) = self.values.get(&candidate) {
@@ -462,6 +462,15 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             deps: &self.deps,
             uses: &self.uses,
         };
+        let span_converter = |span: co2_parser::Span| {
+            ctx.span_in_file(self.file_id, span.start as u32, span.end as u32)
+        };
+        let hir_ctx = HirCtx::new(
+            &resolver,
+            DriverResolver::resolve_value,
+            DriverResolver::resolve_type,
+            &span_converter,
+        );
 
         let hir = co2_hir::lower_function_body(
             &func.body_tokens,
@@ -469,7 +478,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             &self.src_static,
             func.def,
             &func.param_names,
-            &resolver,
+            &hir_ctx,
         )
         .unwrap();
 

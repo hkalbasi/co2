@@ -30,8 +30,29 @@ int main2()
 	return x - 4;
 }
 
+int main3() {
+	int x;
+	
+	x = 1;
+	for(x = 10; x; x = x - 1)
+		;
+	if(x)
+		return 1;
+	x = 10;
+	for (;x;)
+		x = x - 1;
+	if(x)
+		return 1;
+	x = 10;
+	while (x)
+		x = x - 1;
+	if(x)
+		return 1;
+	return 0;
+}
+
 int main() {
-	if (main1() || main2()) {
+	if (main1() || main2() || main3()) {
 		return 6;
 	}
 	return 0;

@@ -108,6 +108,7 @@ where
 
 #[derive(Debug, Clone)]
 pub enum Statement {
+    Empty,
     Return(Option<Spanned<Expression>>),
     Expression(Spanned<Expression>),
     Compound(Spanned<LazyCompoundStatement>),
@@ -115,6 +116,16 @@ pub enum Statement {
         cond: Spanned<Expression>,
         then_branch: Box<Spanned<Statement>>,
         else_branch: Option<Box<Spanned<Statement>>>,
+    },
+    While {
+        cond: Spanned<Expression>,
+        body: Box<Spanned<Statement>>,
+    },
+    For {
+        init: Option<Spanned<Expression>>,
+        cond: Option<Spanned<Expression>>,
+        post: Option<Spanned<Expression>>,
+        body: Box<Spanned<Statement>>,
     },
 }
 
@@ -135,20 +146,54 @@ where
         let expression_statement = expression()
             .map(Statement::Expression)
             .then_ignore(just(Token::Semicolon));
+        let empty_statement = just(Token::Semicolon).to(Statement::Empty);
 
         let compound = lazy_compound_statement().map(Statement::Compound);
 
         let if_statement = just(Token::If)
             .ignore_then(expression().delimited_by(just(Token::LParen), just(Token::RParen)))
             .then(stmt_rec.clone())
-            .then(just(Token::Else).ignore_then(stmt_rec).or_not())
+            .then(just(Token::Else).ignore_then(stmt_rec.clone()).or_not())
             .map(|((cond, then_branch), else_branch)| Statement::If {
                 cond,
                 then_branch: Box::new(then_branch),
                 else_branch: else_branch.map(Box::new),
             });
 
-        choice((if_statement, jump_statement, expression_statement, compound))
+        let while_statement = just(Token::While)
+            .ignore_then(expression().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .then(stmt_rec.clone())
+            .map(|(cond, body)| Statement::While {
+                cond,
+                body: Box::new(body),
+            });
+
+        let for_statement = just(Token::For)
+            .ignore_then(
+                expression()
+                    .or_not()
+                    .then_ignore(just(Token::Semicolon))
+                    .then(expression().or_not().then_ignore(just(Token::Semicolon)))
+                    .then(expression().or_not())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .then(stmt_rec.clone())
+            .map(|(((init, cond), post), body)| Statement::For {
+                init,
+                cond,
+                post,
+                body: Box::new(body),
+            });
+
+        choice((
+            if_statement,
+            while_statement,
+            for_statement,
+            jump_statement,
+            expression_statement,
+            empty_statement,
+            compound,
+        ))
             .map_with(|r, e| (r, e.span()))
     })
 }
