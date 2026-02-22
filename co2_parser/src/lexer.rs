@@ -335,9 +335,10 @@ pub fn lexer<'src: 'static>()
         .map(Token::Preprocessor);
 
     // ----- Numeric constants -----
-    let hex_digit = text::digits(16)
-        .to_slice()
-        .map(|x: &str| -> i32 { x.parse().unwrap() });
+    let hex_digits = one_of("0123456789abcdefABCDEF")
+        .repeated()
+        .at_least(1)
+        .to_slice();
 
     // Decimal integer
     let decimal_integer = text::int(10)
@@ -347,13 +348,15 @@ pub fn lexer<'src: 'static>()
     // Hexadecimal integer
     let hex_integer = just("0x")
         .or(just("0X"))
-        .ignore_then(hex_digit.repeated().at_least(1).to_slice())
+        .then(hex_digits)
+        .to_slice()
         .then(integer_suffix_parser())
         .map(|(num, suffix)| Token::Integer(num.to_string(), suffix));
 
     // Octal integer (starting with 0)
     let octal_integer = just('0')
-        .ignore_then(text::digits(8).repeated().at_least(1).to_slice())
+        .then(one_of("01234567").repeated().at_least(1))
+        .to_slice()
         .then(integer_suffix_parser())
         .map(|(num, suffix)| Token::Integer(num.to_string(), suffix));
 
@@ -367,8 +370,16 @@ pub fn lexer<'src: 'static>()
                 .then(text::digits(10).to_slice())
                 .or_not(),
         )
+        .try_map(
+            |((int, frac), exp): ((&str, Option<&str>), Option<(Option<char>, &str)>), span| {
+                if frac.is_none() && exp.is_none() {
+                    return Err(Rich::custom(span, "not a float literal"));
+                }
+                Ok((int, frac, exp))
+            },
+        )
         .map(
-            |((int, frac), exp): ((&str, Option<&str>), Option<(Option<char>, &str)>)| {
+            |(int, frac, exp): (&str, Option<&str>, Option<(Option<char>, &str)>)| {
                 let mut result = int.to_string();
                 if let Some(frac_digits) = frac {
                     result.push('.');
@@ -400,17 +411,21 @@ pub fn lexer<'src: 'static>()
         just('\'').to('\''),
         just('"').to('"'),
         just('?').to('?'),
-        text::int(8).try_map(|s: &str, span| {
+        one_of("01234567")
+            .repeated()
+            .at_least(1)
+            .at_most(3)
+            .to_slice()
+            .try_map(|s: &str, span| {
             u32::from_str_radix(s, 8)
                 .ok()
                 .and_then(char::from_u32)
                 .ok_or(Rich::custom(span, "invalid octal escape sequence"))
-        }),
+            }),
         just('x').ignore_then(
-            hex_digit
+            one_of("0123456789abcdefABCDEF")
                 .repeated()
                 .at_least(1)
-                .at_most(2)
                 .to_slice()
                 .try_map(|s: &str, span| {
                     u32::from_str_radix(s, 16)

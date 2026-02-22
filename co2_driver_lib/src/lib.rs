@@ -1,27 +1,24 @@
 #![feature(rustc_private)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use co2_hir::{HirCtx, ResolvedValue};
 use co2_parser::{
-    Declaration, DeclarationSpecifier, Declarator, InitDeclarator, StorageClassSpecifier,
-    StructDeclarator, StructOrUnionField, StructOrUnionSpecifier, TypeQueryResult, TypeResolver,
-    TypeSpecifier,
+    BinOp as ParsedBinOp, Declaration, DeclarationSpecifier, Declarator, EnumSpecifier, Expression,
+    InitDeclarator, Initializer, StorageClassSpecifier, StructDeclarator, StructOrUnionField,
+    StructOrUnionSpecifier, TypeQueryResult, TypeResolver, TypeSpecifier,
+    UnaryOp as ParsedUnaryOp,
 };
 use rustc_public_generative::rustc_public::{
+    CrateItem,
     DefId,
     mir::{
-        AggregateKind, BasicBlock as MirBasicBlock, Body, ConstOperand, LocalDecl as MirLocalDecl,
-        Mutability, Operand as MirOperand, Place as MirPlace, ProjectionElem as MirProjection,
-        Rvalue, Statement as MirStatement, StatementKind as MirStatementKind,
-        Terminator as MirTerminator, TerminatorKind, UnwindAction,
+        BasicBlock, Body, CastKind, ConstOperand, LocalDecl, Mutability, Operand, Rvalue,
+        Statement, StatementKind, Terminator, TerminatorKind,
     },
-    ty::{
-        AdtDef, FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Ty, UintTy,
-        VariantIdx,
-    },
+    ty::{AdtDef, FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Ty, UintTy},
 };
 use rustc_public_generative::{self as rustc_gen, FunctionSignature};
 
@@ -53,25 +50,26 @@ struct PendingFunction {
     body_tokens: Vec<co2_parser::Spanned<co2_parser::Token>>,
 }
 
+struct PendingStatic {
+    name: String,
+    def: DefId,
+    ty: rustc_gen::HirTy,
+    init_value: i64,
+}
+
 struct Co2GeneratorState {
     deps: rustc_gen::DependencyInfo,
     file_id: rustc_gen::FileId,
     mode: CompileMode,
     pending_functions: Vec<PendingFunction>,
-    point_length: Option<PointLengthSpecial>,
+    pending_statics: Vec<PendingStatic>,
     typedefs: HashMap<String, DefId>,
-    typedef_tys: HashMap<String, Ty>,
+    typedef_type_defs: HashMap<String, DefId>,
     local_value_map: HashMap<String, ResolvedValue>,
     uses: Vec<String>,
+    global_prelude_decls: Vec<Declaration>,
     source_name: String,
     src_static: &'static str,
-}
-
-struct PointLengthSpecial {
-    point_adt: AdtDef,
-    human_adt: AdtDef,
-    length_fn: FnDef,
-    main_fn: FnDef,
 }
 
 unsafe impl Send for Co2GeneratorState {}
@@ -79,7 +77,7 @@ unsafe impl Sync for Co2GeneratorState {}
 
 struct DriverResolver<'a> {
     typedefs: &'a HashMap<String, DefId>,
-    typedef_tys: &'a HashMap<String, Ty>,
+    typedef_type_defs: &'a HashMap<String, DefId>,
     values: &'a HashMap<String, ResolvedValue>,
     deps: &'a rustc_gen::DependencyInfo,
     uses: &'a [String],
@@ -105,13 +103,21 @@ impl DriverResolver<'_> {
 
     fn resolve_type(&self, path: &str) -> Option<Ty> {
         for candidate in resolve_candidates(path, self.uses) {
-            if let Some(ty) = self.typedef_tys.get(&candidate) {
-                return Some(*ty);
+            if let Some(type_def) = self.typedef_type_defs.get(&candidate) {
+                return Some(CrateItem(*type_def).ty());
             }
             if let Some(last) = candidate.rsplit("::").next()
-                && let Some(ty) = self.typedef_tys.get(last)
+                && let Some(type_def) = self.typedef_type_defs.get(last)
             {
-                return Some(*ty);
+                return Some(CrateItem(*type_def).ty());
+            }
+            if let Some(ty) = self.typedefs.get(&candidate) {
+                return Some(CrateItem(*ty).ty());
+            }
+            if let Some(last) = candidate.rsplit("::").next()
+                && let Some(ty) = self.typedefs.get(last)
+            {
+                return Some(CrateItem(*ty).ty());
             }
             if let Some(ty) = resolve_ty_candidate(&candidate, self.typedefs, self.deps, self.uses)
             {
@@ -149,6 +155,31 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             .expect("failed to parse co2 source")
             .0;
         let items = tu.items;
+        let mut global_prelude_decls = items
+            .iter()
+            .filter_map(|(item, _)| match item {
+                Declaration::Declaration {
+                    declaration_specifiers,
+                    declarators,
+                } => {
+                    let is_typedef = declaration_specifiers.iter().any(|(spec, _)| {
+                        matches!(
+                            spec,
+                            DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Typedef, _))
+                        )
+                    });
+                    let has_initializer = declarators
+                        .iter()
+                        .any(|d| d.0.initializer.is_some());
+                    if !is_typedef && has_initializer {
+                        Some(item.clone())
+                    } else {
+                        None
+                    }
+                }
+                Declaration::FunctionDefinition { .. } => None,
+            })
+            .collect::<Vec<_>>();
 
         let uses = tu
             .rust_use_items
@@ -165,18 +196,23 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let root_crate = ctx.root_crate_def_id();
 
         let mut typedefs: HashMap<String, DefId> = HashMap::new();
-        let mut typedef_tys: HashMap<String, Ty> = HashMap::new();
+        let mut typedef_hir_tys: HashMap<String, rustc_gen::HirTy> = HashMap::new();
 
         let mut pending_functions = Vec::new();
+        let mut pending_statics = Vec::new();
         let mut externs: HashMap<String, FunctionSignature> = HashMap::new();
         let mut hir_items = Vec::new();
+        let mut enum_values: HashMap<String, i64> = HashMap::new();
+        let mut typedef_type_defs: HashMap<String, DefId> = HashMap::new();
 
         struct PendingStructDef {
-            alias: String,
+            key: String,
             fields: Vec<co2_parser::Spanned<StructOrUnionField>>,
         }
 
-        let mut pending_structs = Vec::new();
+        let mut pending_structs_by_key: HashMap<String, PendingStructDef> = HashMap::new();
+        let mut typedef_struct_aliases: Vec<(String, String)> = Vec::new();
+        let mut struct_tag_aliases: Vec<(String, String)> = Vec::new();
         for (item, _) in &items {
             let Declaration::Declaration {
                 declaration_specifiers,
@@ -192,10 +228,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Typedef, _))
                 )
             });
-            if !is_typedef {
-                continue;
-            }
-
             let struct_spec = declaration_specifiers
                 .iter()
                 .find_map(|(spec, _)| match spec {
@@ -210,40 +242,77 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 continue;
             };
 
+            let key = match struct_spec.canonical_field_set_key() {
+                Some(key) => key,
+                None => continue,
+            };
+
             let fields = match struct_spec {
-                StructOrUnionSpecifier::Defined { fields, .. } => fields,
-                StructOrUnionSpecifier::Anonymous { fields } => fields,
+                StructOrUnionSpecifier::Defined { ident, fields } => {
+                    struct_tag_aliases.push((ident.0.clone(), key.clone()));
+                    fields
+                }
+                StructOrUnionSpecifier::Anonymous { fields } => {
+                    fields
+                }
                 StructOrUnionSpecifier::Declared { .. } => continue,
             };
 
-            for init in declarators {
-                if let Some(alias) = declarator_name(&init.0.declarator.0) {
-                    pending_structs.push(PendingStructDef {
-                        alias,
-                        fields: fields.clone(),
-                    });
+            pending_structs_by_key
+                .entry(key.clone())
+                .or_insert_with(|| PendingStructDef {
+                    key: key.clone(),
+                    fields: fields.clone(),
+                });
+
+            if is_typedef {
+                for init in declarators {
+                    if let Some(alias) = declarator_name(&init.0.declarator.0) {
+                        typedef_struct_aliases.push((alias, key.clone()));
+                    }
                 }
             }
         }
 
+        let mut struct_keys = pending_structs_by_key.keys().cloned().collect::<Vec<_>>();
+        struct_keys.sort();
+
         let mut adt_by_name: HashMap<String, AdtDef> = HashMap::new();
-        for pending_struct in &pending_structs {
+        let mut adt_public_name_by_key: HashMap<String, String> = HashMap::new();
+        for (idx, struct_key) in struct_keys.iter().enumerate() {
+            let synthetic_name = format!("__anon_struct_{idx}");
             let adt = AdtDef(ctx.allocate_def_id(
                 root_crate,
-                rustc_gen::DefData::TypeNs(pending_struct.alias.clone()),
+                rustc_gen::DefData::TypeNs(synthetic_name.clone()),
             ));
-            adt_by_name.insert(pending_struct.alias.clone(), adt);
-            typedefs.insert(pending_struct.alias.clone(), adt.0);
+            adt_by_name.insert(struct_key.clone(), adt);
+            adt_public_name_by_key.insert(struct_key.clone(), synthetic_name);
+            typedefs.insert(struct_key.clone(), adt.0);
         }
 
-        for pending_struct in pending_structs {
-            let adt = adt_by_name[&pending_struct.alias];
+        for (alias, key) in typedef_struct_aliases {
+            if let Some(adt) = adt_by_name.get(&key) {
+                typedefs.insert(alias, adt.0);
+            }
+        }
+        for (tag_name, key) in struct_tag_aliases {
+            if let Some(adt) = adt_by_name.get(&key) {
+                typedefs.insert(tag_name, adt.0);
+            }
+        }
+
+        for struct_key in struct_keys {
+            let pending_struct = pending_structs_by_key
+                .remove(&struct_key)
+                .expect("missing pending struct for key");
+            let adt = adt_by_name[&pending_struct.key];
             let mut hir_fields = Vec::new();
+            let mut skip_struct = false;
 
             for (field, field_span) in pending_struct.fields {
                 for (decl, _) in field.declarators {
                     let field_name = struct_declarator_name(&decl).unwrap_or_else(|| {
-                        panic!("anonymous struct field in {}", pending_struct.alias)
+                        panic!("anonymous struct field in {}", pending_struct.key)
                     });
                     let specs = field
                         .specifiers
@@ -252,14 +321,16 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                         .map(DeclarationSpecifier::TypeSpecifier)
                         .map(|spec| (spec, field_span))
                         .collect::<Vec<_>>();
-                    let (_, field_ty) =
-                        lower_value_decl_type(&ctx, specs, decl.declarator.clone(), &typedefs)
-                            .unwrap_or_else(|e| {
-                                panic!(
-                                    "failed to lower struct field {}.{}: {e}",
-                                    pending_struct.alias, field_name
-                                )
-                            });
+                    let Ok((_, field_ty)) = lower_value_decl_type(
+                        &ctx,
+                        specs,
+                        decl.declarator.clone(),
+                        &typedefs,
+                        &typedef_hir_tys,
+                    ) else {
+                        skip_struct = true;
+                        break;
+                    };
 
                     let field_def =
                         ctx.allocate_def_id(adt.0, rustc_gen::DefData::ValueNs(field_name.clone()));
@@ -269,12 +340,18 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                         ty: field_ty,
                     });
                 }
+                if skip_struct {
+                    break;
+                }
             }
-
             hir_items.push(rustc_gen::HirModuleItem::Adt {
-                name: pending_struct.alias,
+                name: adt_public_name_by_key[&pending_struct.key].clone(),
                 id: adt,
-                kind: rustc_gen::HirAdtKind::Struct { fields: hir_fields },
+                kind: rustc_gen::HirAdtKind::Struct {
+                    // Keep a placeholder ADT even when we cannot lower all fields.
+                    // This preserves DefId consistency for header references.
+                    fields: if skip_struct { Vec::new() } else { hir_fields },
+                },
                 span,
             });
         }
@@ -286,11 +363,15 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     declarator,
                     body,
                 } => {
+                    if has_static_storage(&declaration_specifiers) {
+                        continue;
+                    }
                     let (name, sig, param_names) = lower_function_signature(
                         &ctx,
                         declaration_specifiers,
                         declarator,
                         &typedefs,
+                        &typedef_hir_tys,
                     )
                     .expect("failed to lower function signature");
                     pending_functions.push(PendingFunction {
@@ -305,6 +386,8 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     declaration_specifiers,
                     declarators,
                 } => {
+                    collect_enum_constants(&declaration_specifiers, &mut enum_values)
+                        .expect("failed to evaluate enum constants");
                     let mut is_typedef = false;
                     let mut cleaned_specs = Vec::new();
                     for (spec, sp) in declaration_specifiers {
@@ -322,23 +405,59 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     for init in declarators {
                         let InitDeclarator {
                             declarator,
-                            initializer: _,
+                            initializer,
                         } = init.0;
+                        if let Some((initializer, _)) = &initializer
+                            && let Initializer::Expr((expr, _)) = initializer
+                            && !declarator_is_function(&declarator.0)
+                            && let Ok((name, hir_ty)) = lower_value_decl_type(
+                                &ctx,
+                                cleaned_specs.clone(),
+                                declarator.clone(),
+                                &typedefs,
+                                &typedef_hir_tys,
+                            )
+                            && let Ok(init_value) = eval_enum_const_expr(expr, &enum_values)
+                        {
+                            let static_def_id = ctx.allocate_def_id(
+                                root_crate,
+                                rustc_gen::DefData::ValueNs(name.clone()),
+                            );
+                            pending_statics.push(PendingStatic {
+                                name,
+                                def: static_def_id,
+                                ty: hir_ty,
+                                init_value,
+                            });
+                            continue;
+                        }
+
                         if is_typedef {
                             if let Ok((name, ty)) = lower_value_decl_type(
                                 &ctx,
                                 cleaned_specs.clone(),
                                 declarator.clone(),
                                 &typedefs,
+                                &typedef_hir_tys,
                             ) {
-                                if let Some(concrete_ty) = hir_ty_to_ty(&ty) {
-                                    typedef_tys.insert(name.clone(), concrete_ty);
-                                }
-                                if let rustc_gen::HirTyKind::Adt(adt, _) = ty.kind {
-                                    typedefs.insert(name, adt.0);
-                                } else {
+                                typedef_hir_tys.insert(name.clone(), ty.clone());
+                                if let rustc_gen::HirTyKind::Adt(adt, _) = &ty.kind {
+                                    typedefs.insert(name.clone(), adt.0);
+                                    let type_def = ctx.allocate_def_id(
+                                        root_crate,
+                                        rustc_gen::DefData::TypeNs(name.clone()),
+                                    );
+                                    typedef_type_defs.insert(name.clone(), type_def);
+                                    hir_items.push(rustc_gen::HirModuleItem::TypeDef {
+                                        name,
+                                        id: type_def,
+                                        span,
+                                        ty,
+                                    });
+                                } else if !matches!(ty.kind, rustc_gen::HirTyKind::FnPtr(_)) {
                                     let type_def =
                                         ctx.allocate_def_id(root_crate, rustc_gen::DefData::TypeNs(name.clone()));
+                                    typedef_type_defs.insert(name.clone(), type_def);
                                     hir_items.push(rustc_gen::HirModuleItem::TypeDef {
                                         name,
                                         id: type_def,
@@ -355,6 +474,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                             cleaned_specs.clone(),
                             declarator.clone(),
                             &typedefs,
+                            &typedef_hir_tys,
                         ) {
                             externs.insert(name, sig);
                         }
@@ -365,6 +485,10 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
 
         let mut local_value_map = HashMap::new();
         let mut fn_defs = Vec::new();
+
+        for (name, value) in &enum_values {
+            local_value_map.insert(name.clone(), ResolvedValue::ConstInt(*value));
+        }
 
         for func in &mut pending_functions {
             let is_c_entry_main = pending.mode.no_main && func.name == "main";
@@ -395,11 +519,42 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             });
         }
 
+        for pending_static in &pending_statics {
+            hir_items.push(rustc_gen::HirModuleItem::Static {
+                name: pending_static.name.clone(),
+                id: pending_static.def,
+                ty: pending_static.ty.clone(),
+                mutable: true,
+                span,
+            });
+            local_value_map.insert(
+                pending_static.name.clone(),
+                ResolvedValue::ConstInt(pending_static.init_value),
+            );
+        }
+        let static_names = pending_statics
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<HashSet<_>>();
+        global_prelude_decls.retain(|decl| !decl_all_declarators_in_set(decl, &static_names));
+
+        let referenced_body_idents = pending_functions
+            .iter()
+            .flat_map(|func| func.body_tokens.iter())
+            .filter_map(|(tok, _)| match tok {
+                co2_parser::Token::Ident(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+
         let foreign_mod = ctx.allocate_def_id(root_crate, rustc_gen::DefData::ForeignMod);
         let mut foreign_items = Vec::new();
 
         for (name, sig) in externs {
             if local_value_map.contains_key(&name) {
+                continue;
+            }
+            if !referenced_body_idents.contains(&name) {
                 continue;
             }
 
@@ -427,11 +582,12 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 file_id,
                 mode: pending.mode,
                 pending_functions,
-                point_length: None,
+                pending_statics,
                 typedefs,
-                typedef_tys,
+                typedef_type_defs,
                 local_value_map,
                 uses,
+                global_prelude_decls,
                 source_name,
                 src_static,
             },
@@ -445,19 +601,22 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
     }
 
     fn emit_mir(&mut self, ctx: rustc_gen::HirStructureCtx, def: DefId) -> Body {
-        if let Some(special) = &self.point_length {
-            return build_point_length_mir(special, &ctx, &self.deps, self.file_id, def);
+        if let Some(pending_static) = self.pending_statics.iter().find(|s| s.def == def) {
+            return build_static_initializer_body(
+                CrateItem(pending_static.def).ty(),
+                pending_static.init_value,
+                ctx.span_in_file(self.file_id, 0, 0),
+            );
         }
-
         let func = self
             .pending_functions
             .iter()
             .find(|f| f.def.0 == def)
-            .unwrap_or_else(|| panic!("missing function for def {def:?}"));
+            .unwrap_or_else(|| panic!("missing function/static for def {def:?}"));
 
         let resolver = DriverResolver {
             typedefs: &self.typedefs,
-            typedef_tys: &self.typedef_tys,
+            typedef_type_defs: &self.typedef_type_defs,
             values: &self.local_value_map,
             deps: &self.deps,
             uses: &self.uses,
@@ -471,6 +630,24 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             DriverResolver::resolve_type,
             &span_converter,
         );
+        let body_identifiers = func
+            .body_tokens
+            .iter()
+            .filter_map(|(tok, _)| match tok {
+                co2_parser::Token::Ident(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let filtered_prelude_decls = self
+            .global_prelude_decls
+            .iter()
+            .filter(|decl| {
+                prelude_decl_names(decl)
+                    .into_iter()
+                    .any(|name| body_identifiers.contains(name.as_str()))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
 
         let hir = co2_hir::lower_function_body(
             &func.body_tokens,
@@ -478,6 +655,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             &self.src_static,
             func.def,
             &func.param_names,
+            &filtered_prelude_decls,
             &hir_ctx,
         )
         .unwrap();
@@ -600,6 +778,107 @@ fn resolve_ty_candidate(
     )))
 }
 
+fn collect_enum_constants(
+    declaration_specifiers: &[co2_parser::Spanned<DeclarationSpecifier>],
+    enum_values: &mut HashMap<String, i64>,
+) -> Result<(), String> {
+    for (spec, _) in declaration_specifiers {
+        let DeclarationSpecifier::TypeSpecifier((type_specifier, _)) = spec else {
+            continue;
+        };
+        let TypeSpecifier::Enum(enum_spec) = type_specifier else {
+            continue;
+        };
+        let enumerators = match enum_spec {
+            EnumSpecifier::Defined { enumerators, .. } | EnumSpecifier::Anonymous { enumerators } => {
+                enumerators
+            }
+            EnumSpecifier::Declared { .. } => continue,
+        };
+        let mut next = 0i64;
+        for (enumerator, _) in enumerators {
+            let value = if let Some((expr, _)) = &enumerator.value {
+                eval_enum_const_expr(expr, enum_values)?
+            } else {
+                next
+            };
+            enum_values.insert(enumerator.ident.0.clone(), value);
+            next = value.saturating_add(1);
+        }
+    }
+    Ok(())
+}
+
+fn eval_enum_const_expr(expr: &Expression, enum_values: &HashMap<String, i64>) -> Result<i64, String> {
+    match expr {
+        Expression::Constant(co2_parser::Constant::Int(v, _)) => Ok(*v),
+        Expression::Constant(co2_parser::Constant::Float(v)) => Ok(v.trunc() as i64),
+        Expression::Constant(co2_parser::Constant::Char(ch)) => Ok(*ch as i64),
+        Expression::Identifier(path) => {
+            let pretty = path.0.to_pretty();
+            if let Some(v) = enum_values.get(&pretty) {
+                return Ok(*v);
+            }
+            if let Some(last) = pretty.rsplit("::").next()
+                && let Some(v) = enum_values.get(last)
+            {
+                return Ok(*v);
+            }
+            Err(format!("unknown enum constant in enumerator value: {pretty}"))
+        }
+        Expression::UnaryOp(op, inner) => {
+            let v = eval_enum_const_expr(&inner.0, enum_values)?;
+            match op {
+                ParsedUnaryOp::Plus => Ok(v),
+                ParsedUnaryOp::Minus => Ok(-v),
+                ParsedUnaryOp::Com => Ok(!v),
+                ParsedUnaryOp::Not => Ok((v == 0) as i64),
+                ParsedUnaryOp::AddrOf | ParsedUnaryOp::Deref => {
+                    Err("invalid unary operator in enum constant expression".to_owned())
+                }
+            }
+        }
+        Expression::Cast { expr, .. } => eval_enum_const_expr(&expr.0, enum_values),
+        Expression::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            if eval_enum_const_expr(&cond.0, enum_values)? != 0 {
+                eval_enum_const_expr(&then_expr.0, enum_values)
+            } else {
+                eval_enum_const_expr(&else_expr.0, enum_values)
+            }
+        }
+        Expression::BinOp(lhs, op, rhs) => {
+            let l = eval_enum_const_expr(&lhs.0, enum_values)?;
+            let r = eval_enum_const_expr(&rhs.0, enum_values)?;
+            match op {
+                ParsedBinOp::Assign => Err("assignment not allowed in enum constant expression".to_owned()),
+                ParsedBinOp::Add => Ok(l.wrapping_add(r)),
+                ParsedBinOp::Sub => Ok(l.wrapping_sub(r)),
+                ParsedBinOp::Mul => Ok(l.wrapping_mul(r)),
+                ParsedBinOp::Div => Ok(l / r),
+                ParsedBinOp::Rem => Ok(l % r),
+                ParsedBinOp::BitOr => Ok(l | r),
+                ParsedBinOp::BitXor => Ok(l ^ r),
+                ParsedBinOp::BitAnd => Ok(l & r),
+                ParsedBinOp::Eq => Ok((l == r) as i64),
+                ParsedBinOp::Lt => Ok((l < r) as i64),
+                ParsedBinOp::Le => Ok((l <= r) as i64),
+                ParsedBinOp::Ne => Ok((l != r) as i64),
+                ParsedBinOp::Ge => Ok((l >= r) as i64),
+                ParsedBinOp::Gt => Ok((l > r) as i64),
+                ParsedBinOp::Shl => Ok(l << r),
+                ParsedBinOp::Shr => Ok(l >> r),
+                ParsedBinOp::And => Ok(((l != 0) && (r != 0)) as i64),
+                ParsedBinOp::Or => Ok(((l != 0) || (r != 0)) as i64),
+            }
+        }
+        _ => Err("unsupported enum constant expression".to_owned()),
+    }
+}
+
 fn split_type_path(path: &str) -> (&str, Vec<&str>) {
     let Some(start) = path.find('<') else {
         return (path, Vec::new());
@@ -674,19 +953,6 @@ fn find_dep_adt(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<AdtDef> 
     }
 
     None
-}
-
-fn hir_ty_to_ty(ty: &rustc_gen::HirTy) -> Option<Ty> {
-    match &ty.kind {
-        rustc_gen::HirTyKind::Int(i) => Some(Ty::signed_ty(*i)),
-        rustc_gen::HirTyKind::Uint(u) => Some(Ty::unsigned_ty(*u)),
-        rustc_gen::HirTyKind::Tuple(parts) if parts.is_empty() => Some(Ty::new_tuple(&[])),
-        rustc_gen::HirTyKind::RawPtr(mutbl, inner) => {
-            let inner = hir_ty_to_ty(inner)?;
-            Some(Ty::new_ptr(inner, *mutbl))
-        }
-        _ => None,
-    }
 }
 
 fn find_dep_adt_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> Option<AdtDef> {
@@ -784,15 +1050,6 @@ fn find_dep_fn(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<FnDef> {
     None
 }
 
-fn dep_fn_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> FnDef {
-    for path in paths {
-        if let Some(found) = find_dep_fn(deps, path) {
-            return found;
-        }
-    }
-    panic!("missing dependency function (any of): {}", paths.join(", "));
-}
-
 fn normalize_dep_path(path: &str) -> String {
     let mut no_generics = String::with_capacity(path.len());
     let mut depth = 0usize;
@@ -825,282 +1082,109 @@ fn struct_declarator_name(decl: &StructDeclarator) -> Option<String> {
     declarator_name(&decl.declarator.0)
 }
 
-fn place(local: usize) -> MirPlace {
-    MirPlace {
-        local,
-        projection: vec![],
-    }
-}
-
-fn place_fields(local: usize, fields: &[(usize, Ty)]) -> MirPlace {
-    MirPlace {
-        local,
-        projection: fields
+fn prelude_decl_names(decl: &Declaration) -> Vec<String> {
+    match decl {
+        Declaration::Declaration { declarators, .. } => declarators
             .iter()
-            .map(|(field, ty)| MirProjection::Field(*field, *ty))
+            .filter_map(|d| declarator_name(&d.0.declarator.0))
             .collect(),
+        Declaration::FunctionDefinition { .. } => Vec::new(),
     }
 }
 
-fn const_uint(value: u128, span: rustc_gen::rustc_public::ty::Span) -> MirOperand {
-    let c = MirConst::try_from_uint(value, UintTy::Usize).expect("failed to build usize const");
-    MirOperand::Constant(ConstOperand {
-        span,
-        user_ty: None,
-        const_: c,
+fn has_static_storage(specifiers: &[co2_parser::Spanned<DeclarationSpecifier>]) -> bool {
+    specifiers.iter().any(|(spec, _)| {
+        matches!(
+            spec,
+            DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Static, _))
+        )
     })
 }
 
-fn const_u32(value: u128, span: rustc_gen::rustc_public::ty::Span) -> MirOperand {
-    let c = MirConst::try_from_uint(value, UintTy::U32).expect("failed to build u32 const");
-    MirOperand::Constant(ConstOperand {
-        span,
-        user_ty: None,
-        const_: c,
+fn declarator_is_function(decl: &Declarator) -> bool {
+    match decl {
+        Declarator::FunctionDeclarator { .. } => true,
+        Declarator::Identifier(_) | Declarator::Abstract => false,
+        Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::ArrayDeclarator { declarator, .. } => declarator_is_function(&declarator.0),
+    }
+}
+
+fn decl_all_declarators_in_set(decl: &Declaration, names: &HashSet<String>) -> bool {
+    let Declaration::Declaration { declarators, .. } = decl else {
+        return false;
+    };
+    if declarators.is_empty() {
+        return false;
+    }
+    declarators.iter().all(|d| {
+        declarator_name(&d.0.declarator.0)
+            .as_ref()
+            .is_some_and(|n| names.contains(n))
     })
 }
 
-fn variant_idx(id: usize) -> VariantIdx {
-    unsafe { std::mem::transmute::<usize, VariantIdx>(id) }
-}
+fn build_static_initializer_body(ty: Ty, init_value: i64, span: rustc_public_generative::rustc_public::ty::Span) -> Body {
+    let locals = vec![
+        LocalDecl {
+            ty,
+            span,
+            mutability: Mutability::Mut,
+        },
+        LocalDecl {
+            ty: Ty::unsigned_ty(UintTy::U64),
+            span,
+            mutability: Mutability::Mut,
+        },
+    ];
+    let const_u64 = MirConst::try_from_uint(init_value as u128, UintTy::U64)
+        .expect("failed to build static initializer const");
+    let mut statements = vec![Statement {
+        kind: StatementKind::Assign(
+            rustc_public_generative::rustc_public::mir::Place {
+                local: 1,
+                projection: vec![],
+            },
+            Rvalue::Use(Operand::Constant(ConstOperand {
+                span,
+                user_ty: None,
+                const_: const_u64,
+            })),
+        ),
+        span,
+    }];
+    statements.push(Statement {
+        kind: StatementKind::Assign(
+            rustc_public_generative::rustc_public::mir::Place {
+                local: 0,
+                projection: vec![],
+            },
+            Rvalue::Cast(
+                CastKind::IntToInt,
+                Operand::Copy(rustc_public_generative::rustc_public::mir::Place {
+                    local: 1,
+                    projection: vec![],
+                }),
+                ty,
+            ),
+        ),
+        span,
+    });
 
-fn build_point_length_mir(
-    special: &PointLengthSpecial,
-    ctx: &rustc_gen::HirStructureCtx,
-    deps: &rustc_gen::DependencyInfo,
-    file_id: rustc_gen::FileId,
-    def: DefId,
-) -> Body {
-    let span = ctx.span_in_file(file_id, 0, 0);
-
-    let usize_ty = Ty::usize_ty();
-    let point_ty = Ty::from_rigid_kind(RigidTy::Adt(special.point_adt, GenericArgs(vec![])));
-    let human_ty = Ty::from_rigid_kind(RigidTy::Adt(special.human_adt, GenericArgs(vec![])));
-    let i32_ty = Ty::signed_ty(rustc_gen::rustc_public::ty::IntTy::I32);
-
-    if def == special.length_fn.0 {
-        let locals = vec![
-            MirLocalDecl {
-                ty: usize_ty,
-                span,
-                mutability: Mutability::Mut,
-            },
-            MirLocalDecl {
-                ty: human_ty,
-                span,
-                mutability: Mutability::Not,
-            },
-            MirLocalDecl {
-                ty: usize_ty,
-                span,
-                mutability: Mutability::Not,
-            },
-            MirLocalDecl {
-                ty: usize_ty,
-                span,
-                mutability: Mutability::Not,
-            },
-            MirLocalDecl {
-                ty: usize_ty,
-                span,
-                mutability: Mutability::Not,
-            },
-            MirLocalDecl {
-                ty: usize_ty,
-                span,
-                mutability: Mutability::Not,
-            },
-        ];
-
-        let blocks = vec![MirBasicBlock {
-            statements: vec![
-                MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(2),
-                        Rvalue::Use(MirOperand::Move(place_fields(
-                            1,
-                            &[(1, point_ty), (0, usize_ty)],
-                        ))),
-                    ),
-                    span,
-                },
-                MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(3),
-                        Rvalue::Use(MirOperand::Move(place_fields(
-                            1,
-                            &[(1, point_ty), (1, usize_ty)],
-                        ))),
-                    ),
-                    span,
-                },
-                MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(4),
-                        Rvalue::BinaryOp(
-                            rustc_gen::rustc_public::mir::BinOp::Mul,
-                            MirOperand::Move(place(2)),
-                            MirOperand::Move(place(2)),
-                        ),
-                    ),
-                    span,
-                },
-                MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(5),
-                        Rvalue::BinaryOp(
-                            rustc_gen::rustc_public::mir::BinOp::Mul,
-                            MirOperand::Move(place(3)),
-                            MirOperand::Move(place(3)),
-                        ),
-                    ),
-                    span,
-                },
-                MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(0),
-                        Rvalue::BinaryOp(
-                            rustc_gen::rustc_public::mir::BinOp::Add,
-                            MirOperand::Move(place(4)),
-                            MirOperand::Move(place(5)),
-                        ),
-                    ),
-                    span,
-                },
-            ],
-            terminator: MirTerminator {
+    Body::new(
+        vec![BasicBlock {
+            statements,
+            terminator: Terminator {
                 kind: TerminatorKind::Return,
                 span,
             },
-        }];
-
-        return Body::new(blocks, locals, 1, vec![], None, span);
-    }
-
-    if def == special.main_fn.0 {
-        let exit_fn = dep_fn_any(deps, &["std::process::exit", "core::process::exit"]);
-        let locals = vec![
-            MirLocalDecl {
-                ty: Ty::new_tuple(&[]),
-                span,
-                mutability: Mutability::Mut,
-            },
-            MirLocalDecl {
-                ty: point_ty,
-                span,
-                mutability: Mutability::Mut,
-            },
-            MirLocalDecl {
-                ty: human_ty,
-                span,
-                mutability: Mutability::Mut,
-            },
-            MirLocalDecl {
-                ty: usize_ty,
-                span,
-                mutability: Mutability::Mut,
-            },
-            MirLocalDecl {
-                ty: usize_ty,
-                span,
-                mutability: Mutability::Mut,
-            },
-            MirLocalDecl {
-                ty: i32_ty,
-                span,
-                mutability: Mutability::Mut,
-            },
-        ];
-
-        let blocks = vec![
-            MirBasicBlock {
-                statements: vec![
-                    MirStatement {
-                        kind: MirStatementKind::Assign(
-                            place(1),
-                            Rvalue::Aggregate(
-                                AggregateKind::Adt(
-                                    special.point_adt,
-                                    variant_idx(0),
-                                    GenericArgs(vec![]),
-                                    None,
-                                    None,
-                                ),
-                                vec![const_uint(3, span), const_uint(4, span)],
-                            ),
-                        ),
-                        span,
-                    },
-                    MirStatement {
-                        kind: MirStatementKind::Assign(
-                            place(2),
-                            Rvalue::Aggregate(
-                                AggregateKind::Adt(
-                                    special.human_adt,
-                                    variant_idx(0),
-                                    GenericArgs(vec![]),
-                                    None,
-                                    None,
-                                ),
-                                vec![const_u32(30, span), MirOperand::Move(place(1))],
-                            ),
-                        ),
-                        span,
-                    },
-                ],
-                terminator: MirTerminator {
-                    kind: TerminatorKind::Call {
-                        func: fn_const_operand(special.length_fn, vec![], span),
-                        args: vec![MirOperand::Move(place(2))],
-                        destination: place(3),
-                        target: Some(1),
-                        unwind: UnwindAction::Continue,
-                    },
-                    span,
-                },
-            },
-            MirBasicBlock {
-                statements: vec![MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(5),
-                        Rvalue::Cast(
-                            rustc_gen::rustc_public::mir::CastKind::IntToInt,
-                            MirOperand::Move(place(3)),
-                            i32_ty,
-                        ),
-                    ),
-                    span,
-                }],
-                terminator: MirTerminator {
-                    kind: TerminatorKind::Call {
-                        func: fn_const_operand(exit_fn, vec![], span),
-                        args: vec![MirOperand::Move(place(5))],
-                        destination: place(0),
-                        target: None,
-                        unwind: UnwindAction::Continue,
-                    },
-                    span,
-                },
-            },
-        ];
-        return Body::new(blocks, locals, 0, vec![], None, span);
-    }
-
-    panic!("unexpected def in point_length mode: {:?}", def);
-}
-
-fn fn_const_operand(
-    fn_def: FnDef,
-    generic_args: Vec<GenericArgKind>,
-    span: rustc_gen::rustc_public::ty::Span,
-) -> MirOperand {
-    let fn_ty = Ty::from_rigid_kind(RigidTy::FnDef(fn_def, GenericArgs(generic_args)));
-    let c = MirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
-    MirOperand::Constant(ConstOperand {
+        }],
+        locals,
+        0,
+        vec![],
+        None,
         span,
-        user_ty: None,
-        const_: c,
-    })
+    )
 }
 
 pub fn compile_co2_file(mode: CompileMode, co2_file: &Path) {

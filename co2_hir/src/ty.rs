@@ -1,5 +1,7 @@
 use co2_parser::{Span, TypeSpecifier};
-use rustc_public_generative::rustc_public::ty::{IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx};
+use rustc_public_generative::rustc_public::ty::{
+    Binder, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx,
+};
 
 pub(crate) fn is_integer_ty(ty: Ty) -> bool {
     matches!(
@@ -8,13 +10,50 @@ pub(crate) fn is_integer_ty(ty: Ty) -> bool {
     )
 }
 
+pub(crate) fn array_elem_ty(ty: Ty) -> Option<Ty> {
+    let TyKind::RigidTy(RigidTy::Array(elem, _)) = ty.kind() else {
+        return None;
+    };
+    Some(elem)
+}
+
+pub(crate) fn is_array_ty(ty: Ty) -> bool {
+    matches!(ty.kind(), TyKind::RigidTy(RigidTy::Array(_, _)))
+}
+
+pub(crate) fn is_sized_array_ty(ty: Ty) -> bool {
+    matches!(ty.kind(), TyKind::RigidTy(RigidTy::Array(_, _)))
+}
+
 pub(crate) fn is_condition_ty(ty: Ty) -> bool {
     matches!(
         ty.kind(),
         TyKind::RigidTy(RigidTy::Int(_))
             | TyKind::RigidTy(RigidTy::Uint(_))
             | TyKind::RigidTy(RigidTy::RawPtr(_, _))
-    )
+            | TyKind::RigidTy(RigidTy::FnPtr(_))
+            | TyKind::RigidTy(RigidTy::FnDef(_, _))
+    ) || is_maybe_uninit_fn_ptr_ty(ty).is_some()
+}
+
+pub(crate) fn is_maybe_uninit_fn_ptr_ty(ty: Ty) -> Option<Binder<FnSig>> {
+    let TyKind::RigidTy(RigidTy::Adt(_, args)) = ty.kind() else {
+        return None;
+    };
+    if args.0.len() != 1 {
+        return None;
+    }
+    let GenericArgKind::Type(inner) = args.0[0] else {
+        return None;
+    };
+    let TyKind::RigidTy(RigidTy::FnPtr(sig)) = inner.kind() else {
+        return None;
+    };
+    Some(sig)
+}
+
+pub(crate) fn callable_sig(ty: Ty) -> Option<Binder<FnSig>> {
+    ty.kind().fn_sig().or_else(|| is_maybe_uninit_fn_ptr_ty(ty))
 }
 
 pub(crate) fn resolve_field_in_adt(base: Ty, field: &str) -> Option<(usize, Ty)> {
@@ -55,6 +94,7 @@ pub(crate) fn type_specifier_to_ty(type_specifier: &TypeSpecifier) -> Result<Opt
         TypeSpecifier::Float => return Err("float is not supported".to_owned()),
         TypeSpecifier::Double => return Err("double is not supported".to_owned()),
         TypeSpecifier::Signed | TypeSpecifier::Unsigned => None,
+        TypeSpecifier::Enum(_) => Some(Ty::signed_ty(IntTy::I32)),
         TypeSpecifier::StructOrUnion { .. } => {
             return Err("struct/union types are not supported yet".to_owned());
         }
@@ -84,7 +124,34 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
     if expected == actual {
         return true;
     }
+    if let (
+        TyKind::RigidTy(RigidTy::FnPtr(expected_sig)),
+        TyKind::RigidTy(RigidTy::FnDef(_, _)),
+    ) = (expected.kind(), actual.kind())
+        && let Some(actual_sig) = actual.kind().fn_sig()
+    {
+        let expected_sig = expected_sig.skip_binder();
+        let actual_sig = actual_sig.skip_binder();
+        if expected_sig.inputs().len() != actual_sig.inputs().len() {
+            return false;
+        }
+        return expected_sig
+            .inputs()
+            .iter()
+            .zip(actual_sig.inputs().iter())
+            .all(|(e, a)| ty_matches_expected(*e, *a))
+            && ty_matches_expected(expected_sig.output(), actual_sig.output());
+    }
     match (expected.kind(), actual.kind()) {
+        (
+            TyKind::RigidTy(RigidTy::Adt(_, exp_args)),
+            TyKind::RigidTy(RigidTy::FnDef(_, _)),
+        ) if exp_args.0.len() == 1 => {
+            if let GenericArgKind::Type(exp_inner) = exp_args.0[0] {
+                return ty_matches_expected(exp_inner, actual);
+            }
+            false
+        }
         (TyKind::Param(_), _) => true,
         (TyKind::RigidTy(RigidTy::Ref(_, exp_inner, _)), _) => ty_matches_expected(exp_inner, actual),
         (

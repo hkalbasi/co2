@@ -58,7 +58,19 @@ impl Builder<'_> {
             HirBinOp::Add => MirBinOp::Add,
             HirBinOp::Sub => MirBinOp::Sub,
             HirBinOp::Mul => MirBinOp::Mul,
-            HirBinOp::Or => MirBinOp::BitOr,
+            HirBinOp::Div => MirBinOp::Div,
+            HirBinOp::Rem => MirBinOp::Rem,
+            HirBinOp::BitOr => MirBinOp::BitOr,
+            HirBinOp::BitXor => MirBinOp::BitXor,
+            HirBinOp::BitAnd => MirBinOp::BitAnd,
+            HirBinOp::Eq => MirBinOp::Eq,
+            HirBinOp::Lt => MirBinOp::Lt,
+            HirBinOp::Le => MirBinOp::Le,
+            HirBinOp::Ne => MirBinOp::Ne,
+            HirBinOp::Ge => MirBinOp::Ge,
+            HirBinOp::Gt => MirBinOp::Gt,
+            HirBinOp::Shl => MirBinOp::Shl,
+            HirBinOp::Shr => MirBinOp::Shr,
         }
     }
 

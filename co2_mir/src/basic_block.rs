@@ -1,10 +1,10 @@
-use co2_hir::{HirDecl, HirExpr, HirExprKind, HirStmt};
+use co2_hir::{HirDecl, HirExpr, HirExprKind, HirStmt, LabelId};
 use rustc_public_generative::rustc_public::{
     mir::{
         Rvalue, Statement as MirStatement, StatementKind as MirStatementKind, SwitchTargets,
         Terminator as MirTerminator, TerminatorKind, UnwindAction,
     },
-    ty::{IntTy, Span as RustSpan, Ty},
+    ty::{GenericArgKind, IntTy, RigidTy, Span as RustSpan, Ty, TyKind},
 };
 
 use crate::{build::Builder, place::place};
@@ -53,6 +53,9 @@ impl Builder<'_> {
                             place(local_index),
                             local_ty,
                         );
+                    } else if let HirExprKind::Zeroed = &init.kind {
+                        let local_ty = self.locals[local_index].ty;
+                        self.lower_zeroed_to_destination(place(local_index), init.span, local_ty);
                     } else {
                         let value = self.lower_expr_to_operand(init);
                         self.stmts.push(MirStatement {
@@ -64,6 +67,13 @@ impl Builder<'_> {
             }
             HirStmt::Expr(expr) => {
                 let _ = self.lower_expr_to_operand(expr);
+            }
+            HirStmt::Label(label, span) => {
+                self.bind_label(*label, *span);
+            }
+            HirStmt::Goto(label, span) => {
+                let bb = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, *span);
+                self.pending_gotos.push((bb, *label));
             }
             HirStmt::Return(expr, span) => {
                 if let Some(expr) = expr {
@@ -120,13 +130,6 @@ impl Builder<'_> {
             } => {
                 self.lower_if_stmt(cond, then_stmts, else_stmts, *span);
             }
-            HirStmt::While {
-                cond,
-                body_stmts,
-                span,
-            } => {
-                self.lower_while_stmt(cond, body_stmts, *span);
-            }
         }
     }
 
@@ -137,7 +140,26 @@ impl Builder<'_> {
         else_stmts: &[HirStmt],
         span: RustSpan,
     ) {
-        let cond_op = self.lower_expr_to_operand(cond);
+        let cond_is_maybe_uninit_fn_ptr = matches!(
+            cond.ty.kind(),
+            TyKind::RigidTy(RigidTy::Adt(_, args))
+                if args.0.len() == 1
+                    && matches!(args.0[0], GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))))
+        );
+        let cond_expr = if matches!(
+            cond.ty.kind(),
+            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
+        ) || cond_is_maybe_uninit_fn_ptr
+        {
+            HirExpr {
+                kind: HirExprKind::Cast(Box::new(cond.clone())),
+                ty: Ty::usize_ty(),
+                span: cond.span,
+            }
+        } else {
+            cond.clone()
+        };
+        let cond_op = self.lower_expr_to_operand(&cond_expr);
         let entry_span = span;
         let entry_idx = self.blocks.len();
         self.blocks.push(rustc_public_generative::rustc_public::mir::BasicBlock {
@@ -169,39 +191,33 @@ impl Builder<'_> {
         self.patch_switch_targets(entry_idx, then_bb, else_bb);
     }
 
-    pub(crate) fn lower_while_stmt(
-        &mut self,
-        cond: &HirExpr,
-        body_stmts: &[HirStmt],
-        span: RustSpan,
-    ) {
-        let cond_bb = self.blocks.len() + 1;
-        self.push_terminator(TerminatorKind::Goto { target: cond_bb }, span);
-
-        let cond_op = self.lower_expr_to_operand(cond);
-        let cond_idx = self.push_terminator(
-            TerminatorKind::SwitchInt {
-                discr: cond_op,
-                targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
-            },
-            span,
-        );
-
-        let body_bb = self.blocks.len();
-        for stmt in body_stmts {
-            self.lower_stmt(stmt);
-        }
-        self.push_terminator(TerminatorKind::Goto { target: cond_bb }, span);
-
-        let exit_bb = self.blocks.len();
-        self.patch_switch_targets(cond_idx, body_bb, exit_bb);
-    }
-
     pub(crate) fn terminate_fallthrough(&mut self) {
         if self.is_rust_entry_main {
             self.push_exit_terminator(self.span);
         } else {
             self.push_terminator(TerminatorKind::Return, self.span);
+        }
+        self.patch_pending_gotos();
+    }
+
+    fn bind_label(&mut self, label: LabelId, span: RustSpan) {
+        let target = if self.stmts.is_empty() {
+            self.blocks.len()
+        } else {
+            let next = self.blocks.len() + 1;
+            self.push_terminator(TerminatorKind::Goto { target: next }, span);
+            next
+        };
+        self.label_blocks.insert(label, target);
+    }
+
+    fn patch_pending_gotos(&mut self) {
+        for (bb, label) in std::mem::take(&mut self.pending_gotos) {
+            let target = *self
+                .label_blocks
+                .get(&label)
+                .unwrap_or_else(|| panic!("unresolved label id `{label:?}`"));
+            self.patch_goto_target(bb, target);
         }
     }
 

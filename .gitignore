@@ -2,5 +2,6 @@
 /target
 /playground
 /test-bed
+/mir_dump
 rustc-ice*
 synthetic

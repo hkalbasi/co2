@@ -99,20 +99,15 @@ impl Context {
             if reg_guard.contains_key(&file.id) {
                 continue;
             }
-            let source_file = if file.path.exists() {
-                source_map.load_file(&file.path).unwrap_or_else(|_| {
-                    let real = source_map
-                        .path_mapping()
-                        .to_real_filename(source_map.working_dir(), file.path.as_path());
-                    source_map
-                        .new_source_file(rustc_span::FileName::Real(real), file.contents.clone())
-                })
+            let filename = if file.path.exists() {
+                let real = source_map
+                    .path_mapping()
+                    .to_real_filename(source_map.working_dir(), file.path.as_path());
+                rustc_span::FileName::Real(real)
             } else {
-                source_map.new_source_file(
-                    rustc_span::FileName::Custom(file.path.display().to_string()),
-                    file.contents.clone(),
-                )
+                rustc_span::FileName::Custom(file.path.display().to_string())
             };
+            let source_file = source_map.new_source_file(filename, file.contents.clone());
             reg_guard.insert(
                 file.id,
                 RegisteredFile {
@@ -191,6 +186,22 @@ impl ItemSignatureInfo {
                         span: *span,
                     });
                 }
+                crate::HirModuleItem::Static {
+                    id,
+                    span,
+                    ty,
+                    mutable,
+                    ..
+                } => {
+                    result.push(ItemSignatureInfo {
+                        id: *id,
+                        kind: ItemSignatureKind::Static {
+                            ty: ty.clone(),
+                            mutable: *mutable,
+                        },
+                        span: *span,
+                    });
+                }
                 crate::HirModuleItem::ForeignMod { id: _, items } => {
                     for item in items {
                         match item {
@@ -224,6 +235,7 @@ pub enum ItemSignatureKind {
     ForeignFunction(FunctionSignature),
     Struct(Vec<StructField>),
     TypeDef(HirTy),
+    Static { ty: HirTy, mutable: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -468,8 +480,68 @@ impl DefinedCrateInfo {
             function_items_hir.push((def_id, leak(item), body, body_expr, loop_expr));
         }
 
+        let mut static_items_hir = Vec::new();
+        for (my_def_id, static_ty, mutable) in signatures.iter().filter_map(|item| match &item.kind {
+            ItemSignatureKind::Static { ty, mutable } => Some((item.id, ty, *mutable)),
+            _ => None,
+        }) {
+            let name = &self
+                .items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .unwrap()
+                .name;
+            let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+            let loop_expr = leak(hir::Block {
+                stmts: &[],
+                expr: None,
+                hir_id: HirId {
+                    owner: OwnerId { def_id },
+                    local_id: ItemLocalId::new(2),
+                },
+                rules: rustc_hir::BlockCheckMode::DefaultBlock,
+                span: DUMMY_SP,
+                targeted_by_break: false,
+            });
+            let body_kind =
+                hir::ExprKind::Loop(loop_expr, None, rustc_hir::LoopSource::Loop, DUMMY_SP);
+            let body_expr = leak(hir::Expr {
+                hir_id: HirId {
+                    owner: OwnerId { def_id },
+                    local_id: ItemLocalId::new(1),
+                },
+                kind: body_kind,
+                span: DUMMY_SP,
+            });
+            let body = leak(hir::Body {
+                params: &[],
+                value: body_expr,
+            });
+            let item = hir::Item {
+                owner_id: OwnerId { def_id },
+                kind: hir::ItemKind::Static(
+                    if mutable {
+                        rustc_ast::Mutability::Mut
+                    } else {
+                        rustc_ast::Mutability::Not
+                    },
+                    Ident::from_str(name),
+                    leak(hir_ty_to_rustc(tcx, def_id, static_ty)),
+                    body.id(),
+                ),
+                span: DUMMY_SP,
+                vis_span: DUMMY_SP,
+                has_delayed_lints: false,
+                eii: false,
+            };
+            static_items_hir.push((def_id, leak(item), body, body_expr, loop_expr));
+        }
+
         let mut root_item_ids = Vec::with_capacity(
-            1 + struct_items_hir.len() + typedef_items_hir.len() + function_items_hir.len(),
+            1 + struct_items_hir.len()
+                + typedef_items_hir.len()
+                + function_items_hir.len()
+                + static_items_hir.len(),
         );
         root_item_ids.push(hir::ItemId {
             owner_id: OwnerId {
@@ -487,6 +559,11 @@ impl DefinedCrateInfo {
             });
         }
         for (def_id, _, _, _, _) in &function_items_hir {
+            root_item_ids.push(hir::ItemId {
+                owner_id: OwnerId { def_id: *def_id },
+            });
+        }
+        for (def_id, _, _, _, _) in &static_items_hir {
             root_item_ids.push(hir::ItemId {
                 owner_id: OwnerId { def_id: *def_id },
             });
@@ -539,6 +616,11 @@ impl DefinedCrateInfo {
             insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
             owner_parents.insert(def_id, HirId::make_owner(crate_def));
         }
+        for (def_id, item, body, body_expr, loop_expr) in static_items_hir {
+            let nodes = build_owner_nodes_for_fn(item, body, body_expr, loop_expr);
+            insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
+            owner_parents.insert(def_id, HirId::make_owner(crate_def));
+        }
 
         if std::env::var("GEN_DEBUG").is_ok() {
             eprintln!("GeneratedCrate::build: owners len {}", owners.len());
@@ -570,6 +652,12 @@ impl DefinedCrateInfo {
                     items.push(DefinedItemInfo {
                         name,
                         kind: DefinedItemKind::TypeDef(id),
+                    });
+                }
+                crate::HirModuleItem::Static { name, id, .. } => {
+                    items.push(DefinedItemInfo {
+                        name,
+                        kind: DefinedItemKind::Static(id),
                     });
                 }
                 crate::HirModuleItem::Adt {
@@ -797,6 +885,11 @@ impl DefinedCrateState {
             DefinedItemKind::ForeignMod(_) => DefKind::ForeignMod,
             DefinedItemKind::Function { .. } => DefKind::Fn,
             DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
+            DefinedItemKind::Static(_) => DefKind::Static {
+                safety: hir::Safety::Safe,
+                mutability: rustc_ast::Mutability::Mut,
+                nested: false,
+            },
             DefinedItemKind::Struct(_) => DefKind::Struct,
             DefinedItemKind::Field(_) => DefKind::Field,
             DefinedItemKind::TypeDef(_) => DefKind::TyAlias,
@@ -882,6 +975,7 @@ impl DefinedItemInfo {
             DefinedItemKind::Struct(adt_def) => adt_def.0,
             DefinedItemKind::ForeignMod(def_id)
             | DefinedItemKind::TypeDef(def_id)
+            | DefinedItemKind::Static(def_id)
             | DefinedItemKind::Field(def_id) => def_id,
         }
     }
@@ -892,6 +986,7 @@ pub enum DefinedItemKind {
     ForeignMod(DefId),
     Function { fn_def: FnDef, abi: FunctionAbi },
     ForeignFunction(FnDef),
+    Static(DefId),
     Struct(AdtDef),
     Field(DefId),
     TypeDef(DefId),
@@ -1894,6 +1989,9 @@ fn mir_rvalue_to_rustc<'tcx>(
 ) -> rustc_middle::mir::Rvalue<'tcx> {
     match rvalue {
         MirRvalue::Use(op) => rustc_middle::mir::Rvalue::Use(mir_operand_to_rustc(tcx, op)),
+        MirRvalue::ThreadLocalRef(item) => {
+            rustc_middle::mir::Rvalue::ThreadLocalRef(internal(tcx, *item))
+        }
         MirRvalue::AddressOf(raw_ptr_kind, place) => rustc_middle::mir::Rvalue::RawPtr(
             match raw_ptr_kind {
                 rustc_public::mir::RawPtrKind::Mut => rustc_middle::mir::RawPtrKind::Mut,
@@ -2204,7 +2302,12 @@ fn make_unit_ty(owner: LocalDefId) -> hir::Ty<'static> {
     }
 }
 
-fn make_adt_ty<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, adt: AdtDef) -> hir::Ty<'static> {
+fn make_adt_ty<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: LocalDefId,
+    adt: AdtDef,
+    args: &[crate::HirGenericArg],
+) -> hir::Ty<'static> {
     let (def_id, kind) = {
         let def_id = my_def_id_to_rustc_def_id(tcx, adt.0);
         let kind = match tcx.def_kind(def_id) {
@@ -2216,7 +2319,26 @@ fn make_adt_ty<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, adt: AdtDef) -> hir::
         (def_id, kind)
     };
     let ident = Ident::from_str(tcx.item_name(def_id).as_str());
-    let segment = hir::PathSegment::new(ident, HirId::make_owner(owner), Res::Def(kind, def_id));
+    let mut segment = hir::PathSegment::new(ident, HirId::make_owner(owner), Res::Def(kind, def_id));
+    if !args.is_empty() {
+        let mut hir_args = Vec::with_capacity(args.len());
+        for arg in args {
+            let crate::HirGenericArg::Ty(ty) = arg;
+            let ty = leak(hir_ty_to_rustc(tcx, owner, ty));
+            let ambig = ty
+                .try_as_ambig_ty()
+                .expect("generic type argument unexpectedly inferred");
+            hir_args.push(hir::GenericArg::Type(ambig));
+        }
+        let generic_args = leak(hir::GenericArgs {
+            args: leak(hir_args.into_boxed_slice()),
+            constraints: &[],
+            parenthesized: hir::GenericArgsParentheses::No,
+            span_ext: DUMMY_SP,
+        });
+        segment.args = Some(generic_args);
+        segment.infer_args = false;
+    }
     let segments = leak(vec![segment].into_boxed_slice());
     let path = leak(hir::Path {
         span: DUMMY_SP,
@@ -2276,7 +2398,7 @@ fn hir_ty_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, ty: &HirTy) -> hi
                 },
             )
         }
-        HirTyKind::Adt(adt, _args) => make_adt_ty(tcx, owner, *adt),
+        HirTyKind::Adt(adt, args) => make_adt_ty(tcx, owner, *adt, args),
         HirTyKind::Tuple(elems) => {
             if elems.is_empty() {
                 make_unit_ty(owner)
@@ -2284,7 +2406,47 @@ fn hir_ty_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, owner: LocalDefId, ty: &HirTy) -> hi
                 todo!()
             }
         }
-        HirTyKind::FnPtr(_) => todo!(),
+        HirTyKind::FnPtr(sig) => {
+            let local_id = ItemLocalId::new(1);
+            let hir_id = HirId {
+                owner: OwnerId { def_id: owner },
+                local_id,
+            };
+            let fn_decl = leak(hir::FnDecl {
+                inputs: leak(
+                    sig.inputs
+                        .iter()
+                        .map(|ty| hir_ty_to_rustc(tcx, owner, ty))
+                        .collect::<Vec<_>>(),
+                ),
+                output: hir::FnRetTy::Return(leak(hir_ty_to_rustc(tcx, owner, &sig.output))),
+                c_variadic: false,
+                implicit_self: hir::ImplicitSelfKind::None,
+                lifetime_elision_allowed: true,
+            });
+            let param_idents = leak(vec![None; sig.inputs.len()]);
+            let safety = if sig.is_unsafe {
+                hir::Safety::Unsafe
+            } else {
+                hir::Safety::Safe
+            };
+            let abi = match sig.abi {
+                FunctionAbi::Rust => ExternAbi::Rust,
+                FunctionAbi::C => ExternAbi::C { unwind: false },
+            };
+            let fn_ptr = leak(hir::FnPtrTy {
+                safety,
+                abi,
+                generic_params: &[],
+                decl: fn_decl,
+                param_idents,
+            });
+            hir::Ty {
+                hir_id,
+                kind: hir::TyKind::FnPtr(fn_ptr),
+                span: DUMMY_SP,
+            }
+        }
         HirTyKind::Path(_) => todo!(),
     }
 }

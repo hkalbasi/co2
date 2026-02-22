@@ -34,6 +34,13 @@ pub enum HirModuleItem {
         ty: HirTy,
         span: Span,
     },
+    Static {
+        name: String,
+        id: DefId,
+        ty: HirTy,
+        mutable: bool,
+        span: Span,
+    },
     ForeignMod {
         id: DefId,
         items: Vec<ForeignModItem>,

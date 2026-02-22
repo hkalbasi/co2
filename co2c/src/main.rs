@@ -32,9 +32,9 @@ fn main() {
 
 fn run_co2c(args: CcArgs) {
     let preprocessed = preprocess(&args.input, &args.cpp_args);
-    let filtered = filter_to_main_file(&preprocessed, &args.input);
+    let normalized = normalize_preprocessed(&preprocessed);
     let rustc_args = build_rustc_args(&args);
-    compile_co2_source(CompileMode::C, args.input, filtered, rustc_args);
+    compile_co2_source(CompileMode::C, args.input, normalized, rustc_args);
 }
 
 fn parse_args(args: &[String]) -> Result<CcArgs, String> {
@@ -96,7 +96,6 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
 fn preprocess(input: &Path, cpp_args: &[String]) -> String {
     let mut cmd = Command::new("gcc");
     cmd.arg("-E");
-    cmd.arg("-fdirectives-only");
     cmd.arg(input);
     for arg in cpp_args {
         cmd.arg(arg);
@@ -110,51 +109,204 @@ fn preprocess(input: &Path, cpp_args: &[String]) -> String {
     String::from_utf8(out.stdout).expect("gcc -E produced non-utf8 output")
 }
 
-fn filter_to_main_file(preprocessed: &str, input: &Path) -> String {
-    let input_canon = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
-    let input_name = input.file_name().map(|s| s.to_string_lossy().into_owned());
-    let mut keep = true;
-    let mut out = String::new();
+fn normalize_preprocessed(preprocessed: &str) -> String {
+    let no_markers = strip_line_markers(preprocessed);
+    let no_attrs = strip_gnu_attributes(&no_markers);
+    let no_asm = strip_gnu_asm_annotations(&no_attrs);
+    let no_typeof = replace_gnu_typeof_with_usize(&no_asm);
+    strip_extension_keywords(&no_typeof)
+}
 
+fn strip_line_markers(preprocessed: &str) -> String {
+    let mut out = String::new();
     for line in preprocessed.lines() {
-        if let Some(path) = parse_line_marker(line) {
-            keep = matches_input(&path, &input_canon, input_name.as_deref());
+        if is_line_marker(line) {
             continue;
         }
-        if keep {
-            out.push_str(line);
-            out.push('\n');
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn is_line_marker(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('#')
+}
+
+fn strip_gnu_attributes(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if src[i..].starts_with("__attribute__") {
+            let mut j = i + "__attribute__".len();
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'(' {
+                let mut depth = 0usize;
+                while j < bytes.len() {
+                    let b = bytes[j];
+                    if b == b'(' {
+                        depth += 1;
+                    } else if b == b')' {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            j += 1;
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+                out.push(' ');
+                i = j;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+
+    out
+}
+
+fn strip_extension_keywords(src: &str) -> String {
+    fn is_ident_start(b: u8) -> bool {
+        b.is_ascii_alphabetic() || b == b'_'
+    }
+    fn is_ident_continue(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if is_ident_start(bytes[i]) {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && is_ident_continue(bytes[i]) {
+                i += 1;
+            }
+            let ident = &src[start..i];
+            let strip = matches!(
+                ident,
+                "__extension__"
+                    | "__inline"
+                    | "__inline__"
+                    | "__restrict"
+                    | "__restrict__"
+                    | "const"
+                    | "volatile"
+                    | "restrict"
+                    | "_Complex"
+                    | "_Noreturn"
+            );
+            if strip {
+                out.push(' ');
+            } else {
+                out.push_str(ident);
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
         }
     }
 
     out
 }
 
-fn parse_line_marker(line: &str) -> Option<PathBuf> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('#') {
-        return None;
+fn strip_gnu_asm_annotations(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if src[i..].starts_with("__asm__") || src[i..].starts_with("__asm") {
+            let kw_len = if src[i..].starts_with("__asm__") {
+                "__asm__".len()
+            } else {
+                "__asm".len()
+            };
+            let mut j = i + kw_len;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'(' {
+                let mut depth = 0usize;
+                while j < bytes.len() {
+                    let b = bytes[j];
+                    if b == b'(' {
+                        depth += 1;
+                    } else if b == b')' {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            j += 1;
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+                out.push(' ');
+                i = j;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
     }
-    let mut parts = trimmed.split('"');
-    parts.next()?;
-    let file = parts.next()?;
-    Some(PathBuf::from(file))
+
+    out
 }
 
-fn matches_input(marker: &Path, input_canon: &Path, input_name: Option<&str>) -> bool {
-    if marker == input_canon {
-        return true;
-    }
-    if marker.ends_with(input_canon) {
-        return true;
-    }
-    if let Some(name) = input_name {
-        if marker.file_name().map(|s| s.to_string_lossy()) == Some(name.into()) {
-            return true;
+fn replace_gnu_typeof_with_usize(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let kw_len = if src[i..].starts_with("__typeof__") {
+            Some("__typeof__".len())
+        } else if src[i..].starts_with("__typeof") {
+            Some("__typeof".len())
+        } else if src[i..].starts_with("typeof") {
+            Some("typeof".len())
+        } else {
+            None
+        };
+        if let Some(kw_len) = kw_len {
+            let mut j = i + kw_len;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'(' {
+                let mut depth = 0usize;
+                while j < bytes.len() {
+                    let b = bytes[j];
+                    if b == b'(' {
+                        depth += 1;
+                    } else if b == b')' {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            j += 1;
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+                out.push_str("usize");
+                i = j;
+                continue;
+            }
         }
+        out.push(bytes[i] as char);
+        i += 1;
     }
-    let canon = marker.canonicalize().ok();
-    canon.as_deref() == Some(input_canon)
+
+    out
 }
 
 fn build_rustc_args(args: &CcArgs) -> Vec<String> {
@@ -181,5 +333,10 @@ fn build_rustc_args(args: &CcArgs) -> Vec<String> {
     rustc_args.push("-l".to_owned());
     rustc_args.push("c".to_owned());
     rustc_args.push("/dev/null".to_owned());
+
+    if let Ok(rust_flags) = std::env::var("RUSTFLAGS") {
+        rustc_args.extend(rust_flags.split_ascii_whitespace().map(|x| x.to_owned()));
+    }
+
     rustc_args
 }

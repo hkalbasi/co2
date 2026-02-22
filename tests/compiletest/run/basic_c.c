@@ -48,11 +48,654 @@ int main3() {
 		x = x - 1;
 	if(x)
 		return 1;
+	x = 10;
+	do 
+		x = x - 1;
+	while(x);
+	if(x)
+		return 1;
+	return 0;
+}
+
+int main4()
+{
+	int x;
+	
+	x = 1;
+	x = x * 10;
+	x = x / 2;
+	x = x % 3;
+	return x - 2;
+}
+
+int main5()
+{
+start:
+		goto next;
+		return 1;
+	success:
+		return 0;
+	next:
+	foo:
+		goto success;
+		return 1;
+}
+
+int main6()
+{
+	int x;
+	int *p;
+	int *q;
+	int n;
+
+	x = 7;
+	n = 0;
+	p = &x;
+	q = p + n;
+	if (*q - 7)
+		return 1;
+	q = p - n;
+	if (*q - 7)
+		return 1;
+	p[0] = 9;
+	if (*p - 9)
+		return 1;
+	return 0;
+}
+
+int main7()
+{
+	int arr[4];
+	int z[3];
+	int *p;
+
+	arr[0] = 1;
+	arr[1] = 2;
+	p = arr;
+	if (*(arr + 1) - 2)
+		return 1;
+
+	*(p + 2) = 5;
+	p[3] = 7;
+
+	if (arr[2] - 5)
+		return 1;
+	if (*(arr + 3) - 7)
+		return 1;
+
+	if (z[0] || z[1] || z[2])
+		return 1;
+
+	return arr[0] + arr[1] + arr[2] + arr[3] - 15;
+}
+
+struct { int x; int y; };
+struct { int a; char b; };
+struct { int x; int y; int z; };
+struct { int (*f)(int); };
+enum Color { RED, GREEN = 5, BLUE, WHITE = BLUE + 3 };
+
+int main8()
+{
+	struct { int x; int y; } s;
+	
+	s.x = 3;
+	s.y = 5;
+	if (s.y - s.x - 2) {
+		return 1;
+	}
+	struct { int x; int y; } s2 = s;
+	if (s2.y - s2.x - 2) {
+		return 2;
+	}
+	struct { int x; int y; } *s3 = &s2;
+	if (s3->y - s3->x - 2) {
+		return 2;
+	}
+	return 0;
+}
+
+int main9()
+{
+	int a;
+	int b;
+	int c;
+	int x;
+
+	a = 20;
+	b = 6;
+	c = 3;
+
+	if (a + b - 26)
+		return 1;
+	if (a - b - 14)
+		return 1;
+	if (a * c - 60)
+		return 1;
+	if (a / b - 3)
+		return 1;
+	if (a % b - 2)
+		return 1;
+	if ((a | b) - 22)
+		return 1;
+	if ((a ^ b) - 18)
+		return 1;
+	if ((a & b) - 4)
+		return 1;
+	if ((a << 1) - 40)
+		return 1;
+	if ((a >> 2) - 5)
+		return 1;
+
+	if ((a == 20) - 1)
+		return 1;
+	if ((a != 20) - 0)
+		return 1;
+	if ((a < 21) - 1)
+		return 1;
+	if ((a <= 20) - 1)
+		return 1;
+	if ((a > 19) - 1)
+		return 1;
+	if ((a >= 20) - 1)
+		return 1;
+	if ((!0) - 1)
+		return 1;
+	if ((!a) - 0)
+		return 1;
+	if ((~5) + 6)
+		return 1;
+	if ((-a) + 20)
+		return 1;
+
+	x = 0;
+	if (0 && (x = 1))
+		return 1;
+	if (x)
+		return 1;
+	if ((1 || (x = 2)) - 1)
+		return 1;
+	if (x)
+		return 1;
+	if ((0 || (x = 3)) - 1)
+		return 1;
+	if (x - 3)
+		return 1;
+	if ((1 && (x = 4)) - 1)
+		return 1;
+	if (x - 4)
+		return 1;
+
+	return 0;
+}
+
+int main10()
+{
+	int arr[3];
+	int *p;
+	int *q;
+	int x;
+	int y;
+
+	arr[0] = 10;
+	arr[1] = 20;
+	arr[2] = 30;
+
+	p = arr;
+	q = ++p;
+	if (*q - 20)
+		return 1;
+	if (*p - 20)
+		return 1;
+
+	q = p++;
+	if (*q - 20)
+		return 1;
+	if (*p - 30)
+		return 1;
+
+	x = 4;
+	y = ++x;
+	if (x - 5 || y - 5)
+		return 1;
+	y = x++;
+	if (x - 6 || y - 5)
+		return 1;
+
+	return 0;
+}
+
+int main11()
+{
+	int i;
+	int sum;
+
+	sum = 0;
+	for (i = 0; i < 10; i++) {
+		if (i == 2)
+			continue;
+		if (i == 7)
+			break;
+		sum = sum + i;
+	}
+	if (sum - 19)
+		return 1;
+
+	i = 0;
+	sum = 0;
+	while (1) {
+		i++;
+		if (i == 2)
+			continue;
+		if (i == 5)
+			break;
+		sum = sum + i;
+	}
+	if (sum - 8)
+		return 1;
+
+	i = 0;
+	sum = 0;
+	do {
+		i++;
+		if (i == 2)
+			continue;
+		if (i == 5)
+			break;
+		sum = sum + i;
+	} while (1);
+	if (sum - 8)
+		return 1;
+
+	return 0;
+}
+
+int main12()
+{
+	int a;
+	int arr[3];
+	int *p;
+
+	a = 10;
+	a += 2;
+	if (a - 12)
+		return 1;
+	a -= 3;
+	if (a - 9)
+		return 1;
+	a *= 4;
+	if (a - 36)
+		return 1;
+	a /= 6;
+	if (a - 6)
+		return 1;
+	a %= 4;
+	if (a - 2)
+		return 1;
+	a <<= 3;
+	if (a - 16)
+		return 1;
+	a >>= 2;
+	if (a - 4)
+		return 1;
+	a |= 3;
+	if (a - 7)
+		return 1;
+	a &= 6;
+	if (a - 6)
+		return 1;
+	a ^= 5;
+	if (a - 3)
+		return 1;
+
+	arr[0] = 11;
+	arr[1] = 22;
+	arr[2] = 33;
+	p = arr;
+	p += 1;
+	if (*p - 22)
+		return 1;
+	p -= 1;
+	if (*p - 11)
+		return 1;
+
+	return 0;
+}
+
+int main13()
+{
+	int v;
+	int x;
+	int i;
+	int sum;
+
+	x = 0;
+	v = 2;
+	switch (v) {
+	case 1:
+		x = 10;
+		break;
+	case 2:
+		x = 20;
+		break;
+	default:
+		x = 30;
+		break;
+	}
+	if (x - 20)
+		return 1;
+
+	x = 0;
+	v = 1;
+	switch (v) {
+	case 1:
+		x = x + 1;
+	case 2:
+		x = x + 2;
+		break;
+	default:
+		x = x + 4;
+		break;
+	}
+	if (x - 3)
+		return 1;
+
+	x = 0;
+	v = 99;
+	switch (v) {
+	case 0:
+		x = 1;
+		break;
+	default:
+		x = 7;
+		break;
+	}
+	if (x - 7)
+		return 1;
+
+	sum = 0;
+	for (i = 0; i < 5; i++) {
+		switch (i) {
+		case 1:
+			continue;
+		case 3:
+			break;
+		default:
+			sum = sum + i;
+			break;
+		}
+	}
+	/* i=0 adds 0; i=1 continue; i=2 adds 2; i=3 breaks switch only; i=4 adds 4 */
+	if (sum - 6)
+		return 1;
+
+	return 0;
+}
+
+int main14()
+{
+	int x;
+	int *p;
+	int arr[4];
+	struct { int a; char b; } s;
+
+	x = 0;
+	p = &x;
+	if (sizeof x - 4)
+		return 1;
+	if (sizeof(int) - 4)
+		return 1;
+	if (sizeof(int*) - 8)
+		return 1;
+	if (sizeof(p) - 8)
+		return 1;
+	if (sizeof(*p) - 4)
+		return 1;
+	if (sizeof arr - 16)
+		return 1;
+	if (sizeof(s) - 8)
+		return 1;
+	p = (int*)5;
+	if (((int)p) - 5)
+		return 1;
+	if (((int*)5) != p)
+		return 1;
+
+	return 0;
+}
+
+int main15()
+{
+	int a[5] = { [2] = 7, [0] = 9, 1 };
+	struct { int x; int y; int z; } s = { .z = 8, .x = 3 };
+	struct { int x; int y; } p[2] = {
+		[1] = { .y = 6, .x = 5 },
+		[0] = { .x = 1, .y = 2 },
+	};
+	int m[2][3] = { [1][2] = 4, [0][1] = 3 };
+
+	if (a[3] || a[4])
+		return 1;
+	if (a[0] - 9 || a[1] - 1 || a[2] - 7)
+		return 1;
+	if (s.x - 3 || s.y || s.z - 8)
+		return 1;
+	if (p[0].x - 1 || p[0].y - 2 || p[1].x - 5 || p[1].y - 6)
+		return 1;
+	if (m[0][1] - 3 || m[1][2] - 4)
+		return 1;
+	if (m[0][0] || m[0][2] || m[1][0] || m[1][1])
+		return 1;
+
+	return 0;
+}
+
+int main16()
+{
+	enum Color c;
+	int x;
+
+	c = BLUE;
+	if (c - 6)
+		return 1;
+	if (RED)
+		return 1;
+	if (GREEN - 5)
+		return 1;
+	if (WHITE - 9)
+		return 1;
+
+	x = RED + GREEN + BLUE + WHITE;
+	if (x - 20)
+		return 1;
+
+	return 0;
+}
+
+int main17()
+{
+	int a;
+	long y;
+	char *s;
+	char *t;
+	char *u;
+
+	a = 'x';
+	if (a - 120)
+		return 1;
+	a = '\n';
+	if (a - 10)
+		return 1;
+	a = '\\';
+	if (a - 92)
+		return 1;
+	a = '\'';
+	if (a - 39)
+		return 1;
+
+	a = 2.5;
+	if (a - 2)
+		return 1;
+	a = 0x10;
+	if (a - 16)
+		return 1;
+	a = 010;
+	if (a - 8)
+		return 1;
+	y = -1l;
+	if (y + 1l)
+		return 1;
+
+	s = "foo" "bar";
+	if (((int)s[0]) - 'f' || ((int)s[1]) - 'o' || ((int)s[2]) - 'o')
+		return 1;
+	if (((int)s[3]) - 'b' || ((int)s[4]) - 'a' || ((int)s[5]) - 'r')
+		return 1;
+	if (s[6])
+		return 1;
+
+	t = "a" "" "\x12";
+	if (((int)t[0]) - 'a' || ((int)t[1]) - '\x12' || ((int)t[2]))
+		return 1;
+	u = "A\nB\t\\\"";
+	if (((int)u[0]) - 'A' || ((int)u[1]) - '\n' || ((int)u[2]) - 'B')
+		return 1;
+	if (((int)u[3]) - '\t' || ((int)u[4]) - '\\' || ((int)u[5]) - '\"')
+		return 1;
+	if (u[6])
+		return 1;
+
+	return 0;
+}
+
+int fp_id(int x)
+{
+	return x;
+}
+
+int main18()
+{
+	int (*fp)(int);
+
+	fp = fp_id;
+
+	if (fp(3) - 3)
+		return 1;
+
+	struct { int (*f)(int); } s = { .f = fp_id };
+	if (s.f(3) - 3)
+		return 1;
+
+	fp = 0;
+	if (fp)
+		return 1;
+
+	return 0;
+}
+
+int main19()
+{
+	int x;
+	int y;
+	int z;
+
+	x = 10;
+	y = 20;
+	z = 0;
+
+	z = (x > y) ? x : y;
+	if (z - 20)
+		return 1;
+
+	z = (x < y) ? x : y;
+	if (z - 10)
+		return 2;
+
+	if ((x > y ? (x < y ? 1 : 2) : 3) - 3)
+		return 3;
+	if ((x < y ? (x > y ? 1 : 2) : 3) - 2)
+		return 4;
+
+	x = 0;
+	if (x ? 1 : 0)
+		return 5;
+	x = 1;
+	if (!x ? 1 : 0)
+		return 6;
+
+	return 0;
+}
+
+typedef int myint;
+myint the_zero = (myint)0;
+
+int zero()
+{
+	return the_zero;
+}
+
+struct S
+{
+	int (*zerofunc)();
+} s = { &zero };
+struct S2 { int a; int b; };
+
+struct S * anon()
+{
+	return &s;
+}
+
+typedef struct S * (*fty)();
+
+fty go()
+{
+	return &anon;
+}
+
+int main20()
+{
+	return go()()->zerofunc();
+}
+
+int main21()
+{
+	struct S2 *p;
+
+	p = &(struct S2) { 1, 2 };
+	if (p->a - 1)
+		return 1;
+	if (p->b - 2)
+		return 1;
+
+	return 0;
+}
+
+void do_complex(int *p)
+{
+	*p = *p + 1;
+}
+
+int main22()
+{
+	int side_effect_counter;
+	int x;
+
+	side_effect_counter = 0;
+	x = ({ int local; local = 4; do_complex(&side_effect_counter); local + 1; });
+	if (x - 5)
+		return 1;
+	if (side_effect_counter - 1)
+		return 1;
+
 	return 0;
 }
 
 int main() {
-	if (main1() || main2() || main3()) {
+	if (main1() || main2() || main3() || main4() || main5()
+		|| main6() || main7() || main8() || main9() || main10()
+		|| main11() || main12() || main13() || main14() || main15()
+		|| main16() || main17() || main18() || main19() || main20()
+		|| main21() || main22()) {
 		return 6;
 	}
 	return 0;

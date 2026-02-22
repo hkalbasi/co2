@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use co2_hir::{HirBody, LocalId};
+use co2_hir::{HirBody, LabelId, LocalId};
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
     mir::{
@@ -42,7 +42,7 @@ pub fn build_mir_for_body(
         };
         locals.push(MirLocalDecl {
             ty,
-            span,
+            span: local.span,
             mutability: Mutability::Mut,
         });
         local_indices.insert(local_id, idx);
@@ -55,6 +55,8 @@ pub fn build_mir_for_body(
         extra_locals: Vec::new(),
         blocks: Vec::new(),
         stmts: Vec::new(),
+        label_blocks: HashMap::new(),
+        pending_gotos: Vec::new(),
         span,
         is_rust_entry_main,
         exit_fn,
@@ -107,6 +109,8 @@ pub(crate) struct Builder<'a> {
     pub(crate) extra_locals: Vec<MirLocalDecl>,
     pub(crate) blocks: Vec<rustc_gen::rustc_public::mir::BasicBlock>,
     pub(crate) stmts: Vec<rustc_gen::rustc_public::mir::Statement>,
+    pub(crate) label_blocks: HashMap<LabelId, usize>,
+    pub(crate) pending_gotos: Vec<(usize, LabelId)>,
     pub(crate) span: RustSpan,
     pub(crate) is_rust_entry_main: bool,
     pub(crate) exit_fn: Option<FnDef>,
@@ -134,11 +138,13 @@ pub(crate) fn fn_const_operand(
 pub(crate) fn infer_fn_generic_args(
     sig: &rustc_public_generative::rustc_public::ty::FnSig,
     args: &[co2_hir::HirExpr],
+    ret_ty: Ty,
 ) -> Vec<GenericArgKind> {
     let mut by_index: BTreeMap<u32, Ty> = BTreeMap::new();
     for (expected, actual) in sig.inputs().iter().zip(args.iter()) {
         collect_param_bindings(*expected, actual.ty, &mut by_index);
     }
+    collect_param_bindings(sig.output(), ret_ty, &mut by_index);
     by_index
         .into_values()
         .map(GenericArgKind::Type)

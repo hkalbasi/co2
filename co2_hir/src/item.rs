@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use co2_parser::{
-    CompoundStatement, RustPath, Spanned, Token, TypeQueryResult, TypeResolver as ParserTypeResolver,
-    parse_compound_statement,
+    CompoundStatement, Declaration, RustPath, Spanned, Token, TypeQueryResult,
+    TypeResolver as ParserTypeResolver, parse_compound_statement,
 };
 use la_arena::{Arena, Idx};
 use rustc_public_generative::rustc_public::ty::{FnDef, FnSig, Span as RustSpan, Ty};
@@ -13,13 +13,22 @@ use crate::{HirStmt, resolver::HirCtx};
 pub struct HirLocal {
     pub name: String,
     pub ty: Ty,
+    pub span: RustSpan,
 }
 
 pub type LocalId = Idx<HirLocal>;
 
 #[derive(Clone, Debug)]
+pub struct HirLabel {
+    pub name: Option<String>,
+}
+
+pub type LabelId = Idx<HirLabel>;
+
+#[derive(Clone, Debug)]
 pub struct HirBody {
     pub locals: Arena<HirLocal>,
+    pub labels: Arena<HirLabel>,
     pub params: Vec<LocalId>,
     pub stmts: Vec<HirStmt>,
     pub span: RustSpan,
@@ -31,9 +40,10 @@ pub fn lower_function_body<R>(
     source: &'static str,
     def: FnDef,
     param_names: &[String],
+    prelude_decls: &[Declaration],
     hir_ctx: &HirCtx<'_, R>,
 ) -> Result<HirBody, String> {
-    hir_ctx.lower_function_body(tokens, source_name, source, def, param_names)
+    hir_ctx.lower_function_body(tokens, source_name, source, def, param_names, prelude_decls)
 }
 
 impl<R> HirCtx<'_, R> {
@@ -44,7 +54,9 @@ impl<R> HirCtx<'_, R> {
         source: &'static str,
         def: FnDef,
         param_names: &[String],
+        prelude_decls: &[Declaration],
     ) -> Result<HirBody, String> {
+        self.reset_labels();
         struct BodyParseResolver<'a, R> {
             hir_ctx: &'a HirCtx<'a, R>,
         }
@@ -64,21 +76,20 @@ impl<R> HirCtx<'_, R> {
             .ok_or_else(|| "failed to parse function body".to_owned())?;
         self.lower_compound_statement(
             parsed,
-            source_name,
-            source,
             &def.fn_sig().skip_binder(),
             param_names,
+            prelude_decls,
         )
     }
 
     fn lower_compound_statement(
         &self,
         (compound, parser_span): Spanned<CompoundStatement>,
-        source_name: &str,
-        source: &'static str,
         sig: &FnSig,
         param_names: &[String],
+        prelude_decls: &[Declaration],
     ) -> Result<HirBody, String> {
+        let body_span = self.to_rust_span(parser_span);
         let mut locals = Arena::new();
         let mut params = Vec::new();
         let mut local_map: HashMap<String, LocalId> = HashMap::new();
@@ -86,6 +97,7 @@ impl<R> HirCtx<'_, R> {
         locals.alloc(HirLocal {
             name: "_ret".to_owned(),
             ty: sig.output(),
+            span: body_span,
         });
 
         for (idx, ty) in sig.inputs().iter().enumerate() {
@@ -96,26 +108,24 @@ impl<R> HirCtx<'_, R> {
             let id = locals.alloc(HirLocal {
                 name: name.clone(),
                 ty: *ty,
+                span: body_span,
             });
             params.push(id);
             local_map.insert(name, id);
         }
 
         let mut stmts = Vec::new();
-        self.lower_compound_items(
-            compound,
-            source_name,
-            source,
-            &mut stmts,
-            &mut locals,
-            &mut local_map,
-        )?;
+        for decl in prelude_decls {
+            self.lower_decl(decl.clone(), &mut stmts, &mut locals, &mut local_map)?;
+        }
+        self.lower_compound_items(compound, &mut stmts, &mut locals, &mut local_map)?;
 
         Ok(HirBody {
             locals,
+            labels: self.take_labels(),
             params,
             stmts,
-            span: self.to_rust_span(parser_span),
+            span: body_span,
         })
     }
 }

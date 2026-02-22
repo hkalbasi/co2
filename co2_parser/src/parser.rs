@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-use crate::{Span, Spanned, TypeResolver, lexer::Token};
+use crate::{
+    Span, Spanned, TypeResolver,
+    lexer::{IntegerSuffix, Token},
+};
 use chumsky::{
     input::{SliceInput, ValueInput},
     prelude::*,
@@ -70,15 +73,18 @@ pub struct CompoundStatement {
     pub statements: Vec<Spanned<StatementOrDeclaration>>,
 }
 
-pub fn compound_statement<'src, 'r: 'src, I>(
+pub(crate) fn compound_statement<'src, 'r: 'src, I>(
     resolver: &'r dyn TypeResolver,
+    stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
 )
 -> impl Parser<'src, I, Spanned<CompoundStatement>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    statement_or_declaration(resolver)
+    statement_or_declaration(resolver, stmt_rec)
         .repeated()
         .collect()
         .map(|statements| CompoundStatement { statements })
@@ -94,24 +100,45 @@ pub enum StatementOrDeclaration {
 
 fn statement_or_declaration<'src, 'r: 'src, I>(
     resolver: &'r dyn TypeResolver,
+    stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
 )
 -> impl Parser<'src, I, Spanned<StatementOrDeclaration>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    declaration(resolver)
+    declaration(resolver, true, stmt_rec.clone())
         .map(StatementOrDeclaration::Declaration)
-        .or(statement(resolver).map(StatementOrDeclaration::Statement))
+        .or(stmt_rec.map(StatementOrDeclaration::Statement))
         .map_with(|r, e| (r, e.span()))
 }
 
 #[derive(Debug, Clone)]
 pub enum Statement {
     Empty,
+    Goto(Spanned<String>),
+    Break,
+    Continue,
+    Switch {
+        expr: Spanned<Expression>,
+        body: Box<Spanned<Statement>>,
+    },
+    Case {
+        expr: Spanned<Expression>,
+        statement: Box<Spanned<Statement>>,
+    },
+    Default {
+        statement: Box<Spanned<Statement>>,
+    },
+    Label {
+        name: Spanned<String>,
+        statement: Box<Spanned<Statement>>,
+    },
     Return(Option<Spanned<Expression>>),
     Expression(Spanned<Expression>),
-    Compound(Spanned<LazyCompoundStatement>),
+    Compound(Spanned<CompoundStatement>),
     If {
         cond: Spanned<Expression>,
         then_branch: Box<Spanned<Statement>>,
@@ -121,6 +148,10 @@ pub enum Statement {
         cond: Spanned<Expression>,
         body: Box<Spanned<Statement>>,
     },
+    DoWhile {
+        body: Box<Spanned<Statement>>,
+        cond: Spanned<Expression>,
+    },
     For {
         init: Option<Spanned<Expression>>,
         cond: Option<Spanned<Expression>>,
@@ -129,8 +160,8 @@ pub enum Statement {
     },
 }
 
-fn statement<'src, 'r: 'src, I>(
-    _resolver: &'r dyn TypeResolver,
+pub(crate) fn statement<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
 )
 -> impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -138,20 +169,51 @@ where
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     recursive(|stmt_rec| {
+        let expression_rec = expression(resolver, stmt_rec.clone());
         let jump_statement = just(Token::Return)
-            .ignore_then(expression().or_not())
+            .ignore_then(expression_rec.clone().or_not())
             .map(|exp| Statement::Return(exp))
             .then_ignore(just(Token::Semicolon));
+        let goto_statement = just(Token::Goto)
+            .ignore_then(identifier())
+            .then_ignore(just(Token::Semicolon))
+            .map(Statement::Goto);
+        let break_statement = just(Token::Break)
+            .then_ignore(just(Token::Semicolon))
+            .to(Statement::Break);
+        let continue_statement = just(Token::Continue)
+            .then_ignore(just(Token::Semicolon))
+            .to(Statement::Continue);
+        let switch_statement = just(Token::Switch)
+            .ignore_then(expression_rec.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .then(stmt_rec.clone())
+            .map(|(expr, body)| Statement::Switch {
+                expr,
+                body: Box::new(body),
+            });
+        let case_statement = just(Token::Case)
+            .ignore_then(expression_rec.clone())
+            .then_ignore(just(Token::Colon))
+            .then(stmt_rec.clone())
+            .map(|(expr, statement)| Statement::Case {
+                expr,
+                statement: Box::new(statement),
+            });
+        let default_statement = just(Token::Default)
+            .ignore_then(just(Token::Colon).ignore_then(stmt_rec.clone()))
+            .map(|statement| Statement::Default {
+                statement: Box::new(statement),
+            });
 
-        let expression_statement = expression()
+        let expression_statement = expression_rec.clone()
             .map(Statement::Expression)
             .then_ignore(just(Token::Semicolon));
         let empty_statement = just(Token::Semicolon).to(Statement::Empty);
 
-        let compound = lazy_compound_statement().map(Statement::Compound);
+        let compound = compound_statement(resolver, stmt_rec.clone()).map(Statement::Compound);
 
         let if_statement = just(Token::If)
-            .ignore_then(expression().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .ignore_then(expression_rec.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
             .then(stmt_rec.clone())
             .then(just(Token::Else).ignore_then(stmt_rec.clone()).or_not())
             .map(|((cond, then_branch), else_branch)| Statement::If {
@@ -161,20 +223,36 @@ where
             });
 
         let while_statement = just(Token::While)
-            .ignore_then(expression().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .ignore_then(expression_rec.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
             .then(stmt_rec.clone())
             .map(|(cond, body)| Statement::While {
                 cond,
                 body: Box::new(body),
             });
+        let do_while_statement = just(Token::Do)
+            .ignore_then(stmt_rec.clone())
+            .then_ignore(just(Token::While))
+            .then(expression_rec.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .then_ignore(just(Token::Semicolon))
+            .map(|(body, cond)| Statement::DoWhile {
+                body: Box::new(body),
+                cond,
+            });
+        let labeled_statement = identifier()
+            .then_ignore(just(Token::Colon))
+            .then(stmt_rec.clone())
+            .map(|(name, statement)| Statement::Label {
+                name,
+                statement: Box::new(statement),
+            });
 
         let for_statement = just(Token::For)
             .ignore_then(
-                expression()
+                expression_rec.clone()
                     .or_not()
                     .then_ignore(just(Token::Semicolon))
-                    .then(expression().or_not().then_ignore(just(Token::Semicolon)))
-                    .then(expression().or_not())
+                    .then(expression_rec.clone().or_not().then_ignore(just(Token::Semicolon)))
+                    .then(expression_rec.clone().or_not())
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .then(stmt_rec.clone())
@@ -188,7 +266,15 @@ where
         choice((
             if_statement,
             while_statement,
+            do_while_statement,
             for_statement,
+            switch_statement,
+            case_statement,
+            default_statement,
+            labeled_statement,
+            goto_statement,
+            break_statement,
+            continue_statement,
             jump_statement,
             expression_statement,
             empty_statement,
@@ -200,7 +286,9 @@ where
 
 #[derive(Debug, Clone)]
 pub enum Constant {
-    Int(i32),
+    Int(i64, IntegerSuffix),
+    Float(f64),
+    Char(char),
     String(String),
 }
 
@@ -210,58 +298,205 @@ pub enum Expression {
     Constant(Constant),
     Identifier(Spanned<RustPath>),
     Field(Box<Spanned<Expression>>, Spanned<String>),
-    InitList(Vec<Spanned<Expression>>),
+    Arrow(Box<Spanned<Expression>>, Spanned<String>),
     Subscript(Box<Spanned<Expression>>, Box<Spanned<Expression>>),
     Call {
         func: Box<Spanned<Expression>>,
         params: Vec<Spanned<Expression>>,
     },
+    Update {
+        expr: Box<Spanned<Expression>>,
+        op: UpdateOp,
+        is_postfix: bool,
+    },
+    AssignWithOp {
+        lhs: Box<Spanned<Expression>>,
+        op: BinOp,
+        rhs: Box<Spanned<Expression>>,
+    },
+    Cast {
+        type_name: Box<TypeName>,
+        expr: Box<Spanned<Expression>>,
+    },
+    SizeofType(Box<TypeName>),
+    Sizeof(Box<Spanned<Expression>>),
     UnaryOp(UnaryOp, Box<Spanned<Expression>>),
     BinOp(Box<Spanned<Expression>>, BinOp, Box<Spanned<Expression>>),
+    Conditional {
+        cond: Box<Spanned<Expression>>,
+        then_expr: Box<Spanned<Expression>>,
+        else_expr: Box<Spanned<Expression>>,
+    },
+    CompoundLiteral {
+        type_name: Box<TypeName>,
+        initializer: Box<Spanned<Initializer>>,
+    },
+    GnuStatementExpr {
+        body: Box<Spanned<CompoundStatement>>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum UpdateOp {
+    Inc,
+    Dec,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
+    Not,
+    Com,
     AddrOf,
     Deref,
     Plus,
     Minus,
 }
 
-impl Expression {
-    fn dummy() -> Box<Spanned<Expression>> {
-        Box::new((Expression::Empty, SimpleSpan::from(0..0)))
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum BinOp {
     Assign,
-    Or,
     Add,
     Sub,
     Mul,
+    Div,
+    Rem,
+    Or,
+    And,
+    BitOr,
+    BitXor,
+    BitAnd,
+    Eq,
+    Lt,
+    Le,
+    Ne,
+    Ge,
+    Gt,
+    Shl,
+    Shr,
 }
 
-fn expression<'src, I>()
+pub(crate) fn expression<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+    stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
+)
+-> impl Parser<'src, I, Spanned<Expression>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    expression_with_type_paths(resolver, stmt_rec, false)
+}
+
+fn expression_with_type_paths<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+    stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
+    allow_path_types_in_type_name: bool,
+)
 -> impl Parser<'src, I, Spanned<Expression>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     recursive(|rec| {
+        #[derive(Clone)]
+        enum PostfixPart {
+            Subscript(Spanned<Expression>),
+            Call(Vec<Spanned<Expression>>),
+            Dot(Spanned<String>),
+            Arrow(Spanned<String>),
+            PostInc,
+            PostDec,
+        }
+
+        let compound_initializer = recursive(|init_rec| {
+            let designator = choice((
+                rec.clone()
+                    .delimited_by(just(Token::LBracket), just(Token::RBracket))
+                    .map(Designator::Subscript),
+                just(Token::Dot).ignore_then(identifier()).map(Designator::Field),
+            ))
+            .map_with(|r, e| (r, e.span()));
+
+            let initializer_item = designator
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<_>>()
+                .then_ignore(just(Token::Assign))
+                .or_not()
+                .then(init_rec.clone())
+                .map(|(designators, initializer)| InitializerItem {
+                    designators,
+                    initializer,
+                })
+                .map_with(|r, e| (r, e.span()));
+
+            let list = initializer_item
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .map(Initializer::List)
+                .map_with(|r, e| (r, e.span()));
+
+            let expr = rec
+                .clone()
+                .map(Initializer::Expr)
+                .map_with(|r, e| (r, e.span()));
+
+            choice((list, expr))
+        });
+
+        let compound_literal = type_name(
+            resolver,
+            rec.clone(),
+            allow_path_types_in_type_name,
+            allow_path_types_in_type_name,
+        )
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .then(
+                compound_initializer
+                    .clone()
+                    .filter(|(init, _)| matches!(init, Initializer::List(_))),
+            )
+            .map(|(type_name, initializer)| Expression::CompoundLiteral {
+                type_name: Box::new(type_name),
+                initializer: Box::new(initializer),
+            });
+
         let primary_expression = choice((
+            compound_literal,
+            just(Token::LParen)
+                .then_ignore(look_ahead(Token::LBrace))
+                .ignore_then(stmt_rec.clone())
+                .then_ignore(just(Token::RParen))
+                .map(|(body, _)| Expression::GnuStatementExpr {
+                    body: Box::new({
+                        let Statement::Compound(body) = body else {
+                            unreachable!();
+                        };
+                        body
+                    }),
+                }),
             rust_path().map(Expression::Identifier),
             select! {
-                Token::Integer(i, _) => Expression::Constant(Constant::Int(i.parse().unwrap())),
-                Token::FloatLit(i, _) => Expression::Constant(Constant::Int(i.parse().unwrap())),
-                Token::StringLit(s) => Expression::Constant(Constant::String(s)),
+                Token::StringLit(s) => s,
+            }
+            .repeated()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map(|parts| Expression::Constant(Constant::String(parts.concat()))),
+            select! {
+                Token::Integer(i, suffix) => Expression::Constant(Constant::Int(parse_integer_constant(&i), suffix)),
+                Token::FloatLit(i, _) => Expression::Constant(Constant::Float(i.parse().unwrap())),
+                Token::CharLit(s) => {
+                    let ch = s.chars().next().expect("empty char literal");
+                    Expression::Constant(Constant::Char(ch))
+                },
             },
-            rec.clone()
-                .separated_by(just(Token::Comma))
-                .collect()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace))
-                .map(Expression::InitList),
             rec.clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .map(|x: (Expression, SimpleSpan)| x.0),
@@ -273,73 +508,158 @@ where
                 choice((
                     rec.clone()
                         .delimited_by(just(Token::LBracket), just(Token::RBracket))
-                        .map(|sub| Expression::Subscript(Expression::dummy(), Box::new(sub))),
+                        .map(PostfixPart::Subscript),
                     rec.clone()
                         .separated_by(just(Token::Comma))
                         .collect()
-                        .map(|params| Expression::Call {
-                            func: Expression::dummy(),
-                            params,
-                        })
+                        .map(PostfixPart::Call)
                         .delimited_by(just(Token::LParen), just(Token::RParen)),
                     just(Token::Dot)
                         .ignore_then(identifier())
-                        .map(|ident| Expression::Field(Expression::dummy(), ident)),
+                        .map(PostfixPart::Dot),
+                    just(Token::Arrow)
+                        .ignore_then(identifier())
+                        .map(PostfixPart::Arrow),
+                    just(Token::Inc).to(PostfixPart::PostInc),
+                    just(Token::Dec).to(PostfixPart::PostDec),
                 ))
                 .repeated()
-                .collect::<Vec<_>>(),
+                .collect::<Vec<PostfixPart>>(),
             )
             .map(|(mut main, posts)| {
-                for mut post in posts {
+                for post in posts {
                     let span = main.1;
-                    match &mut post {
-                        Expression::Empty
-                        | Expression::Identifier(_)
-                        | Expression::Constant(_)
-                        | Expression::InitList(_)
-                        | Expression::UnaryOp(..)
-                        | Expression::BinOp(..) => {
-                            unreachable!()
-                        }
-                        Expression::Subscript(target, _)
-                        | Expression::Call {
-                            func: target,
-                            params: _,
-                        }
-                        | Expression::Field(target, _) => **target = main,
-                    }
-                    main = (post, span);
+                    let post_expr = match post {
+                        PostfixPart::Subscript(sub) => Expression::Subscript(Box::new(main), Box::new(sub)),
+                        PostfixPart::Call(params) => Expression::Call {
+                            func: Box::new(main),
+                            params,
+                        },
+                        PostfixPart::Dot(ident) => Expression::Field(Box::new(main), ident),
+                        PostfixPart::Arrow(ident) => Expression::Arrow(Box::new(main), ident),
+                        PostfixPart::PostInc => Expression::Update {
+                            expr: Box::new(main),
+                            op: UpdateOp::Inc,
+                            is_postfix: true,
+                        },
+                        PostfixPart::PostDec => Expression::Update {
+                            expr: Box::new(main),
+                            op: UpdateOp::Dec,
+                            is_postfix: true,
+                        },
+                    };
+                    main = (post_expr, span);
                 }
                 main
             });
 
         let unary_op = choice((
+            just(Token::Bang).to(UnaryOp::Not),
+            just(Token::Tilde).to(UnaryOp::Com),
             just(Token::Amp).to(UnaryOp::AddrOf),
             just(Token::Star).to(UnaryOp::Deref),
             just(Token::Plus).to(UnaryOp::Plus),
             just(Token::Minus).to(UnaryOp::Minus),
         ));
 
-        let unary_expression = unary_op
-            .repeated()
-            .collect::<Vec<_>>()
-            .then(postfix_expression)
-            .map(|(ops, mut expr)| {
-                for op in ops.into_iter().rev() {
-                    let span = expr.1;
-                    expr = (Expression::UnaryOp(op, Box::new(expr)), span);
-                }
-                expr
+        let cast_expression = recursive(|cast_expr| {
+            let unary_expression = recursive(|unary| {
+                let sizeof_type_expression = just(Token::Sizeof)
+                    .ignore_then(
+                        type_name(
+                            resolver,
+                            rec.clone(),
+                            allow_path_types_in_type_name,
+                            allow_path_types_in_type_name,
+                        )
+                            .delimited_by(just(Token::LParen), just(Token::RParen)),
+                    )
+                    .map(|ty| Expression::SizeofType(Box::new(ty)))
+                    .map_with(|r, e| (r, e.span()));
+                
+                let prefix_inc_expression = just(Token::Inc)
+                    .ignore_then(unary.clone())
+                    .map(|expr| Expression::Update {
+                        expr: Box::new(expr),
+                        op: UpdateOp::Inc,
+                        is_postfix: false,
+                    })
+                    .map_with(|r, e| (r, e.span()));
+
+                let prefix_dec_expression = just(Token::Dec)
+                    .ignore_then(unary.clone())
+                    .map(|expr| Expression::Update {
+                        expr: Box::new(expr),
+                        op: UpdateOp::Dec,
+                        is_postfix: false,
+                    })
+                    .map_with(|r, e| (r, e.span()));
+
+                let unary_operator_expression = unary_op
+                    .then(cast_expr.clone())
+                    .map(|(op, expr)| Expression::UnaryOp(op, Box::new(expr)))
+                    .map_with(|r, e| (r, e.span()));
+
+                let sizeof_unary_expression = just(Token::Sizeof)
+                    .ignore_then(unary)
+                    .map(|expr| Expression::Sizeof(Box::new(expr)))
+                    .map_with(|r, e| (r, e.span()));
+
+                choice((
+                    sizeof_type_expression,
+                    prefix_inc_expression,
+                    prefix_dec_expression,
+                    unary_operator_expression,
+                    sizeof_unary_expression,
+                    postfix_expression.clone(),
+                ))
             });
 
+            let cast_type_expression =
+                type_name(
+                    resolver,
+                    rec.clone(),
+                    allow_path_types_in_type_name,
+                    allow_path_types_in_type_name,
+                )
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .then(cast_expr.clone())
+                .map(|(type_name, expr)| Expression::Cast {
+                    type_name: Box::new(type_name),
+                    expr: Box::new(expr),
+                })
+                .map_with(|r, e| (r, e.span()));
+
+            choice((cast_type_expression, unary_expression))
+        });
+
         let mul = just(Token::Star).to(BinOp::Mul);
+        let div = just(Token::Slash).to(BinOp::Div);
+        let rem = just(Token::Percent).to(BinOp::Rem);
         let add = just(Token::Plus).to(BinOp::Add);
         let sub = just(Token::Minus).to(BinOp::Sub);
+        let shl = just(Token::Shl).to(BinOp::Shl);
+        let shr = just(Token::Shr).to(BinOp::Shr);
+        let lt = just(Token::Lt).to(BinOp::Lt);
+        let le = just(Token::Le).to(BinOp::Le);
+        let gt = just(Token::Gt).to(BinOp::Gt);
+        let ge = just(Token::Ge).to(BinOp::Ge);
+        let eq = just(Token::EqEq).to(BinOp::Eq);
+        let ne = just(Token::Ne).to(BinOp::Ne);
+        let bit_and = just(Token::Amp).to(BinOp::BitAnd);
+        let bit_xor = just(Token::Caret).to(BinOp::BitXor);
+        let bit_or = just(Token::Pipe).to(BinOp::BitOr);
+        let logical_and = just(Token::And).to(BinOp::And);
         let logical_or = just(Token::Or).to(BinOp::Or);
 
-        let multiplicative = unary_expression
+        let multiplicative = cast_expression
             .clone()
-            .then(mul.then(unary_expression).repeated().collect::<Vec<_>>())
+            .then(
+                choice((mul, div, rem))
+                    .then(cast_expression)
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
             .map(|(head, tails)| {
                 let mut expr = head;
                 for (op, rhs) in tails {
@@ -347,7 +667,8 @@ where
                     expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
                 }
                 expr
-            });
+            })
+            .boxed();
 
         let additive = multiplicative
             .clone()
@@ -364,11 +685,17 @@ where
                     expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
                 }
                 expr
-            });
+            })
+            .boxed();
 
-        let logical_or_expr = additive
+        let shift = additive
             .clone()
-            .then(logical_or.then(additive).repeated().collect::<Vec<_>>())
+            .then(
+                choice((shl, shr))
+                    .then(additive)
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
             .map(|(head, tails)| {
                 let mut expr = head;
                 for (op, rhs) in tails {
@@ -376,15 +703,170 @@ where
                     expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
                 }
                 expr
-            });
+            })
+            .boxed();
 
-        let assignment = logical_or_expr
+        let relational = shift
             .clone()
-            .then(just(Token::Assign).ignore_then(rec.clone()).or_not())
-            .map(|(lhs, rhs)| {
-                if let Some(rhs) = rhs {
+            .then(
+                choice((lt, le, gt, ge))
+                    .then(shift)
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            })
+            .boxed();
+
+        let equality = relational
+            .clone()
+            .then(
+                choice((eq, ne))
+                    .then(relational)
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            })
+            .boxed();
+
+        let bit_and_expr = equality
+            .clone()
+            .then(bit_and.then(equality).repeated().collect::<Vec<_>>())
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            })
+            .boxed();
+
+        let bit_xor_expr = bit_and_expr
+            .clone()
+            .then(bit_xor.then(bit_and_expr).repeated().collect::<Vec<_>>())
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            })
+            .boxed();
+
+        let bit_or_expr = bit_xor_expr
+            .clone()
+            .then(bit_or.then(bit_xor_expr).repeated().collect::<Vec<_>>())
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            })
+            .boxed();
+
+        let logical_and_expr = bit_or_expr
+            .clone()
+            .then(logical_and.then(bit_or_expr).repeated().collect::<Vec<_>>())
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            })
+            .boxed();
+
+        let logical_or_expr = logical_and_expr
+            .clone()
+            .then(logical_or.then(logical_and_expr).repeated().collect::<Vec<_>>())
+            .map(|(head, tails)| {
+                let mut expr = head;
+                for (op, rhs) in tails {
+                    let span = expr.1;
+                    expr = (Expression::BinOp(Box::new(expr), op, Box::new(rhs)), span);
+                }
+                expr
+            })
+            .boxed();
+
+        let conditional_expr = logical_or_expr
+            .clone()
+            .then(
+                just(Token::Question)
+                    .ignore_then(rec.clone())
+                    .then_ignore(just(Token::Colon))
+                    .then(rec.clone())
+                    .map(|(then_expr, else_expr)| (then_expr, else_expr))
+                    .or_not(),
+            )
+            .map(|(cond, then_else)| {
+                if let Some((then_expr, else_expr)) = then_else {
+                    let span = cond.1;
+                    (
+                        Expression::Conditional {
+                            cond: Box::new(cond),
+                            then_expr: Box::new(then_expr),
+                            else_expr: Box::new(else_expr),
+                        },
+                        span,
+                    )
+                } else {
+                    cond
+                }
+            })
+            .boxed();
+
+        let assignment = conditional_expr
+            .clone()
+            .then(
+                choice((
+                    just(Token::Assign).to(None),
+                    just(Token::PlusAssign).to(Some(BinOp::Add)),
+                    just(Token::MinusAssign).to(Some(BinOp::Sub)),
+                    just(Token::StarAssign).to(Some(BinOp::Mul)),
+                    just(Token::SlashAssign).to(Some(BinOp::Div)),
+                    just(Token::PercentAssign).to(Some(BinOp::Rem)),
+                    just(Token::PipeAssign).to(Some(BinOp::BitOr)),
+                    just(Token::CaretAssign).to(Some(BinOp::BitXor)),
+                    just(Token::AmpAssign).to(Some(BinOp::BitAnd)),
+                    just(Token::ShlAssign).to(Some(BinOp::Shl)),
+                    just(Token::ShrAssign).to(Some(BinOp::Shr)),
+                ))
+                .then(rec.clone())
+                .or_not(),
+            )
+            .map(|(lhs, assign)| {
+                if let Some((op, rhs)) = assign {
                     let span = lhs.1;
-                    (Expression::BinOp(Box::new(lhs), BinOp::Assign, Box::new(rhs)), span)
+                    match op {
+                        Some(op) => (
+                            Expression::AssignWithOp {
+                                lhs: Box::new(lhs),
+                                op,
+                                rhs: Box::new(rhs),
+                            },
+                            span,
+                        ),
+                        None => (Expression::BinOp(Box::new(lhs), BinOp::Assign, Box::new(rhs)), span),
+                    }
                 } else {
                     lhs
                 }
@@ -395,10 +877,63 @@ where
     })
 }
 
+fn parse_integer_constant(text: &str) -> i64 {
+    parse_unsigned_integer_constant(text)
+        .map(|v| v as i64)
+        .unwrap_or_else(|e| panic!("invalid integer literal `{text}`: {e}"))
+}
+
+fn parse_unsigned_integer_constant(text: &str) -> Result<u64, String> {
+    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        return u64::from_str_radix(hex, 16).map_err(|e| e.to_string());
+    }
+
+    if text.len() > 1
+        && let Some(octal) = text.strip_prefix('0')
+    {
+        return u64::from_str_radix(octal, 8).map_err(|e| e.to_string());
+    }
+
+    text.parse::<u64>().map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone)]
 pub struct LazySubscription {
     #[allow(dead_code)]
     tokens: Vec<Spanned<Token>>,
+}
+
+impl LazySubscription {
+    pub fn constant_len(&self) -> Option<u64> {
+        let mut len = None;
+        for (token, _) in &self.tokens {
+            let next = match token {
+                Token::Integer(text, suffix) => {
+                    if !matches!(suffix, crate::lexer::IntegerSuffix::None) {
+                        return None;
+                    }
+                    parse_unsigned_integer_constant(text).ok()
+                }
+                Token::FloatLit(text, suffix) => {
+                    if !matches!(suffix, crate::lexer::FloatSuffix::None) {
+                        return None;
+                    }
+                    if !text.chars().all(|c| c.is_ascii_digit()) {
+                        return None;
+                    }
+                    text.parse::<u64>().ok()
+                }
+                _ => None,
+            };
+            if let Some(parsed) = next {
+                if len.is_some() {
+                    return None;
+                }
+                len = Some(parsed);
+            }
+        }
+        len
+    }
 }
 
 fn lazy_subscription<'src, I>()
@@ -546,7 +1081,81 @@ pub enum TypeSpecifier {
         kind: StructOrUnionKind,
         specifier: StructOrUnionSpecifier,
     },
+    Enum(EnumSpecifier),
     TypedefName(Spanned<RustPath>),
+}
+
+impl StructOrUnionSpecifier {
+    pub fn canonical_field_set_key(&self) -> Option<String> {
+        let fields = match self {
+            StructOrUnionSpecifier::Declared { .. } => return None,
+            StructOrUnionSpecifier::Defined { fields, .. } => fields,
+            StructOrUnionSpecifier::Anonymous { fields } => fields,
+        };
+
+        let mut entries = Vec::new();
+        for (field, _) in fields {
+            let base = canonical_base_type_key(&field.specifiers)?;
+            for (decl, _) in &field.declarators {
+                if decl.bits.is_some() {
+                    return None;
+                }
+                let (name, suffix) = canonical_decl_key(&decl.declarator.0)?;
+                let name = name?;
+                entries.push(format!("{name}:{base}{suffix}"));
+            }
+        }
+        entries.sort();
+        Some(format!("__co2_anon_struct{{{}}}", entries.join("|")))
+    }
+}
+
+fn canonical_base_type_key(specifiers: &[Spanned<TypeSpecifier>]) -> Option<String> {
+    for (specifier, _) in specifiers {
+        let key = match specifier {
+            TypeSpecifier::Int => "int".to_owned(),
+            TypeSpecifier::Void => "void".to_owned(),
+            TypeSpecifier::Char => "char".to_owned(),
+            TypeSpecifier::Short => "short".to_owned(),
+            TypeSpecifier::Long => "long".to_owned(),
+            TypeSpecifier::Float => "float".to_owned(),
+            TypeSpecifier::Double => "double".to_owned(),
+            TypeSpecifier::Signed => continue,
+            TypeSpecifier::Unsigned => continue,
+            TypeSpecifier::Enum(_) => "int".to_owned(),
+            TypeSpecifier::TypedefName(path) => path.0.to_pretty(),
+            TypeSpecifier::StructOrUnion { specifier, .. } => specifier.canonical_field_set_key()?,
+        };
+        return Some(key);
+    }
+    None
+}
+
+fn canonical_decl_key(decl: &Declarator) -> Option<(Option<String>, String)> {
+    match decl {
+        Declarator::Abstract => Some((None, String::new())),
+        Declarator::Identifier((name, _)) => Some((Some(name.clone()), String::new())),
+        Declarator::FunctionDeclarator {
+            declarator,
+            param_list,
+        } => {
+            let (name, inner) = canonical_decl_key(&declarator.0)?;
+            let suffix = if param_list.ellipsis {
+                "(...)".to_owned()
+            } else {
+                "()".to_owned()
+            };
+            Some((name, format!("{inner}{suffix}")))
+        }
+        Declarator::PointerDeclarator { declarator, .. } => {
+            let (name, inner) = canonical_decl_key(&declarator.0)?;
+            Some((name, format!("*{inner}")))
+        }
+        Declarator::ArrayDeclarator { declarator, .. } => {
+            let (name, inner) = canonical_decl_key(&declarator.0)?;
+            Some((name, format!("{inner}[]")))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -598,11 +1207,11 @@ where
             .then_ignore(just(Token::Semicolon)),
         type_specifier_rec,
     )
-    .map(|(specifiers, declarators)| StructOrUnionField {
-        specifiers,
-        declarators,
-    })
-    .map_with(|r, e| (r, e.span()));
+        .map(|(specifiers, declarators)| StructOrUnionField {
+            specifiers,
+            declarators,
+        })
+        .map_with(|r, e| (r, e.span()));
     single
         .repeated()
         .collect()
@@ -629,11 +1238,37 @@ pub enum StructOrUnionKind {
     Union,
 }
 
+#[derive(Debug, Clone)]
+pub struct Enumerator {
+    pub ident: Spanned<String>,
+    pub value: Option<Spanned<Expression>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum EnumSpecifier {
+    Defined {
+        ident: Spanned<String>,
+        enumerators: Vec<Spanned<Enumerator>>,
+    },
+    Declared {
+        ident: Spanned<String>,
+    },
+    Anonymous {
+        enumerators: Vec<Spanned<Enumerator>>,
+    },
+}
+
 fn type_specifier<'src, 'r: 'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
     + 'src,
+    expression_rec: impl Parser<'src, I, Spanned<Expression>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
     resolver: &'r dyn TypeResolver,
+    allow_unsure_paths: bool,
+    allow_path_types: bool,
+    allow_enum_definition: bool,
 ) -> impl Parser<'src, I, Spanned<TypeSpecifier>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -655,6 +1290,37 @@ where
         ))
         .map(|(kind, specifier)| TypeSpecifier::StructOrUnion { kind, specifier });
 
+        let enumerator = identifier()
+            .then(just(Token::Assign).ignore_then(expression_rec).or_not())
+            .map(|(ident, value)| Enumerator { ident, value })
+            .map_with(|r, e| (r, e.span()));
+        let enum_body = enumerator
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace));
+        let enum_specifier = if allow_enum_definition {
+            just(Token::Enum)
+                .ignore_then(
+                    choice((
+                        identifier()
+                            .then(enum_body.clone())
+                            .map(|(ident, enumerators)| EnumSpecifier::Defined { ident, enumerators }),
+                        enum_body
+                            .clone()
+                            .map(|enumerators| EnumSpecifier::Anonymous { enumerators }),
+                        identifier().map(|ident| EnumSpecifier::Declared { ident }),
+                    )),
+                )
+                .map(TypeSpecifier::Enum)
+                .boxed()
+        } else {
+            just(Token::Enum)
+                .ignore_then(identifier().map(|ident| EnumSpecifier::Declared { ident }))
+                .map(TypeSpecifier::Enum)
+                .boxed()
+        };
+
         choice([
             just(Token::Int).to(TypeSpecifier::Int),
             just(Token::Void).to(TypeSpecifier::Void),
@@ -667,16 +1333,18 @@ where
             just(Token::Unsigned).to(TypeSpecifier::Unsigned),
         ])
         .or(struct_or_union_specifier)
-        .or(
-            rust_path()
-                .filter(move |path| {
-                    matches!(
-                        resolver.classify_path(&path.0),
-                        TypeQueryResult::Type | TypeQueryResult::Unsure
-                    )
-                })
-                .map(TypeSpecifier::TypedefName),
-        )
+        .or(enum_specifier)
+        .or(rust_path().filter(move |path| {
+            if !allow_path_types {
+                return false;
+            }
+            match resolver.classify_path(&path.0) {
+                TypeQueryResult::Type => true,
+                TypeQueryResult::Unsure => allow_unsure_paths,
+                TypeQueryResult::Expr => false,
+            }
+        })
+        .map(TypeSpecifier::TypedefName))
         .map_with(|r, e| (r, e.span()))
         .labelled("Type specifier")
     })
@@ -717,6 +1385,18 @@ pub enum TypeQualifier {
     Volatile,
 }
 
+#[derive(Debug, Clone)]
+pub enum SpecifierQualifier {
+    TypeSpecifier(Spanned<TypeSpecifier>),
+    TypeQualifier(Spanned<TypeQualifier>),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeName {
+    pub specifier_qualifier_list: Vec<Spanned<SpecifierQualifier>>,
+    pub abstract_declarator: Option<Spanned<Declarator>>,
+}
+
 fn type_qualifier<'src, I>()
 -> impl Parser<'src, I, Spanned<TypeQualifier>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -732,6 +1412,73 @@ where
     .map_with(|r, e| (r, e.span()))
 }
 
+fn specifier_qualifier<'src, 'r: 'src, I>(
+    declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
+    expression_rec: impl Parser<'src, I, Spanned<Expression>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
+    resolver: &'r dyn TypeResolver,
+    allow_path_types: bool,
+    allow_unsure_paths: bool,
+) -> impl Parser<'src, I, Spanned<SpecifierQualifier>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    choice((
+        type_specifier(
+            declarator_rec,
+            expression_rec,
+            resolver,
+            allow_unsure_paths,
+            allow_path_types,
+            false,
+        )
+        .map(SpecifierQualifier::TypeSpecifier),
+        type_qualifier().map(SpecifierQualifier::TypeQualifier),
+    ))
+    .map_with(|r, e| (r, e.span()))
+}
+
+fn type_name<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+    expression_rec: impl Parser<'src, I, Spanned<Expression>, extra::Err<Rich<'src, Token, Span>>>
+        + Clone
+        + 'src,
+    allow_path_types: bool,
+    allow_unsure_paths: bool,
+) -> impl Parser<'src, I, TypeName, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    let declarator = declarator(resolver, expression_rec.clone());
+    let sq = specifier_qualifier(
+        declarator.clone(),
+        expression_rec,
+        resolver,
+        allow_path_types,
+        allow_unsure_paths,
+    )
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>();
+    sq.then(declarator.or_not()).map(
+        |(specifier_qualifier_list, abstract_declarator)| TypeName {
+            specifier_qualifier_list,
+            abstract_declarator: abstract_declarator.and_then(|decl| {
+                if matches!(decl.0, Declarator::Abstract) {
+                    None
+                } else {
+                    Some(decl)
+                }
+            }),
+        },
+    )
+}
+
 #[derive(Debug, Clone)]
 pub enum DeclarationSpecifier {
     TypeSpecifier(Spanned<TypeSpecifier>),
@@ -743,14 +1490,19 @@ fn declaration_specifier<'src, 'r: 'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
     + 'src,
+    expression_rec: impl Parser<'src, I, Spanned<Expression>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
     resolver: &'r dyn TypeResolver,
+    allow_enum_definition: bool,
 ) -> impl Parser<'src, I, Spanned<DeclarationSpecifier>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     choice((
-        type_specifier(declarator_rec, resolver).map(DeclarationSpecifier::TypeSpecifier),
+        type_specifier(declarator_rec, expression_rec, resolver, true, true, allow_enum_definition)
+            .map(DeclarationSpecifier::TypeSpecifier),
         type_qualifier().map(DeclarationSpecifier::TypeQualifier),
         storage_class_specifier().map(DeclarationSpecifier::StorageSpecifier),
     ))
@@ -793,6 +1545,9 @@ fn parameter_type_list<'src, 'r: 'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
     + 'src,
+    expression_rec: impl Parser<'src, I, Spanned<Expression>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
     resolver: &'r dyn TypeResolver,
 ) -> impl Parser<'src, I, ParameterList, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -803,7 +1558,7 @@ where
         declarator_rec
             .clone()
             .then_ignore(look_ahead(Token::RParen).or(look_ahead(Token::Comma))),
-        declaration_specifier(declarator_rec, resolver),
+        declaration_specifier(declarator_rec, expression_rec, resolver, false),
     );
     single
         .separated_by(just(Token::Comma))
@@ -836,6 +1591,9 @@ pub enum Declarator {
 
 fn declarator<'src, 'r: 'src, I>(
     resolver: &'r dyn TypeResolver,
+    expression_rec: impl Parser<'src, I, Spanned<Expression>, extra::Err<Rich<'src, Token, Span>>>
+        + Clone
+        + 'src,
 )
 -> impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -847,11 +1605,14 @@ where
             .map(Declarator::Identifier)
             .or(empty().to(Declarator::Abstract))
             .map_with(|r, e| (r, e.span()));
+        let grouped = rec
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        let param_list = parameter_type_list(rec, resolver).map(Err);
+        let param_list = parameter_type_list(rec, expression_rec, resolver).map(Err);
         let subscription = lazy_subscription().map(Ok);
 
-        let direct_declarator = ident
+        let direct_declarator = choice((grouped, ident))
             .then(param_list.or(subscription).repeated().collect())
             .map(|(mut base, tails): (_, Vec<_>)| {
                 for tail in tails {
@@ -915,20 +1676,99 @@ where
 #[derive(Debug, Clone)]
 pub struct InitDeclarator {
     pub declarator: Spanned<Declarator>,
-    pub initializer: Option<Spanned<Expression>>,
+    pub initializer: Option<Spanned<Initializer>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Designator {
+    Subscript(Spanned<Expression>),
+    Field(Spanned<String>),
+}
+
+#[derive(Debug, Clone)]
+pub struct InitializerItem {
+    pub designators: Option<Vec<Spanned<Designator>>>,
+    pub initializer: Spanned<Initializer>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Initializer {
+    Expr(Spanned<Expression>),
+    List(Vec<Spanned<InitializerItem>>),
+}
+
+fn initializer<'src, 'r: 'src, I>(
+    resolver: &'r dyn TypeResolver,
+    allow_path_types_in_type_name: bool,
+    stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
+)
+-> impl Parser<'src, I, Spanned<Initializer>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    recursive(|init_rec| {
+        let designator = choice((
+            expression(resolver, stmt_rec.clone())
+                .delimited_by(just(Token::LBracket), just(Token::RBracket))
+                .map(Designator::Subscript),
+            just(Token::Dot).ignore_then(identifier()).map(Designator::Field),
+        ))
+        .map_with(|r, e| (r, e.span()));
+
+        let initializer_item = designator
+            .repeated()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .then_ignore(just(Token::Assign))
+            .or_not()
+            .then(init_rec.clone())
+            .map(|(designators, initializer)| InitializerItem {
+                designators,
+                initializer,
+            })
+            .map_with(|r, e| (r, e.span()));
+
+        let list = initializer_item
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(Initializer::List)
+            .map_with(|r, e| (r, e.span()));
+
+        let expr = expression_with_type_paths(resolver, stmt_rec, allow_path_types_in_type_name)
+            .map(Initializer::Expr)
+            .map_with(|r, e| (r, e.span()));
+
+        choice((list, expr))
+    })
 }
 
 fn init_declarator_list<'src, 'r: 'src, I>(
     resolver: &'r dyn TypeResolver,
+    allow_path_types_in_type_name: bool,
+    stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
 )
 -> impl Parser<'src, I, Vec<Spanned<InitDeclarator>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    declarator(resolver)
+    declarator(
+        resolver,
+        expression_with_type_paths(resolver, stmt_rec.clone(), allow_path_types_in_type_name),
+    )
         .filter(|decl| declarator_has_name(&decl.0))
-        .then(just(Token::Assign).ignore_then(expression()).or_not())
+        .then(
+            just(Token::Assign)
+                .ignore_then(initializer(resolver, allow_path_types_in_type_name, stmt_rec.clone()))
+                .or_not(),
+        )
         .map(|(declarator, initializer)| InitDeclarator {
             declarator,
             initializer,
@@ -948,6 +1788,15 @@ fn declarator_has_name(decl: &Declarator) -> bool {
     }
 }
 
+fn declarator_is_function(decl: &Declarator) -> bool {
+    match decl {
+        Declarator::FunctionDeclarator { .. } => true,
+        Declarator::Identifier(_) | Declarator::Abstract => false,
+        Declarator::PointerDeclarator { declarator, .. } => declarator_is_function(&declarator.0),
+        Declarator::ArrayDeclarator { declarator, .. } => declarator_is_function(&declarator.0),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Declaration {
     FunctionDefinition {
@@ -963,42 +1812,36 @@ pub enum Declaration {
 
 fn declaration<'src, 'r: 'src, I>(
     resolver: &'r dyn TypeResolver,
+    allow_path_types_in_type_name: bool,
+    stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
 )
 -> impl Parser<'src, I, Spanned<Declaration>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
+    let expr = expression_with_type_paths(resolver, stmt_rec.clone(), allow_path_types_in_type_name);
+    let declarator = declarator(resolver, expr.clone());
     let function = left_recursion(
-        group((
-            identifier(),
-            parameter_type_list(declarator(resolver), resolver),
-            lazy_compound_statement(),
-        )),
-        declaration_specifier(declarator(resolver), resolver),
+        declarator.clone()
+            .filter(|decl| declarator_has_name(&decl.0))
+            .filter(|decl| declarator_is_function(&decl.0))
+            .then_ignore(look_ahead(Token::LBrace))
+            .then(lazy_compound_statement()),
+        declaration_specifier(declarator.clone(), expr.clone(), resolver, true),
     )
-    .map(
-        |(declaration_specifiers, ((ident, ident_span), params, body))| {
-            Declaration::FunctionDefinition {
-                declaration_specifiers,
-                declarator: (
-                    Declarator::FunctionDeclarator {
-                        declarator: Box::new((
-                            Declarator::Identifier((ident, ident_span)),
-                            ident_span,
-                        )),
-                        param_list: params,
-                    },
-                    ident_span,
-                ),
-                body,
-            }
-        },
-    );
+    .map(|(declaration_specifiers, (declarator, body))| Declaration::FunctionDefinition {
+        declaration_specifiers,
+        declarator,
+        body,
+    });
 
     let simple = left_recursion(
-        init_declarator_list(resolver).then_ignore(just(Token::Semicolon)),
-        declaration_specifier(declarator(resolver), resolver),
+        init_declarator_list(resolver, allow_path_types_in_type_name, stmt_rec)
+            .then_ignore(just(Token::Semicolon)),
+        declaration_specifier(declarator, expr, resolver, true),
     )
     .map(
         |(declaration_specifiers, declarators)| Declaration::Declaration {
@@ -1049,7 +1892,7 @@ where
     use_item()
         .repeated()
         .collect()
-        .then(declaration(resolver).repeated().collect())
+        .then(declaration(resolver, true, statement(resolver)).repeated().collect())
         .map_with(|(rust_use_items, items), e| {
             (
                 TranslationUnit {
@@ -1059,4 +1902,11 @@ where
                 e.span(),
             )
         })
+}
+
+#[test]
+fn parser_is_constructible() {
+    use chumsky::input::Input;
+    let parser = translation_unit(&crate::AllowAllTypes);
+    parser.parse((&[]).map(SimpleSpan { start: 1, end: 2, context: () }, |_| unreachable!()));
 }
