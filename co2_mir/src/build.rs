@@ -8,8 +8,8 @@ use rustc_public_generative::rustc_public::{
         Rvalue, Statement as MirStatement, StatementKind as MirStatementKind,
     },
     ty::{
-        FnDef, GenericArgKind, GenericArgs, IntTy, MirConst, RigidTy, Span as RustSpan, Ty,
-        TyKind, UintTy, VariantIdx,
+        FnDef, GenericArgKind, GenericArgs, IntTy, MirConst, RigidTy, Span as RustSpan, Ty, TyKind,
+        UintTy, VariantIdx,
     },
 };
 

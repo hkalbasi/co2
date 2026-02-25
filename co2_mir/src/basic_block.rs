@@ -96,7 +96,9 @@ impl Builder<'_> {
                                 ),
                                 span: expr.span,
                             });
-                            value = rustc_public_generative::rustc_public::mir::Operand::Copy(place(cast_local));
+                            value = rustc_public_generative::rustc_public::mir::Operand::Copy(
+                                place(cast_local),
+                            );
                         }
                         self.stmts.push(MirStatement {
                             kind: MirStatementKind::Assign(
@@ -106,7 +108,13 @@ impl Builder<'_> {
                             span: expr.span,
                         });
                     } else if let HirExprKind::Call { func, args } = &expr.kind {
-                        self.lower_call_to_destination(func, args, expr.span, place(0), self.locals[0].ty);
+                        self.lower_call_to_destination(
+                            func,
+                            args,
+                            expr.span,
+                            place(0),
+                            self.locals[0].ty,
+                        );
                     } else {
                         let value = self.lower_expr_to_operand(expr);
                         self.stmts.push(MirStatement {
@@ -162,28 +170,31 @@ impl Builder<'_> {
         let cond_op = self.lower_expr_to_operand(&cond_expr);
         let entry_span = span;
         let entry_idx = self.blocks.len();
-        self.blocks.push(rustc_public_generative::rustc_public::mir::BasicBlock {
-            statements: std::mem::take(&mut self.stmts),
-            terminator: MirTerminator {
-                kind: TerminatorKind::SwitchInt {
-                    discr: cond_op,
-                    targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements: std::mem::take(&mut self.stmts),
+                terminator: MirTerminator {
+                    kind: TerminatorKind::SwitchInt {
+                        discr: cond_op,
+                        targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+                    },
+                    span: entry_span,
                 },
-                span: entry_span,
-            },
-        });
+            });
 
         let then_bb = self.blocks.len();
         for stmt in then_stmts {
             self.lower_stmt(stmt);
         }
-        let then_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, entry_span);
+        let then_exit =
+            self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, entry_span);
 
         let else_bb = self.blocks.len();
         for stmt in else_stmts {
             self.lower_stmt(stmt);
         }
-        let else_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, entry_span);
+        let else_exit =
+            self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, entry_span);
 
         let join_bb = self.blocks.len();
         self.patch_goto_target(then_exit, join_bb);
@@ -229,19 +240,20 @@ impl Builder<'_> {
         span: rustc_public_generative::rustc_public::ty::Span,
     ) {
         let next = self.blocks.len() + 1;
-        self.blocks.push(rustc_public_generative::rustc_public::mir::BasicBlock {
-            statements: std::mem::take(&mut self.stmts),
-            terminator: MirTerminator {
-                kind: TerminatorKind::Call {
-                    func,
-                    args,
-                    destination,
-                    target: Some(next),
-                    unwind: UnwindAction::Continue,
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements: std::mem::take(&mut self.stmts),
+                terminator: MirTerminator {
+                    kind: TerminatorKind::Call {
+                        func,
+                        args,
+                        destination,
+                        target: Some(next),
+                        unwind: UnwindAction::Continue,
+                    },
+                    span,
                 },
-                span,
-            },
-        });
+            });
     }
 
     pub(crate) fn push_exit_terminator(
@@ -255,9 +267,9 @@ impl Builder<'_> {
                     vec![],
                     span,
                 ),
-                args: vec![rustc_public_generative::rustc_public::mir::Operand::Copy(place(
-                    self.exit_code_local.expect("missing exit code local"),
-                ))],
+                args: vec![rustc_public_generative::rustc_public::mir::Operand::Copy(
+                    place(self.exit_code_local.expect("missing exit code local")),
+                )],
                 destination: place(0),
                 target: None,
                 unwind: UnwindAction::Continue,
@@ -272,10 +284,11 @@ impl Builder<'_> {
         span: rustc_public_generative::rustc_public::ty::Span,
     ) -> usize {
         let idx = self.blocks.len();
-        self.blocks.push(rustc_public_generative::rustc_public::mir::BasicBlock {
-            statements: std::mem::take(&mut self.stmts),
-            terminator: MirTerminator { kind, span },
-        });
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements: std::mem::take(&mut self.stmts),
+                terminator: MirTerminator { kind, span },
+            });
         idx
     }
 
@@ -288,7 +301,12 @@ impl Builder<'_> {
         }
     }
 
-    pub(crate) fn patch_switch_targets(&mut self, block_idx: usize, then_bb: usize, else_bb: usize) {
+    pub(crate) fn patch_switch_targets(
+        &mut self,
+        block_idx: usize,
+        then_bb: usize,
+        else_bb: usize,
+    ) {
         match &mut self.blocks[block_idx].terminator.kind {
             TerminatorKind::SwitchInt { targets, .. } => {
                 *targets = SwitchTargets::new(vec![(0, else_bb)], then_bb);

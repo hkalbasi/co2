@@ -1,4 +1,6 @@
-use co2_parser::{DeclarationSpecifier, Declarator, Span, Spanned, StructOrUnionSpecifier, TypeSpecifier};
+use co2_parser::{
+    DeclarationSpecifier, Declarator, Span, Spanned, StructOrUnionSpecifier, TypeSpecifier,
+};
 use rustc_public_generative::rustc_public::{
     DefId,
     mir::Mutability,
@@ -21,7 +23,13 @@ pub fn lower_function_signature(
     typedef_hir_tys: &std::collections::HashMap<String, HirTy>,
 ) -> Result<(String, FunctionSignature, Vec<String>), String> {
     let parsed_param_names = function_param_names(&declarator.0);
-    let base = base_ty_of_decl(ctx, declaration_specifiers, declarator.1, typedefs, typedef_hir_tys)?;
+    let base = base_ty_of_decl(
+        ctx,
+        declaration_specifiers,
+        declarator.1,
+        typedefs,
+        typedef_hir_tys,
+    )?;
     let (decl_ty, name) = extract_decl_type(
         ctx,
         TyOrFunction::Ty(base),
@@ -49,7 +57,13 @@ pub fn lower_value_decl_type(
     typedefs: &std::collections::HashMap<String, DefId>,
     typedef_hir_tys: &std::collections::HashMap<String, HirTy>,
 ) -> Result<(String, HirTy), String> {
-    let base = base_ty_of_decl(ctx, declaration_specifiers, declarator.1, typedefs, typedef_hir_tys)?;
+    let base = base_ty_of_decl(
+        ctx,
+        declaration_specifiers,
+        declarator.1,
+        typedefs,
+        typedef_hir_tys,
+    )?;
     let (decl_ty, name) = extract_decl_type(
         ctx,
         TyOrFunction::Ty(base),
@@ -94,12 +108,12 @@ fn base_ty_of_decl(
                             return Err(format!("unresolved struct/union tag: {}", ident.0));
                         }
                     }
-                    StructOrUnionSpecifier::Defined { .. } | StructOrUnionSpecifier::Anonymous { .. } => {
-                        let key = specifier
-                            .canonical_field_set_key()
-                            .ok_or_else(|| {
-                                "struct/union type is only supported when declared at top level".to_owned()
-                            })?;
+                    StructOrUnionSpecifier::Defined { .. }
+                    | StructOrUnionSpecifier::Anonymous { .. } => {
+                        let key = specifier.canonical_field_set_key().ok_or_else(|| {
+                            "struct/union type is only supported when declared at top level"
+                                .to_owned()
+                        })?;
                         if let Some(def_id) = typedefs.get(&key) {
                             HirTy::adt(AdtDef(*def_id), vec![], span)
                         } else {
@@ -152,9 +166,7 @@ fn extract_decl_type(
             param_list,
         } => {
             let mut inputs = Vec::with_capacity(param_list.parameters.len());
-            if !(param_list.parameters.len() == 1
-                && parameter_is_void(&param_list.parameters[0]))
-            {
+            if !(param_list.parameters.len() == 1 && parameter_is_void(&param_list.parameters[0])) {
                 for param in param_list.parameters {
                     let param_base =
                         base_ty_of_decl(ctx, param.0, span, typedefs, typedef_hir_tys)?;

@@ -172,7 +172,9 @@ impl<R> HirCtx<'_, R> {
             Statement::Default { .. } => {
                 return Err("default label outside of switch body".to_owned());
             }
-            Statement::Goto(name) => out.push(HirStmt::Goto(self.resolve_or_insert_label(name.0), span)),
+            Statement::Goto(name) => {
+                out.push(HirStmt::Goto(self.resolve_or_insert_label(name.0), span))
+            }
             Statement::Label { name, statement } => {
                 out.push(HirStmt::Label(self.resolve_or_insert_label(name.0), span));
                 self.lower_stmt(statement.0, statement.1, out, locals, local_map)?;
@@ -196,7 +198,10 @@ impl<R> HirCtx<'_, R> {
             } => {
                 let cond = self.lower_expr(cond, locals, local_map)?;
                 if !is_condition_ty(cond.ty) {
-                    return Err(format!("if condition must be scalar-like, got {:?}", cond.ty));
+                    return Err(format!(
+                        "if condition must be scalar-like, got {:?}",
+                        cond.ty
+                    ));
                 }
 
                 let mut then_map = local_map.clone();
@@ -231,7 +236,10 @@ impl<R> HirCtx<'_, R> {
             Statement::While { cond, body } => {
                 let cond = self.lower_expr(cond, locals, local_map)?;
                 if !is_condition_ty(cond.ty) {
-                    return Err(format!("while condition must be scalar-like, got {:?}", cond.ty));
+                    return Err(format!(
+                        "while condition must be scalar-like, got {:?}",
+                        cond.ty
+                    ));
                 }
                 let cond_label = self.fresh_label();
                 let body_label = self.fresh_label();
@@ -294,7 +302,10 @@ impl<R> HirCtx<'_, R> {
                 let cond = if let Some(cond) = cond {
                     let cond = self.lower_expr(cond, locals, local_map)?;
                     if !is_condition_ty(cond.ty) {
-                        return Err(format!("for condition must be scalar-like, got {:?}", cond.ty));
+                        return Err(format!(
+                            "for condition must be scalar-like, got {:?}",
+                            cond.ty
+                        ));
                     }
                     cond
                 } else {
@@ -335,7 +346,10 @@ impl<R> HirCtx<'_, R> {
             Statement::Switch { expr, body } => {
                 let discr = self.lower_expr(expr, locals, local_map)?;
                 if !is_condition_ty(discr.ty) {
-                    return Err(format!("switch expression must be scalar-like, got {:?}", discr.ty));
+                    return Err(format!(
+                        "switch expression must be scalar-like, got {:?}",
+                        discr.ty
+                    ));
                 }
                 let discr_local = locals.alloc(HirLocal {
                     name: format!("__switch_discr{}", locals.len()),

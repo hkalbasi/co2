@@ -1,11 +1,14 @@
 use co2_hir::{HirExpr, HirExprKind, ResolvedValue};
 use rustc_public_generative::rustc_public::{
     CrateItem,
-    mir::{Mutability, Place as MirPlace, ProjectionElem as MirProjection, Rvalue, Statement as MirStatement, StatementKind as MirStatementKind},
+    mir::{
+        Mutability, Place as MirPlace, ProjectionElem as MirProjection, Rvalue,
+        Statement as MirStatement, StatementKind as MirStatementKind,
+    },
     ty::Ty,
 };
 
-use crate::{build::Builder};
+use crate::build::Builder;
 
 pub(crate) fn place(local: usize) -> MirPlace {
     MirPlace {

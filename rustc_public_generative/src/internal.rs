@@ -15,8 +15,8 @@ use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefI
 use rustc_hir::definitions::{DefPathData, Definitions, DisambiguatorState};
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
 use rustc_index::{Idx, IndexVec};
-use rustc_middle::mir::{BorrowKind, ConstValue};
 use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
+use rustc_middle::mir::{BorrowKind, ConstValue};
 use rustc_middle::query::Providers as QueryProviders;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::util::Providers as UtilProviders;
@@ -180,7 +180,12 @@ impl ItemSignatureInfo {
                         })
                     }
                 },
-                crate::HirModuleItem::TypeDef { id, span, ty, name: _ } => {
+                crate::HirModuleItem::TypeDef {
+                    id,
+                    span,
+                    ty,
+                    name: _,
+                } => {
                     result.push(ItemSignatureInfo {
                         id: *id,
                         kind: ItemSignatureKind::TypeDef(ty.clone()),
@@ -236,7 +241,10 @@ pub enum ItemSignatureKind {
     ForeignFunction(FunctionSignature),
     Struct(Vec<StructField>),
     TypeDef(HirTy),
-    Static { ty: HirTy, mutable: bool },
+    Static {
+        ty: HirTy,
+        mutable: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -482,10 +490,12 @@ impl DefinedCrateInfo {
         }
 
         let mut static_items_hir = Vec::new();
-        for (my_def_id, static_ty, mutable) in signatures.iter().filter_map(|item| match &item.kind {
-            ItemSignatureKind::Static { ty, mutable } => Some((item.id, ty, *mutable)),
-            _ => None,
-        }) {
+        for (my_def_id, static_ty, mutable) in
+            signatures.iter().filter_map(|item| match &item.kind {
+                ItemSignatureKind::Static { ty, mutable } => Some((item.id, ty, *mutable)),
+                _ => None,
+            })
+        {
             let name = &self
                 .items
                 .iter()
@@ -1468,11 +1478,9 @@ fn generated_resolutions<'tcx>(
                 continue;
             };
             let (res, is_root_child, is_foreign_child) = match item.kind {
-                DefinedItemKind::Function { .. } => (
-                    Res::Def(DefKind::Fn, local_def_id.to_def_id()),
-                    true,
-                    false,
-                ),
+                DefinedItemKind::Function { .. } => {
+                    (Res::Def(DefKind::Fn, local_def_id.to_def_id()), true, false)
+                }
                 DefinedItemKind::Struct(_) => (
                     Res::Def(DefKind::Struct, local_def_id.to_def_id()),
                     true,
@@ -1483,11 +1491,9 @@ fn generated_resolutions<'tcx>(
                     true,
                     false,
                 ),
-                DefinedItemKind::ForeignFunction(_) => (
-                    Res::Def(DefKind::Fn, local_def_id.to_def_id()),
-                    false,
-                    true,
-                ),
+                DefinedItemKind::ForeignFunction(_) => {
+                    (Res::Def(DefKind::Fn, local_def_id.to_def_id()), false, true)
+                }
                 _ => continue,
             };
             let child = rustc_middle::metadata::ModChild {
@@ -1512,13 +1518,17 @@ fn generated_resolutions<'tcx>(
                     .module_children
                     .insert(foreign_mod_local, foreign_children);
             }
-            (*r_ptr).effective_visibilities.public_at_level(CRATE_DEF_ID);
+            (*r_ptr)
+                .effective_visibilities
+                .public_at_level(CRATE_DEF_ID);
             for item in &defined_crate.items {
                 let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local()
                 else {
                     continue;
                 };
-                (*r_ptr).effective_visibilities.public_at_level(local_def_id);
+                (*r_ptr)
+                    .effective_visibilities
+                    .public_at_level(local_def_id);
             }
         }
 
@@ -2350,7 +2360,8 @@ fn make_adt_ty<'tcx>(
         (def_id, kind)
     };
     let ident = Ident::from_str(tcx.item_name(def_id).as_str());
-    let mut segment = hir::PathSegment::new(ident, HirId::make_owner(owner), Res::Def(kind, def_id));
+    let mut segment =
+        hir::PathSegment::new(ident, HirId::make_owner(owner), Res::Def(kind, def_id));
     if !args.is_empty() {
         let mut hir_args = Vec::with_capacity(args.len());
         for arg in args {

@@ -142,7 +142,11 @@ fn build_compilers(root: &Path) -> Result<()> {
 fn run_suite(root: &Path, suite: Suite, filter: Option<&str>, stats: &mut Stats) -> Result<()> {
     let dir = root.join("tests").join("compiletest").join(suite.as_str());
     let tests = collect_tests(&dir, filter)?;
-    eprintln!("running {} tests for suite `{}`", tests.len(), suite.as_str());
+    eprintln!(
+        "running {} tests for suite `{}`",
+        tests.len(),
+        suite.as_str()
+    );
 
     for test in tests {
         let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
@@ -206,9 +210,7 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
 
     let mut compile_flags = directive_args(test, "compile-flags")?;
     if suite == Suite::Debuginfo
-        && !compile_flags
-            .windows(2)
-            .any(|w| w == ["-C", "debuginfo=2"])
+        && !compile_flags.windows(2).any(|w| w == ["-C", "debuginfo=2"])
         && !compile_flags.iter().any(|s| s.contains("debuginfo="))
     {
         compile_flags.extend(["-C".to_owned(), "debuginfo=2".to_owned()]);
@@ -244,7 +246,11 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
             cmd.output().context("failed to execute co2")?
         }
         Mode::Rust => {
-            let rust_src = temp_path.join(test.path.file_name().context("missing Rust test filename")?);
+            let rust_src = temp_path.join(
+                test.path
+                    .file_name()
+                    .context("missing Rust test filename")?,
+            );
             fs::copy(&test.path, &rust_src).context("failed to copy Rust test source")?;
 
             let mut aux_externs = Vec::new();
@@ -291,7 +297,8 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
                 cmd.arg("--extern")
                     .arg(format!("{crate_name}={}", rlib_path.display()));
             }
-            cmd.output().context("failed to execute co2 for Rust test")?
+            cmd.output()
+                .context("failed to execute co2 for Rust test")?
         }
     };
 
@@ -394,9 +401,7 @@ fn check_ui(test: &TestCase, output: &Output) -> Result<()> {
     }
 
     if patterns.is_empty() {
-        bail!(
-            "UI test has no expectations; add `//@ ui-error: ...` or a sidecar `.stderr` file"
-        );
+        bail!("UI test has no expectations; add `//@ ui-error: ...` or a sidecar `.stderr` file");
     }
 
     for pat in patterns {
@@ -535,13 +540,11 @@ fn check_debuginfo(test: &TestCase, compile: &CompileResult) -> Result<TestOutco
     let got_status = output.status.code().unwrap_or(-1);
     if got_status != expected_status {
         if let Some(reason) = debuginfo_skip_reason(&merged) {
-            return Ok(TestOutcome::Skip(
-                format!("debugger execution is restricted in this environment ({reason})"),
-            ));
+            return Ok(TestOutcome::Skip(format!(
+                "debugger execution is restricted in this environment ({reason})"
+            )));
         }
-        bail!(
-            "debugger status mismatch: expected {expected_status}, got {got_status}\n{merged}"
-        );
+        bail!("debugger status mismatch: expected {expected_status}, got {got_status}\n{merged}");
     }
 
     for check in checks {
@@ -575,8 +578,14 @@ fn debuginfo_skip_reason(output: &str) -> Option<&'static str> {
         ("no such process", "target process unavailable"),
         ("process exited with code 127", "debugger launch failed"),
         ("no symbol", "missing debuginfo symbols"),
-        ("no line number information", "missing line debug information"),
-        ("which has no line number information", "missing line debug information"),
+        (
+            "no line number information",
+            "missing line debug information",
+        ),
+        (
+            "which has no line number information",
+            "missing line debug information",
+        ),
     ];
 
     for (needle, reason) in markers {
@@ -622,11 +631,12 @@ fn collect_tests_inner(dir: &Path, filter: Option<&str>, out: &mut Vec<TestCase>
         }
         if path.file_name().and_then(OsStr::to_str).is_some_and(|f| {
             f.ends_with(".aux.rs") || f.ends_with(".aux.co2") || f.ends_with(".aux.c")
-        })
-        {
+        }) {
             continue;
         }
-        if let Some(f) = filter && !path.to_string_lossy().contains(f) {
+        if let Some(f) = filter
+            && !path.to_string_lossy().contains(f)
+        {
             continue;
         }
 

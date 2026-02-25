@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
 use co2_parser::{
-    BinOp as ParsedBinOp, Constant, Declarator, Expression, SpecifierQualifier, Spanned,
-    Statement, StatementOrDeclaration, TypeName, 
-    UnaryOp as ParsedUnaryOp,
-    UpdateOp as ParsedUpdateOp, IntegerSuffix,
+    BinOp as ParsedBinOp, Constant, Declarator, Expression, IntegerSuffix, Spanned,
+    SpecifierQualifier, Statement, StatementOrDeclaration, TypeName, UnaryOp as ParsedUnaryOp,
+    UpdateOp as ParsedUpdateOp,
 };
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
@@ -13,6 +12,7 @@ use rustc_public_generative::rustc_public::{
 };
 
 use crate::decl::call_arg_type_compatible;
+use crate::initializer_tree::InitializerTree;
 use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, ResolvedValue};
 use crate::stmt::HirStmt;
@@ -20,19 +20,27 @@ use crate::ty::{
     adt_field_tys, array_elem_ty, callable_sig, is_array_ty, is_condition_ty, is_integer_ty,
     is_maybe_uninit_fn_ptr_ty, resolve_field_in_adt, ty_matches_expected,
 };
-use crate::initializer_tree::InitializerTree;
 
 fn needs_implicit_cast(dst: Ty, src: &HirExpr) -> bool {
     let dst_is_mu_fn_ptr = is_maybe_uninit_fn_ptr_ty(dst).is_some();
     matches!(
         (dst.kind(), src.ty.kind()),
-        (TyKind::RigidTy(RigidTy::RawPtr(_, _)), TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_)))
-            | (TyKind::RigidTy(RigidTy::FnPtr(_)), TyKind::RigidTy(RigidTy::FnDef(_, _)))
-            | (TyKind::RigidTy(RigidTy::FnPtr(_)), TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_)))
+        (
+            TyKind::RigidTy(RigidTy::RawPtr(_, _)),
+            TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
+        ) | (
+            TyKind::RigidTy(RigidTy::FnPtr(_)),
+            TyKind::RigidTy(RigidTy::FnDef(_, _))
+        ) | (
+            TyKind::RigidTy(RigidTy::FnPtr(_)),
+            TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
+        )
     ) || (dst_is_mu_fn_ptr
         && matches!(
             src.ty.kind(),
-            TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::FnDef(_, _) | RigidTy::FnPtr(_))
+            TyKind::RigidTy(
+                RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::FnDef(_, _) | RigidTy::FnPtr(_)
+            )
         ))
 }
 
@@ -231,11 +239,8 @@ impl<R> HirCtx<'_, R> {
                     ));
                 }
 
-                for (idx, (expected, actual)) in sig
-                    .inputs()
-                    .iter()
-                    .zip(lowered_args.iter_mut())
-                    .enumerate()
+                for (idx, (expected, actual)) in
+                    sig.inputs().iter().zip(lowered_args.iter_mut()).enumerate()
                 {
                     if needs_implicit_cast(*expected, actual) {
                         *actual = HirExpr {
@@ -278,7 +283,10 @@ impl<R> HirCtx<'_, R> {
                 let mut base = self.lower_expr(*base, locals, local_map)?;
                 self.array_to_pointer_decay_if_array(&mut base);
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base.ty.kind() else {
-                    return Err(format!("arrow base must be pointer type, got {:?}", base.ty));
+                    return Err(format!(
+                        "arrow base must be pointer type, got {:?}",
+                        base.ty
+                    ));
                 };
                 let deref_base = HirExpr {
                     kind: HirExprKind::Deref(Box::new(base)),
@@ -301,10 +309,16 @@ impl<R> HirCtx<'_, R> {
                 self.array_to_pointer_decay_if_array(&mut base);
                 let index = self.lower_expr(*index, locals, local_map)?;
                 if !is_integer_ty(index.ty) {
-                    return Err(format!("subscript index must be integer, got {:?}", index.ty));
+                    return Err(format!(
+                        "subscript index must be integer, got {:?}",
+                        index.ty
+                    ));
                 }
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base.ty.kind() else {
-                    return Err(format!("subscript base must be pointer type, got {:?}", base.ty));
+                    return Err(format!(
+                        "subscript base must be pointer type, got {:?}",
+                        base.ty
+                    ));
                 };
                 let ptr_ty = base.ty;
                 let ptr_offset = HirExpr {
@@ -468,7 +482,8 @@ impl<R> HirCtx<'_, R> {
                     target_ty.kind(),
                     TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
                 ) || is_maybe_uninit_fn_ptr_ty(target_ty).is_some();
-                let src_is_fn_item = matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
+                let src_is_fn_item =
+                    matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
                 if !((src_is_int && dst_is_int)
                     || (src_is_ptr_like && dst_is_ptr_like)
                     || (src_is_int && dst_is_ptr_like)
@@ -493,12 +508,8 @@ impl<R> HirCtx<'_, R> {
                 initializer,
             } => {
                 let target_ty = self.lower_type_name(*type_name)?;
-                let tree = self.lower_to_initializer_tree(
-                    target_ty,
-                    *initializer,
-                    locals,
-                    local_map,
-                )?;
+                let tree =
+                    self.lower_to_initializer_tree(target_ty, *initializer, locals, local_map)?;
                 let init_expr = initializer_tree_to_expr(&tree, target_ty, span)
                     .ok_or_else(|| "unsupported compound literal initializer shape".to_owned())?;
                 Ok(init_expr)
@@ -538,7 +549,10 @@ impl<R> HirCtx<'_, R> {
                             });
                         }
                         if !is_place_expr(&inner) {
-                            if matches!(inner.kind, HirExprKind::Aggregate { .. } | HirExprKind::Zeroed) {
+                            if matches!(
+                                inner.kind,
+                                HirExprKind::Aggregate { .. } | HirExprKind::Zeroed
+                            ) {
                                 return Ok(HirExpr {
                                     kind: HirExprKind::AddrOf(Box::new(inner.clone())),
                                     ty: Ty::new_ptr(inner.ty, Mutability::Mut),
@@ -571,7 +585,10 @@ impl<R> HirCtx<'_, R> {
                     ParsedUnaryOp::Plus => Ok(inner),
                     ParsedUnaryOp::Not => {
                         if !is_condition_ty(inner.ty) {
-                            return Err(format!("unary `!` expects scalar-like expression, got {:?}", inner.ty));
+                            return Err(format!(
+                                "unary `!` expects scalar-like expression, got {:?}",
+                                inner.ty
+                            ));
                         }
                         Ok(HirExpr {
                             kind: HirExprKind::LogicalNot(Box::new(inner)),
@@ -612,9 +629,12 @@ impl<R> HirCtx<'_, R> {
             Expression::GnuStatementExpr { body } => {
                 let mut parsed = body.0;
                 let Some((last_item, _)) = parsed.statements.pop() else {
-                    return Err("gnu statement expression requires a final expression statement".to_owned());
+                    return Err(
+                        "gnu statement expression requires a final expression statement".to_owned(),
+                    );
                 };
-                let StatementOrDeclaration::Statement((Statement::Expression(tail), _)) = last_item else {
+                let StatementOrDeclaration::Statement((Statement::Expression(tail), _)) = last_item
+                else {
                     return Err(
                         "gnu statement expression final statement must be an expression".to_owned(),
                     );
@@ -627,15 +647,13 @@ impl<R> HirCtx<'_, R> {
                         StatementOrDeclaration::Declaration((decl, _)) => {
                             self.lower_decl(decl, &mut lowered_statements, locals, &mut scoped_map)?
                         }
-                        StatementOrDeclaration::Statement((stmt, span)) => {
-                            self.lower_stmt(
-                                stmt,
-                                span,
-                                &mut lowered_statements,
-                                locals,
-                                &mut scoped_map,
-                            )?
-                        }
+                        StatementOrDeclaration::Statement((stmt, span)) => self.lower_stmt(
+                            stmt,
+                            span,
+                            &mut lowered_statements,
+                            locals,
+                            &mut scoped_map,
+                        )?,
                     }
                 }
                 let tail = self.lower_expr(tail, locals, &mut scoped_map)?;
@@ -657,19 +675,19 @@ impl<R> HirCtx<'_, R> {
                 let cond = self.lower_expr(*cond, locals, local_map)?;
                 let then_expr = self.lower_expr(*then_expr, locals, local_map)?;
                 let else_expr = self.lower_expr(*else_expr, locals, local_map)?;
-                
+
                 let mut then_expr = then_expr;
                 let mut else_expr = else_expr;
                 self.array_to_pointer_decay_if_array(&mut then_expr);
                 self.array_to_pointer_decay_if_array(&mut else_expr);
-                
+
                 if !ty_matches_expected(then_expr.ty, else_expr.ty) {
                     return Err(format!(
                         "ternary operator branches have mismatched types: {:?} vs {:?}",
                         then_expr.ty, else_expr.ty
                     ));
                 }
-                
+
                 let result_ty = then_expr.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Conditional {
@@ -697,11 +715,10 @@ impl<R> HirCtx<'_, R> {
                         .ok_or_else(|| format!("unresolved struct/union tag: {}", ident.0))?,
                     co2_parser::StructOrUnionSpecifier::Defined { .. }
                     | co2_parser::StructOrUnionSpecifier::Anonymous { .. } => {
-                        let key = specifier
-                            .canonical_field_set_key()
-                            .ok_or_else(|| {
-                                "struct/union type is only supported when declared at top level".to_owned()
-                            })?;
+                        let key = specifier.canonical_field_set_key().ok_or_else(|| {
+                            "struct/union type is only supported when declared at top level"
+                                .to_owned()
+                        })?;
                         self.resolve_type(&key).ok_or_else(|| {
                             format!("anonymous struct type is not predeclared at top level: {key}")
                         })?
@@ -891,9 +908,12 @@ impl<R> HirCtx<'_, R> {
             ParsedBinOp::And | ParsedBinOp::Or => unreachable!(),
         };
         let ty = match op {
-            HirBinOp::Eq | HirBinOp::Lt | HirBinOp::Le | HirBinOp::Ne | HirBinOp::Ge | HirBinOp::Gt => {
-                Ty::signed_ty(IntTy::I32)
-            }
+            HirBinOp::Eq
+            | HirBinOp::Lt
+            | HirBinOp::Le
+            | HirBinOp::Ne
+            | HirBinOp::Ge
+            | HirBinOp::Gt => Ty::signed_ty(IntTy::I32),
             _ => lhs.ty,
         };
         Ok(HirExpr {
@@ -965,6 +985,8 @@ fn int_suffix_ty(suffix: IntegerSuffix) -> Ty {
         IntegerSuffix::None => Ty::signed_ty(IntTy::I32),
         IntegerSuffix::Long | IntegerSuffix::LongLong => Ty::signed_ty(IntTy::I64),
         IntegerSuffix::Unsigned => Ty::unsigned_ty(UintTy::U32),
-        IntegerSuffix::UnsignedLong | IntegerSuffix::UnsignedLongLong => Ty::unsigned_ty(UintTy::U64),
+        IntegerSuffix::UnsignedLong | IntegerSuffix::UnsignedLongLong => {
+            Ty::unsigned_ty(UintTy::U64)
+        }
     }
 }

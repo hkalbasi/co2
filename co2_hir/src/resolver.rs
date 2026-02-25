@@ -1,7 +1,5 @@
 use rustc_public_generative::rustc_public::{
-    CrateDefType,
-    CrateItem,
-    DefId,
+    CrateDefType, CrateItem, DefId,
     ty::{FnDef, Span as RustSpan, Ty},
 };
 use std::cell::RefCell;
@@ -22,10 +20,10 @@ impl ResolvedValue {
     pub(crate) fn ty(&self) -> Ty {
         match self {
             ResolvedValue::Fn(fn_def) => fn_def.ty(),
-            ResolvedValue::ConstInt(_) => Ty::signed_ty(rustc_public_generative::rustc_public::ty::IntTy::I32),
-            ResolvedValue::Static { def, ty } => {
-                ty.unwrap_or_else(|| CrateItem(*def).ty())
+            ResolvedValue::ConstInt(_) => {
+                Ty::signed_ty(rustc_public_generative::rustc_public::ty::IntTy::I32)
             }
+            ResolvedValue::Static { def, ty } => ty.unwrap_or_else(|| CrateItem(*def).ty()),
         }
     }
 }

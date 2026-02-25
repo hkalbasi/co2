@@ -1,11 +1,11 @@
-use co2_hir::{HirExpr, HirExprKind, HirLogicalOp, ReturnSemantic, ResolvedValue};
+use co2_hir::{HirExpr, HirExprKind, HirLogicalOp, ResolvedValue, ReturnSemantic};
 use rustc_public_generative::rustc_public::{
     CrateDefType,
     mir::{
         AggregateKind, BorrowKind, CastKind, ConstOperand, MutBorrowKind, Mutability,
         Operand as MirOperand, PointerCoercion, ProjectionElem as MirProjection, RawPtrKind,
-        Rvalue, Safety, SwitchTargets, TerminatorKind,
-        Statement as MirStatement, StatementKind as MirStatementKind,
+        Rvalue, Safety, Statement as MirStatement, StatementKind as MirStatementKind,
+        SwitchTargets, TerminatorKind,
     },
     ty::{GenericArgKind, GenericArgs, IntTy, MirConst, RigidTy, Span as RustSpan, Ty, TyKind},
 };
@@ -32,7 +32,13 @@ fn maybe_uninit_fn_ptr_inner(ty: Ty) -> Option<Ty> {
     }
 }
 
-fn callable_sig(ty: Ty) -> Option<rustc_public_generative::rustc_public::ty::Binder<rustc_public_generative::rustc_public::ty::FnSig>> {
+fn callable_sig(
+    ty: Ty,
+) -> Option<
+    rustc_public_generative::rustc_public::ty::Binder<
+        rustc_public_generative::rustc_public::ty::FnSig,
+    >,
+> {
     ty.kind()
         .fn_sig()
         .or_else(|| maybe_uninit_fn_ptr_inner(ty).and_then(|inner| inner.kind().fn_sig()))
@@ -80,12 +86,7 @@ impl Builder<'_> {
         MirOperand::Copy(place(dst_local))
     }
 
-    fn read_maybe_uninit_as(
-        &mut self,
-        src: &HirExpr,
-        value_ty: Ty,
-        span: RustSpan,
-    ) -> MirOperand {
+    fn read_maybe_uninit_as(&mut self, src: &HirExpr, value_ty: Ty, span: RustSpan) -> MirOperand {
         let src_place = if let Some(place) = self.lower_expr_to_place(src) {
             place
         } else {
@@ -169,7 +170,9 @@ impl Builder<'_> {
                 });
                 MirOperand::Copy(place(ptr_local))
             }
-            HirExprKind::Zeroed => panic!("zeroed expression must be lowered by declaration lowering"),
+            HirExprKind::Zeroed => {
+                panic!("zeroed expression must be lowered by declaration lowering")
+            }
             HirExprKind::Local(local) => {
                 let local_index = self.local_to_index(*local);
                 match self.locals[local_index].ty.kind() {
@@ -316,7 +319,9 @@ impl Builder<'_> {
                 }
                 self.lower_expr_to_operand(tail)
             }
-            HirExprKind::LogicalNot(inner) => self.lower_logical_not_expr(inner, expr.span, expr.ty),
+            HirExprKind::LogicalNot(inner) => {
+                self.lower_logical_not_expr(inner, expr.span, expr.ty)
+            }
             HirExprKind::BitNot(inner) => {
                 let inner_op = self.lower_expr_to_operand(inner);
                 let minus_one = self.lower_expr_to_operand(&HirExpr {
@@ -360,48 +365,49 @@ impl Builder<'_> {
                 MirOperand::Move(place(tmp))
             }
             HirExprKind::ConstStr(s) => self.lower_const_string(s, expr.span),
-            HirExprKind::Path(path) => {
-                match path {
-                    ResolvedValue::Fn(fn_def) => {
-                        let fn_ty = Ty::from_rigid_kind(RigidTy::FnDef(*fn_def, GenericArgs(vec![])));
-                        let c = MirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
-                        MirOperand::Constant(ConstOperand {
+            HirExprKind::Path(path) => match path {
+                ResolvedValue::Fn(fn_def) => {
+                    let fn_ty = Ty::from_rigid_kind(RigidTy::FnDef(*fn_def, GenericArgs(vec![])));
+                    let c = MirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
+                    MirOperand::Constant(ConstOperand {
+                        span: expr.span,
+                        user_ty: None,
+                        const_: c,
+                    })
+                }
+                ResolvedValue::ConstInt(v) => {
+                    let (uint_ty, bits) = crate::rvalue::int_literal_bits(*v, expr.ty);
+                    let c =
+                        MirConst::try_from_uint(bits, uint_ty).expect("failed to build enum const");
+                    let const_op = MirOperand::Constant(ConstOperand {
+                        span: expr.span,
+                        user_ty: None,
+                        const_: c,
+                    });
+                    if matches!(expr.ty.kind(), TyKind::RigidTy(RigidTy::Uint(_))) {
+                        const_op
+                    } else {
+                        let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                        self.stmts.push(MirStatement {
+                            kind: MirStatementKind::Assign(
+                                place(tmp),
+                                Rvalue::Cast(CastKind::IntToInt, const_op, expr.ty),
+                            ),
                             span: expr.span,
-                            user_ty: None,
-                            const_: c,
-                        })
-                    }
-                    ResolvedValue::ConstInt(v) => {
-                        let (uint_ty, bits) = crate::rvalue::int_literal_bits(*v, expr.ty);
-                        let c = MirConst::try_from_uint(bits, uint_ty).expect("failed to build enum const");
-                        let const_op = MirOperand::Constant(ConstOperand {
-                            span: expr.span,
-                            user_ty: None,
-                            const_: c,
                         });
-                        if matches!(expr.ty.kind(), TyKind::RigidTy(RigidTy::Uint(_))) {
-                            const_op
-                        } else {
-                            let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                            self.stmts.push(MirStatement {
-                                kind: MirStatementKind::Assign(
-                                    place(tmp),
-                                    Rvalue::Cast(CastKind::IntToInt, const_op, expr.ty),
-                                ),
-                                span: expr.span,
-                            });
-                            MirOperand::Copy(place(tmp))
-                        }
-                    }
-                    ResolvedValue::Static { .. } => {
-                        let place = self
-                            .lower_expr_to_place(expr)
-                            .expect("static path should be place-expressible");
-                        MirOperand::Copy(place)
+                        MirOperand::Copy(place(tmp))
                     }
                 }
+                ResolvedValue::Static { .. } => {
+                    let place = self
+                        .lower_expr_to_place(expr)
+                        .expect("static path should be place-expressible");
+                    MirOperand::Copy(place)
+                }
+            },
+            HirExprKind::Call { func, args } => {
+                self.lower_call_expr(func, args, expr.span, expr.ty)
             }
-            HirExprKind::Call { func, args } => self.lower_call_expr(func, args, expr.span, expr.ty),
             HirExprKind::Assign { lhs, rhs } => {
                 let lhs_place = self
                     .lower_expr_to_place(lhs)
@@ -425,19 +431,29 @@ impl Builder<'_> {
                 let rhs_value = self.lower_expr_to_operand(rhs);
                 let old_lhs = self.new_temp(lhs.ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(place(old_lhs), Rvalue::Use(MirOperand::Copy(lhs_place.clone()))),
+                    kind: MirStatementKind::Assign(
+                        place(old_lhs),
+                        Rvalue::Use(MirOperand::Copy(lhs_place.clone())),
+                    ),
                     span: expr.span,
                 });
                 let new_val = self.new_temp(lhs.ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         place(new_val),
-                        Rvalue::BinaryOp(self.lower_bin_op(*op), MirOperand::Copy(place(old_lhs)), rhs_value),
+                        Rvalue::BinaryOp(
+                            self.lower_bin_op(*op),
+                            MirOperand::Copy(place(old_lhs)),
+                            rhs_value,
+                        ),
                     ),
                     span: expr.span,
                 });
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(MirOperand::Copy(place(new_val)))),
+                    kind: MirStatementKind::Assign(
+                        lhs_place.clone(),
+                        Rvalue::Use(MirOperand::Copy(place(new_val))),
+                    ),
                     span: expr.span,
                 });
                 match return_semantic {
@@ -455,7 +471,10 @@ impl Builder<'_> {
                     .expect("assignment lhs should be place-expressible");
                 let old_lhs = self.new_temp(lhs.ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(place(old_lhs), Rvalue::Use(MirOperand::Copy(lhs_place.clone()))),
+                    kind: MirStatementKind::Assign(
+                        place(old_lhs),
+                        Rvalue::Use(MirOperand::Copy(lhs_place.clone())),
+                    ),
                     span: expr.span,
                 });
                 let rhs_op = self.lower_expr_to_operand(rhs);
@@ -481,7 +500,10 @@ impl Builder<'_> {
                     span: expr.span,
                 });
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(MirOperand::Copy(place(new_ptr)))),
+                    kind: MirStatementKind::Assign(
+                        lhs_place.clone(),
+                        Rvalue::Use(MirOperand::Copy(place(new_ptr))),
+                    ),
                     span: expr.span,
                 });
                 match return_semantic {
@@ -505,7 +527,10 @@ impl Builder<'_> {
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         place(tmp),
-                        Rvalue::AddressOf(rustc_public_generative::rustc_public::mir::RawPtrKind::Mut, target_place),
+                        Rvalue::AddressOf(
+                            rustc_public_generative::rustc_public::mir::RawPtrKind::Mut,
+                            target_place,
+                        ),
                     ),
                     span: expr.span,
                 });
@@ -593,10 +618,7 @@ impl Builder<'_> {
 
                 if dst_mu_fn_ptr.is_some() && src_is_fn_ptr {
                     return self.write_value_into_maybe_uninit_storage(
-                        dst_ty,
-                        inner_op,
-                        src_ty,
-                        expr.span,
+                        dst_ty, inner_op, src_ty, expr.span,
                     );
                 }
 
@@ -699,10 +721,7 @@ impl Builder<'_> {
                         MirOperand::Copy(place(usize_tmp))
                     };
                     return self.write_value_into_maybe_uninit_storage(
-                        dst_ty,
-                        usize_op,
-                        usize_ty,
-                        expr.span,
+                        dst_ty, usize_op, usize_ty, expr.span,
                     );
                 }
 
@@ -748,16 +767,17 @@ impl Builder<'_> {
 
         let lhs_op = self.lower_expr_to_operand(lhs);
         let entry_bb = self.blocks.len();
-        self.blocks.push(rustc_public_generative::rustc_public::mir::BasicBlock {
-            statements: std::mem::take(&mut self.stmts),
-            terminator: rustc_public_generative::rustc_public::mir::Terminator {
-                kind: TerminatorKind::SwitchInt {
-                    discr: lhs_op,
-                    targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements: std::mem::take(&mut self.stmts),
+                terminator: rustc_public_generative::rustc_public::mir::Terminator {
+                    kind: TerminatorKind::SwitchInt {
+                        discr: lhs_op,
+                        targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+                    },
+                    span,
                 },
-                span,
-            },
-        });
+            });
 
         let (lhs_short_bb, rhs_eval_bb, lhs_short_val) = match op {
             HirLogicalOp::And => (self.blocks.len(), self.blocks.len() + 1, 0),
@@ -770,27 +790,26 @@ impl Builder<'_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(result_local),
-                Rvalue::Use(lhs_short_operand),
-            ),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(lhs_short_operand)),
             span,
         });
-        let lhs_short_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
+        let lhs_short_exit =
+            self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
         debug_assert_eq!(rhs_eval_bb, self.blocks.len());
         let rhs_op = self.lower_expr_to_operand(rhs);
         let rhs_switch_bb = self.blocks.len();
-        self.blocks.push(rustc_public_generative::rustc_public::mir::BasicBlock {
-            statements: std::mem::take(&mut self.stmts),
-            terminator: rustc_public_generative::rustc_public::mir::Terminator {
-                kind: TerminatorKind::SwitchInt {
-                    discr: rhs_op,
-                    targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements: std::mem::take(&mut self.stmts),
+                terminator: rustc_public_generative::rustc_public::mir::Terminator {
+                    kind: TerminatorKind::SwitchInt {
+                        discr: rhs_op,
+                        targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+                    },
+                    span,
                 },
-                span,
-            },
-        });
+            });
 
         let rhs_false_bb = self.blocks.len();
         let rhs_false_operand = self.lower_expr_to_operand(&HirExpr {
@@ -799,13 +818,11 @@ impl Builder<'_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(result_local),
-                Rvalue::Use(rhs_false_operand),
-            ),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(rhs_false_operand)),
             span,
         });
-        let rhs_false_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
+        let rhs_false_exit =
+            self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
         let rhs_true_bb = self.blocks.len();
         let rhs_true_operand = self.lower_expr_to_operand(&HirExpr {
@@ -814,10 +831,7 @@ impl Builder<'_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(result_local),
-                Rvalue::Use(rhs_true_operand),
-            ),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(rhs_true_operand)),
             span,
         });
         let rhs_true_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -853,16 +867,17 @@ impl Builder<'_> {
         });
         let inner_op = self.lower_expr_to_operand(inner);
         let entry_bb = self.blocks.len();
-        self.blocks.push(rustc_public_generative::rustc_public::mir::BasicBlock {
-            statements: std::mem::take(&mut self.stmts),
-            terminator: rustc_public_generative::rustc_public::mir::Terminator {
-                kind: TerminatorKind::SwitchInt {
-                    discr: inner_op,
-                    targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements: std::mem::take(&mut self.stmts),
+                terminator: rustc_public_generative::rustc_public::mir::Terminator {
+                    kind: TerminatorKind::SwitchInt {
+                        discr: inner_op,
+                        targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+                    },
+                    span,
                 },
-                span,
-            },
-        });
+            });
 
         let true_bb = self.blocks.len();
         let one = self.lower_expr_to_operand(&HirExpr {
@@ -871,10 +886,7 @@ impl Builder<'_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(result_local),
-                Rvalue::Use(one),
-            ),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(one)),
             span,
         });
         let true_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -886,10 +898,7 @@ impl Builder<'_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(result_local),
-                Rvalue::Use(zero),
-            ),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero)),
             span,
         });
         let false_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -932,16 +941,17 @@ impl Builder<'_> {
         };
         let cond_op = self.lower_expr_to_operand(&cond_expr);
         let entry_bb = self.blocks.len();
-        self.blocks.push(rustc_public_generative::rustc_public::mir::BasicBlock {
-            statements: std::mem::take(&mut self.stmts),
-            terminator: rustc_public_generative::rustc_public::mir::Terminator {
-                kind: TerminatorKind::SwitchInt {
-                    discr: cond_op,
-                    targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements: std::mem::take(&mut self.stmts),
+                terminator: rustc_public_generative::rustc_public::mir::Terminator {
+                    kind: TerminatorKind::SwitchInt {
+                        discr: cond_op,
+                        targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
+                    },
+                    span,
                 },
-                span,
-            },
-        });
+            });
 
         let then_bb = self.blocks.len();
         let then_op = self.lower_expr_to_operand(then_expr);
@@ -1012,7 +1022,8 @@ impl Builder<'_> {
         span: RustSpan,
         ret_ty: Ty,
     ) {
-        let zeroed_fn = crate::build::dep_fn_any(self.deps, &["std::mem::zeroed", "core::mem::zeroed"]);
+        let zeroed_fn =
+            crate::build::dep_fn_any(self.deps, &["std::mem::zeroed", "core::mem::zeroed"]);
         let sig = zeroed_fn
             .ty()
             .kind()

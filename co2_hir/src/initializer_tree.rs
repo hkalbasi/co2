@@ -124,7 +124,10 @@ impl InitializerCursor {
         }
     }
 
-    fn go_next(&mut self, span: rustc_public_generative::rustc_public::ty::Span) -> Result<(), String> {
+    fn go_next(
+        &mut self,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) -> Result<(), String> {
         if self.stack.is_empty() {
             return Ok(());
         }
@@ -155,7 +158,9 @@ impl InitializerCursor {
             return Ok(());
         }
 
-        Err(format!("invalid initializer cursor parent type: {parent_ty:?} at {span:?}"))
+        Err(format!(
+            "invalid initializer cursor parent type: {parent_ty:?} at {span:?}"
+        ))
     }
 }
 
@@ -194,7 +199,9 @@ fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Result<HirExpr, String
     if is_maybe_uninit_fn_ptr_ty(expected_ty).is_some()
         && matches!(
             expr.ty.kind(),
-            TyKind::RigidTy(RigidTy::FnDef(_, _) | RigidTy::FnPtr(_) | RigidTy::Int(_) | RigidTy::Uint(_))
+            TyKind::RigidTy(
+                RigidTy::FnDef(_, _) | RigidTy::FnPtr(_) | RigidTy::Int(_) | RigidTy::Uint(_)
+            )
         )
     {
         return Ok(HirExpr {
@@ -215,7 +222,10 @@ fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Result<HirExpr, String
     if ty_matches_expected(expected_ty, expr.ty) {
         return Ok(expr);
     }
-    if matches!(expr.kind, HirExprKind::ConstInt(_)) && is_integer_ty(expr.ty) && is_integer_ty(expected_ty) {
+    if matches!(expr.kind, HirExprKind::ConstInt(_))
+        && is_integer_ty(expr.ty)
+        && is_integer_ty(expected_ty)
+    {
         return Ok(HirExpr {
             kind: expr.kind,
             ty: expected_ty,
@@ -251,7 +261,10 @@ impl<R> HirCtx<'_, R> {
             Initializer::Expr(expr) => {
                 // C string literal can initialize char arrays.
                 if is_array_ty(expected_ty)
-                    && matches!(expr.0, Expression::Constant(co2_parser::Constant::String(_)))
+                    && matches!(
+                        expr.0,
+                        Expression::Constant(co2_parser::Constant::String(_))
+                    )
                 {
                     let list = self.initializer_list_from_string(expected_ty, expr.clone());
                     return self.lower_to_initializer_tree(
@@ -294,19 +307,18 @@ impl<R> HirCtx<'_, R> {
                         let Initializer::Expr(expr) = &it.initializer.0 else {
                             unreachable!();
                         };
-                        lowered.push(self.lower_expr(
-                            expr.clone(),
-                            locals,
-                            local_map,
-                        )?);
+                        lowered.push(self.lower_expr(expr.clone(), locals, local_map)?);
                     }
 
-                    let mut positional_children: Vec<InitializerTree> = vec![InitializerTree::Zeroed; field_tys.len()];
+                    let mut positional_children: Vec<InitializerTree> =
+                        vec![InitializerTree::Zeroed; field_tys.len()];
                     let mut positional_ok = lowered.len() <= field_tys.len();
                     if positional_ok {
                         for (idx, val) in lowered.iter().enumerate() {
                             match coerce_expr_to_type(val.clone(), field_tys[idx]) {
-                                Ok(coerced) => positional_children[idx] = InitializerTree::Leaf(coerced),
+                                Ok(coerced) => {
+                                    positional_children[idx] = InitializerTree::Leaf(coerced)
+                                }
                                 Err(_) => {
                                     positional_ok = false;
                                     break;
@@ -320,7 +332,8 @@ impl<R> HirCtx<'_, R> {
                         });
                     }
 
-                    let mut reordered_children: Vec<InitializerTree> = vec![InitializerTree::Zeroed; field_tys.len()];
+                    let mut reordered_children: Vec<InitializerTree> =
+                        vec![InitializerTree::Zeroed; field_tys.len()];
                     let mut used = vec![false; field_tys.len()];
                     for val in lowered {
                         let mut placed = false;
@@ -348,7 +361,8 @@ impl<R> HirCtx<'_, R> {
                 }
 
                 let mut result = InitializerTree::Middle { children: vec![] };
-                let mut cursor = if adt_field_tys(expected_ty).is_some() || is_array_ty(expected_ty) {
+                let mut cursor = if adt_field_tys(expected_ty).is_some() || is_array_ty(expected_ty)
+                {
                     let mut c = InitializerCursor {
                         base_ty: expected_ty,
                         stack: vec![],
@@ -363,7 +377,9 @@ impl<R> HirCtx<'_, R> {
                     }
                     c
                 } else {
-                    return Err(format!("invalid initializer list target type: {expected_ty:?}"));
+                    return Err(format!(
+                        "invalid initializer list target type: {expected_ty:?}"
+                    ));
                 };
 
                 for (item, item_span) in items {
@@ -496,7 +512,10 @@ impl<R> HirCtx<'_, R> {
                     }
                     return Ok(());
                 }
-                Err(format!("initializer list target is not aggregate: {:?}", lhs.ty))
+                Err(format!(
+                    "initializer list target is not aggregate: {:?}",
+                    lhs.ty
+                ))
             }
         }
     }

@@ -72,8 +72,9 @@ impl<R> HirCtx<'_, R> {
         }
 
         let parse_resolver = BodyParseResolver { hir_ctx: self };
-        let parsed = parse_compound_statement(tokens, source_name.to_owned(), source, &parse_resolver)
-            .ok_or_else(|| "failed to parse function body".to_owned())?;
+        let parsed =
+            parse_compound_statement(tokens, source_name.to_owned(), source, &parse_resolver)
+                .ok_or_else(|| "failed to parse function body".to_owned())?;
         self.lower_compound_statement(
             parsed,
             &def.fn_sig().skip_binder(),

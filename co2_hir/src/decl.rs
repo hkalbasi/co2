@@ -28,7 +28,9 @@ enum TyOrFunction {
 }
 
 fn ty_contains_fn_ptr(ty: Ty) -> bool {
-    if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))) || is_maybe_uninit_fn_ptr_ty(ty).is_some() {
+    if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
+        || is_maybe_uninit_fn_ptr_ty(ty).is_some()
+    {
         return true;
     }
     if let Some(elem) = array_elem_ty(ty) {
@@ -144,7 +146,9 @@ impl<R> HirCtx<'_, R> {
                                 let needs_base_zero = tree_contains_zeroed(&tree);
                                 let can_skip_base_zero = !needs_base_zero && ty_contains_fn_ptr(ty);
                                 if can_skip_base_zero {
-                                    if let Some(aggregate_init) = tree_to_full_aggregate_expr(&tree, ty, span) {
+                                    if let Some(aggregate_init) =
+                                        tree_to_full_aggregate_expr(&tree, ty, span)
+                                    {
                                         Some(aggregate_init)
                                     } else {
                                         tree_initializer = Some(tree);
@@ -239,11 +243,10 @@ impl<R> HirCtx<'_, R> {
                             .ok_or_else(|| format!("unresolved struct/union tag: {}", ident.0)),
                         co2_parser::StructOrUnionSpecifier::Defined { .. }
                         | co2_parser::StructOrUnionSpecifier::Anonymous { .. } => {
-                            let key = specifier
-                                .canonical_field_set_key()
-                                .ok_or_else(|| {
-                                    "struct/union type is only supported when declared at top level".to_owned()
-                                })?;
+                            let key = specifier.canonical_field_set_key().ok_or_else(|| {
+                                "struct/union type is only supported when declared at top level"
+                                    .to_owned()
+                            })?;
                             self.resolve_type(&key).ok_or_else(|| {
                                 format!(
                                     "anonymous struct type is not predeclared at top level: {key}"
@@ -281,7 +284,8 @@ impl<R> HirCtx<'_, R> {
                 let mut inputs = Vec::with_capacity(param_list.parameters.len());
                 for param in param_list.parameters {
                     let param_base = self.base_ty_of_decl(param.0, span)?;
-                    let (param_decl_ty, _) = self.extract_decl_type(TyOrFunction::Ty(param_base), param.1)?;
+                    let (param_decl_ty, _) =
+                        self.extract_decl_type(TyOrFunction::Ty(param_base), param.1)?;
                     let mut param_ty = match param_decl_ty {
                         TyOrFunction::Ty(ty) => ty,
                         TyOrFunction::Function(_) => {
@@ -313,7 +317,9 @@ impl<R> HirCtx<'_, R> {
             }
             Declarator::PointerDeclarator { declarator, .. } => {
                 let ptr_or_fn_ptr = match current {
-                    TyOrFunction::Ty(inner) => TyOrFunction::Ty(Ty::new_ptr(inner, Mutability::Mut)),
+                    TyOrFunction::Ty(inner) => {
+                        TyOrFunction::Ty(Ty::new_ptr(inner, Mutability::Mut))
+                    }
                     TyOrFunction::Function(sig) => {
                         let fn_ptr = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
                         TyOrFunction::Ty(self.maybe_uninit_of(fn_ptr)?)

@@ -417,10 +417,10 @@ pub fn lexer<'src: 'static>()
             .at_most(3)
             .to_slice()
             .try_map(|s: &str, span| {
-            u32::from_str_radix(s, 8)
-                .ok()
-                .and_then(char::from_u32)
-                .ok_or(Rich::custom(span, "invalid octal escape sequence"))
+                u32::from_str_radix(s, 8)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .ok_or(Rich::custom(span, "invalid octal escape sequence"))
             }),
         just('x').ignore_then(
             one_of("0123456789abcdefABCDEF")

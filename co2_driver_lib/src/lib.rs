@@ -8,12 +8,10 @@ use co2_hir::{HirCtx, ResolvedValue};
 use co2_parser::{
     BinOp as ParsedBinOp, Declaration, DeclarationSpecifier, Declarator, EnumSpecifier, Expression,
     InitDeclarator, Initializer, StorageClassSpecifier, StructDeclarator, StructOrUnionField,
-    StructOrUnionSpecifier, TypeQueryResult, TypeResolver, TypeSpecifier,
-    UnaryOp as ParsedUnaryOp,
+    StructOrUnionSpecifier, TypeQueryResult, TypeResolver, TypeSpecifier, UnaryOp as ParsedUnaryOp,
 };
 use rustc_public_generative::rustc_public::{
-    CrateItem,
-    DefId,
+    CrateItem, DefId,
     mir::{
         BasicBlock, Body, CastKind, ConstOperand, LocalDecl, Mutability, Operand, Rvalue,
         Statement, StatementKind, Terminator, TerminatorKind,
@@ -29,7 +27,7 @@ mod types;
 pub use types::CompileMode;
 
 use crate::hir_ty::{lower_function_signature, lower_value_decl_type};
-use crate::span::{FILE_ID};
+use crate::span::FILE_ID;
 
 struct PendingCompile {
     mode: CompileMode,
@@ -151,9 +149,10 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         }
 
         let parse_resolver = TranslationUnitParseResolver;
-        let tu = co2_parser::parse_translation_unit(source_name.clone(), src_static, &parse_resolver)
-            .expect("failed to parse co2 source")
-            .0;
+        let tu =
+            co2_parser::parse_translation_unit(source_name.clone(), src_static, &parse_resolver)
+                .expect("failed to parse co2 source")
+                .0;
         let items = tu.items;
         let mut global_prelude_decls = items
             .iter()
@@ -165,12 +164,13 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     let is_typedef = declaration_specifiers.iter().any(|(spec, _)| {
                         matches!(
                             spec,
-                            DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Typedef, _))
+                            DeclarationSpecifier::StorageSpecifier((
+                                StorageClassSpecifier::Typedef,
+                                _
+                            ))
                         )
                     });
-                    let has_initializer = declarators
-                        .iter()
-                        .any(|d| d.0.initializer.is_some());
+                    let has_initializer = declarators.iter().any(|d| d.0.initializer.is_some());
                     if !is_typedef && has_initializer {
                         Some(item.clone())
                     } else {
@@ -252,9 +252,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     struct_tag_aliases.push((ident.0.clone(), key.clone()));
                     fields
                 }
-                StructOrUnionSpecifier::Anonymous { fields } => {
-                    fields
-                }
+                StructOrUnionSpecifier::Anonymous { fields } => fields,
                 StructOrUnionSpecifier::Declared { .. } => continue,
             };
 
@@ -455,8 +453,10 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                         ty,
                                     });
                                 } else if !matches!(ty.kind, rustc_gen::HirTyKind::FnPtr(_)) {
-                                    let type_def =
-                                        ctx.allocate_def_id(root_crate, rustc_gen::DefData::TypeNs(name.clone()));
+                                    let type_def = ctx.allocate_def_id(
+                                        root_crate,
+                                        rustc_gen::DefData::TypeNs(name.clone()),
+                                    );
                                     typedef_type_defs.insert(name.clone(), type_def);
                                     hir_items.push(rustc_gen::HirModuleItem::TypeDef {
                                         name,
@@ -793,9 +793,8 @@ fn collect_enum_constants(
             continue;
         };
         let enumerators = match enum_spec {
-            EnumSpecifier::Defined { enumerators, .. } | EnumSpecifier::Anonymous { enumerators } => {
-                enumerators
-            }
+            EnumSpecifier::Defined { enumerators, .. }
+            | EnumSpecifier::Anonymous { enumerators } => enumerators,
             EnumSpecifier::Declared { .. } => continue,
         };
         let mut next = 0i64;
@@ -812,7 +811,10 @@ fn collect_enum_constants(
     Ok(())
 }
 
-fn eval_enum_const_expr(expr: &Expression, enum_values: &HashMap<String, i64>) -> Result<i64, String> {
+fn eval_enum_const_expr(
+    expr: &Expression,
+    enum_values: &HashMap<String, i64>,
+) -> Result<i64, String> {
     match expr {
         Expression::Constant(co2_parser::Constant::Int(v, _)) => Ok(*v),
         Expression::Constant(co2_parser::Constant::Float(v)) => Ok(v.trunc() as i64),
@@ -827,7 +829,9 @@ fn eval_enum_const_expr(expr: &Expression, enum_values: &HashMap<String, i64>) -
             {
                 return Ok(*v);
             }
-            Err(format!("unknown enum constant in enumerator value: {pretty}"))
+            Err(format!(
+                "unknown enum constant in enumerator value: {pretty}"
+            ))
         }
         Expression::UnaryOp(op, inner) => {
             let v = eval_enum_const_expr(&inner.0, enum_values)?;
@@ -857,7 +861,9 @@ fn eval_enum_const_expr(expr: &Expression, enum_values: &HashMap<String, i64>) -
             let l = eval_enum_const_expr(&lhs.0, enum_values)?;
             let r = eval_enum_const_expr(&rhs.0, enum_values)?;
             match op {
-                ParsedBinOp::Assign => Err("assignment not allowed in enum constant expression".to_owned()),
+                ParsedBinOp::Assign => {
+                    Err("assignment not allowed in enum constant expression".to_owned())
+                }
                 ParsedBinOp::Add => Ok(l.wrapping_add(r)),
                 ParsedBinOp::Sub => Ok(l.wrapping_sub(r)),
                 ParsedBinOp::Mul => Ok(l.wrapping_mul(r)),
@@ -1127,7 +1133,11 @@ fn decl_all_declarators_in_set(decl: &Declaration, names: &HashSet<String>) -> b
     })
 }
 
-fn build_static_initializer_body(ty: Ty, init_value: i64, span: rustc_public_generative::rustc_public::ty::Span) -> Body {
+fn build_static_initializer_body(
+    ty: Ty,
+    init_value: i64,
+    span: rustc_public_generative::rustc_public::ty::Span,
+) -> Body {
     let locals = vec![
         LocalDecl {
             ty,

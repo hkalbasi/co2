@@ -19,9 +19,9 @@ pub use parser::{
     BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier, Declarator, Designator,
     EnumSpecifier, Enumerator, Expression, InitDeclarator, Initializer, InitializerItem,
     LazyCompoundStatement, RustPath, RustPathSegment, SpecifierQualifier, Statement,
-    StatementOrDeclaration, StorageClassSpecifier, StructDeclarator, StructOrUnionField, StructOrUnionSpecifier,
-    TranslationUnit as ParsedTranslationUnit, TypeName, TypeQueryResult, TypeSpecifier, UnaryOp,
-    UpdateOp, UseItem,
+    StatementOrDeclaration, StorageClassSpecifier, StructDeclarator, StructOrUnionField,
+    StructOrUnionSpecifier, TranslationUnit as ParsedTranslationUnit, TypeName, TypeQueryResult,
+    TypeSpecifier, UnaryOp, UpdateOp, UseItem,
 };
 
 // Type definitions
@@ -211,13 +211,15 @@ mod tests {
             else {
                 panic!("expected declaration");
             };
-            let spec = declaration_specifiers.iter().find_map(|(spec, _)| match spec {
-                DeclarationSpecifier::TypeSpecifier((
-                    TypeSpecifier::StructOrUnion { specifier, .. },
-                    _,
-                )) => Some(specifier),
-                _ => None,
-            });
+            let spec = declaration_specifiers
+                .iter()
+                .find_map(|(spec, _)| match spec {
+                    DeclarationSpecifier::TypeSpecifier((
+                        TypeSpecifier::StructOrUnion { specifier, .. },
+                        _,
+                    )) => Some(specifier),
+                    _ => None,
+                });
             spec.and_then(|s| s.canonical_field_set_key())
                 .expect("expected canonical key")
         };

@@ -1,10 +1,16 @@
 use co2_hir::HirBinOp;
 use rustc_public_generative::rustc_public::{
-    mir::{BinOp as MirBinOp, CastKind, ConstOperand, Mutability, Operand as MirOperand, Rvalue, Statement as MirStatement, StatementKind as MirStatementKind},
+    mir::{
+        BinOp as MirBinOp, CastKind, ConstOperand, Mutability, Operand as MirOperand, Rvalue,
+        Statement as MirStatement, StatementKind as MirStatementKind,
+    },
     ty::{IntTy, MirConst, Span as RustSpan, Ty, TyKind, UintTy},
 };
 
-use crate::{build::{Builder, dep_fn_any}, place::place};
+use crate::{
+    build::{Builder, dep_fn_any},
+    place::place,
+};
 
 pub(crate) fn int_literal_bits(value: i64, target_ty: Ty) -> (UintTy, u128) {
     let TyKind::RigidTy(rigid) = target_ty.kind() else {
