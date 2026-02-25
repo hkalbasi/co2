@@ -949,6 +949,7 @@ pub(crate) fn is_place_expr(expr: &HirExpr) -> bool {
     match &expr.kind {
         HirExprKind::Local(_) => true,
         HirExprKind::Field { base, .. } => is_place_expr(base),
+        HirExprKind::Path(ResolvedValue::Static { .. }) => true,
         HirExprKind::PtrOffset { .. } => false,
         HirExprKind::PtrDiff { .. } => false,
         HirExprKind::Logical { .. } => false,

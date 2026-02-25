@@ -1,5 +1,7 @@
 use rustc_public_generative::rustc_public::{
     CrateDefType,
+    CrateItem,
+    DefId,
     ty::{FnDef, Span as RustSpan, Ty},
 };
 use std::cell::RefCell;
@@ -13,6 +15,7 @@ use crate::item::{HirLabel, LabelId};
 pub enum ResolvedValue {
     Fn(FnDef),
     ConstInt(i64),
+    Static { def: DefId, ty: Option<Ty> },
 }
 
 impl ResolvedValue {
@@ -20,6 +23,9 @@ impl ResolvedValue {
         match self {
             ResolvedValue::Fn(fn_def) => fn_def.ty(),
             ResolvedValue::ConstInt(_) => Ty::signed_ty(rustc_public_generative::rustc_public::ty::IntTy::I32),
+            ResolvedValue::Static { def, ty } => {
+                ty.unwrap_or_else(|| CrateItem(*def).ty())
+            }
         }
     }
 }

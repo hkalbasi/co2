@@ -529,7 +529,10 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             });
             local_value_map.insert(
                 pending_static.name.clone(),
-                ResolvedValue::ConstInt(pending_static.init_value),
+                ResolvedValue::Static {
+                    def: pending_static.def,
+                    ty: None,
+                },
             );
         }
         let static_names = pending_statics

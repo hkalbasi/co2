@@ -393,6 +393,12 @@ impl Builder<'_> {
                             MirOperand::Copy(place(tmp))
                         }
                     }
+                    ResolvedValue::Static { .. } => {
+                        let place = self
+                            .lower_expr_to_place(expr)
+                            .expect("static path should be place-expressible");
+                        MirOperand::Copy(place)
+                    }
                 }
             }
             HirExprKind::Call { func, args } => self.lower_call_expr(func, args, expr.span, expr.ty),

@@ -1,6 +1,8 @@
-use co2_hir::{HirExpr, HirExprKind};
+use co2_hir::{HirExpr, HirExprKind, ResolvedValue};
 use rustc_public_generative::rustc_public::{
+    CrateItem,
     mir::{Mutability, Place as MirPlace, ProjectionElem as MirProjection, Rvalue, Statement as MirStatement, StatementKind as MirStatementKind},
+    ty::Ty,
 };
 
 use crate::{build::Builder};
@@ -35,6 +37,21 @@ impl Builder<'_> {
                     });
                     place(tmp)
                 };
+                base_place.projection.push(MirProjection::Deref);
+                Some(base_place)
+            }
+            HirExprKind::Path(ResolvedValue::Static { def, ty }) => {
+                let value_ty = ty.unwrap_or_else(|| CrateItem(*def).ty());
+                let ptr_ty = Ty::new_ptr(value_ty, Mutability::Mut);
+                let tmp_ptr = self.new_temp(ptr_ty, Mutability::Mut, expr.span);
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(
+                        place(tmp_ptr),
+                        Rvalue::ThreadLocalRef(CrateItem(*def)),
+                    ),
+                    span: expr.span,
+                });
+                let mut base_place = place(tmp_ptr);
                 base_place.projection.push(MirProjection::Deref);
                 Some(base_place)
             }

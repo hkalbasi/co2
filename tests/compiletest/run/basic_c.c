@@ -690,12 +690,29 @@ int main22()
 	return 0;
 }
 
+int counter = 0;
+int uninit;
+
+int count() {
+	counter += 1;
+	return counter;
+}
+
+int main23()
+{
+	count();
+	count();
+	count();
+	uninit = 4;
+	return count() - uninit;
+}
+
 int main() {
 	if (main1() || main2() || main3() || main4() || main5()
 		|| main6() || main7() || main8() || main9() || main10()
 		|| main11() || main12() || main13() || main14() || main15()
 		|| main16() || main17() || main18() || main19() || main20()
-		|| main21() || main22()) {
+		|| main21() || main22() || main23()) {
 		return 6;
 	}
 	return 0;

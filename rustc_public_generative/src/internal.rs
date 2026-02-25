@@ -15,7 +15,8 @@ use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefI
 use rustc_hir::definitions::{DefPathData, Definitions, DisambiguatorState};
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
 use rustc_index::{Idx, IndexVec};
-use rustc_middle::mir::BorrowKind;
+use rustc_middle::mir::{BorrowKind, ConstValue};
+use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
 use rustc_middle::query::Providers as QueryProviders;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::util::Providers as UtilProviders;
@@ -1990,7 +1991,25 @@ fn mir_rvalue_to_rustc<'tcx>(
     match rvalue {
         MirRvalue::Use(op) => rustc_middle::mir::Rvalue::Use(mir_operand_to_rustc(tcx, op)),
         MirRvalue::ThreadLocalRef(item) => {
-            rustc_middle::mir::Rvalue::ThreadLocalRef(internal(tcx, *item))
+            let def_id = internal(tcx, *item);
+            if tcx.is_thread_local_static(def_id) {
+                rustc_middle::mir::Rvalue::ThreadLocalRef(def_id)
+            } else {
+                let alloc_id = tcx.reserve_and_set_static_alloc(def_id);
+                let ptr = Pointer::new(CtfeProvenance::from(alloc_id), rustc_abi::Size::ZERO);
+                let scalar = Scalar::from_pointer(ptr, &tcx);
+                let ty = tcx.type_of(def_id).instantiate_identity();
+                let ptr_ty = rustc_middle::ty::Ty::new_mut_ptr(tcx, ty);
+                let const_ = rustc_middle::mir::Const::Val(ConstValue::Scalar(scalar), ptr_ty);
+                let op = rustc_middle::mir::Operand::Constant(Box::new(
+                    rustc_middle::mir::ConstOperand {
+                        span: DUMMY_SP,
+                        user_ty: None,
+                        const_,
+                    },
+                ));
+                rustc_middle::mir::Rvalue::Use(op)
+            }
         }
         MirRvalue::AddressOf(raw_ptr_kind, place) => rustc_middle::mir::Rvalue::RawPtr(
             match raw_ptr_kind {
@@ -2226,12 +2245,20 @@ fn mir_const_to_rustc<'tcx>(
     }
 }
 
-fn make_owner_info(nodes: hir::OwnerNodes<'static>) -> hir::OwnerInfo<'static> {
+fn make_owner_info_with_attrs(
+    nodes: hir::OwnerNodes<'static>,
+    attrs: Option<Vec<hir::Attribute>>,
+) -> hir::OwnerInfo<'static> {
+    let mut map = rustc_data_structures::sorted_map::SortedMap::new();
+    if let Some(attrs) = attrs {
+        let attrs: &'static [hir::Attribute] = Box::leak(attrs.into_boxed_slice());
+        map.insert(ItemLocalId::new(0), attrs);
+    }
     hir::OwnerInfo {
         nodes,
         parenting: LocalDefIdMap::default(),
         attrs: hir::AttributeMap {
-            map: rustc_data_structures::sorted_map::SortedMap::new(),
+            map,
             define_opaque: None,
             opt_hash: Some(Fingerprint::ZERO),
         },
@@ -2241,6 +2268,10 @@ fn make_owner_info(nodes: hir::OwnerNodes<'static>) -> hir::OwnerInfo<'static> {
             opt_hash: Some(Fingerprint::ZERO),
         },
     }
+}
+
+fn make_owner_info(nodes: hir::OwnerNodes<'static>) -> hir::OwnerInfo<'static> {
+    make_owner_info_with_attrs(nodes, None)
 }
 
 fn insert_non_owner(
