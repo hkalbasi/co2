@@ -12,3 +12,8 @@ int add(int a, int b) {
 int hypot(Point p) {
     return p.x * p.x + p.y * p.y;
 }
+
+typedef union {
+    int a;
+    u64 b;
+} Union1;

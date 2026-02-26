@@ -236,7 +236,8 @@ impl<R> HirCtx<'_, R> {
     ) -> Result<Ty, String> {
         for (specifier, _) in &specifiers {
             if let DeclarationSpecifier::TypeSpecifier((type_specifier, _)) = specifier {
-                if let co2_parser::TypeSpecifier::StructOrUnion { specifier, .. } = type_specifier {
+                if let co2_parser::TypeSpecifier::StructOrUnion { kind, specifier } = type_specifier
+                {
                     return match specifier {
                         co2_parser::StructOrUnionSpecifier::Declared { ident } => self
                             .resolve_type(&ident.0)
@@ -247,9 +248,10 @@ impl<R> HirCtx<'_, R> {
                                 "struct/union type is only supported when declared at top level"
                                     .to_owned()
                             })?;
+                            let key = format!("{kind:?}::{key}");
                             self.resolve_type(&key).ok_or_else(|| {
                                 format!(
-                                    "anonymous struct type is not predeclared at top level: {key}"
+                                    "anonymous struct/union type is not predeclared at top level: {key}"
                                 )
                             })
                         }

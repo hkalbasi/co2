@@ -674,7 +674,7 @@ impl<R> HirCtx<'_, R> {
             let SpecifierQualifier::TypeSpecifier((type_specifier, _)) = sq else {
                 continue;
             };
-            if let co2_parser::TypeSpecifier::StructOrUnion { specifier, .. } = type_specifier {
+            if let co2_parser::TypeSpecifier::StructOrUnion { kind, specifier } = type_specifier {
                 base = Some(match specifier {
                     co2_parser::StructOrUnionSpecifier::Declared { ident } => self
                         .resolve_type(&ident.0)
@@ -685,8 +685,11 @@ impl<R> HirCtx<'_, R> {
                             "struct/union type is only supported when declared at top level"
                                 .to_owned()
                         })?;
+                        let key = format!("{kind:?}::{key}");
                         self.resolve_type(&key).ok_or_else(|| {
-                            format!("anonymous struct type is not predeclared at top level: {key}")
+                            format!(
+                                "anonymous struct/union type is not predeclared at top level: {key}"
+                            )
                         })?
                     }
                 });
@@ -755,7 +758,10 @@ impl<R> HirCtx<'_, R> {
                 return Err(format!("field projection on non-adt type: {:?}", base.ty));
             };
             let Some(next_ty) = field_tys.get(*index).copied() else {
-                return Err(format!("field index out of bounds: {} for {:?}", index, base.ty));
+                return Err(format!(
+                    "field index out of bounds: {} for {:?}",
+                    index, base.ty
+                ));
             };
             base = HirExpr {
                 kind: HirExprKind::Field {

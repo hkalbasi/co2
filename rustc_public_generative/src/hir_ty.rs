@@ -1,4 +1,5 @@
 use rustc_public::{
+    DefId,
     mir::Mutability,
     ty::{AdtDef, FloatTy, IntTy, Span, UintTy},
 };
@@ -15,6 +16,7 @@ pub enum HirTyKind {
     Adt(AdtDef, Vec<HirGenericArg>),
     Tuple(Vec<HirTy>),
     RawPtr(Mutability, Box<HirTy>),
+    Ref(Mutability, DefId, Box<HirTy>),
     FnPtr(Box<FunctionSignature>),
     Path(HirPath),
 }
@@ -59,6 +61,13 @@ impl HirTy {
     pub fn new_ptr(inner: HirTy, mutbl: Mutability, span: Span) -> Self {
         HirTy {
             kind: HirTyKind::RawPtr(mutbl, Box::new(inner)),
+            span,
+        }
+    }
+
+    pub fn new_ref(inner: HirTy, mutbl: Mutability, lifetime: DefId, span: Span) -> Self {
+        HirTy {
+            kind: HirTyKind::Ref(mutbl, lifetime, Box::new(inner)),
             span,
         }
     }

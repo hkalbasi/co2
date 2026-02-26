@@ -150,12 +150,14 @@ pub(crate) fn resolve_field_path_in_adt(base: Ty, field: &str) -> Option<(Vec<us
     let TyKind::RigidTy(RigidTy::Adt(adt, args)) = base.kind() else {
         return None;
     };
+    let adt_is_union = is_union_ty(base);
     let variant = adt.variant(variant_idx(0))?;
     let fields = variant.fields();
     for (idx, field_def) in fields.iter().enumerate() {
         let name = field_def.name.to_string();
         if name == field {
-            return Some((vec![idx], field_def.ty_with_args(&args)));
+            let storage_idx = if adt_is_union { 0 } else { idx };
+            return Some((vec![storage_idx], field_def.ty_with_args(&args)));
         }
     }
     for (idx, field_def) in fields.iter().enumerate() {
@@ -164,13 +166,19 @@ pub(crate) fn resolve_field_path_in_adt(base: Ty, field: &str) -> Option<(Vec<us
             continue;
         }
         let nested_ty = field_def.ty_with_args(&args);
-        if let Some((mut sub_path, nested_field_ty)) = resolve_field_path_in_adt(nested_ty, field)
-        {
+        if let Some((mut sub_path, nested_field_ty)) = resolve_field_path_in_adt(nested_ty, field) {
             sub_path.insert(0, idx);
             return Some((sub_path, nested_field_ty));
         }
     }
     None
+}
+
+pub(crate) fn is_union_ty(ty: Ty) -> bool {
+    let TyKind::RigidTy(RigidTy::Adt(adt, _)) = ty.kind() else {
+        return false;
+    };
+    adt.kind().is_union()
 }
 
 pub(crate) fn adt_field_tys(base: Ty) -> Option<Vec<Ty>> {
@@ -190,6 +198,7 @@ pub(crate) fn adt_field_tys(base: Ty) -> Option<Vec<Ty>> {
 pub(crate) fn type_specifier_to_ty(type_specifier: &TypeSpecifier) -> Result<Option<Ty>, String> {
     let ty = match type_specifier {
         TypeSpecifier::Int => Some(Ty::signed_ty(IntTy::I32)),
+        TypeSpecifier::Bool => Some(Ty::bool_ty()),
         TypeSpecifier::Void => Some(Ty::new_tuple(&[])),
         TypeSpecifier::Char => Some(Ty::signed_ty(IntTy::I8)),
         TypeSpecifier::Short => Some(Ty::signed_ty(IntTy::I16)),

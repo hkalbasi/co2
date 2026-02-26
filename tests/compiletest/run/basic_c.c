@@ -771,12 +771,46 @@ int main25()
 	return 0;
 }
 
+struct S1_init {
+	int a;
+	int b;
+};
+
+struct S2_init {
+	int a;
+	int b;
+	union {
+		int c;
+		int d;
+	};
+	struct S1_init s;
+};
+
+struct S2_init v_init = {1, 2, 3, {4, 5}};
+
+int main26()
+{
+	if(v_init.a != 1)
+		return 1;
+	if(v_init.b != 2)
+		return 2;
+	if(v_init.c != 3 || v_init.d != 3)
+		return 3;
+	if(v_init.s.a != 4)
+		return 4;
+	if(v_init.s.b != 5)
+		return 5;
+
+	return 0;
+}
+
 int main() {
 	if (main1() || main2() || main3() || main4() || main5()
 		|| main6() || main7() || main8() || main9() || main10()
 		|| main11() || main12() || main13() || main14() || main15()
 		|| main16() || main17() || main18() || main19() || main20()
-		|| main21() || main22() || main23() || main24() || main25()) {
+		|| main21() || main22() || main23() || main24() || main25()
+		|| main26()) {
 		return 6;
 	}
 	return 0;

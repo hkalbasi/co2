@@ -6,9 +6,9 @@ use rustc_public_generative::rustc_public::{
     mir::Mutability,
     ty::{AdtDef, IntTy, UintTy},
 };
-use rustc_public_generative::{FunctionAbi, FunctionSignature, HirStructureCtx, HirTy, HirTyKind};
+use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyKind};
 
-use crate::span::co2_span_to_rustc;
+use crate::{CrateSigCtx, span::co2_span_to_rustc};
 
 enum TyOrFunction {
     Ty(HirTy),
@@ -16,7 +16,7 @@ enum TyOrFunction {
 }
 
 pub fn lower_function_signature(
-    ctx: &HirStructureCtx,
+    ctx: &CrateSigCtx,
     declaration_specifiers: Vec<Spanned<DeclarationSpecifier>>,
     declarator: Spanned<Declarator>,
     typedefs: &std::collections::HashMap<String, DefId>,
@@ -51,7 +51,29 @@ pub fn lower_function_signature(
 }
 
 pub fn lower_value_decl_type(
-    ctx: &HirStructureCtx,
+    ctx: &CrateSigCtx,
+    declaration_specifiers: Vec<Spanned<DeclarationSpecifier>>,
+    declarator: Spanned<Declarator>,
+    typedefs: &std::collections::HashMap<String, DefId>,
+    typedef_hir_tys: &std::collections::HashMap<String, HirTy>,
+) -> (String, HirTy) {
+    let span = declarator.1;
+    match try_lower_value_decl_type(
+        ctx,
+        declaration_specifiers,
+        declarator,
+        typedefs,
+        typedef_hir_tys,
+    ) {
+        Ok(x) => x,
+        Err(e) => {
+            ctx.terminate_with_error(span, &e);
+        }
+    }
+}
+
+pub fn try_lower_value_decl_type(
+    ctx: &CrateSigCtx,
     declaration_specifiers: Vec<Spanned<DeclarationSpecifier>>,
     declarator: Spanned<Declarator>,
     typedefs: &std::collections::HashMap<String, DefId>,
@@ -81,7 +103,7 @@ pub fn lower_value_decl_type(
 }
 
 pub fn lower_field_decl_type(
-    ctx: &HirStructureCtx,
+    ctx: &CrateSigCtx,
     declaration_specifiers: Vec<Spanned<DeclarationSpecifier>>,
     declarator: Spanned<Declarator>,
     typedefs: &std::collections::HashMap<String, DefId>,
@@ -110,7 +132,7 @@ pub fn lower_field_decl_type(
 }
 
 fn base_ty_of_decl(
-    ctx: &HirStructureCtx,
+    ctx: &CrateSigCtx,
     specifiers: Vec<Spanned<DeclarationSpecifier>>,
     span: Span,
     typedefs: &std::collections::HashMap<String, DefId>,
@@ -121,6 +143,10 @@ fn base_ty_of_decl(
         if let DeclarationSpecifier::TypeSpecifier((type_specifier, _)) = specifier {
             let ty = match type_specifier {
                 TypeSpecifier::Int => HirTy::signed_ty(IntTy::I32, span),
+                TypeSpecifier::Bool => HirTy {
+                    kind: HirTyKind::Bool,
+                    span,
+                },
                 TypeSpecifier::Void => HirTy::new_tuple(vec![], span),
                 TypeSpecifier::Char => HirTy::signed_ty(IntTy::I8, span),
                 TypeSpecifier::Short => HirTy::signed_ty(IntTy::I16, span),
@@ -129,7 +155,7 @@ fn base_ty_of_decl(
                 TypeSpecifier::Double => return Err("double is not supported".to_owned()),
                 TypeSpecifier::Signed | TypeSpecifier::Unsigned => continue,
                 TypeSpecifier::Enum(_) => HirTy::signed_ty(IntTy::I32, span),
-                TypeSpecifier::StructOrUnion { specifier, .. } => match specifier {
+                TypeSpecifier::StructOrUnion { kind, specifier } => match specifier {
                     StructOrUnionSpecifier::Declared { ident } => {
                         if let Some(def_id) = typedefs.get(&ident.0) {
                             HirTy::adt(AdtDef(*def_id), vec![], span)
@@ -143,11 +169,12 @@ fn base_ty_of_decl(
                             "struct/union type is only supported when declared at top level"
                                 .to_owned()
                         })?;
+                        let key = format!("{kind:?}::{key}");
                         if let Some(def_id) = typedefs.get(&key) {
                             HirTy::adt(AdtDef(*def_id), vec![], span)
                         } else {
                             return Err(format!(
-                                "anonymous struct type is not predeclared at top level: {key}"
+                                "anonymous struct/union type is not predeclared at top level: {key}"
                             ));
                         }
                     }
@@ -166,10 +193,10 @@ fn base_ty_of_decl(
                         } else if let Some(def_id) = typedefs.get(last) {
                             HirTy::adt(AdtDef(*def_id), vec![], span)
                         } else {
-                            return Err(format!("unresolved typedef path: {name}"));
+                            return Err(format!("unresolved type path: {name}"));
                         }
                     } else {
-                        return Err(format!("unresolved typedef path: {name}"));
+                        return Err(format!("unresolved type path: {name}"));
                     }
                 }
             };
@@ -180,7 +207,7 @@ fn base_ty_of_decl(
 }
 
 fn extract_decl_type(
-    ctx: &HirStructureCtx,
+    ctx: &CrateSigCtx,
     current: TyOrFunction,
     (decl, span): Spanned<Declarator>,
     typedefs: &std::collections::HashMap<String, DefId>,
@@ -217,6 +244,7 @@ fn extract_decl_type(
             }
             let function_ty = match current {
                 TyOrFunction::Ty(ret) => TyOrFunction::Function(FunctionSignature {
+                    lifetimes: vec![],
                     inputs,
                     output: ret,
                     abi: FunctionAbi::Rust,

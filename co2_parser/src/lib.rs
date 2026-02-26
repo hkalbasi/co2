@@ -14,14 +14,15 @@ mod exp;
 mod lexer;
 mod parser;
 
+pub use chumsky::prelude::Rich;
 pub use lexer::{FloatSuffix, IntegerSuffix, Token};
 pub use parser::{
     BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier, Declarator, Designator,
     EnumSpecifier, Enumerator, Expression, InitDeclarator, Initializer, InitializerItem,
     LazyCompoundStatement, RustPath, RustPathSegment, SpecifierQualifier, Statement,
     StatementOrDeclaration, StorageClassSpecifier, StructDeclarator, StructOrUnionField,
-    StructOrUnionSpecifier, TranslationUnit as ParsedTranslationUnit, TypeName, TypeQueryResult,
-    TypeSpecifier, UnaryOp, UpdateOp, UseItem,
+    StructOrUnionKind, StructOrUnionSpecifier, TranslationUnit as ParsedTranslationUnit, TypeName,
+    TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp, UseItem,
 };
 
 // Type definitions
@@ -132,7 +133,7 @@ pub fn parse_compound_statement(
 pub fn print_errors_and_terminate(
     filename: String,
     src: &'static str,
-    errs: Vec<chumsky::prelude::Rich<'_, char>>,
+    errs: Vec<Rich<'_, char>>,
 ) -> ! {
     errs.into_iter()
         .map(|e| e.map_token(|c| c.to_string()))
@@ -156,7 +157,7 @@ pub fn print_errors_and_terminate(
                         .with_color(Color::Yellow)
                 }))
                 .finish()
-                .print(sources([(filename.clone(), src.to_owned())]))
+                .eprint(sources([(filename.clone(), src.to_owned())]))
                 .unwrap()
         });
     std::process::exit(5);

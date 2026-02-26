@@ -33,8 +33,8 @@ mod hir_ty;
 mod internal;
 
 pub use hir_structure::{
-    ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirModule, HirModuleItem,
-    HirStructure, StructField,
+    ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirImplItem, HirImplItemKind,
+    HirModule, HirModuleItem, HirSelfKind, HirStructure, StructField,
 };
 pub use hir_ty::{HirGenericArg, HirTy, HirTyKind};
 
@@ -44,6 +44,7 @@ pub struct DependencyInfo {
     pub crates: Vec<DependencyCrate>,
     pub functions: Vec<DependencyFunction>,
     pub types: Vec<DependencyType>,
+    pub traits: Vec<DependencyTrait>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +64,14 @@ pub struct DependencyFunction {
 #[derive(Debug, Clone)]
 pub struct DependencyType {
     pub adt: AdtDef,
+    pub path: String,
+    pub def_path_hash_hi: u64,
+    pub def_path_hash_lo: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DependencyTrait {
+    pub def_id: DefId,
     pub path: String,
     pub def_path_hash_hi: u64,
     pub def_path_hash_lo: u64,
@@ -117,4 +126,6 @@ pub enum DefData {
     ForeignMod,
     ValueNs(String),
     TypeNs(String),
+    LifetimeNs(String),
+    Impl,
 }

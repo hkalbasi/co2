@@ -1098,6 +1098,7 @@ where
 #[derive(Debug, Clone)]
 pub enum TypeSpecifier {
     Int,
+    Bool,
     Void,
     Char,
     Short,
@@ -1132,8 +1133,20 @@ impl StructOrUnionSpecifier {
                 continue;
             }
             for (decl, _) in &field.declarators {
-                if decl.bits.is_some() {
-                    return None;
+                if let Some((bits, _)) = &decl.bits {
+                    // Include bit fields in the canonical key; they are lowered as their
+                    // underlying integer type (Rust does not support bit fields).
+                    let field_name = match &decl.declarator.0 {
+                        Declarator::Identifier((n, _)) => n.clone(),
+                        Declarator::Abstract => {
+                            let name = format!("$anon{anon_idx}");
+                            anon_idx += 1;
+                            name
+                        }
+                        _ => return None,
+                    };
+                    entries.push(format!("{field_name}:{base}:{bits}bits"));
+                    continue;
                 }
                 let (name, suffix) = canonical_decl_key(&decl.declarator.0)?;
                 match name {
@@ -1154,6 +1167,7 @@ fn canonical_base_type_key(specifiers: &[Spanned<TypeSpecifier>]) -> Option<Stri
     for (specifier, _) in specifiers {
         let key = match specifier {
             TypeSpecifier::Int => "int".to_owned(),
+            TypeSpecifier::Bool => "bool".to_owned(),
             TypeSpecifier::Void => "void".to_owned(),
             TypeSpecifier::Char => "char".to_owned(),
             TypeSpecifier::Short => "short".to_owned(),
@@ -1164,9 +1178,13 @@ fn canonical_base_type_key(specifiers: &[Spanned<TypeSpecifier>]) -> Option<Stri
             TypeSpecifier::Unsigned => continue,
             TypeSpecifier::Enum(_) => "int".to_owned(),
             TypeSpecifier::TypedefName(path) => path.0.to_pretty(),
-            TypeSpecifier::StructOrUnion { specifier, .. } => {
-                specifier.canonical_field_set_key()?
-            }
+            TypeSpecifier::StructOrUnion { specifier, .. } => match specifier {
+                StructOrUnionSpecifier::Declared { ident } => format!("struct::{}", ident.0),
+                StructOrUnionSpecifier::Defined { .. }
+                | StructOrUnionSpecifier::Anonymous { .. } => {
+                    specifier.canonical_field_set_key()?
+                }
+            },
         };
         return Some(key);
     }
@@ -1363,6 +1381,7 @@ where
 
         choice([
             just(Token::Int).to(TypeSpecifier::Int),
+            just(Token::Bool).to(TypeSpecifier::Bool),
             just(Token::Void).to(TypeSpecifier::Void),
             just(Token::Char).to(TypeSpecifier::Char),
             just(Token::Short).to(TypeSpecifier::Short),

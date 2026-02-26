@@ -8,6 +8,7 @@ use crate::{Span, Spanned};
 pub enum Token {
     // Keywords
     Auto,
+    Bool,
     Break,
     Case,
     Char,
@@ -141,6 +142,7 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Token::Auto => write!(f, "auto"),
+            Token::Bool => write!(f, "_Bool"),
             Token::Break => write!(f, "break"),
             Token::Case => write!(f, "case"),
             Token::Char => write!(f, "char"),
@@ -518,6 +520,7 @@ pub fn lexer<'src: 'static>()
         .map(|ident: &str| ident.to_string())
         .map(|ident| match ident.as_str() {
             "auto" => Token::Auto,
+            "_Bool" => Token::Bool,
             "break" => Token::Break,
             "case" => Token::Case,
             "char" => Token::Char,

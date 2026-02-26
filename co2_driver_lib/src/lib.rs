@@ -8,17 +8,22 @@ use co2_hir::{HirCtx, ResolvedValue};
 use co2_parser::{
     BinOp as ParsedBinOp, Declaration, DeclarationSpecifier, Declarator, EnumSpecifier, Expression,
     InitDeclarator, Initializer, StorageClassSpecifier, StructDeclarator, StructOrUnionField,
-    StructOrUnionSpecifier, TypeQueryResult, TypeResolver, TypeSpecifier, UnaryOp as ParsedUnaryOp,
+    StructOrUnionKind, StructOrUnionSpecifier, TypeQueryResult, TypeResolver, TypeSpecifier,
+    UnaryOp as ParsedUnaryOp,
 };
+use rustc_public_generative::rustc_public::crate_def::CrateDefItems;
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
     mir::{
         BasicBlock, Body, CastKind, ConstOperand, LocalDecl, Mutability, Operand, Rvalue,
         Statement, StatementKind, Terminator, TerminatorKind,
     },
-    ty::{AdtDef, FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Ty, TyKind, UintTy},
+    ty::{
+        AdtDef, AssocContainer, AssocKind, FnDef, GenericArgKind, GenericArgs, MirConst, Region,
+        RegionKind, RigidTy, TraitDef, Ty, TyKind, UintTy,
+    },
 };
-use rustc_public_generative::{self as rustc_gen, FunctionSignature};
+use rustc_public_generative::{self as rustc_gen, FunctionSignature, HirStructureCtx};
 
 mod hir_ty;
 mod span;
@@ -26,8 +31,11 @@ mod types;
 
 pub use types::CompileMode;
 
-use crate::hir_ty::{lower_field_decl_type, lower_function_signature, lower_value_decl_type};
-use crate::span::FILE_ID;
+use crate::hir_ty::{
+    lower_field_decl_type, lower_function_signature, lower_value_decl_type,
+    try_lower_value_decl_type,
+};
+use crate::span::{FILE_ID, co2_span_to_rustc};
 
 struct PendingCompile {
     mode: CompileMode,
@@ -57,7 +65,14 @@ struct PendingStatic {
 
 struct PendingStructDef {
     key: String,
+    kind: StructOrUnionKind,
     fields: Vec<co2_parser::Spanned<StructOrUnionField>>,
+}
+
+struct ImplMethodInfo {
+    self_adt: AdtDef,
+    by_ref: bool,
+    mut_ref: bool,
 }
 
 const ANON_FIELD_PREFIX: &str = "__anon_field_";
@@ -68,6 +83,7 @@ struct Co2GeneratorState {
     mode: CompileMode,
     pending_functions: Vec<PendingFunction>,
     pending_statics: Vec<PendingStatic>,
+    impl_methods: HashMap<DefId, ImplMethodInfo>,
     typedefs: HashMap<String, DefId>,
     typedef_type_defs: HashMap<String, DefId>,
     local_value_map: HashMap<String, ResolvedValue>,
@@ -86,6 +102,30 @@ struct DriverResolver<'a> {
     values: &'a HashMap<String, ResolvedValue>,
     deps: &'a rustc_gen::DependencyInfo,
     uses: &'a [String],
+}
+
+struct CrateSigCtx<'a> {
+    hir_ctx: HirStructureCtx<'a>,
+    source_name: String,
+    source: &'static str,
+}
+
+impl CrateSigCtx<'_> {
+    fn terminate_with_error(&self, span: co2_parser::Span, msg: &str) -> ! {
+        co2_parser::print_errors_and_terminate(
+            self.source_name.clone(),
+            self.source,
+            vec![co2_parser::Rich::custom(span, msg)],
+        );
+    }
+
+    fn root_crate_def_id(&self) -> DefId {
+        self.hir_ctx.root_crate_def_id()
+    }
+
+    fn allocate_def_id(&self, parent: DefId, data: rustc_public_generative::DefData) -> DefId {
+        self.hir_ctx.allocate_def_id(parent, data)
+    }
 }
 
 impl DriverResolver<'_> {
@@ -147,6 +187,11 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let deps = ctx.dependencies();
         let source_name = pending.source_path.to_string_lossy().into_owned();
         let src_static: &'static str = Box::leak(pending.source.into_boxed_str());
+        let ctx = CrateSigCtx {
+            hir_ctx: ctx,
+            source_name,
+            source: src_static,
+        };
         struct TranslationUnitParseResolver;
         impl TypeResolver for TranslationUnitParseResolver {
             fn classify_path(&self, path: &co2_parser::RustPath) -> TypeQueryResult {
@@ -156,10 +201,13 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         }
 
         let parse_resolver = TranslationUnitParseResolver;
-        let tu =
-            co2_parser::parse_translation_unit(source_name.clone(), src_static, &parse_resolver)
-                .expect("failed to parse co2 source")
-                .0;
+        let tu = co2_parser::parse_translation_unit(
+            ctx.source_name.clone(),
+            src_static,
+            &parse_resolver,
+        )
+        .expect("failed to parse co2 source")
+        .0;
         let items = tu.items;
         let mut global_prelude_decls = items
             .iter()
@@ -215,6 +263,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let mut pending_structs_by_key: HashMap<String, PendingStructDef> = HashMap::new();
         let mut typedef_struct_aliases: Vec<(String, String)> = Vec::new();
         let mut struct_tag_aliases: Vec<(String, String)> = Vec::new();
+        let mut impl_methods: HashMap<DefId, ImplMethodInfo> = HashMap::new();
         for (item, _) in &items {
             let Declaration::Declaration {
                 declaration_specifiers,
@@ -234,21 +283,22 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 .iter()
                 .find_map(|(spec, _)| match spec {
                     DeclarationSpecifier::TypeSpecifier((
-                        TypeSpecifier::StructOrUnion { specifier, .. },
+                        TypeSpecifier::StructOrUnion { kind, specifier },
                         _,
-                    )) => Some(specifier.clone()),
+                    )) => Some((*kind, specifier.clone())),
                     _ => None,
                 });
 
-            let Some(struct_spec) = struct_spec else {
+            let Some((struct_kind, struct_spec)) = struct_spec else {
                 continue;
             };
 
             let key = match struct_spec.canonical_field_set_key() {
-                Some(key) => key,
+                Some(key) => format!("{struct_kind:?}::{key}"),
                 None => continue,
             };
             collect_struct_specifier(
+                struct_kind,
                 &struct_spec,
                 &mut pending_structs_by_key,
                 &mut struct_tag_aliases,
@@ -269,7 +319,14 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let mut adt_by_name: HashMap<String, AdtDef> = HashMap::new();
         let mut adt_public_name_by_key: HashMap<String, String> = HashMap::new();
         for (idx, struct_key) in struct_keys.iter().enumerate() {
-            let synthetic_name = format!("__anon_struct_{idx}");
+            let kind = pending_structs_by_key
+                .get(struct_key)
+                .map(|pending| pending.kind)
+                .unwrap_or(StructOrUnionKind::Struct);
+            let synthetic_name = match kind {
+                StructOrUnionKind::Struct => format!("__anon_struct_{idx}"),
+                StructOrUnionKind::Union => format!("__anon_union_{idx}"),
+            };
             let adt = AdtDef(ctx.allocate_def_id(
                 root_crate,
                 rustc_gen::DefData::TypeNs(synthetic_name.clone()),
@@ -290,15 +347,112 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             }
         }
 
+        // Collect forward-declared (opaque) struct/union tags referenced in field types that
+        // were never defined in the translation unit. Create empty stub ADTs for them so that
+        // pointer-to-opaque fields can be resolved without errors.
+        {
+            let pending_keys: Vec<String> = pending_structs_by_key.keys().cloned().collect();
+            let mut seen_fwd: HashSet<String> = HashSet::new();
+            for struct_key in &pending_keys {
+                let fields = pending_structs_by_key[struct_key].fields.clone();
+                for (field, _) in &fields {
+                    for (type_spec, _) in &field.specifiers {
+                        let TypeSpecifier::StructOrUnion { kind, specifier } = type_spec else {
+                            continue;
+                        };
+                        let StructOrUnionSpecifier::Declared { ident } = specifier else {
+                            continue;
+                        };
+                        let tag_name = &ident.0;
+                        if typedefs.contains_key(tag_name.as_str()) {
+                            continue;
+                        }
+                        if !seen_fwd.insert(tag_name.clone()) {
+                            continue;
+                        }
+                        let extra_idx = struct_keys.len();
+                        let synthetic_name = format!("__fwd_{extra_idx}");
+                        let adt = AdtDef(ctx.allocate_def_id(
+                            root_crate,
+                            rustc_gen::DefData::TypeNs(synthetic_name.clone()),
+                        ));
+                        let stub_key = format!("{kind:?}::tag::{tag_name}");
+                        adt_by_name.insert(stub_key.clone(), adt);
+                        adt_public_name_by_key.insert(stub_key.clone(), synthetic_name);
+                        typedefs.insert(tag_name.clone(), adt.0);
+                        struct_keys.push(stub_key.clone());
+                        pending_structs_by_key.insert(
+                            stub_key.clone(),
+                            PendingStructDef {
+                                key: stub_key,
+                                kind: *kind,
+                                fields: vec![],
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        // Pre-pass: populate typedef_hir_tys in source order so that primitive typedefs
+        // (e.g. `typedef unsigned long int __uint64_t`) are available when processing
+        // struct fields below. Errors are silently skipped; they will be retried (and
+        // reported) in the main declaration loop further down.
+        for (item, _) in &items {
+            let Declaration::Declaration {
+                declaration_specifiers,
+                declarators,
+            } = item
+            else {
+                continue;
+            };
+            let mut is_typedef = false;
+            let mut cleaned_specs = Vec::new();
+            for (spec, sp) in declaration_specifiers {
+                match spec {
+                    DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Typedef, _)) => {
+                        is_typedef = true;
+                    }
+                    _ => cleaned_specs.push((spec.clone(), *sp)),
+                }
+            }
+            if !is_typedef {
+                continue;
+            }
+            for init in declarators {
+                if let Ok((name, ty)) = try_lower_value_decl_type(
+                    &ctx,
+                    cleaned_specs.clone(),
+                    init.0.declarator.clone(),
+                    &typedefs,
+                    &typedef_hir_tys,
+                ) {
+                    typedef_hir_tys.entry(name).or_insert(ty);
+                } else if let Ok((name, sig, _)) = lower_function_signature(
+                    &ctx,
+                    cleaned_specs.clone(),
+                    init.0.declarator.clone(),
+                    &typedefs,
+                    &typedef_hir_tys,
+                ) {
+                    // Function-type typedef (e.g. `typedef ssize_t fn_t(args)`).
+                    // Store as FnPtr so pointer-to-this-type resolves correctly.
+                    let decl_span = co2_span_to_rustc(&ctx, init.0.declarator.1);
+                    typedef_hir_tys.entry(name).or_insert(rustc_gen::HirTy {
+                        kind: rustc_gen::HirTyKind::FnPtr(Box::new(sig)),
+                        span: decl_span,
+                    });
+                }
+            }
+        }
+
         for struct_key in struct_keys {
             let pending_struct = pending_structs_by_key
                 .remove(&struct_key)
                 .expect("missing pending struct for key");
             let adt = adt_by_name[&pending_struct.key];
             let mut hir_fields = Vec::new();
-            let mut skip_struct = false;
             let mut anon_field_idx = 0usize;
-
             for (field, field_span) in pending_struct.fields {
                 if field.declarators.is_empty() {
                     let specs = field
@@ -308,15 +462,17 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                         .map(DeclarationSpecifier::TypeSpecifier)
                         .map(|spec| (spec, field_span))
                         .collect::<Vec<_>>();
-                    let Ok(field_ty) = lower_field_decl_type(
+                    let field_ty = match lower_field_decl_type(
                         &ctx,
                         specs,
                         (Declarator::Abstract, field_span),
                         &typedefs,
                         &typedef_hir_tys,
-                    ) else {
-                        skip_struct = true;
-                        break;
+                    ) {
+                        Ok(ty) => ty,
+                        Err(e) => {
+                            ctx.terminate_with_error(field_span, &e);
+                        }
                     };
                     let field_name = format!("{ANON_FIELD_PREFIX}{anon_field_idx}");
                     anon_field_idx += 1;
@@ -342,15 +498,17 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                         .map(DeclarationSpecifier::TypeSpecifier)
                         .map(|spec| (spec, field_span))
                         .collect::<Vec<_>>();
-                    let Ok(field_ty) = lower_field_decl_type(
+                    let field_ty = match lower_field_decl_type(
                         &ctx,
                         specs,
                         decl.declarator.clone(),
                         &typedefs,
                         &typedef_hir_tys,
-                    ) else {
-                        skip_struct = true;
-                        break;
+                    ) {
+                        Ok(ty) => ty,
+                        Err(e) => {
+                            ctx.terminate_with_error(field_span, &e);
+                        }
                     };
                     let field_def =
                         ctx.allocate_def_id(adt.0, rustc_gen::DefData::ValueNs(field_name.clone()));
@@ -360,18 +518,78 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                         ty: field_ty,
                     });
                 }
-                if skip_struct {
-                    break;
-                }
             }
+            let adt_kind = match pending_struct.kind {
+                StructOrUnionKind::Union => rustc_gen::HirAdtKind::Union { fields: hir_fields },
+                StructOrUnionKind::Struct => rustc_gen::HirAdtKind::Struct { fields: hir_fields },
+            };
             hir_items.push(rustc_gen::HirModuleItem::Adt {
                 name: adt_public_name_by_key[&pending_struct.key].clone(),
                 id: adt,
-                kind: rustc_gen::HirAdtKind::Struct {
-                    // Keep a placeholder ADT even when we cannot lower all fields.
-                    // This preserves DefId consistency for header references.
-                    fields: if skip_struct { Vec::new() } else { hir_fields },
+                kind: adt_kind,
+                span,
+            });
+        }
+
+        let clone_trait = dep_trait_any(&deps, &["core::clone::Clone", "std::clone::Clone"]);
+        let copy_trait = dep_trait_any(&deps, &["core::marker::Copy", "std::marker::Copy"]);
+        let clone_trait_fn = if let Some(_) = find_dep_trait(&deps, "core::clone::Clone") {
+            find_trait_method_def(&deps, "core::clone::Clone", "clone")
+        } else {
+            find_trait_method_def(&deps, "std::clone::Clone", "clone")
+        };
+        let adt_keys = adt_by_name.keys().cloned().collect::<Vec<_>>();
+        for key in adt_keys {
+            let adt = adt_by_name[&key];
+            let self_ty_hir = rustc_gen::HirTy::adt(adt, vec![], span);
+
+            let clone_impl_def = ctx.allocate_def_id(root_crate, rustc_gen::DefData::Impl);
+            let clone_method_def = ctx.allocate_def_id(
+                clone_impl_def,
+                rustc_gen::DefData::ValueNs("clone".to_owned()),
+            );
+            let clone_self_lifetime = ctx.allocate_def_id(
+                clone_method_def,
+                rustc_gen::DefData::LifetimeNs("a".to_owned()),
+            );
+            let clone_sig = FunctionSignature {
+                lifetimes: vec![clone_self_lifetime],
+                inputs: Vec::new(),
+                output: self_ty_hir.clone(),
+                abi: rustc_gen::FunctionAbi::Rust,
+                is_unsafe: false,
+            };
+            hir_items.push(rustc_gen::HirModuleItem::Impl {
+                id: clone_impl_def,
+                self_ty: self_ty_hir.clone(),
+                trait_def: Some(clone_trait),
+                items: vec![rustc_gen::HirImplItem {
+                    name: "clone".to_owned(),
+                    id: clone_method_def,
+                    kind: rustc_gen::HirImplItemKind::Fn {
+                        sig: clone_sig,
+                        self_kind: rustc_gen::HirSelfKind::RefImm(clone_self_lifetime),
+                        trait_item_def_id: Some(clone_trait_fn),
+                    },
+                    span,
+                }],
+                span,
+            });
+            impl_methods.insert(
+                clone_method_def,
+                ImplMethodInfo {
+                    self_adt: adt,
+                    by_ref: true,
+                    mut_ref: false,
                 },
+            );
+
+            let copy_impl_def = ctx.allocate_def_id(root_crate, rustc_gen::DefData::Impl);
+            hir_items.push(rustc_gen::HirModuleItem::Impl {
+                id: copy_impl_def,
+                self_ty: self_ty_hir.clone(),
+                trait_def: Some(copy_trait),
+                items: Vec::new(),
                 span,
             });
         }
@@ -429,53 +647,74 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                         } = init.0;
 
                         if is_typedef {
-                            if let Ok((name, ty)) = lower_value_decl_type(
+                            let result = try_lower_value_decl_type(
                                 &ctx,
                                 cleaned_specs.clone(),
                                 declarator.clone(),
                                 &typedefs,
                                 &typedef_hir_tys,
-                            ) {
-                                typedef_hir_tys.insert(name.clone(), ty.clone());
-                                if let rustc_gen::HirTyKind::Adt(adt, _) = &ty.kind {
-                                    typedefs.insert(name.clone(), adt.0);
-                                    let type_def = ctx.allocate_def_id(
-                                        root_crate,
-                                        rustc_gen::DefData::TypeNs(name.clone()),
-                                    );
-                                    typedef_type_defs.insert(name.clone(), type_def);
-                                    hir_items.push(rustc_gen::HirModuleItem::TypeDef {
-                                        name,
-                                        id: type_def,
-                                        span,
-                                        ty,
-                                    });
-                                } else if !matches!(ty.kind, rustc_gen::HirTyKind::FnPtr(_)) {
-                                    let type_def = ctx.allocate_def_id(
-                                        root_crate,
-                                        rustc_gen::DefData::TypeNs(name.clone()),
-                                    );
-                                    typedef_type_defs.insert(name.clone(), type_def);
-                                    hir_items.push(rustc_gen::HirModuleItem::TypeDef {
-                                        name,
-                                        id: type_def,
-                                        span,
-                                        ty,
-                                    });
+                            );
+                            let (name, ty) = match result {
+                                Ok(pair) => pair,
+                                Err(_) => {
+                                    // May be a function-type typedef (e.g. `typedef Ret fn_t(args)`).
+                                    // Store as FnPtr; skip emitting a TypeDef item (not needed for fn types).
+                                    if let Ok((fn_name, sig, _)) = lower_function_signature(
+                                        &ctx,
+                                        cleaned_specs.clone(),
+                                        declarator.clone(),
+                                        &typedefs,
+                                        &typedef_hir_tys,
+                                    ) {
+                                        typedef_hir_tys.insert(
+                                            fn_name,
+                                            rustc_gen::HirTy {
+                                                kind: rustc_gen::HirTyKind::FnPtr(Box::new(sig)),
+                                                span,
+                                            },
+                                        );
+                                    }
+                                    continue;
                                 }
+                            };
+                            typedef_hir_tys.insert(name.clone(), ty.clone());
+                            if let rustc_gen::HirTyKind::Adt(adt, _) = &ty.kind {
+                                typedefs.insert(name.clone(), adt.0);
+                                let type_def = ctx.allocate_def_id(
+                                    root_crate,
+                                    rustc_gen::DefData::TypeNs(name.clone()),
+                                );
+                                typedef_type_defs.insert(name.clone(), type_def);
+                                hir_items.push(rustc_gen::HirModuleItem::TypeDef {
+                                    name,
+                                    id: type_def,
+                                    span,
+                                    ty,
+                                });
+                            } else if !matches!(ty.kind, rustc_gen::HirTyKind::FnPtr(_)) {
+                                let type_def = ctx.allocate_def_id(
+                                    root_crate,
+                                    rustc_gen::DefData::TypeNs(name.clone()),
+                                );
+                                typedef_type_defs.insert(name.clone(), type_def);
+                                hir_items.push(rustc_gen::HirModuleItem::TypeDef {
+                                    name,
+                                    id: type_def,
+                                    span,
+                                    ty,
+                                });
                             }
                             continue;
                         }
 
-                        if !declarator_is_function(&declarator.0)
-                            && let Ok((name, hir_ty)) = lower_value_decl_type(
+                        if !declarator_is_function(&declarator.0) {
+                            let (name, hir_ty) = lower_value_decl_type(
                                 &ctx,
                                 cleaned_specs.clone(),
                                 declarator.clone(),
                                 &typedefs,
                                 &typedef_hir_tys,
-                            )
-                        {
+                            );
                             let static_def_id = ctx.allocate_def_id(
                                 root_crate,
                                 rustc_gen::DefData::ValueNs(name.clone()),
@@ -621,12 +860,13 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 mode: pending.mode,
                 pending_functions,
                 pending_statics,
+                impl_methods,
                 typedefs,
                 typedef_type_defs,
                 local_value_map,
                 uses,
                 global_prelude_decls,
-                source_name,
+                source_name: ctx.source_name,
                 src_static,
             },
             rustc_gen::HirStructure {
@@ -644,6 +884,13 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 &self.deps,
                 CrateItem(pending_static.def).ty(),
                 pending_static.init_value,
+                ctx.span_in_file(self.file_id, 0, 0),
+            );
+        }
+        if let Some(method) = self.impl_methods.get(&def) {
+            return build_clone_method_body(
+                &self.deps,
+                method,
                 ctx.span_in_file(self.file_id, 0, 0),
             );
         }
@@ -717,21 +964,22 @@ fn collect_nested_struct_specs_in_fields(
 ) {
     for (field, _) in fields {
         for (type_spec, _) in &field.specifiers {
-            let TypeSpecifier::StructOrUnion { specifier, .. } = type_spec else {
+            let TypeSpecifier::StructOrUnion { kind, specifier } = type_spec else {
                 continue;
             };
-            collect_struct_specifier(specifier, pending_structs_by_key, struct_tag_aliases);
+            collect_struct_specifier(*kind, specifier, pending_structs_by_key, struct_tag_aliases);
         }
     }
 }
 
 fn collect_struct_specifier(
+    kind: StructOrUnionKind,
     struct_spec: &StructOrUnionSpecifier,
     pending_structs_by_key: &mut HashMap<String, PendingStructDef>,
     struct_tag_aliases: &mut Vec<(String, String)>,
 ) {
     let key = match struct_spec.canonical_field_set_key() {
-        Some(key) => key,
+        Some(key) => format!("{kind:?}::{key}"),
         None => return,
     };
     let fields = match struct_spec {
@@ -746,6 +994,7 @@ fn collect_struct_specifier(
         .entry(key.clone())
         .or_insert_with(|| PendingStructDef {
             key: key.clone(),
+            kind,
             fields: fields.clone(),
         });
     collect_nested_struct_specs_in_fields(fields, pending_structs_by_key, struct_tag_aliases);
@@ -1137,6 +1386,56 @@ fn find_dep_fn(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<FnDef> {
     None
 }
 
+fn find_dep_trait(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<DefId> {
+    let normalized_path = normalize_dep_path(path);
+    if let Some(found) = deps
+        .traits
+        .iter()
+        .find(|t| normalize_dep_path(&t.path) == normalized_path)
+        .map(|t| t.def_id)
+    {
+        return Some(found);
+    }
+    if let Some(found) = deps
+        .traits
+        .iter()
+        .find(|t| {
+            let normalized = normalize_dep_path(&t.path);
+            if path.contains("::") {
+                normalized.ends_with(&normalized_path)
+            } else {
+                normalized.ends_with(&format!("::{}", normalized_path))
+            }
+        })
+        .map(|t| t.def_id)
+    {
+        return Some(found);
+    }
+    None
+}
+
+fn find_trait_method_def(deps: &rustc_gen::DependencyInfo, trait_path: &str, name: &str) -> DefId {
+    let trait_def_id =
+        find_dep_trait(deps, trait_path).unwrap_or_else(|| panic!("missing trait {trait_path}"));
+    let trait_def = TraitDef(trait_def_id);
+    for assoc in trait_def.associated_items() {
+        let AssocKind::Fn {
+            name: item_name,
+            has_self,
+        } = assoc.kind
+        else {
+            continue;
+        };
+        if assoc.container != AssocContainer::Trait {
+            continue;
+        }
+        if item_name == name && has_self {
+            return assoc.def_id.0;
+        }
+    }
+    panic!("missing trait method {trait_path}::{name}");
+}
+
 fn normalize_dep_path(path: &str) -> String {
     let mut no_generics = String::with_capacity(path.len());
     let mut depth = 0usize;
@@ -1218,6 +1517,15 @@ fn dep_fn_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> FnDef {
         }
     }
     panic!("missing dependency function (any of): {}", paths.join(", "));
+}
+
+fn dep_trait_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> DefId {
+    for path in paths {
+        if let Some(found) = find_dep_trait(deps, path) {
+            return found;
+        }
+    }
+    panic!("missing dependency trait (any of): {}", paths.join(", "));
 }
 
 fn fn_const_operand(
@@ -1377,6 +1685,110 @@ fn build_static_initializer_body(
         vec![call_block, return_block],
         locals,
         0,
+        vec![],
+        None,
+        span,
+    )
+}
+
+fn build_clone_method_body(
+    deps: &rustc_gen::DependencyInfo,
+    method: &ImplMethodInfo,
+    span: rustc_public_generative::rustc_public::ty::Span,
+) -> Body {
+    let self_ty = CrateItem(method.self_adt.0).ty();
+    let region = Region {
+        kind: RegionKind::ReErased,
+    };
+    let arg_ty = if method.by_ref {
+        let mutability = if method.mut_ref {
+            Mutability::Mut
+        } else {
+            Mutability::Not
+        };
+        Ty::new_ref(region, self_ty, mutability)
+    } else {
+        self_ty
+    };
+
+    let raw_ptr_ty = Ty::new_ptr(self_ty, Mutability::Not);
+    let locals = vec![
+        LocalDecl {
+            ty: self_ty,
+            span,
+            mutability: Mutability::Mut,
+        },
+        LocalDecl {
+            ty: arg_ty,
+            span,
+            mutability: Mutability::Not,
+        },
+        LocalDecl {
+            ty: raw_ptr_ty,
+            span,
+            mutability: Mutability::Not,
+        },
+    ];
+
+    let read_fn = dep_fn_any(deps, &["core::ptr::read", "std::ptr::read"]);
+    let read_sig = read_fn
+        .ty()
+        .kind()
+        .fn_sig()
+        .expect("ptr::read has no signature")
+        .skip_binder();
+    let read_generic_args = infer_fn_generic_args_for_return(&read_sig, self_ty);
+
+    let mut projection = Vec::new();
+    if method.by_ref {
+        projection.push(rustc_public_generative::rustc_public::mir::ProjectionElem::Deref);
+    }
+    let deref_place = rustc_public_generative::rustc_public::mir::Place {
+        local: 1,
+        projection,
+    };
+    let ptr_place = rustc_public_generative::rustc_public::mir::Place {
+        local: 2,
+        projection: vec![],
+    };
+    let statements = vec![Statement {
+        kind: StatementKind::Assign(
+            ptr_place.clone(),
+            Rvalue::AddressOf(
+                rustc_public_generative::rustc_public::mir::RawPtrKind::Const,
+                deref_place,
+            ),
+        ),
+        span,
+    }];
+
+    let call_block = BasicBlock {
+        statements,
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                func: fn_const_operand(read_fn, read_generic_args, span),
+                args: vec![Operand::Copy(ptr_place)],
+                destination: rustc_public_generative::rustc_public::mir::Place {
+                    local: 0,
+                    projection: vec![],
+                },
+                target: Some(1),
+                unwind: rustc_public_generative::rustc_public::mir::UnwindAction::Continue,
+            },
+            span,
+        },
+    };
+    let return_block = BasicBlock {
+        statements: vec![],
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span,
+        },
+    };
+    Body::new(
+        vec![call_block, return_block],
+        locals,
+        1,
         vec![],
         None,
         span,

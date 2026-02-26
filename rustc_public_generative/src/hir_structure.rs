@@ -41,6 +41,13 @@ pub enum HirModuleItem {
         mutable: bool,
         span: Span,
     },
+    Impl {
+        id: DefId,
+        self_ty: HirTy,
+        trait_def: Option<DefId>,
+        items: Vec<HirImplItem>,
+        span: Span,
+    },
     ForeignMod {
         id: DefId,
         items: Vec<ForeignModItem>,
@@ -50,6 +57,7 @@ pub enum HirModuleItem {
 #[derive(Debug, Clone)]
 pub enum HirAdtKind {
     Struct { fields: Vec<StructField> },
+    Union { fields: Vec<StructField> },
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +65,32 @@ pub struct StructField {
     pub id: DefId,
     pub name: String,
     pub ty: HirTy,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirImplItem {
+    pub name: String,
+    pub id: DefId,
+    pub kind: HirImplItemKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HirSelfKind {
+    Imm,
+    Mut,
+    RefImm(DefId),
+    RefMut(DefId),
+    None,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirImplItemKind {
+    Fn {
+        sig: FunctionSignature,
+        self_kind: HirSelfKind,
+        trait_item_def_id: Option<DefId>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +105,7 @@ pub enum ForeignModItem {
 
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
+    pub lifetimes: Vec<DefId>,
     pub inputs: Vec<HirTy>,
     pub output: HirTy,
     pub abi: FunctionAbi,

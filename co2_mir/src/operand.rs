@@ -15,7 +15,9 @@ use crate::{
     place::place,
 };
 
-fn find_ptr_offset_from_fn(deps: &rustc_public_generative::DependencyInfo) -> Option<rustc_public_generative::rustc_public::ty::FnDef> {
+fn find_ptr_offset_from_fn(
+    deps: &rustc_public_generative::DependencyInfo,
+) -> Option<rustc_public_generative::rustc_public::ty::FnDef> {
     let exact = [
         "core::ptr::mut_ptr::offset_from",
         "core::ptr::const_ptr::offset_from",
@@ -304,7 +306,9 @@ impl Builder<'_> {
                             .0
                             .iter()
                             .map(|arg| match arg {
-                                GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_)) => {
+                                GenericArgKind::Type(ty)
+                                    if matches!(ty.kind(), TyKind::Param(_)) =>
+                                {
                                     GenericArgKind::Type(pointee_ty)
                                 }
                                 _ => arg.clone(),
@@ -315,7 +319,10 @@ impl Builder<'_> {
                 };
                 self.emit_call_block(
                     fn_const_operand(offset_from, generic_args, expr.span),
-                    vec![MirOperand::Copy(place(lhs_cast)), MirOperand::Copy(place(rhs_cast))],
+                    vec![
+                        MirOperand::Copy(place(lhs_cast)),
+                        MirOperand::Copy(place(rhs_cast)),
+                    ],
                     place(ret_local),
                     expr.span,
                 );
