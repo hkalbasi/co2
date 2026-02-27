@@ -804,13 +804,57 @@ int main26()
 	return 0;
 }
 
+int count_and_return_zero() {
+	counter += 1;
+	return 0;
+}
+
+int main27()
+{
+	counter = 0;
+	switch(count_and_return_zero())
+		case 0:
+			;
+	switch(count_and_return_zero())
+		case 0:
+			switch(count_and_return_zero()) {
+				case 2:
+				case 5:
+					return 1;
+				case 0:
+					goto next27;
+				default:
+					return 1;
+			}
+	return 1;
+	next27:
+	switch(count_and_return_zero())
+		case 1:
+			return 1;
+	switch(count_and_return_zero()) {
+		{
+			foo27:
+			case 1:
+				return 1;
+		}
+	}
+	switch(count_and_return_zero()) {
+		case 0:
+			return counter - 6;
+		case 1:
+			return 1;
+		default:
+			return 1;
+	}
+}
+
 int main() {
 	if (main1() || main2() || main3() || main4() || main5()
 		|| main6() || main7() || main8() || main9() || main10()
 		|| main11() || main12() || main13() || main14() || main15()
 		|| main16() || main17() || main18() || main19() || main20()
 		|| main21() || main22() || main23() || main24() || main25()
-		|| main26()) {
+		|| main26() || main27()) {
 		return 6;
 	}
 	return 0;

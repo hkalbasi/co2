@@ -26,105 +26,6 @@ pub enum HirStmt {
 }
 
 impl<R> HirCtx<'_, R> {
-    fn lower_switch_stmt(
-        &self,
-        stmt: Statement,
-        parser_span: co2_parser::Span,
-        out: &mut Vec<HirStmt>,
-        locals: &mut Arena<HirLocal>,
-        local_map: &mut HashMap<String, LocalId>,
-        discr_local: LocalId,
-        discr_ty: Ty,
-        case_labels: &mut Vec<(HirExpr, LabelId)>,
-        default_label: &mut Option<LabelId>,
-    ) -> Result<(), String> {
-        let span = self.to_rust_span(parser_span);
-        match stmt {
-            Statement::Case { expr, statement } => {
-                let case_label = self.fresh_label();
-                let case_expr = self.lower_expr(expr, locals, local_map)?;
-                if !is_condition_ty(case_expr.ty) {
-                    return Err(format!(
-                        "switch case expression must be scalar-like, got {:?}",
-                        case_expr.ty
-                    ));
-                }
-                let discr_expr = HirExpr {
-                    kind: HirExprKind::Local(discr_local),
-                    ty: discr_ty,
-                    span,
-                };
-                let cond = HirExpr {
-                    kind: HirExprKind::Binary {
-                        op: crate::HirBinOp::Eq,
-                        lhs: Box::new(discr_expr),
-                        rhs: Box::new(case_expr),
-                    },
-                    ty: Ty::signed_ty(IntTy::I32),
-                    span,
-                };
-                case_labels.push((cond, case_label));
-                out.push(HirStmt::Label(case_label, span));
-                self.lower_switch_stmt(
-                    statement.0,
-                    statement.1,
-                    out,
-                    locals,
-                    local_map,
-                    discr_local,
-                    discr_ty,
-                    case_labels,
-                    default_label,
-                )
-            }
-            Statement::Default { statement } => {
-                if default_label.is_some() {
-                    return Err("duplicate `default` label in switch".to_owned());
-                }
-                let label = self.fresh_label();
-                *default_label = Some(label);
-                out.push(HirStmt::Label(label, span));
-                self.lower_switch_stmt(
-                    statement.0,
-                    statement.1,
-                    out,
-                    locals,
-                    local_map,
-                    discr_local,
-                    discr_ty,
-                    case_labels,
-                    default_label,
-                )
-            }
-            Statement::Compound(nested) => {
-                let outer_scope = local_map.clone();
-                for (stmt_or_decl, _) in nested.0.statements {
-                    match stmt_or_decl {
-                        StatementOrDeclaration::Statement((stmt, span)) => {
-                            self.lower_switch_stmt(
-                                stmt,
-                                span,
-                                out,
-                                locals,
-                                local_map,
-                                discr_local,
-                                discr_ty,
-                                case_labels,
-                                default_label,
-                            )?;
-                        }
-                        StatementOrDeclaration::Declaration((decl, _)) => {
-                            self.lower_decl(decl, out, locals, local_map)?;
-                        }
-                    }
-                }
-                *local_map = outer_scope;
-                Ok(())
-            }
-            _ => self.lower_stmt(stmt, parser_span, out, locals, local_map),
-        }
-    }
-
     pub(crate) fn lower_compound_items(
         &self,
         compound: CompoundStatement,
@@ -168,9 +69,44 @@ impl<R> HirCtx<'_, R> {
                 };
                 out.push(HirStmt::Goto(label, span));
             }
-            Statement::Case { .. } => return Err("case label outside of switch body".to_owned()),
-            Statement::Default { .. } => {
-                return Err("default label outside of switch body".to_owned());
+            Statement::Case { expr, statement } => {
+                let (discr_local, discr_ty) = self
+                    .current_switch_discr()
+                    .ok_or_else(|| "case label outside of switch body".to_owned())?;
+                let case_label = self.fresh_label();
+                let case_expr = self.lower_expr(expr, locals, local_map)?;
+                if !is_condition_ty(case_expr.ty) {
+                    return Err(format!(
+                        "switch case expression must be scalar-like, got {:?}",
+                        case_expr.ty
+                    ));
+                }
+                let discr_expr = HirExpr {
+                    kind: HirExprKind::Local(discr_local),
+                    ty: discr_ty,
+                    span,
+                };
+                let cond = HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: crate::HirBinOp::Eq,
+                        lhs: Box::new(discr_expr),
+                        rhs: Box::new(case_expr),
+                    },
+                    ty: Ty::signed_ty(IntTy::I32),
+                    span,
+                };
+                self.register_case(cond, case_label);
+                out.push(HirStmt::Label(case_label, span));
+                self.lower_stmt(statement.0, statement.1, out, locals, local_map)?;
+            }
+            Statement::Default { statement } => {
+                if !self.in_switch() {
+                    return Err("default label outside of switch body".to_owned());
+                }
+                let label = self.fresh_label();
+                self.register_default(label)?;
+                out.push(HirStmt::Label(label, span));
+                self.lower_stmt(statement.0, statement.1, out, locals, local_map)?;
             }
             Statement::Goto(name) => {
                 out.push(HirStmt::Goto(self.resolve_or_insert_label(name.0), span))
@@ -358,38 +294,28 @@ impl<R> HirCtx<'_, R> {
                         discr.ty
                     ));
                 }
+                let discr_ty = discr.ty;
                 let discr_local = locals.alloc(HirLocal {
                     name: format!("__switch_discr{}", locals.len()),
-                    ty: discr.ty,
+                    ty: discr_ty,
                     span,
                 });
                 out.push(HirStmt::Decl(HirDecl {
                     local: discr_local,
-                    initializer: Some(discr.clone()),
+                    initializer: Some(discr),
                     span,
                 }));
 
                 let end_label = self.fresh_label();
-                let mut case_labels = Vec::new();
-                let mut default_label = None;
                 let mut body_stmts = Vec::new();
 
-                self.enter_switch(end_label);
-                let switch_res = self.lower_switch_stmt(
-                    body.0,
-                    body.1,
-                    &mut body_stmts,
-                    locals,
-                    local_map,
-                    discr_local,
-                    discr.ty,
-                    &mut case_labels,
-                    &mut default_label,
-                );
-                self.exit_switch();
-                switch_res?;
+                self.enter_switch_scope(discr_local, discr_ty, end_label);
+                let body_res =
+                    self.lower_stmt(body.0, body.1, &mut body_stmts, locals, local_map);
+                let scope = self.exit_switch_scope();
+                body_res?;
 
-                for (cond, label) in case_labels {
+                for (cond, label) in scope.case_labels {
                     out.push(HirStmt::If {
                         cond,
                         then_stmts: vec![HirStmt::Goto(label, span)],
@@ -397,7 +323,7 @@ impl<R> HirCtx<'_, R> {
                         span,
                     });
                 }
-                out.push(HirStmt::Goto(default_label.unwrap_or(end_label), span));
+                out.push(HirStmt::Goto(scope.default_label.unwrap_or(end_label), span));
                 out.extend(body_stmts);
                 out.push(HirStmt::Label(end_label, span));
             }

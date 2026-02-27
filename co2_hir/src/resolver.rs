@@ -7,7 +7,15 @@ use std::collections::HashMap;
 
 use la_arena::Arena;
 
-use crate::item::{HirLabel, LabelId};
+use crate::expr::HirExpr;
+use crate::item::{HirLabel, LabelId, LocalId};
+
+pub(crate) struct SwitchScope {
+    pub(crate) discr_local: LocalId,
+    pub(crate) discr_ty: Ty,
+    pub(crate) case_labels: Vec<(HirExpr, LabelId)>,
+    pub(crate) default_label: Option<LabelId>,
+}
 
 #[derive(Clone, Debug)]
 pub enum ResolvedValue {
@@ -39,6 +47,7 @@ pub struct HirCtx<'a, R> {
     named_labels: RefCell<HashMap<String, LabelId>>,
     continue_labels: RefCell<Vec<LabelId>>,
     break_labels: RefCell<Vec<LabelId>>,
+    switch_scopes: RefCell<Vec<SwitchScope>>,
     pub(crate) ret_ty: Ty,
 }
 
@@ -59,6 +68,7 @@ impl<'a, R> HirCtx<'a, R> {
             named_labels: RefCell::new(HashMap::new()),
             continue_labels: RefCell::new(Vec::new()),
             break_labels: RefCell::new(Vec::new()),
+            switch_scopes: RefCell::new(Vec::new()),
             ret_ty,
         }
     }
@@ -80,6 +90,7 @@ impl<'a, R> HirCtx<'a, R> {
         self.named_labels.borrow_mut().clear();
         self.continue_labels.borrow_mut().clear();
         self.break_labels.borrow_mut().clear();
+        self.switch_scopes.borrow_mut().clear();
     }
 
     pub(crate) fn take_labels(&self) -> Arena<HirLabel> {
@@ -111,12 +122,59 @@ impl<'a, R> HirCtx<'a, R> {
         self.break_labels.borrow_mut().pop();
     }
 
-    pub(crate) fn enter_switch(&self, break_label: LabelId) {
+    pub(crate) fn enter_switch_scope(
+        &self,
+        discr_local: LocalId,
+        discr_ty: Ty,
+        break_label: LabelId,
+    ) {
+        self.switch_scopes.borrow_mut().push(SwitchScope {
+            discr_local,
+            discr_ty,
+            case_labels: Vec::new(),
+            default_label: None,
+        });
         self.break_labels.borrow_mut().push(break_label);
     }
 
-    pub(crate) fn exit_switch(&self) {
+    pub(crate) fn exit_switch_scope(&self) -> SwitchScope {
         self.break_labels.borrow_mut().pop();
+        self.switch_scopes
+            .borrow_mut()
+            .pop()
+            .expect("exit_switch_scope called outside switch")
+    }
+
+    pub(crate) fn current_switch_discr(&self) -> Option<(LocalId, Ty)> {
+        self.switch_scopes
+            .borrow()
+            .last()
+            .map(|s| (s.discr_local, s.discr_ty))
+    }
+
+    pub(crate) fn in_switch(&self) -> bool {
+        !self.switch_scopes.borrow().is_empty()
+    }
+
+    pub(crate) fn register_case(&self, cond: HirExpr, label: LabelId) {
+        self.switch_scopes
+            .borrow_mut()
+            .last_mut()
+            .expect("register_case called outside switch")
+            .case_labels
+            .push((cond, label));
+    }
+
+    pub(crate) fn register_default(&self, label: LabelId) -> Result<(), String> {
+        let mut scopes = self.switch_scopes.borrow_mut();
+        let scope = scopes
+            .last_mut()
+            .expect("register_default called outside switch");
+        if scope.default_label.is_some() {
+            return Err("duplicate `default` label in switch".to_owned());
+        }
+        scope.default_label = Some(label);
+        Ok(())
     }
 
     pub(crate) fn current_continue_label(&self) -> Option<LabelId> {
