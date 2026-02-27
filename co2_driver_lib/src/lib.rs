@@ -889,7 +889,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         }
         if let Some(method) = self.impl_methods.get(&def) {
             return build_clone_method_body(
-                &self.deps,
                 method,
                 ctx.span_in_file(self.file_id, 0, 0),
             );
@@ -1692,7 +1691,6 @@ fn build_static_initializer_body(
 }
 
 fn build_clone_method_body(
-    deps: &rustc_gen::DependencyInfo,
     method: &ImplMethodInfo,
     span: rustc_public_generative::rustc_public::ty::Span,
 ) -> Body {
@@ -1711,7 +1709,6 @@ fn build_clone_method_body(
         self_ty
     };
 
-    let raw_ptr_ty = Ty::new_ptr(self_ty, Mutability::Not);
     let locals = vec![
         LocalDecl {
             ty: self_ty,
@@ -1723,21 +1720,7 @@ fn build_clone_method_body(
             span,
             mutability: Mutability::Not,
         },
-        LocalDecl {
-            ty: raw_ptr_ty,
-            span,
-            mutability: Mutability::Not,
-        },
     ];
-
-    let read_fn = dep_fn_any(deps, &["core::ptr::read", "std::ptr::read"]);
-    let read_sig = read_fn
-        .ty()
-        .kind()
-        .fn_sig()
-        .expect("ptr::read has no signature")
-        .skip_binder();
-    let read_generic_args = infer_fn_generic_args_for_return(&read_sig, self_ty);
 
     let mut projection = Vec::new();
     if method.by_ref {
@@ -1747,46 +1730,29 @@ fn build_clone_method_body(
         local: 1,
         projection,
     };
-    let ptr_place = rustc_public_generative::rustc_public::mir::Place {
-        local: 2,
+    let return_place = rustc_public_generative::rustc_public::mir::Place {
+        local: 0,
         projection: vec![],
     };
     let statements = vec![Statement {
         kind: StatementKind::Assign(
-            ptr_place.clone(),
-            Rvalue::AddressOf(
-                rustc_public_generative::rustc_public::mir::RawPtrKind::Const,
-                deref_place,
+            return_place.clone(),
+            Rvalue::Use(
+                Operand::Copy(deref_place),
             ),
         ),
         span,
     }];
 
-    let call_block = BasicBlock {
-        statements,
-        terminator: Terminator {
-            kind: TerminatorKind::Call {
-                func: fn_const_operand(read_fn, read_generic_args, span),
-                args: vec![Operand::Copy(ptr_place)],
-                destination: rustc_public_generative::rustc_public::mir::Place {
-                    local: 0,
-                    projection: vec![],
-                },
-                target: Some(1),
-                unwind: rustc_public_generative::rustc_public::mir::UnwindAction::Continue,
-            },
-            span,
-        },
-    };
     let return_block = BasicBlock {
-        statements: vec![],
+        statements,
         terminator: Terminator {
             kind: TerminatorKind::Return,
             span,
         },
     };
     Body::new(
-        vec![call_block, return_block],
+        vec![return_block],
         locals,
         1,
         vec![],
