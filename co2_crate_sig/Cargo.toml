@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-co2_parser = { version = "0.1.0", path = "../co2_parser" }
-rustc_public_generative = { version = "0.1.0", path = "../rustc_public_generative" }
+co2_ast = { path = "../co2_ast" }
+co2_parser = { path = "../co2_parser" }
+rustc_public_generative = { path = "../rustc_public_generative" }

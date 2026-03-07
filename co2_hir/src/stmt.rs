@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use co2_parser::{CompoundStatement, Statement, StatementOrDeclaration};
+use co2_ast::{CompoundStatement, Statement, StatementOrDeclaration};
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{IntTy, Span as RustSpan, Ty};
 
@@ -49,7 +49,7 @@ impl<R> HirCtx<'_, R> {
     pub(crate) fn lower_stmt(
         &self,
         stmt: Statement,
-        parser_span: co2_parser::Span,
+        parser_span: co2_ast::Span,
         out: &mut Vec<HirStmt>,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<String, LocalId>,

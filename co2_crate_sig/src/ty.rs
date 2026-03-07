@@ -1,4 +1,4 @@
-use co2_parser::{DeclarationSpecifier, Declarator, Span, Spanned, TypeSpecifier};
+use co2_ast::{DeclarationSpecifier, Declarator, Span, Spanned, TypeSpecifier};
 use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyKind};
 use rustc_public_generative::{
     HirGenericArg,

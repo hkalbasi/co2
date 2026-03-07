@@ -9,5 +9,6 @@ path = "src/lib.rs"
 [dependencies]
 ariadne = "0.6.0"
 chumsky = "0.11"
+co2_ast = { version = "0.1.0", path = "../co2_ast" }
 itertools = "0.14.0"
 la-arena = "0.3.1"

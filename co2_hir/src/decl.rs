@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use co2_parser::{
+use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
     Initializer, Spanned, TypeName,
 };
@@ -182,17 +182,17 @@ impl<R> HirCtx<'_, R> {
     pub(crate) fn lower_type_name(
         &self,
         type_name: TypeName,
-        span: co2_parser::Span,
+        span: co2_ast::Span,
     ) -> Result<Ty, String> {
         let specifiers = type_name
             .specifier_qualifier_list
             .into_iter()
             .map(|(s, span)| {
                 let s = match s {
-                    co2_parser::SpecifierQualifier::TypeSpecifier(t) => {
+                    co2_ast::SpecifierQualifier::TypeSpecifier(t) => {
                         DeclarationSpecifier::TypeSpecifier(t)
                     }
-                    co2_parser::SpecifierQualifier::TypeQualifier(t) => {
+                    co2_ast::SpecifierQualifier::TypeQualifier(t) => {
                         DeclarationSpecifier::TypeQualifier(t)
                     }
                 };
@@ -220,17 +220,17 @@ impl<R> HirCtx<'_, R> {
     fn base_ty_of_decl(
         &self,
         specifiers: Vec<Spanned<DeclarationSpecifier>>,
-        span: co2_parser::Span,
+        span: co2_ast::Span,
     ) -> Result<Ty, String> {
         for (specifier, _) in &specifiers {
             if let DeclarationSpecifier::TypeSpecifier((type_specifier, _)) = specifier {
-                if let co2_parser::TypeSpecifier::StructOrUnion { .. } = type_specifier {
+                if let co2_ast::TypeSpecifier::StructOrUnion { .. } = type_specifier {
                     self.terminate_with_error(span, "todo!()");
                 }
                 if let Some(ty) = crate::ty::type_specifier_to_ty(type_specifier)? {
                     return Ok(ty);
                 }
-                if let co2_parser::TypeSpecifier::TypedefName(path) = type_specifier {
+                if let co2_ast::TypeSpecifier::TypedefName(path) = type_specifier {
                     return self
                         .resolve_type(&path.0)
                         .ok_or_else(|| format!("unresolved typedef path: {}", path.0.to_pretty()));

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use co2_parser::{
+use co2_ast::{
     DeclarationSpecifier, Declarator, EnumSpecifier, StructOrUnionField, StructOrUnionKind,
     StructOrUnionSpecifier, TypeQueryResult,
 };
@@ -94,7 +94,7 @@ impl CrateSigCtx<'_> {
     fn define_def(
         &mut self,
         def: DefId,
-        fields: &[(StructOrUnionField, co2_parser::Span)],
+        fields: &[(StructOrUnionField, co2_ast::Span)],
         _span: Span,
     ) {
         let data = self.struct_manager.definitions.get(&def).unwrap();

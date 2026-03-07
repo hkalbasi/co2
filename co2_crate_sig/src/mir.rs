@@ -9,14 +9,14 @@ pub enum MirOwnerInfo {
     EnumConstZeroed,
     EnumConstPrevPlus(DefId, Span),
     EnumConstExplicit {
-        initializer: co2_parser::Spanned<co2_parser::Expression>,
+        initializer: co2_ast::Spanned<co2_ast::Expression>,
     },
     Static {
-        initializer: co2_parser::Spanned<co2_parser::Initializer>,
+        initializer: co2_ast::Spanned<co2_ast::Initializer>,
     },
     Fn {
         def: FnDef,
         param_names: Vec<String>,
-        body_tokens: Vec<co2_parser::Spanned<co2_parser::Token>>,
+        body_tokens: Vec<co2_ast::Spanned<co2_ast::Token>>,
     },
 }

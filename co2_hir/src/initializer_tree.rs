@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use co2_parser::{Designator, Expression, Initializer, InitializerItem, Spanned};
+use co2_ast::{Designator, Expression, Initializer, InitializerItem, Spanned};
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
     mir::Mutability,
@@ -264,7 +264,7 @@ impl<R> HirCtx<'_, R> {
                 if is_array_ty(expected_ty)
                     && matches!(
                         expr.0,
-                        Expression::Constant(co2_parser::Constant::String(_))
+                        Expression::Constant(co2_ast::Constant::String(_))
                     )
                 {
                     let list = self.initializer_list_from_string(expected_ty, expr.clone());
@@ -416,7 +416,7 @@ impl<R> HirCtx<'_, R> {
         expected_ty: Ty,
         expr: Spanned<Expression>,
     ) -> Vec<Spanned<InitializerItem>> {
-        let Expression::Constant(co2_parser::Constant::String(s)) = expr.0 else {
+        let Expression::Constant(co2_ast::Constant::String(s)) = expr.0 else {
             return vec![];
         };
         let span = expr.1;
@@ -429,9 +429,9 @@ impl<R> HirCtx<'_, R> {
                         designators: None,
                         initializer: (
                             Initializer::Expr((
-                                Expression::Constant(co2_parser::Constant::Int(
+                                Expression::Constant(co2_ast::Constant::Int(
                                     ch as i64,
-                                    co2_parser::IntegerSuffix::None,
+                                    co2_ast::IntegerSuffix::None,
                                 )),
                                 span,
                             )),

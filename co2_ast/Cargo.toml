@@ -1,0 +1,9 @@
+[package]
+name = "co2_ast"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ariadne = "0.6.0"
+chumsky = "0.11.0"
+itertools = "0.14.0"

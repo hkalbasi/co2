@@ -11,7 +11,7 @@ path = "src/lib.rs"
 rustc_public_generative = { path = "../rustc_public_generative" }
 co2_hir = { path = "../co2_hir" }
 co2_mir = { path = "../co2_mir" }
-co2_parser = { path = "../co2_parser" }
+co2_ast = { path = "../co2_ast" }
 co2_crate_sig = { version = "0.1.0", path = "../co2_crate_sig" }
 
 [package.metadata.rust-analyzer]

@@ -1,4 +1,4 @@
-use co2_parser::{RustPath, TypeQueryResult};
+use co2_ast::{RustPath, TypeQueryResult};
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
     ty::{AdtDef, FnDef, GenericArgKind, GenericArgs, RigidTy, Span as RustSpan, Ty, TyKind},
@@ -37,7 +37,7 @@ impl ResolvedValue {
     }
 }
 
-type ParserSpan = co2_parser::Span;
+type ParserSpan = co2_ast::Span;
 
 pub struct HirCtx<'a, R> {
     resolver: &'a R,
@@ -122,11 +122,11 @@ impl<'a, R> HirCtx<'a, R> {
         (self.span_converter)(span)
     }
 
-    pub(crate) fn terminate_with_error(&self, span: co2_parser::Span, msg: &str) -> ! {
-        co2_parser::print_errors_and_terminate(
+    pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
+        co2_ast::print_errors_and_terminate(
             self.source_name.clone(),
             self.source,
-            vec![co2_parser::Rich::custom(span, msg)],
+            vec![co2_ast::Rich::custom(span, msg)],
         );
     }
 

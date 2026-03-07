@@ -1,4 +1,4 @@
-use co2_parser::{Span, TypeSpecifier};
+use co2_ast::{Span, TypeSpecifier};
 use rustc_public_generative::rustc_public::ty::{
     Binder, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx,
 };

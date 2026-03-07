@@ -7,6 +7,7 @@ edition = "2024"
 path = "src/lib.rs"
 
 [dependencies]
+co2_ast = { path = "../co2_ast" }
 co2_parser = { path = "../co2_parser" }
 rustc_public_generative = { path = "../rustc_public_generative" }
 la-arena = "0.3.1"

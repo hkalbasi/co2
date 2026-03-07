@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use co2_parser::{
+use co2_ast::{
     BinOp as ParsedBinOp, Constant, Expression, IntegerSuffix, Spanned, Statement,
     StatementOrDeclaration, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
@@ -898,7 +898,7 @@ impl<R> HirCtx<'_, R> {
         &self,
         tree: &InitializerTree,
         ty: Ty,
-        parser_span: co2_parser::Span,
+        parser_span: co2_ast::Span,
     ) -> HirExpr {
         let span = self.to_rust_span(parser_span);
         match tree {

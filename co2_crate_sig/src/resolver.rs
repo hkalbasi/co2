@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use co2_parser::{
-    Declaration, DeclarationSpecifier, Declarator, ParsedTranslationUnit, StorageClassSpecifier,
+use co2_ast::{
+    Declaration, DeclarationSpecifier, Declarator, TranslationUnit, StorageClassSpecifier,
     TypeQueryResult,
 };
 use rustc_public_generative::{DefData, DependencyInfo, HirStructureCtx, rustc_public::DefId};
@@ -58,7 +58,7 @@ impl ModuleData {
 
     fn forward_pass_parsed_module(
         ctx: &HirStructureCtx<'_>,
-        ast: &ParsedTranslationUnit,
+        ast: &TranslationUnit,
         parent: DefId,
         foreign_mod: DefId,
     ) -> Self {
@@ -157,7 +157,7 @@ impl Resolver {
     pub(crate) fn new(
         ctx: &HirStructureCtx<'_>,
         deps: DependencyInfo,
-        p: &ParsedTranslationUnit,
+        p: &TranslationUnit,
         foreign_mod: DefId,
     ) -> Self {
         let mut this = Self::default();

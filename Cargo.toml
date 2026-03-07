@@ -9,5 +9,7 @@ members = [
   "co2c",
   "co2_test_harness",
   "co2_crate_sig",
+  "co2_ast",
+  "co2_ast_resolved",
 ]
 resolver = "2"

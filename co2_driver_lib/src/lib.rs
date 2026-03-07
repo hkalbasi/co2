@@ -6,7 +6,7 @@ use std::sync::{Mutex, OnceLock};
 
 use co2_crate_sig::{MirOwnerInfo, Resolver};
 use co2_hir::{HirBody, HirCtx, HirExpr, HirStmt, ResolvedValue};
-use co2_parser::Initializer;
+use co2_ast::Initializer;
 use rustc_public_generative::rustc_public::ty::IntTy;
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
@@ -110,7 +110,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 param_names,
                 body_tokens,
             } => {
-                let span_converter = |span: co2_parser::Span| {
+                let span_converter = |span: co2_ast::Span| {
                     ctx.span_in_file(self.file_id, span.start as u32, span.end as u32)
                 };
                 let hir_ctx = HirCtx::new(
@@ -137,9 +137,9 @@ impl Co2GeneratorState {
         &mut self,
         ctx: &HirStructureCtx<'_>,
         def: DefId,
-        initializer: co2_parser::Spanned<Initializer>,
+        initializer: co2_ast::Spanned<Initializer>,
     ) -> Body {
-        let span_converter = |span: co2_parser::Span| {
+        let span_converter = |span: co2_ast::Span| {
             ctx.span_in_file(self.file_id, span.start as u32, span.end as u32)
         };
         let hir_ctx = HirCtx::new(

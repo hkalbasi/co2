@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use co2_parser::{
+use co2_ast::{
     Declaration, DeclarationSpecifier, InitDeclarator, StorageClassSpecifier, StructOrUnionKind,
     TypeQueryResult, TypeResolver,
 };
@@ -32,7 +32,7 @@ pub fn lower_crate_sig(
 
     struct TranslationUnitParseResolver;
     impl TypeResolver for TranslationUnitParseResolver {
-        fn classify_path(&self, path: &co2_parser::RustPath) -> TypeQueryResult {
+        fn classify_path(&self, path: &co2_ast::RustPath) -> TypeQueryResult {
             let _ = path;
             TypeQueryResult::Unsure
         }
@@ -312,7 +312,7 @@ pub fn lower_crate_sig(
     )
 }
 
-fn has_static_storage(specifiers: &[co2_parser::Spanned<DeclarationSpecifier>]) -> bool {
+fn has_static_storage(specifiers: &[co2_ast::Spanned<DeclarationSpecifier>]) -> bool {
     specifiers.iter().any(|(spec, _)| {
         matches!(
             spec,

@@ -188,9 +188,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "co2_ast"
+version = "0.1.0"
+dependencies = [
+ "ariadne",
+ "chumsky",
+ "itertools",
+]
+
+[[package]]
+name = "co2_ast_resolved"
+version = "0.1.0"
+
+[[package]]
 name = "co2_crate_sig"
 version = "0.1.0"
 dependencies = [
+ "co2_ast",
  "co2_parser",
  "rustc_public_generative",
 ]
@@ -199,10 +213,10 @@ dependencies = [
 name = "co2_driver_lib"
 version = "0.1.0"
 dependencies = [
+ "co2_ast",
  "co2_crate_sig",
  "co2_hir",
  "co2_mir",
- "co2_parser",
  "rustc_public_generative",
 ]
 
@@ -210,6 +224,7 @@ dependencies = [
 name = "co2_hir"
 version = "0.1.0"
 dependencies = [
+ "co2_ast",
  "co2_parser",
  "la-arena",
  "rustc_public_generative",
@@ -229,6 +244,7 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "chumsky",
+ "co2_ast",
  "itertools",
  "la-arena",
 ]

@@ -19,11 +19,11 @@ pub(crate) struct CrateSigCtx<'a> {
 }
 
 impl CrateSigCtx<'_> {
-    pub(crate) fn terminate_with_error(&self, span: co2_parser::Span, msg: &str) -> ! {
-        co2_parser::print_errors_and_terminate(
+    pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
+        co2_ast::print_errors_and_terminate(
             self.source_name.clone(),
             self.source,
-            vec![co2_parser::Rich::custom(span, msg)],
+            vec![co2_ast::Rich::custom(span, msg)],
         );
     }
 

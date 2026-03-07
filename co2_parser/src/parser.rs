@@ -1,19 +1,9 @@
-use std::fmt::Display;
-
-use crate::{
-    Span, Spanned, TypeResolver,
-    lexer::{IntegerSuffix, Token},
-};
+use co2_ast::TypeResolver;
+use co2_ast::*;
 use chumsky::{
     input::{SliceInput, ValueInput},
     prelude::*,
 };
-use itertools::Itertools as _;
-
-#[derive(Debug, Clone)]
-pub struct LazyCompoundStatement {
-    pub tokens: Spanned<Vec<Spanned<Token>>>,
-}
 
 fn look_ahead<'src, I>(
     token: Token,
@@ -72,11 +62,6 @@ where
     })
 }
 
-#[derive(Debug, Clone)]
-pub struct CompoundStatement {
-    pub statements: Vec<Spanned<StatementOrDeclaration>>,
-}
-
 pub(crate) fn compound_statement<'src, 'r: 'src, I>(
     resolver: &'r dyn TypeResolver,
     stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
@@ -95,12 +80,6 @@ where
         .delimited_by(just(Token::LBrace), just(Token::RBrace))
 }
 
-#[derive(Debug, Clone)]
-pub enum StatementOrDeclaration {
-    Declaration(Spanned<Declaration>),
-    Statement(Spanned<Statement>),
-}
-
 fn statement_or_declaration<'src, 'r: 'src, I>(
     resolver: &'r dyn TypeResolver,
     stmt_rec: impl Parser<'src, I, Spanned<Statement>, extra::Err<Rich<'src, Token, Span>>>
@@ -115,51 +94,6 @@ where
         .map(StatementOrDeclaration::Declaration)
         .or(stmt_rec.map(StatementOrDeclaration::Statement))
         .map_with(|r, e| (r, e.span()))
-}
-
-#[derive(Debug, Clone)]
-pub enum Statement {
-    Empty,
-    Goto(Spanned<String>),
-    Break,
-    Continue,
-    Switch {
-        expr: Spanned<Expression>,
-        body: Box<Spanned<Statement>>,
-    },
-    Case {
-        expr: Spanned<Expression>,
-        statement: Box<Spanned<Statement>>,
-    },
-    Default {
-        statement: Box<Spanned<Statement>>,
-    },
-    Label {
-        name: Spanned<String>,
-        statement: Box<Spanned<Statement>>,
-    },
-    Return(Option<Spanned<Expression>>),
-    Expression(Spanned<Expression>),
-    Compound(Spanned<CompoundStatement>),
-    If {
-        cond: Spanned<Expression>,
-        then_branch: Box<Spanned<Statement>>,
-        else_branch: Option<Box<Spanned<Statement>>>,
-    },
-    While {
-        cond: Spanned<Expression>,
-        body: Box<Spanned<Statement>>,
-    },
-    DoWhile {
-        body: Box<Spanned<Statement>>,
-        cond: Spanned<Expression>,
-    },
-    For {
-        init: Option<Spanned<Expression>>,
-        cond: Option<Spanned<Expression>>,
-        post: Option<Spanned<Expression>>,
-        body: Box<Spanned<Statement>>,
-    },
 }
 
 pub(crate) fn statement<'src, 'r: 'src, I>(
@@ -306,97 +240,6 @@ where
         ))
         .map_with(|r, e| (r, e.span()))
     })
-}
-
-#[derive(Debug, Clone)]
-pub enum Constant {
-    Int(i64, IntegerSuffix),
-    Float(f64),
-    Char(char),
-    String(String),
-}
-
-#[derive(Debug, Clone)]
-pub enum Expression {
-    Empty,
-    Constant(Constant),
-    Identifier(Spanned<RustPath>),
-    Field(Box<Spanned<Expression>>, Spanned<String>),
-    Arrow(Box<Spanned<Expression>>, Spanned<String>),
-    Subscript(Box<Spanned<Expression>>, Box<Spanned<Expression>>),
-    Call {
-        func: Box<Spanned<Expression>>,
-        params: Vec<Spanned<Expression>>,
-    },
-    Update {
-        expr: Box<Spanned<Expression>>,
-        op: UpdateOp,
-        is_postfix: bool,
-    },
-    AssignWithOp {
-        lhs: Box<Spanned<Expression>>,
-        op: BinOp,
-        rhs: Box<Spanned<Expression>>,
-    },
-    Cast {
-        type_name: Box<TypeName>,
-        expr: Box<Spanned<Expression>>,
-    },
-    SizeofType(Box<TypeName>),
-    Sizeof(Box<Spanned<Expression>>),
-    UnaryOp(UnaryOp, Box<Spanned<Expression>>),
-    BinOp(Box<Spanned<Expression>>, BinOp, Box<Spanned<Expression>>),
-    Conditional {
-        cond: Box<Spanned<Expression>>,
-        then_expr: Box<Spanned<Expression>>,
-        else_expr: Box<Spanned<Expression>>,
-    },
-    CompoundLiteral {
-        type_name: Box<TypeName>,
-        initializer: Box<Spanned<Initializer>>,
-    },
-    GnuStatementExpr {
-        body: Box<Spanned<CompoundStatement>>,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum UpdateOp {
-    Inc,
-    Dec,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum UnaryOp {
-    Not,
-    Com,
-    AddrOf,
-    Deref,
-    Plus,
-    Minus,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum BinOp {
-    Assign,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Or,
-    And,
-    BitOr,
-    BitXor,
-    BitAnd,
-    Eq,
-    Lt,
-    Le,
-    Ne,
-    Ge,
-    Gt,
-    Shl,
-    Shr,
 }
 
 pub(crate) fn expression<'src, 'r: 'src, I>(
@@ -924,59 +767,6 @@ fn parse_integer_constant(text: &str) -> i64 {
         .unwrap_or_else(|e| panic!("invalid integer literal `{text}`: {e}"))
 }
 
-fn parse_unsigned_integer_constant(text: &str) -> Result<u64, String> {
-    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        return u64::from_str_radix(hex, 16).map_err(|e| e.to_string());
-    }
-
-    if text.len() > 1
-        && let Some(octal) = text.strip_prefix('0')
-    {
-        return u64::from_str_radix(octal, 8).map_err(|e| e.to_string());
-    }
-
-    text.parse::<u64>().map_err(|e| e.to_string())
-}
-
-#[derive(Debug, Clone)]
-pub struct LazySubscription {
-    #[allow(dead_code)]
-    tokens: Vec<Spanned<Token>>,
-}
-
-impl LazySubscription {
-    pub fn constant_len(&self) -> Option<u64> {
-        let mut len = None;
-        for (token, _) in &self.tokens {
-            let next = match token {
-                Token::Integer(text, suffix) => {
-                    if !matches!(suffix, crate::lexer::IntegerSuffix::None) {
-                        return None;
-                    }
-                    parse_unsigned_integer_constant(text).ok()
-                }
-                Token::FloatLit(text, suffix) => {
-                    if !matches!(suffix, crate::lexer::FloatSuffix::None) {
-                        return None;
-                    }
-                    if !text.chars().all(|c| c.is_ascii_digit()) {
-                        return None;
-                    }
-                    text.parse::<u64>().ok()
-                }
-                _ => None,
-            };
-            if let Some(parsed) = next {
-                if len.is_some() {
-                    return None;
-                }
-                len = Some(parsed);
-            }
-        }
-        len
-    }
-}
-
 fn lazy_subscription<'src, I>()
 -> impl Parser<'src, I, Spanned<LazySubscription>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -1005,82 +795,6 @@ where
             e.span(),
         )
     })
-}
-
-#[derive(Debug, Clone)]
-pub enum RustPathSegment {
-    Ident(String),
-    Generics(Vec<Spanned<RustPath>>),
-}
-
-#[derive(Debug, Clone)]
-pub struct RustPath {
-    pub segments: Vec<Spanned<RustPathSegment>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypeQueryResult {
-    Type,
-    Expr,
-    Unsure,
-}
-
-impl RustPath {
-    pub fn from_ident((ident, span): Spanned<String>) -> RustPath {
-        RustPath {
-            segments: vec![(RustPathSegment::Ident(ident), span)],
-        }
-    }
-
-    pub fn decompose(&self) -> (RustPath, Vec<RustPath>) {
-        let mut base = self.clone();
-        if let Some((RustPathSegment::Generics(_), _)) = base.segments.last() {
-            let Some((RustPathSegment::Generics(last), _)) = base.segments.pop() else {
-                unreachable!();
-            };
-            (base, last.into_iter().map(|x| x.0.clone()).collect())
-        } else {
-            (base, vec![])
-        }
-    }
-
-    pub fn to_pretty(&self) -> String {
-        self.segments
-            .iter()
-            .map(|seg| match &seg.0 {
-                RustPathSegment::Ident(s) => s.clone(),
-                RustPathSegment::Generics(parts) => {
-                    let inner = parts
-                        .iter()
-                        .map(|p| p.0.to_pretty())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("<{inner}>")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("::")
-    }
-}
-
-impl Display for RustPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(
-            &self
-                .segments
-                .iter()
-                .map(|x| match &x.0 {
-                    RustPathSegment::Ident(ident) => ident.clone(),
-                    RustPathSegment::Generics(rust_paths) => {
-                        format!(
-                            "<{}>",
-                            rust_paths.iter().map(|x| x.0.to_string()).join(", ")
-                        )
-                    }
-                })
-                .join("::"),
-        )
-    }
 }
 
 fn rust_path<'src, I>()
@@ -1117,135 +831,6 @@ where
             })
             .map_with(|r, e| (r, e.span()))
     })
-}
-
-#[derive(Debug, Clone)]
-pub enum TypeSpecifier {
-    Int,
-    Bool,
-    Void,
-    Char,
-    Short,
-    Long,
-    Float,
-    Double,
-    Signed,
-    Unsigned,
-    StructOrUnion {
-        kind: StructOrUnionKind,
-        specifier: StructOrUnionSpecifier,
-    },
-    Enum(EnumSpecifier),
-    TypedefName(Spanned<RustPath>),
-}
-
-impl StructOrUnionSpecifier {
-    pub fn canonical_field_set_key(&self) -> Option<String> {
-        let fields = match self {
-            StructOrUnionSpecifier::Declared { .. } => return None,
-            StructOrUnionSpecifier::Defined { fields, .. } => fields,
-            StructOrUnionSpecifier::Anonymous { fields } => fields,
-        };
-
-        let mut entries = Vec::new();
-        let mut anon_idx = 0usize;
-        for (field, _) in fields {
-            let base = canonical_base_type_key(&field.specifiers)?;
-            if field.declarators.is_empty() {
-                entries.push(format!("$anon{anon_idx}:{base}"));
-                anon_idx += 1;
-                continue;
-            }
-            for (decl, _) in &field.declarators {
-                if let Some((bits, _)) = &decl.bits {
-                    // Include bit fields in the canonical key; they are lowered as their
-                    // underlying integer type (Rust does not support bit fields).
-                    let field_name = match &decl.declarator.0 {
-                        Declarator::Identifier((n, _)) => n.clone(),
-                        Declarator::Abstract => {
-                            let name = format!("$anon{anon_idx}");
-                            anon_idx += 1;
-                            name
-                        }
-                        _ => return None,
-                    };
-                    entries.push(format!("{field_name}:{base}:{bits}bits"));
-                    continue;
-                }
-                let (name, suffix) = canonical_decl_key(&decl.declarator.0)?;
-                match name {
-                    Some(name) => entries.push(format!("{name}:{base}{suffix}")),
-                    None => {
-                        entries.push(format!("$anon{anon_idx}:{base}{suffix}"));
-                        anon_idx += 1;
-                    }
-                }
-            }
-        }
-        entries.sort();
-        Some(format!("__co2_anon_struct{{{}}}", entries.join("|")))
-    }
-}
-
-fn canonical_base_type_key(specifiers: &[Spanned<TypeSpecifier>]) -> Option<String> {
-    for (specifier, _) in specifiers {
-        let key = match specifier {
-            TypeSpecifier::Int => "int".to_owned(),
-            TypeSpecifier::Bool => "bool".to_owned(),
-            TypeSpecifier::Void => "void".to_owned(),
-            TypeSpecifier::Char => "char".to_owned(),
-            TypeSpecifier::Short => "short".to_owned(),
-            TypeSpecifier::Long => "long".to_owned(),
-            TypeSpecifier::Float => "float".to_owned(),
-            TypeSpecifier::Double => "double".to_owned(),
-            TypeSpecifier::Signed => continue,
-            TypeSpecifier::Unsigned => continue,
-            TypeSpecifier::Enum(_) => "int".to_owned(),
-            TypeSpecifier::TypedefName(path) => path.0.to_pretty(),
-            TypeSpecifier::StructOrUnion { specifier, .. } => match specifier {
-                StructOrUnionSpecifier::Declared { ident } => format!("struct::{}", ident.0),
-                StructOrUnionSpecifier::Defined { .. }
-                | StructOrUnionSpecifier::Anonymous { .. } => {
-                    specifier.canonical_field_set_key()?
-                }
-            },
-        };
-        return Some(key);
-    }
-    None
-}
-
-fn canonical_decl_key(decl: &Declarator) -> Option<(Option<String>, String)> {
-    match decl {
-        Declarator::Abstract => Some((None, String::new())),
-        Declarator::Identifier((name, _)) => Some((Some(name.clone()), String::new())),
-        Declarator::FunctionDeclarator {
-            declarator,
-            param_list,
-        } => {
-            let (name, inner) = canonical_decl_key(&declarator.0)?;
-            let suffix = if param_list.ellipsis {
-                "(...)".to_owned()
-            } else {
-                "()".to_owned()
-            };
-            Some((name, format!("{inner}{suffix}")))
-        }
-        Declarator::PointerDeclarator { declarator, .. } => {
-            let (name, inner) = canonical_decl_key(&declarator.0)?;
-            Some((name, format!("*{inner}")))
-        }
-        Declarator::ArrayDeclarator { declarator, .. } => {
-            let (name, inner) = canonical_decl_key(&declarator.0)?;
-            Some((name, format!("{inner}[]")))
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct StructOrUnionField {
-    pub specifiers: Vec<Spanned<TypeSpecifier>>,
-    pub declarators: Vec<Spanned<StructDeclarator>>,
 }
 
 fn left_recursion<'src, I, B: 'src, E: 'src>(
@@ -1300,46 +885,6 @@ where
         .repeated()
         .collect()
         .delimited_by(just(Token::LBrace), just(Token::RBrace))
-}
-
-#[derive(Debug, Clone)]
-pub enum StructOrUnionSpecifier {
-    Defined {
-        ident: Spanned<String>,
-        fields: Vec<Spanned<StructOrUnionField>>,
-    },
-    Declared {
-        ident: Spanned<String>,
-    },
-    Anonymous {
-        fields: Vec<Spanned<StructOrUnionField>>,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum StructOrUnionKind {
-    Struct,
-    Union,
-}
-
-#[derive(Debug, Clone)]
-pub struct Enumerator {
-    pub ident: Spanned<String>,
-    pub value: Option<Spanned<Expression>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum EnumSpecifier {
-    Defined {
-        ident: Spanned<String>,
-        enumerators: Vec<Spanned<Enumerator>>,
-    },
-    Declared {
-        ident: Spanned<String>,
-    },
-    Anonymous {
-        enumerators: Vec<Spanned<Enumerator>>,
-    },
 }
 
 fn type_specifier<'src, 'r: 'src, I>(
@@ -1434,17 +979,6 @@ where
     })
 }
 
-#[derive(Debug, Clone)]
-pub enum StorageClassSpecifier {
-    Typedef,
-    Extern,
-    Static,
-    Atomic,
-    ThreadLocal,
-    Auto,
-    Register,
-}
-
 fn storage_class_specifier<'src, I>()
 -> impl Parser<'src, I, Spanned<StorageClassSpecifier>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -1462,25 +996,6 @@ where
     ])
     .labelled("Storage specifier")
     .map_with(|r, e| (r, e.span()))
-}
-
-#[derive(Debug, Clone)]
-pub enum TypeQualifier {
-    Const,
-    Restrict,
-    Volatile,
-}
-
-#[derive(Debug, Clone)]
-pub enum SpecifierQualifier {
-    TypeSpecifier(Spanned<TypeSpecifier>),
-    TypeQualifier(Spanned<TypeQualifier>),
-}
-
-#[derive(Debug, Clone)]
-pub struct TypeName {
-    pub specifier_qualifier_list: Vec<Spanned<SpecifierQualifier>>,
-    pub abstract_declarator: Option<Spanned<Declarator>>,
 }
 
 fn type_qualifier<'src, I>()
@@ -1564,13 +1079,6 @@ where
         })
 }
 
-#[derive(Debug, Clone)]
-pub enum DeclarationSpecifier {
-    TypeSpecifier(Spanned<TypeSpecifier>),
-    TypeQualifier(Spanned<TypeQualifier>),
-    StorageSpecifier(Spanned<StorageClassSpecifier>),
-}
-
 fn declaration_specifier<'src, 'r: 'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
@@ -1627,12 +1135,6 @@ where
     .map_with(|r, e| (r, e.span()))
 }
 
-#[derive(Debug, Clone)]
-pub struct ParameterList {
-    pub parameters: Vec<(Vec<Spanned<DeclarationSpecifier>>, Spanned<Declarator>)>,
-    pub ellipsis: bool,
-}
-
 fn parameter_type_list<'src, 'r: 'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
@@ -1661,45 +1163,6 @@ where
             ellipsis: ellipsis.is_some(),
         })
         .delimited_by(just(Token::LParen), just(Token::RParen))
-}
-
-#[derive(Debug, Clone)]
-pub enum Declarator {
-    Abstract,
-    Identifier(Spanned<String>),
-    FunctionDeclarator {
-        declarator: Box<Spanned<Declarator>>,
-        param_list: ParameterList,
-    },
-    PointerDeclarator {
-        declarator: Box<Spanned<Declarator>>,
-        qualifiers: Vec<Spanned<TypeQualifier>>,
-    },
-    ArrayDeclarator {
-        declarator: Box<Spanned<Declarator>>,
-        subscription: Spanned<LazySubscription>,
-    },
-}
-
-impl Declarator {
-    pub fn is_terminal(&self) -> bool {
-        matches!(self, Declarator::Identifier(_) | Declarator::Abstract)
-    }
-
-    pub fn is_function(&self) -> bool {
-        match self {
-            Declarator::FunctionDeclarator { declarator, .. } => {
-                if declarator.0.is_terminal() {
-                    true
-                } else {
-                    declarator.0.is_function()
-                }
-            }
-            Declarator::Identifier(_) | Declarator::Abstract => false,
-            Declarator::PointerDeclarator { declarator, .. } => declarator.0.is_function(),
-            Declarator::ArrayDeclarator { declarator, .. } => declarator.0.is_function(),
-        }
-    }
 }
 
 fn declarator<'src, 'r: 'src, I>(
@@ -1765,12 +1228,6 @@ where
     })
 }
 
-#[derive(Debug, Clone)]
-pub struct StructDeclarator {
-    pub declarator: Spanned<Declarator>,
-    pub bits: Option<Spanned<String>>,
-}
-
 fn struct_declarator<'src, I>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator>, extra::Err<Rich<'src, Token, Span>>>
     + Clone,
@@ -1783,30 +1240,6 @@ where
         .then(just(Token::Colon).ignore_then(number()).or_not())
         .map(|(declarator, bits)| StructDeclarator { declarator, bits })
         .map_with(|r, e| (r, e.span()))
-}
-
-#[derive(Debug, Clone)]
-pub struct InitDeclarator {
-    pub declarator: Spanned<Declarator>,
-    pub initializer: Option<Spanned<Initializer>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Designator {
-    Subscript(Spanned<Expression>),
-    Field(Spanned<String>),
-}
-
-#[derive(Debug, Clone)]
-pub struct InitializerItem {
-    pub designators: Option<Vec<Spanned<Designator>>>,
-    pub initializer: Spanned<Initializer>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Initializer {
-    Expr(Spanned<Expression>),
-    List(Vec<Spanned<InitializerItem>>),
 }
 
 fn initializer<'src, 'r: 'src, I>(
@@ -1904,19 +1337,6 @@ fn declarator_has_name(decl: &Declarator) -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Declaration {
-    FunctionDefinition {
-        declaration_specifiers: Vec<Spanned<DeclarationSpecifier>>,
-        declarator: Spanned<Declarator>,
-        body: Spanned<LazyCompoundStatement>,
-    },
-    Declaration {
-        declaration_specifiers: Vec<Spanned<DeclarationSpecifier>>,
-        declarators: Vec<Spanned<InitDeclarator>>,
-    },
-}
-
 fn declaration<'src, 'r: 'src, I>(
     resolver: &'r dyn TypeResolver,
     allow_path_types_in_type_name: bool,
@@ -1963,11 +1383,6 @@ where
     choice((function, simple)).map_with(|r, e| (r, e.span()))
 }
 
-#[derive(Debug, Clone)]
-pub struct UseItem {
-    pub path: Vec<Spanned<String>>,
-}
-
 fn use_item<'src, I>()
 -> impl Parser<'src, I, Spanned<UseItem>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -1983,12 +1398,6 @@ where
         )
         .then_ignore(just(Token::Semicolon))
         .map_with(|r, e| (r, e.span()))
-}
-
-#[derive(Debug)]
-pub struct TranslationUnit {
-    pub rust_use_items: Vec<Spanned<UseItem>>,
-    pub items: Vec<Spanned<Declaration>>,
 }
 
 pub fn translation_unit<'src, 'r: 'src, I>(

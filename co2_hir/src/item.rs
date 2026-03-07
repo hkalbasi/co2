@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use co2_parser::{
+use co2_ast::{
     CompoundStatement, Declaration, RustPath, Spanned, Token, TypeQueryResult,
-    TypeResolver as ParserTypeResolver, parse_compound_statement,
+    TypeResolver as ParserTypeResolver,
 };
+use co2_parser::parse_compound_statement;
 use la_arena::{Arena, Idx};
 use rustc_public_generative::rustc_public::{
     CrateItem, DefId,
@@ -66,7 +67,7 @@ pub fn lower_function_body<R>(
 }
 
 pub fn lower_static_body<R>(
-    (initializer, parser_span): Spanned<co2_parser::Initializer>,
+    (initializer, parser_span): Spanned<co2_ast::Initializer>,
     def: DefId,
     hir_ctx: &HirCtx<'_, R>,
 ) -> Result<HirBody, String> {
