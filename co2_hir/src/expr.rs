@@ -214,7 +214,7 @@ impl HirCtx<'_> {
                     lowered_args.push(arg);
                 }
 
-                if sig.inputs().len() != lowered_args.len() {
+                if sig.inputs().len() != lowered_args.len() && !sig.c_variadic {
                     return Err(format!(
                         "call argument count mismatch: expected {}, got {}",
                         sig.inputs().len(),

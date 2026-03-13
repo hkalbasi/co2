@@ -303,6 +303,7 @@ pub fn lower_crate_sig(
             output: self_ty_hir.clone(),
             abi: FunctionAbi::Rust,
             is_unsafe: false,
+            c_variadic: false,
         };
         ctx.hir_items.push(HirModuleItem::Impl {
             id: clone_impl_def,

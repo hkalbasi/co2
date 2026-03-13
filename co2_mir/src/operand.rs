@@ -1049,8 +1049,11 @@ impl Builder<'_> {
 
         let mut arg_ops = Vec::with_capacity(args.len());
         for (idx, arg) in args.iter().enumerate() {
-            let expected_ty = sig.inputs()[idx];
-            let op = self.lower_call_arg(arg, expected_ty);
+            let op = if let Some(expected_ty) = sig.inputs().get(idx) {
+                self.lower_call_arg(arg, *expected_ty)
+            } else {
+                self.lower_expr_to_operand(arg)
+            };
             arg_ops.push(op);
         }
         match &func.kind {

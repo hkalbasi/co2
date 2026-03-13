@@ -1,10 +1,10 @@
 //@ mode: c
 //@ run-status: 0
-//@ run-stdout: ok\n
+//@ run-stdout: ok 3\n
 
-int write(int fd, char* buf, int len);
+int printf(const char *, ...);
 
 int main() {
-    write(1, "ok\n", 3);
+    printf("ok %d\n", 3);
     return 0;
 }

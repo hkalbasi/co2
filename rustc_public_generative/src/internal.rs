@@ -1001,7 +1001,7 @@ fn generate_sig<'tcx>(
             &function.output,
             item_allocator,
         ))),
-        c_variadic: false,
+        c_variadic: function.c_variadic,
         implicit_self: hir::ImplicitSelfKind::None,
         lifetime_elision_allowed: true,
     });
@@ -1075,7 +1075,7 @@ fn generate_sig_with_self<'tcx>(
             &sig.output,
             item_allocator,
         ))),
-        c_variadic: false,
+        c_variadic: sig.c_variadic,
         implicit_self,
         lifetime_elision_allowed: true,
     });
@@ -2887,7 +2887,7 @@ fn hir_ty_to_rustc<'tcx>(
                     &sig.output,
                     item_allocator,
                 ))),
-                c_variadic: false,
+                c_variadic: sig.c_variadic,
                 implicit_self: hir::ImplicitSelfKind::None,
                 lifetime_elision_allowed: true,
             });

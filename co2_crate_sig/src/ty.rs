@@ -209,6 +209,7 @@ impl LocalResolverBase {
                         output: ret,
                         abi: FunctionAbi::C,
                         is_unsafe: false,
+                        c_variadic: param_list.ellipsis,
                     }),
                     TyOrFunction::Function(_) => {
                         return Err("function returning function is not supported".to_owned());

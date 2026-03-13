@@ -135,6 +135,7 @@ pub struct FunctionSignature {
     pub output: HirTy,
     pub abi: FunctionAbi,
     pub is_unsafe: bool,
+    pub c_variadic: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
