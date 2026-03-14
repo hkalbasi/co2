@@ -910,18 +910,31 @@ impl HirCtx<'_> {
                 span,
             },
             InitializerTree::Middle { children } => {
-                let Some(field_tys) = adt_field_tys(ty) else {
-                    self.terminate_with_error(parser_span, "Can't compute adt fields");
-                };
-                let mut args = Vec::with_capacity(children.len());
-                for (child, field_ty) in children.iter().zip(field_tys.into_iter()) {
-                    let expr = self.initializer_tree_to_expr(child, field_ty, parser_span);
-                    args.push(expr);
-                }
-                HirExpr {
-                    kind: HirExprKind::Aggregate { args },
-                    ty,
-                    span,
+                if let Some(elem_ty) = array_elem_ty(ty) {
+                    let mut args = Vec::with_capacity(children.len());
+                    for child in children {
+                        let expr = self.initializer_tree_to_expr(child, elem_ty, parser_span);
+                        args.push(expr);
+                    }
+                    HirExpr {
+                        kind: HirExprKind::Aggregate { args },
+                        ty,
+                        span,
+                    }
+                } else {
+                    let Some(field_tys) = adt_field_tys(ty) else {
+                        self.terminate_with_error(parser_span, "Can't compute adt fields");
+                    };
+                    let mut args = Vec::with_capacity(children.len());
+                    for (child, field_ty) in children.iter().zip(field_tys) {
+                        let expr = self.initializer_tree_to_expr(child, field_ty, parser_span);
+                        args.push(expr);
+                    }
+                    HirExpr {
+                        kind: HirExprKind::Aggregate { args },
+                        ty,
+                        span,
+                    }
                 }
             }
         }

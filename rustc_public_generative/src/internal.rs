@@ -13,6 +13,7 @@ use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_ast::{Attribute, FloatTy, IntTy, UintTy};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::packed::Pu128;
 use rustc_data_structures::steal::Steal;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
@@ -2594,6 +2595,31 @@ fn make_prim_ty(owner: LocalDefId, prim: hir::PrimTy) -> hir::Ty<'static> {
     }
 }
 
+fn make_array_ty(
+    owner: LocalDefId,
+    pointee: &'static hir::Ty<'static>,
+    len: usize,
+) -> hir::Ty<'static> {
+    hir::Ty {
+        hir_id: HirId::make_owner(owner),
+        span: DUMMY_SP,
+        kind: hir::TyKind::Array(
+            pointee,
+            leak(hir::ConstArg {
+                hir_id: HirId::make_owner(owner),
+                span: DUMMY_SP,
+                kind: hir::ConstArgKind::Literal {
+                    lit: rustc_ast::LitKind::Int(
+                        Pu128(len as u128),
+                        rustc_ast::LitIntType::Unsuffixed,
+                    ),
+                    negated: false,
+                },
+            }),
+        ),
+    }
+}
+
 fn make_ptr_ty(
     owner: LocalDefId,
     pointee: &'static hir::Ty<'static>,
@@ -2845,6 +2871,10 @@ fn hir_ty_to_rustc<'tcx>(
                     rustc_public::mir::Mutability::Mut => hir::Mutability::Mut,
                 },
             )
+        }
+        HirTyKind::Array(len, to) => {
+            let pointee = leak(hir_ty_to_rustc(tcx, owner, &to, item_allocator));
+            make_array_ty(owner, pointee, *len)
         }
         HirTyKind::Ref(mutability, lifetime, to) => {
             let pointee = leak(hir_ty_to_rustc(tcx, owner, &to, item_allocator));

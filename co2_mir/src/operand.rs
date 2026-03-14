@@ -401,27 +401,44 @@ impl Builder<'_> {
                 });
                 MirOperand::Copy(place(tmp))
             }
-            HirExprKind::Aggregate { args } => {
-                let TyKind::RigidTy(RigidTy::Adt(adt, adt_args)) = expr.ty.kind() else {
-                    panic!("aggregate initializer expects adt type, got {:?}", expr.ty);
-                };
-                let mut operands = Vec::with_capacity(args.len());
-                for arg in args {
-                    operands.push(self.lower_expr_to_operand(arg));
-                }
-                let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(tmp),
-                        Rvalue::Aggregate(
-                            AggregateKind::Adt(adt, variant_idx(0), adt_args, None, None),
-                            operands,
+            HirExprKind::Aggregate { args } => match expr.ty.kind() {
+                TyKind::RigidTy(RigidTy::Adt(adt, adt_args)) => {
+                    let mut operands = Vec::with_capacity(args.len());
+                    for arg in args {
+                        operands.push(self.lower_expr_to_operand(arg));
+                    }
+                    let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(
+                            place(tmp),
+                            Rvalue::Aggregate(
+                                AggregateKind::Adt(adt, variant_idx(0), adt_args, None, None),
+                                operands,
+                            ),
                         ),
-                    ),
-                    span: expr.span,
-                });
-                MirOperand::Copy(place(tmp))
-            }
+                        span: expr.span,
+                    });
+                    MirOperand::Copy(place(tmp))
+                }
+                TyKind::RigidTy(RigidTy::Array(elem, len)) => {
+                    let mut operands = Vec::with_capacity(args.len());
+                    for arg in args {
+                        operands.push(self.lower_expr_to_operand(arg));
+                    }
+                    let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(
+                            place(tmp),
+                            Rvalue::Aggregate(AggregateKind::Array(elem), operands),
+                        ),
+                        span: expr.span,
+                    });
+                    MirOperand::Copy(place(tmp))
+                }
+                _ => {
+                    panic!("aggregate initializer expects adt type, got {:?}", expr.ty);
+                }
+            },
             HirExprKind::ConstStr(s) => self.lower_const_string(s, expr.span),
             HirExprKind::Path(path) => match path {
                 ResolvedValue::Fn(fn_def) => {

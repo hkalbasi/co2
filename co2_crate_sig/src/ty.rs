@@ -192,7 +192,13 @@ impl LocalResolverBase {
                         let param_base = self.base_ty_of_decl(param.0, span);
                         let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
                         let param_ty = match param_decl_ty {
-                            TyOrFunction::Ty(ty) => ty,
+                            TyOrFunction::Ty(ty) => {
+                                if let HirTyKind::Array(_, inner) = ty.kind {
+                                    HirTy::new_ptr(*inner, Mutability::Mut, ty.span)
+                                } else {
+                                    ty
+                                }
+                            }
                             TyOrFunction::Function(_) => {
                                 return Err(
                                     "function type is invalid in parameter position".to_owned()
@@ -232,10 +238,19 @@ impl LocalResolverBase {
                 };
                 self.extract_decl_type(ptr_or_fn_ptr, *declarator)
             }
-            Declarator::ArrayDeclarator { declarator, .. } => {
+            Declarator::ArrayDeclarator {
+                declarator,
+                subscription,
+            } => {
+                let len = if let Some(len) = subscription.0.constant_len() {
+                    len as usize
+                } else {
+                    // self.terminate_with_error(subscription.1, "Can not handle complex subscriptions");
+                    555
+                };
                 let array_ty = match current {
                     TyOrFunction::Ty(inner) => {
-                        TyOrFunction::Ty(HirTy::new_ptr(inner, Mutability::Mut, rust_span))
+                        TyOrFunction::Ty(HirTy::new_array(inner, len, rust_span))
                     }
                     TyOrFunction::Function(_) => {
                         return Err("array of functions is not supported".to_owned());

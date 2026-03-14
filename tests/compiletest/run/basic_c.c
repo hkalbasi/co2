@@ -883,23 +883,37 @@ int main27()
 	}
 }
 
+int static_array[3] = {0, 1, 2};
+
+int main28()
+{
+	if (static_array[0] != 0)
+		return 1;
+	if (static_array[1] != 1)
+		return 2;
+	if (static_array[2] != 2)
+		return 3;
+	
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
-	main_ty mains[28] = {
+	main_ty mains[29] = {
 		main0,
 		main1, main2, main3, main4, main5,
 		main6, main7, main8, main9, main10,
 		main11, main12, main13, main14, main15,
 		main16, main17, main18, main19, main20,
 		main21, main22, main23, main24, main25,
-		main26, main27
+		main26, main27, main28
 	};
 	
 	int i;
 	for (i = 0; i < sizeof(mains) / sizeof(mains[0]); i += 1) {
 		if (mains[i]()) {
-			return 100 + i;
+			return i;
 		}
 	}
 	return 0;
