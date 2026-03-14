@@ -17,43 +17,7 @@ impl Builder<'_> {
             }) => {
                 if let Some(init) = initializer {
                     let local_index = self.local_to_index(*local);
-                    if let HirExprKind::Aggregate { args } = &init.kind {
-                        let rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
-                            rustc_public_generative::rustc_public::ty::RigidTy::Adt(adt, adt_args),
-                        ) = init.ty.kind()
-                        else {
-                            panic!("aggregate initializer expects adt type, got {:?}", init.ty);
-                        };
-                        let mut operands = Vec::with_capacity(args.len());
-                        for arg in args {
-                            operands.push(self.lower_expr_to_operand(arg));
-                        }
-                        self.stmts.push(MirStatement {
-                            kind: MirStatementKind::Assign(
-                                place(local_index),
-                                Rvalue::Aggregate(
-                                    rustc_public_generative::rustc_public::mir::AggregateKind::Adt(
-                                        adt,
-                                        crate::build::variant_idx(0),
-                                        adt_args,
-                                        None,
-                                        None,
-                                    ),
-                                    operands,
-                                ),
-                            ),
-                            span: init.span,
-                        });
-                    } else if let HirExprKind::Call { func, args } = &init.kind {
-                        let local_ty = self.locals[local_index].ty;
-                        self.lower_call_to_destination(
-                            func,
-                            args,
-                            init.span,
-                            place(local_index),
-                            local_ty,
-                        );
-                    } else if let HirExprKind::Zeroed = &init.kind {
+                    if let HirExprKind::Zeroed = &init.kind {
                         let local_ty = self.locals[local_index].ty;
                         self.lower_zeroed_to_destination(place(local_index), init.span, local_ty);
                     } else {

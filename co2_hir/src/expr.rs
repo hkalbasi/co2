@@ -22,11 +22,20 @@ use crate::ty::{
     ty_matches_expected,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HirExpr {
     pub kind: HirExprKind,
     pub ty: Ty,
     pub span: RustSpan,
+}
+
+impl std::fmt::Debug for HirExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            HirExprKind::ConstInt(i) => write!(f, "{i}"),
+            _ => write!(f, "expr"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

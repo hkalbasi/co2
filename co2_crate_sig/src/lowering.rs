@@ -8,7 +8,7 @@ use co2_parser::parse_compound_statement;
 use rustc_public_generative::{
     DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirGenericArg,
     HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem, HirSelfKind, HirStructure,
-    HirStructureCtx, HirTy,
+    HirStructureCtx, HirTy, HirTyConst,
     rustc_public::{
         DefId,
         ty::{AdtDef, FnDef, IntTy},
@@ -19,6 +19,7 @@ use crate::{
     CrateSigCtx, LocalResolver, LocalResolverBase, MirOwnerInfo,
     resolver::Resolver,
     struct_manager::{PendingEnum, StructData, StructManager},
+    ty::CTy,
 };
 
 pub struct WellknownDefs {
@@ -164,26 +165,16 @@ pub fn lower_crate_sig(
                     } = init.0;
 
                     if is_typedef {
-                        let result = ctx.try_lower_value_decl_type(
-                            base.clone(),
-                            declarator.transform(&resolver),
-                        );
-                        let (name, ty) = match result {
-                            Ok(pair) => pair,
-                            Err(e) => {
-                                // May be a function-type typedef (e.g. `typedef Ret fn_t(args)`).
-                                // Store as FnPtr; skip emitting a TypeDef item (not needed for fn types).
-                                if let Ok((fn_name, sig, _)) = ctx.lower_function_signature(
-                                    base.clone(),
-                                    declarator.transform(&resolver),
-                                ) {
-                                    ctx.resolver
-                                        .borrow_mut()
-                                        .unrepresentable_typedefs
-                                        .insert(fn_name, sig);
-                                    continue;
-                                }
-                                ctx.terminate_with_error(init.1, &e);
+                        let (name, ty) = ctx
+                            .lower_value_decl_ctype(base.clone(), declarator.transform(&resolver));
+                        let ty = match ty {
+                            CTy::Ty(ty) => ty,
+                            _ => {
+                                ctx.resolver
+                                    .borrow_mut()
+                                    .unrepresentable_typedefs
+                                    .insert(name, ty);
+                                continue;
                             }
                         };
                         let type_def = ctx.resolve_in_current([&*name]).unwrap().0;
@@ -196,43 +187,70 @@ pub fn lower_crate_sig(
                         continue;
                     }
 
-                    if !declarator.0.is_function() {
-                        let (name, ty) = ctx
-                            .lower_value_decl_type(base.clone(), declarator.transform(&resolver));
-                        let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
-                        if let Some((initializer, span)) = initializer {
-                            let initializer = initializer.transform(&resolver);
-                            let initializer = (initializer, span);
-                            ctx.mir_owners
-                                .insert(id, MirOwnerInfo::Static { initializer });
-                        } else {
-                            ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+                    let (name, ty) =
+                        ctx.lower_value_decl_ctype(base.clone(), declarator.transform(&resolver));
+                    match ty {
+                        CTy::Ty(ty) => {
+                            let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
+                            if let Some((initializer, span)) = initializer {
+                                let initializer = initializer.transform(&resolver);
+                                let initializer = (initializer, span);
+                                ctx.mir_owners
+                                    .insert(id, MirOwnerInfo::Static { initializer });
+                            } else {
+                                ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+                            }
+                            ctx.hir_items.push(HirModuleItem::Static {
+                                name,
+                                id,
+                                ty,
+                                mutable: true,
+                                span,
+                            });
                         }
-                        ctx.hir_items.push(HirModuleItem::Static {
-                            name,
-                            id,
-                            ty,
-                            mutable: true,
-                            span,
-                        });
-                        continue;
-                    } else {
-                        match ctx
-                            .lower_function_signature(base.clone(), declarator.transform(&resolver))
-                        {
-                            Ok((name, sig, _param_names)) => {
-                                let def_id = ctx.resolve_in_current([&*name]).unwrap().0;
-                                let span = ctx.co2_span_to_rustc(init.1);
-                                foreign_items.push(ForeignModItem::ForeignFunction {
-                                    name,
-                                    id: FnDef(def_id),
-                                    sig,
-                                    span,
-                                });
+                        CTy::UnsizedArray(elem_ty) => {
+                            let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
+                            let (len_id, len_name) =
+                                ctx.resolver.borrow_mut().emit_fake_def(DefData::ValueNs);
+                            let len_rhs = ctx.allocate_def_id(len_id, DefData::AnonConst);
+                            if let Some((initializer, span)) = initializer {
+                                let initializer = initializer.transform(&resolver);
+                                let initializer = (initializer, span);
+                                ctx.mir_owners
+                                    .insert(id, MirOwnerInfo::Static { initializer });
+                            } else {
+                                ctx.terminate_with_error(
+                                    parser_span,
+                                    "static with unsized array type should have initializer",
+                                );
                             }
-                            Err(e) => {
-                                ctx.terminate_with_error(parser_span, &e);
-                            }
+                            let ty = HirTy::new_array(elem_ty, HirTyConst::ConstDef(len_id), span);
+                            ctx.hir_items.push(HirModuleItem::Static {
+                                name,
+                                id,
+                                ty,
+                                mutable: true,
+                                span,
+                            });
+                            ctx.hir_items.push(HirModuleItem::Const {
+                                name: len_name,
+                                id: len_id,
+                                ty: HirTy::usize_ty(span),
+                                rhs: len_rhs,
+                                span,
+                            });
+                            ctx.mir_owners
+                                .insert(len_rhs, MirOwnerInfo::StaticArraySizeInference { span });
+                        }
+                        CTy::Function(sig) => {
+                            let def_id = ctx.resolve_in_current([&*name]).unwrap().0;
+                            let span = ctx.co2_span_to_rustc(init.1);
+                            foreign_items.push(ForeignModItem::ForeignFunction {
+                                name,
+                                id: FnDef(def_id),
+                                sig,
+                                span,
+                            });
                         }
                     }
                 }

@@ -653,6 +653,10 @@ pub struct LazySubscription {
 }
 
 impl LazySubscription {
+    pub fn is_unsized(&self) -> bool {
+        self.tokens.len() == 2
+    }
+
     pub fn constant_len(&self) -> Option<u64> {
         let mut len = None;
         for (token, _) in &self.tokens {

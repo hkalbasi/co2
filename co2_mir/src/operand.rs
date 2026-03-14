@@ -201,7 +201,9 @@ impl Builder<'_> {
                 MirOperand::Copy(place(ptr_local))
             }
             HirExprKind::Zeroed => {
-                panic!("zeroed expression must be lowered by declaration lowering")
+                let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
+                MirOperand::Copy(place(temp))
             }
             HirExprKind::Local(local) => {
                 let local_index = self.local_to_index(*local);
@@ -420,7 +422,7 @@ impl Builder<'_> {
                     });
                     MirOperand::Copy(place(tmp))
                 }
-                TyKind::RigidTy(RigidTy::Array(elem, len)) => {
+                TyKind::RigidTy(RigidTy::Array(elem, _)) => {
                     let mut operands = Vec::with_capacity(args.len());
                     for arg in args {
                         operands.push(self.lower_expr_to_operand(arg));

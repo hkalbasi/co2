@@ -6,24 +6,31 @@ use co2_ast::{
 };
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
-use rustc_public_generative::rustc_public::{
-    CrateItem,
-    mir::{Mutability, Safety},
-    ty::{
-        Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, IntTy, RigidTy, Span as RustSpan,
-        Ty, TyKind,
+use rustc_public_generative::{
+    HirTy,
+    rustc_public::{
+        CrateItem,
+        mir::{Mutability, Safety},
+        ty::{
+            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, IntTy, RigidTy,
+            Span as RustSpan, Ty, TyConst, TyKind,
+        },
     },
 };
 
-use crate::expr::{HirExpr, HirExprKind};
 use crate::item::{HirLocal, LocalId};
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
 use crate::ty::{array_elem_ty, is_array_ty, is_maybe_uninit_fn_ptr_ty, ty_matches_expected};
+use crate::{
+    expr::{HirExpr, HirExprKind},
+    initializer_tree::InitializerTree,
+};
 
-pub enum TyOrFunction {
+pub enum CTy {
     Ty(Ty),
     Function(FnSig),
+    UnsizedArray(Ty),
 }
 
 #[derive(Clone, Debug)]
@@ -62,13 +69,61 @@ impl HirCtx<'_> {
                         initializer,
                     } = init.0;
                     let raw_initializer = initializer.clone();
-                    let ((name, span), ty) =
+                    let ((name, parser_span), ty) =
                         self.lower_value_decl_type(declaration_specifiers.clone(), declarator);
-                    let TyOrFunction::Ty(ty) = ty else {
-                        continue;
+                    let ty = match ty {
+                        CTy::Ty(ty) => ty,
+                        CTy::Function(_) => continue,
+                        CTy::UnsizedArray(elem) => {
+                            let Some(initializer) = initializer else {
+                                self.terminate_with_error(
+                                    parser_span,
+                                    "Unsized array without initializer is invalid",
+                                );
+                            };
+                            let fake_ty = Ty::from_rigid_kind(RigidTy::Array(
+                                elem,
+                                TyConst::try_from_target_usize(567_567).unwrap(),
+                            ));
+                            let tree = self.lower_to_initializer_tree(
+                                fake_ty,
+                                initializer,
+                                locals,
+                                local_map,
+                            );
+                            let real_len = if let InitializerTree::Middle { children } = &tree {
+                                children.len() as u64
+                            } else {
+                                self.terminate_with_error(
+                                    parser_span,
+                                    "invalid initializer for unsized array",
+                                );
+                            };
+                            let real_ty = Ty::from_rigid_kind(RigidTy::Array(
+                                elem,
+                                TyConst::try_from_target_usize(real_len).unwrap(),
+                            ));
+                            let tree_expr =
+                                self.initializer_tree_to_expr(&tree, real_ty, parser_span);
+
+                            let span = self.to_rust_span(parser_span);
+                            let local = locals.alloc(HirLocal {
+                                name: name.1.clone(),
+                                ty: real_ty,
+                                span,
+                            });
+                            local_map.insert(name.0, local);
+
+                            out.push(HirStmt::Decl(HirDecl {
+                                local,
+                                initializer: Some(tree_expr),
+                                span,
+                            }));
+                            continue;
+                        }
                     };
 
-                    let span = self.to_rust_span(span);
+                    let span = self.to_rust_span(parser_span);
 
                     let local = locals.alloc(HirLocal {
                         name: name.1.clone(),
@@ -87,7 +142,6 @@ impl HirCtx<'_> {
                             }
                         });
 
-                    let mut tree_initializer = None;
                     let initializer = if let Some(init) = initializer {
                         match init.0 {
                             Initializer::Expr(expr) if !needs_tree => {
@@ -100,12 +154,8 @@ impl HirCtx<'_> {
                                     locals,
                                     local_map,
                                 );
-                                tree_initializer = Some(tree);
-                                Some(HirExpr {
-                                    kind: HirExprKind::Zeroed,
-                                    ty,
-                                    span,
-                                })
+                                let expr = self.initializer_tree_to_expr(&tree, ty, parser_span);
+                                Some(expr)
                             }
                             _ => Some(HirExpr {
                                 kind: HirExprKind::Zeroed,
@@ -142,15 +192,6 @@ impl HirCtx<'_> {
                         initializer,
                         span,
                     }));
-
-                    if let Some(tree) = tree_initializer {
-                        let lhs = HirExpr {
-                            kind: HirExprKind::Local(local),
-                            ty,
-                            span,
-                        };
-                        self.emit_initializer_tree_assignments(lhs, &tree, out)?;
-                    }
                 }
             }
         }
@@ -161,9 +202,9 @@ impl HirCtx<'_> {
         &self,
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> Result<(Spanned<(usize, String)>, TyOrFunction), String> {
+    ) -> Result<(Spanned<(usize, String)>, CTy), String> {
         let base = self.base_ty_of_decl(declaration_specifiers, declarator.1)?;
-        let (decl_ty, name) = self.extract_decl_type(TyOrFunction::Ty(base), declarator)?;
+        let (decl_ty, name) = self.extract_decl_type(base, declarator)?;
         let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
         Ok((name, decl_ty))
     }
@@ -172,7 +213,7 @@ impl HirCtx<'_> {
         &self,
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> (Spanned<(usize, String)>, TyOrFunction) {
+    ) -> (Spanned<(usize, String)>, CTy) {
         let span = declarator.1;
         match self.try_lower_value_decl_type(declaration_specifiers, declarator) {
             Ok(x) => x,
@@ -201,19 +242,23 @@ impl HirCtx<'_> {
             })
             .collect::<Vec<_>>();
         let base = self.base_ty_of_decl(specifiers, span)?;
-        match type_name.abstract_declarator {
-            None => Ok(base),
+        let ty = match type_name.abstract_declarator {
+            None => base,
             Some(decl) => {
-                let (ty, name) = self.extract_decl_type(TyOrFunction::Ty(base), decl)?;
+                let (ty, name) = self.extract_decl_type(base, decl)?;
                 if let Some((_, span)) = name {
                     self.terminate_with_error(span, "type name should not have name");
                 }
-                match ty {
-                    TyOrFunction::Ty(ty) => Ok(ty),
-                    TyOrFunction::Function(_) => {
-                        self.terminate_with_error(span, "Function is invalid as a type name");
-                    }
-                }
+                ty
+            }
+        };
+        match ty {
+            CTy::Ty(ty) => Ok(ty),
+            CTy::Function(_) => {
+                self.terminate_with_error(span, "Function is invalid as a type name");
+            }
+            CTy::UnsizedArray(_) => {
+                self.terminate_with_error(span, "Unsized array is invalid as a type name");
             }
         }
     }
@@ -222,38 +267,40 @@ impl HirCtx<'_> {
         &self,
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         span: co2_ast::Span,
-    ) -> Result<Ty, String> {
+    ) -> Result<CTy, String> {
         for (specifier, _) in &specifiers {
             if let DeclarationSpecifier::TypeSpecifier((type_specifier, _)) = specifier {
                 if let co2_ast::TypeSpecifier::StructOrUnion { kind: _, specifier } = type_specifier
                 {
-                    return Ok(Ty::from_rigid_kind(RigidTy::Adt(
+                    return Ok(CTy::Ty(Ty::from_rigid_kind(RigidTy::Adt(
                         AdtDef(specifier.0),
                         GenericArgs(vec![]),
-                    )));
+                    ))));
                 }
                 if let Some(ty) = crate::ty::type_specifier_to_ty(type_specifier)? {
-                    return Ok(ty);
+                    return Ok(CTy::Ty(ty));
                 }
                 if let co2_ast::TypeSpecifier::TypedefName(path) = type_specifier {
-                    return Ok(match path.0 {
-                        co2_crate_sig::DefOrLocal::Def(def_id) => CrateItem(def_id).ty(),
+                    return Ok(match &path.0 {
+                        co2_crate_sig::DefOrLocal::Def(def_id) => CTy::Ty(CrateItem(*def_id).ty()),
                         co2_crate_sig::DefOrLocal::Local(_) => {
                             panic!("Invalid local in type position")
                         }
-                        co2_crate_sig::DefOrLocal::Prim(primitive_ty) => match primitive_ty {
-                            co2_crate_sig::PrimitiveTy::IntTy(int_ty) => {
-                                Ty::from_rigid_kind(RigidTy::Int(int_ty))
-                            }
-                            co2_crate_sig::PrimitiveTy::UintTy(uint_ty) => {
-                                Ty::from_rigid_kind(RigidTy::Uint(uint_ty))
-                            }
-                            co2_crate_sig::PrimitiveTy::FloatTy(float_ty) => {
-                                Ty::from_rigid_kind(RigidTy::Float(float_ty))
-                            }
-                        },
-                        co2_crate_sig::DefOrLocal::UnrepresentableType(_) => {
-                            todo!("Function types are not supported in hir");
+                        co2_crate_sig::DefOrLocal::Prim(primitive_ty) => {
+                            CTy::Ty(match *primitive_ty {
+                                co2_crate_sig::PrimitiveTy::IntTy(int_ty) => {
+                                    Ty::from_rigid_kind(RigidTy::Int(int_ty))
+                                }
+                                co2_crate_sig::PrimitiveTy::UintTy(uint_ty) => {
+                                    Ty::from_rigid_kind(RigidTy::Uint(uint_ty))
+                                }
+                                co2_crate_sig::PrimitiveTy::FloatTy(float_ty) => {
+                                    Ty::from_rigid_kind(RigidTy::Float(float_ty))
+                                }
+                            })
+                        }
+                        co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
+                            self.sig_cty_to_cty(sig_ty)
                         }
                     });
                 }
@@ -264,9 +311,9 @@ impl HirCtx<'_> {
 
     fn extract_decl_type(
         &self,
-        current: TyOrFunction,
+        current: CTy,
         (decl, span): Spanned<Declarator<LocalResolver>>,
-    ) -> Result<(TyOrFunction, Option<Spanned<(usize, String)>>), String> {
+    ) -> Result<(CTy, Option<Spanned<(usize, String)>>), String> {
         match decl {
             Declarator::Abstract => Ok((current, None)),
             Declarator::Identifier(ident) => Ok((current, Some(ident))),
@@ -277,13 +324,13 @@ impl HirCtx<'_> {
                 let mut inputs = Vec::with_capacity(param_list.parameters.len());
                 for param in param_list.parameters {
                     let param_base = self.base_ty_of_decl(param.0, span)?;
-                    let (param_decl_ty, _) =
-                        self.extract_decl_type(TyOrFunction::Ty(param_base), param.1)?;
+                    let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
                     let mut param_ty = match param_decl_ty {
-                        TyOrFunction::Ty(ty) => ty,
-                        TyOrFunction::Function(_) => {
+                        CTy::Ty(ty) => ty,
+                        CTy::Function(_) => {
                             return Err("function type is invalid in parameter position".to_owned());
                         }
+                        CTy::UnsizedArray(elem) => Ty::new_ptr(elem, Mutability::Mut),
                     };
                     // Function arguments are always decayed to pointer in C.
                     if let Some(elem) = array_elem_ty(param_ty) {
@@ -292,31 +339,36 @@ impl HirCtx<'_> {
                     inputs.push(param_ty);
                 }
                 let function_ty = match current {
-                    TyOrFunction::Ty(ret) => {
+                    CTy::Ty(ret) => {
                         let mut inputs_and_output = inputs;
                         inputs_and_output.push(ret);
-                        TyOrFunction::Function(FnSig {
+                        CTy::Function(FnSig {
                             inputs_and_output,
                             c_variadic: param_list.ellipsis,
                             safety: Safety::Safe,
                             abi: Abi::C { unwind: false },
                         })
                     }
-                    TyOrFunction::Function(_) => {
+                    CTy::Function(_) => {
                         return Err("returning function without ptr is not valid".to_owned());
+                    }
+                    CTy::UnsizedArray(_) => {
+                        return Err("returning unsized array is not valid".to_owned());
                     }
                 };
                 self.extract_decl_type(function_ty, *declarator)
             }
             Declarator::PointerDeclarator { declarator, .. } => {
                 let ptr_or_fn_ptr = match current {
-                    TyOrFunction::Ty(inner) => {
-                        TyOrFunction::Ty(Ty::new_ptr(inner, Mutability::Mut))
-                    }
-                    TyOrFunction::Function(sig) => {
+                    CTy::Ty(inner) => CTy::Ty(Ty::new_ptr(inner, Mutability::Mut)),
+                    CTy::Function(sig) => {
                         let fn_ptr = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
-                        TyOrFunction::Ty(self.maybe_uninit_of(fn_ptr)?)
+                        CTy::Ty(self.maybe_uninit_of(fn_ptr)?)
                     }
+                    CTy::UnsizedArray(elem) => CTy::Ty(Ty::new_ptr(
+                        Ty::new_ptr(elem, Mutability::Mut),
+                        Mutability::Mut,
+                    )),
                 };
                 self.extract_decl_type(ptr_or_fn_ptr, *declarator)
             }
@@ -325,21 +377,49 @@ impl HirCtx<'_> {
                 subscription,
             } => {
                 let array_ty = match current {
-                    TyOrFunction::Ty(inner) => {
+                    CTy::Ty(inner) => {
                         if let Some(size) = subscription.0.constant_len() {
-                            TyOrFunction::Ty(
+                            CTy::Ty(
                                 Ty::try_new_array(inner, size)
                                     .map_err(|e| format!("failed to build array type: {e}"))?,
                             )
+                        } else if subscription.0.is_unsized() {
+                            CTy::UnsizedArray(inner)
                         } else {
-                            TyOrFunction::Ty(Ty::new_ptr(inner, Mutability::Mut))
+                            return Err("Can not calculate subscription".to_owned());
                         }
                     }
-                    TyOrFunction::Function(_) => {
-                        return Err("array of functions is not supported".to_owned());
+                    CTy::Function(_) => {
+                        return Err("array of functions is invalid".to_owned());
+                    }
+                    CTy::UnsizedArray(_) => {
+                        return Err("array of unsized arrays is invalid".to_owned());
                     }
                 };
                 self.extract_decl_type(array_ty, *declarator)
+            }
+        }
+    }
+
+    fn hir_ty_to_ty(&self, hir_ty: &HirTy) -> Ty {
+        match &hir_ty.kind {
+            rustc_public_generative::HirTyKind::Bool => Ty::bool_ty(),
+            rustc_public_generative::HirTyKind::Char => todo!(),
+            &rustc_public_generative::HirTyKind::Int(int_ty) => Ty::signed_ty(int_ty),
+            &rustc_public_generative::HirTyKind::Uint(uint_ty) => Ty::unsigned_ty(uint_ty),
+            &rustc_public_generative::HirTyKind::Float(float_ty) => {
+                Ty::from_rigid_kind(RigidTy::Float(float_ty))
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn sig_cty_to_cty(&self, sig_ty: &co2_crate_sig::CTy) -> CTy {
+        match sig_ty {
+            co2_crate_sig::CTy::Ty(hir_ty) => CTy::Ty(self.hir_ty_to_ty(hir_ty)),
+            co2_crate_sig::CTy::Function(_) => todo!(),
+            co2_crate_sig::CTy::UnsizedArray(hir_ty) => {
+                CTy::UnsizedArray(self.hir_ty_to_ty(hir_ty))
             }
         }
     }

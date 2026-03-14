@@ -4,11 +4,13 @@ use co2_ast::{
     Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, RustPath,
     Spanned, StatelessResolver, StructOrUnionSpecifier, TypeQueryResult, TypeResolver,
 };
-use rustc_public_generative::{
-    DefData, FileId, FunctionSignature, HirStructureCtx, rustc_public::DefId,
-};
+use rustc_public_generative::{DefData, FileId, HirStructureCtx, rustc_public::DefId};
 
-use crate::{Resolver, struct_manager::StructManager, ty::PrimitiveTy};
+use crate::{
+    Resolver,
+    struct_manager::StructManager,
+    ty::{CTy, PrimitiveTy},
+};
 
 pub struct LocalResolverBase {
     pub resolver: Resolver,
@@ -26,7 +28,19 @@ pub struct LocalResolverBase {
     pub source_name: String,
     pub source: &'static str,
     pub(crate) struct_manager: StructManager,
-    pub(crate) unrepresentable_typedefs: HashMap<String, FunctionSignature>,
+    pub(crate) unrepresentable_typedefs: HashMap<String, CTy>,
+}
+
+impl LocalResolverBase {
+    pub fn emit_fake_def(&mut self, def_data: fn(String) -> DefData) -> (DefId, String) {
+        let fake_name = format!("__co2_fake_def_{}", self.fake_defs_counter);
+        self.fake_defs_counter += 1;
+        let def_id = self.hir_ctx.allocate_def_id(
+            self.hir_ctx.root_crate_def_id(),
+            def_data(fake_name.clone()),
+        );
+        (def_id, fake_name)
+    }
 }
 
 #[derive(Clone)]
@@ -56,7 +70,7 @@ pub enum DefOrLocal {
     Def(DefId),
     Local(u32),
     Prim(PrimitiveTy),
-    UnrepresentableType(FunctionSignature),
+    UnrepresentableType(CTy),
 }
 
 impl co2_ast::TypeResolver for LocalResolver {
@@ -109,12 +123,8 @@ impl co2_ast::TypeResolver for LocalResolver {
                     };
                     if is_typedef {
                         let mut base = next.base.borrow_mut();
-                        let fake_name = format!("__co2_fake_def_{}", base.fake_defs_counter);
-                        base.fake_defs_counter += 1;
-                        let def_id = base.hir_ctx.allocate_def_id(
-                            base.hir_ctx.root_crate_def_id(),
-                            rustc_public_generative::DefData::TypeNs(fake_name.clone()),
-                        );
+                        let (def_id, fake_name) =
+                            base.emit_fake_def(rustc_public_generative::DefData::TypeNs);
                         base.pending_typedefs.push((
                             def_id,
                             fake_name,

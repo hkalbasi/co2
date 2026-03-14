@@ -9,7 +9,7 @@ use rustc_public_generative::{
     rustc_public::{DefId, ty::Span},
 };
 
-use crate::{LocalResolver, LocalResolverBase, MirOwnerInfo, ty::TyOrFunction};
+use crate::{LocalResolver, LocalResolverBase, MirOwnerInfo, ty::CTy};
 
 pub(crate) struct StructData {
     pub(crate) def_id: DefId,
@@ -132,7 +132,7 @@ impl LocalResolverBase {
                         {
                             let id = anon_field_count;
                             anon_field_count += 1;
-                            let TyOrFunction::Ty(ty) = base.clone() else {
+                            let CTy::Ty(ty) = base.clone() else {
                                 self.terminate_with_error(
                                     parser_span,
                                     "Function is invalid for anon fields",

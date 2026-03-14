@@ -1,5 +1,5 @@
 use co2_ast::{DeclarationSpecifier, Declarator, Span, Spanned, TypeSpecifier};
-use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyKind};
+use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst, HirTyKind};
 use rustc_public_generative::{
     HirGenericArg,
     rustc_public::{
@@ -11,9 +11,10 @@ use rustc_public_generative::{
 use crate::{CrateSigCtx, LocalResolver, LocalResolverBase};
 
 #[derive(Debug, Clone)]
-pub(crate) enum TyOrFunction {
+pub enum CTy {
     Ty(HirTy),
     Function(FunctionSignature),
+    UnsizedArray(HirTy),
 }
 
 impl CrateSigCtx<'_> {
@@ -21,7 +22,7 @@ impl CrateSigCtx<'_> {
         &mut self,
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         parser_span: Span,
-    ) -> TyOrFunction {
+    ) -> CTy {
         self.resolver
             .borrow_mut()
             .base_ty_of_decl(specifiers, parser_span)
@@ -29,7 +30,7 @@ impl CrateSigCtx<'_> {
 
     pub(crate) fn lower_function_signature(
         &mut self,
-        base: TyOrFunction,
+        base: CTy,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> Result<(String, FunctionSignature, Vec<String>), String> {
         self.resolver
@@ -37,19 +38,32 @@ impl CrateSigCtx<'_> {
             .lower_function_signature(base, declarator)
     }
 
-    pub(crate) fn try_lower_value_decl_type(
+    pub(crate) fn lower_value_decl_ctype(
         &mut self,
-        base: TyOrFunction,
+        base: CTy,
         declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> Result<(String, HirTy), String> {
-        self.resolver
+    ) -> (String, CTy) {
+        let span = declarator.1;
+        match self
+            .resolver
             .borrow_mut()
-            .try_lower_value_decl_type(base, declarator)
+            .extract_decl_type(base, declarator)
+        {
+            Ok((ty, name)) => {
+                let Some(name) = name else {
+                    self.terminate_with_error(span, "Unexpected abstract declarator");
+                };
+                (name, ty)
+            }
+            Err(e) => {
+                self.terminate_with_error(span, &e);
+            }
+        }
     }
 
     pub(crate) fn lower_value_decl_type(
         &mut self,
-        base: TyOrFunction,
+        base: CTy,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> (String, HirTy) {
         self.resolver
@@ -61,13 +75,13 @@ impl CrateSigCtx<'_> {
 impl LocalResolverBase {
     pub(crate) fn lower_function_signature(
         &mut self,
-        base: TyOrFunction,
+        base: CTy,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> Result<(String, FunctionSignature, Vec<String>), String> {
         let parsed_param_names = function_param_names(&declarator.0);
         let (decl_ty, name) = self.extract_decl_type(base, declarator)?;
         let name = name.ok_or_else(|| "missing function name".to_owned())?;
-        let TyOrFunction::Function(sig) = decl_ty else {
+        let CTy::Function(sig) = decl_ty else {
             return Err("it wasn't function".to_owned());
         };
         let names = parsed_param_names
@@ -81,7 +95,7 @@ impl LocalResolverBase {
 
     pub(crate) fn lower_value_decl_type(
         &mut self,
-        base: TyOrFunction,
+        base: CTy,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> (String, HirTy) {
         let span = declarator.1;
@@ -95,16 +109,19 @@ impl LocalResolverBase {
 
     pub(crate) fn try_lower_value_decl_type(
         &mut self,
-        base: TyOrFunction,
+        base: CTy,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> Result<(String, HirTy), String> {
         let (decl_ty, name) = self.extract_decl_type(base, declarator)?;
         let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
         match decl_ty {
-            TyOrFunction::Ty(ty) => Ok((name, ty)),
-            TyOrFunction::Function(_) => {
+            CTy::Ty(ty) => Ok((name, ty)),
+            CTy::Function(_) => {
                 Err("function is not a first-class declaration type in this context".to_owned())
             }
+            CTy::UnsizedArray(_) => Err(
+                "unsized array is not a first-class declaration type in this context".to_owned(),
+            ),
         }
     }
 
@@ -112,7 +129,7 @@ impl LocalResolverBase {
         &mut self,
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         parser_span: Span,
-    ) -> TyOrFunction {
+    ) -> CTy {
         let span = self.co2_span_to_rustc(parser_span);
         for (specifier, _) in specifiers {
             if let DeclarationSpecifier::TypeSpecifier((type_specifier, _)) = specifier {
@@ -142,8 +159,8 @@ impl LocalResolverBase {
                                 PrimitiveTy::UintTy(uint_ty) => HirTy::unsigned_ty(uint_ty, span),
                                 PrimitiveTy::FloatTy(float_ty) => HirTy::float_ty(float_ty, span),
                             },
-                            crate::DefOrLocal::UnrepresentableType(sig) => {
-                                return TyOrFunction::Function(sig);
+                            crate::DefOrLocal::UnrepresentableType(ty) => {
+                                return ty;
                             }
                         }
                         // let path = path.to_pretty();
@@ -162,7 +179,7 @@ impl LocalResolverBase {
                         // }
                     }
                 };
-                return TyOrFunction::Ty(ty);
+                return CTy::Ty(ty);
             }
         }
         self.terminate_with_error(
@@ -173,9 +190,9 @@ impl LocalResolverBase {
 
     fn extract_decl_type(
         &mut self,
-        current: TyOrFunction,
+        current: CTy,
         (decl, span): Spanned<Declarator<LocalResolver>>,
-    ) -> Result<(TyOrFunction, Option<String>), String> {
+    ) -> Result<(CTy, Option<String>), String> {
         let rust_span = self.co2_span_to_rustc(span);
         match decl {
             Declarator::Abstract => Ok((current, None)),
@@ -192,24 +209,28 @@ impl LocalResolverBase {
                         let param_base = self.base_ty_of_decl(param.0, span);
                         let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
                         let param_ty = match param_decl_ty {
-                            TyOrFunction::Ty(ty) => {
+                            CTy::Ty(ty) => {
                                 if let HirTyKind::Array(_, inner) = ty.kind {
                                     HirTy::new_ptr(*inner, Mutability::Mut, ty.span)
                                 } else {
                                     ty
                                 }
                             }
-                            TyOrFunction::Function(_) => {
+                            CTy::Function(_) => {
                                 return Err(
                                     "function type is invalid in parameter position".to_owned()
                                 );
+                            }
+                            CTy::UnsizedArray(elem) => {
+                                let span = elem.span;
+                                HirTy::new_ptr(elem, Mutability::Mut, span)
                             }
                         };
                         inputs.push(param_ty);
                     }
                 }
                 let function_ty = match current {
-                    TyOrFunction::Ty(ret) => TyOrFunction::Function(FunctionSignature {
+                    CTy::Ty(ret) => CTy::Function(FunctionSignature {
                         lifetimes: vec![],
                         inputs,
                         output: ret,
@@ -217,24 +238,30 @@ impl LocalResolverBase {
                         is_unsafe: false,
                         c_variadic: param_list.ellipsis,
                     }),
-                    TyOrFunction::Function(_) => {
-                        return Err("function returning function is not supported".to_owned());
+                    CTy::Function(_) => {
+                        return Err("function returning function is not valid".to_owned());
+                    }
+                    CTy::UnsizedArray(_) => {
+                        return Err("function returning unsized array is not valid".to_owned());
                     }
                 };
                 self.extract_decl_type(function_ty, *declarator)
             }
             Declarator::PointerDeclarator { declarator, .. } => {
                 let ptr_or_fn_ptr = match current {
-                    TyOrFunction::Ty(inner) => {
-                        TyOrFunction::Ty(HirTy::new_ptr(inner, Mutability::Mut, rust_span))
-                    }
-                    TyOrFunction::Function(sig) => TyOrFunction::Ty(self.maybe_uninit_of(
+                    CTy::Ty(inner) => CTy::Ty(HirTy::new_ptr(inner, Mutability::Mut, rust_span)),
+                    CTy::Function(sig) => CTy::Ty(self.maybe_uninit_of(
                         HirTy {
                             kind: HirTyKind::FnPtr(Box::new(sig)),
                             span: rust_span,
                         },
                         rust_span,
                     )?),
+                    CTy::UnsizedArray(inner) => CTy::Ty(HirTy::new_ptr(
+                        HirTy::new_ptr(inner, Mutability::Mut, rust_span),
+                        Mutability::Mut,
+                        rust_span,
+                    )),
                 };
                 self.extract_decl_type(ptr_or_fn_ptr, *declarator)
             }
@@ -242,20 +269,24 @@ impl LocalResolverBase {
                 declarator,
                 subscription,
             } => {
+                let inner = match current {
+                    CTy::Ty(inner) => inner,
+                    CTy::Function(_) => {
+                        return Err("array of functions is not valid".to_owned());
+                    }
+                    CTy::UnsizedArray(_) => {
+                        return Err("array of unsized arrays is not valid".to_owned());
+                    }
+                };
                 let len = if let Some(len) = subscription.0.constant_len() {
-                    len as usize
+                    HirTyConst::Literal(len as usize)
+                } else if subscription.0.is_unsized() {
+                    return self.extract_decl_type(CTy::UnsizedArray(inner), *declarator);
                 } else {
                     // self.terminate_with_error(subscription.1, "Can not handle complex subscriptions");
-                    555
+                    HirTyConst::Literal(555)
                 };
-                let array_ty = match current {
-                    TyOrFunction::Ty(inner) => {
-                        TyOrFunction::Ty(HirTy::new_array(inner, len, rust_span))
-                    }
-                    TyOrFunction::Function(_) => {
-                        return Err("array of functions is not supported".to_owned());
-                    }
-                };
+                let array_ty = CTy::Ty(HirTy::new_array(inner, len, rust_span));
                 self.extract_decl_type(array_ty, *declarator)
             }
         }

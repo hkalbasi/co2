@@ -16,6 +16,9 @@ pub enum MirOwnerInfo {
     Static {
         initializer: co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>,
     },
+    StaticArraySizeInference {
+        span: Span,
+    },
     Fn {
         def: FnDef,
         param_names: Vec<(usize, String)>,

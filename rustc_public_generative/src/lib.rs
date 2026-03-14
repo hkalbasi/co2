@@ -36,7 +36,7 @@ pub use hir_structure::{
     ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirImplItem, HirImplItemKind,
     HirModule, HirModuleItem, HirSelfKind, HirStructure, StructField,
 };
-pub use hir_ty::{HirGenericArg, HirLifetime, HirTy, HirTyKind};
+pub use hir_ty::{HirGenericArg, HirLifetime, HirTy, HirTyConst, HirTyKind};
 
 /// Summary of crates loaded as dependencies by rustc.
 #[derive(Debug, Clone, Default)]
@@ -129,4 +129,5 @@ pub enum DefData {
     TypeNs(String),
     LifetimeNs(String),
     Impl,
+    AnonConst,
 }

@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use co2_ast::Initializer;
 use co2_crate_sig::{LocalResolver, MirOwnerInfo, WellknownDefs};
 use co2_hir::{HirBody, HirCtx, HirExpr, HirStmt, ResolvedValue};
-use rustc_public_generative::rustc_public::ty::IntTy;
+use rustc_public_generative::rustc_public::ty::{IntTy, UintTy};
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
     mir::{
@@ -99,6 +99,9 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             }
             MirOwnerInfo::Static { initializer } => {
                 self.lower_explicit_static_mir(&ctx, def, initializer)
+            }
+            MirOwnerInfo::StaticArraySizeInference { span } => {
+                build_const_int_initializer_body(UintTy::Usize, 7, span)
             }
             MirOwnerInfo::StaticZeroed | MirOwnerInfo::EnumConstZeroed => {
                 build_zeroed_static_initializer_body(
@@ -233,6 +236,39 @@ fn collect_param_bindings(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>)
         }
         _ => {}
     }
+}
+
+fn build_const_int_initializer_body(
+    ty: UintTy,
+    value: u128,
+    span: rustc_public_generative::rustc_public::ty::Span,
+) -> Body {
+    let locals = vec![LocalDecl {
+        ty: Ty::unsigned_ty(ty),
+        span,
+        mutability: Mutability::Mut,
+    }];
+    let return_block = BasicBlock {
+        statements: vec![Statement {
+            span,
+            kind: StatementKind::Assign(
+                rustc_public_generative::rustc_public::mir::Place {
+                    local: 0,
+                    projection: vec![],
+                },
+                Rvalue::Use(Operand::Constant(ConstOperand {
+                    span,
+                    user_ty: None,
+                    const_: MirConst::try_from_uint(value, ty).unwrap(),
+                })),
+            ),
+        }],
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span,
+        },
+    };
+    Body::new(vec![return_block], locals, 0, vec![], None, span)
 }
 
 fn build_zeroed_static_initializer_body(

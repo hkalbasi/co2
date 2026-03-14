@@ -3,16 +3,12 @@ use std::collections::HashMap;
 use co2_ast::{Designator, Expression, Initializer, InitializerItem, Spanned};
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
-use rustc_public_generative::rustc_public::{
-    mir::Mutability,
-    ty::{IntTy, Ty},
-};
+use rustc_public_generative::rustc_public::ty::{RigidTy, Ty, TyKind};
 
 use crate::{
     expr::{HirExpr, HirExprKind},
     item::{HirLocal, LocalId},
     resolver::HirCtx,
-    stmt::HirStmt,
     ty::{
         adt_field_tys, array_elem_ty, is_array_ty, is_integer_ty, is_union_ty, needs_implicit_cast,
         resolve_field_path_in_adt,
@@ -98,36 +94,39 @@ impl InitializerCursor {
     }
 
     fn insert_to_tree(&self, result: &mut InitializerTree, value: InitializerTree) {
+        if self.stack.is_empty() {
+            return;
+        }
         let mut current = result;
-        for (index, _) in &self.stack {
-            let children = current.children();
+        let mut prev_ty = self.base_ty;
+        for (index, ty) in &self.stack {
+            let children = current.children(prev_ty);
             while children.len() <= *index {
                 children.push(InitializerTree::Zeroed);
             }
             current = &mut children[*index];
+            prev_ty = *ty;
         }
         *current = value;
     }
 
-    fn go_through_primitive(&mut self) -> Result<(), String> {
+    fn go_through(&mut self) -> bool {
         if self.stack.is_empty() {
-            return Ok(());
+            return false;
         }
-        loop {
-            let ty = self.ty();
-            if let Some(fields) = adt_field_tys(ty) {
-                if fields.is_empty() {
-                    return Ok(());
-                }
-                self.stack.push((0, fields[0]));
-                continue;
+        let ty = self.ty();
+        if let Some(fields) = adt_field_tys(ty) {
+            if fields.is_empty() {
+                todo!()
             }
-            if let Some(elem) = array_elem_ty(ty) {
-                self.stack.push((0, elem));
-                continue;
-            }
-            return Ok(());
+            self.stack.push((0, fields[0]));
+            return true;
         }
+        if let Some(elem) = array_elem_ty(ty) {
+            self.stack.push((0, elem));
+            return true;
+        }
+        false
     }
 
     fn go_next(
@@ -176,12 +175,15 @@ impl InitializerCursor {
 }
 
 impl InitializerTree {
-    fn children(&mut self) -> &mut Vec<InitializerTree> {
+    fn children(&mut self, ty: Ty) -> &mut Vec<InitializerTree> {
         match self {
             InitializerTree::Middle { children } => children,
             InitializerTree::Leaf(_) => panic!("leaf does not have children"),
             InitializerTree::Zeroed => {
-                *self = InitializerTree::Middle { children: vec![] };
+                let count = children_count_of_ty(ty);
+                *self = InitializerTree::Middle {
+                    children: vec![InitializerTree::Zeroed; count],
+                };
                 let InitializerTree::Middle { children } = self else {
                     unreachable!();
                 };
@@ -189,6 +191,18 @@ impl InitializerTree {
             }
         }
     }
+}
+
+fn children_count_of_ty(ty: Ty) -> usize {
+    let count = match ty.kind() {
+        TyKind::RigidTy(rigid_ty) => match rigid_ty {
+            RigidTy::Array(_, ty_const) => ty_const.eval_target_usize().unwrap() as usize,
+            RigidTy::Adt(..) => 1,
+            _ => panic!("Can't go through primitive ty {ty}"),
+        },
+        _ => todo!(),
+    };
+    if count == 567_567 { 0 } else { count }
 }
 
 fn eval_const_int(expr: &HirExpr) -> Result<i64, String> {
@@ -294,72 +308,9 @@ impl HirCtx<'_> {
                     ));
                 }
 
-                // Preserve legacy behavior used by existing tests:
-                // when struct list has no designators, allow type-based field matching fallback.
-                if let Some(field_tys) = adt_field_tys(expected_ty)
-                    && items.iter().all(|(it, _)| {
-                        it.designators.is_none() && matches!(it.initializer.0, Initializer::Expr(_))
-                    })
-                {
-                    let mut lowered = Vec::with_capacity(items.len());
-                    for (it, _) in &items {
-                        let Initializer::Expr(expr) = &it.initializer.0 else {
-                            unreachable!();
-                        };
-                        lowered.push(self.lower_expr(expr.clone(), locals, local_map)?);
-                    }
-
-                    let mut positional_children: Vec<InitializerTree> =
-                        vec![InitializerTree::Zeroed; field_tys.len()];
-                    let mut positional_ok = lowered.len() <= field_tys.len();
-                    if positional_ok {
-                        for (idx, val) in lowered.iter().enumerate() {
-                            match coerce_expr_to_type(val.clone(), field_tys[idx]) {
-                                Ok(coerced) => {
-                                    positional_children[idx] = InitializerTree::Leaf(coerced)
-                                }
-                                Err(_) => {
-                                    positional_ok = false;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if positional_ok {
-                        return Ok(InitializerTree::Middle {
-                            children: positional_children,
-                        });
-                    }
-
-                    let mut reordered_children: Vec<InitializerTree> =
-                        vec![InitializerTree::Zeroed; field_tys.len()];
-                    let mut used = vec![false; field_tys.len()];
-                    for val in lowered {
-                        let mut placed = false;
-                        for (idx, field_ty) in field_tys.iter().enumerate() {
-                            if used[idx] {
-                                continue;
-                            }
-                            if let Ok(coerced) = coerce_expr_to_type(val.clone(), *field_ty) {
-                                reordered_children[idx] = InitializerTree::Leaf(coerced);
-                                used[idx] = true;
-                                placed = true;
-                                break;
-                            }
-                        }
-                        if !placed {
-                            return Err(format!(
-                                "initializer type mismatch for ADT {expected_ty:?}: no compatible field for {:?}",
-                                val.ty
-                            ));
-                        }
-                    }
-                    return Ok(InitializerTree::Middle {
-                        children: reordered_children,
-                    });
-                }
-
-                let mut result = InitializerTree::Middle { children: vec![] };
+                let mut result = InitializerTree::Middle {
+                    children: vec![InitializerTree::Zeroed; children_count_of_ty(expected_ty)],
+                };
                 let mut cursor = if adt_field_tys(expected_ty).is_some() || is_array_ty(expected_ty)
                 {
                     let mut c = InitializerCursor {
@@ -392,15 +343,27 @@ impl HirCtx<'_> {
                             local_map,
                         )?;
                     }
-                    if matches!(item.initializer.0, Initializer::Expr(_)) {
-                        cursor.go_through_primitive()?;
-                    }
-                    let node = self.lower_to_initializer_tree(
-                        cursor.ty(),
-                        item.initializer,
-                        locals,
-                        local_map,
-                    );
+                    let node = if let Initializer::Expr(expr) = item.initializer.0 {
+                        let expr = self.lower_expr(expr, locals, local_map)?;
+                        loop {
+                            if let Ok(coerced) = coerce_expr_to_type(expr.clone(), cursor.ty()) {
+                                break InitializerTree::Leaf(coerced);
+                            }
+                            if !cursor.go_through() {
+                                self.terminate_with_error(
+                                    item_span,
+                                    "failed to lower initializer tree",
+                                );
+                            }
+                        }
+                    } else {
+                        self.lower_to_initializer_tree(
+                            cursor.ty(),
+                            item.initializer,
+                            locals,
+                            local_map,
+                        )
+                    };
                     cursor.insert_to_tree(&mut result, node);
                     cursor.go_next(span)?;
                 }
@@ -442,80 +405,5 @@ impl HirCtx<'_> {
             .collect::<Vec<_>>();
         let _ = expected_ty;
         items
-    }
-
-    pub(crate) fn emit_initializer_tree_assignments(
-        &self,
-        lhs: HirExpr,
-        tree: &InitializerTree,
-        out: &mut Vec<HirStmt>,
-    ) -> Result<(), String> {
-        match tree {
-            InitializerTree::Zeroed => Ok(()),
-            InitializerTree::Leaf(expr) => {
-                out.push(HirStmt::Expr(HirExpr {
-                    kind: HirExprKind::Assign {
-                        lhs: Box::new(lhs.clone()),
-                        rhs: Box::new(expr.clone()),
-                    },
-                    ty: lhs.ty,
-                    span: lhs.span,
-                }));
-                Ok(())
-            }
-            InitializerTree::Middle { children } => {
-                if let Some(fields) = adt_field_tys(lhs.ty) {
-                    for (idx, child) in children.iter().enumerate() {
-                        if idx >= fields.len() {
-                            return Err("too many struct initializer elements".to_owned());
-                        }
-                        let child_lhs = HirExpr {
-                            kind: HirExprKind::Field {
-                                base: Box::new(lhs.clone()),
-                                index: idx,
-                            },
-                            ty: fields[idx],
-                            span: lhs.span,
-                        };
-                        self.emit_initializer_tree_assignments(child_lhs, child, out)?;
-                    }
-                    return Ok(());
-                }
-                if is_array_ty(lhs.ty) {
-                    let elem_ty = array_elem_ty(lhs.ty).expect("array elem");
-                    let ptr_ty = Ty::new_ptr(elem_ty, Mutability::Mut);
-                    for (idx, child) in children.iter().enumerate() {
-                        let idx_expr = HirExpr {
-                            kind: HirExprKind::ConstInt(idx as i64),
-                            ty: Ty::signed_ty(IntTy::I32),
-                            span: lhs.span,
-                        };
-                        let ptr = HirExpr {
-                            kind: HirExprKind::PtrOffset {
-                                base: Box::new(HirExpr {
-                                    kind: HirExprKind::ArrayToPointer(Box::new(lhs.clone())),
-                                    ty: ptr_ty,
-                                    span: lhs.span,
-                                }),
-                                index: Box::new(idx_expr),
-                            },
-                            ty: ptr_ty,
-                            span: lhs.span,
-                        };
-                        let child_lhs = HirExpr {
-                            kind: HirExprKind::Deref(Box::new(ptr)),
-                            ty: elem_ty,
-                            span: lhs.span,
-                        };
-                        self.emit_initializer_tree_assignments(child_lhs, child, out)?;
-                    }
-                    return Ok(());
-                }
-                Err(format!(
-                    "initializer list target is not aggregate: {:?}",
-                    lhs.ty
-                ))
-            }
-        }
     }
 }

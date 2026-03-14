@@ -42,6 +42,13 @@ pub enum HirModuleItem {
         mutable: bool,
         span: Span,
     },
+    Const {
+        name: String,
+        id: DefId,
+        ty: HirTy,
+        rhs: DefId,
+        span: Span,
+    },
     Impl {
         id: DefId,
         self_ty: HirTy,
@@ -61,6 +68,7 @@ impl HirModuleItem {
             HirModuleItem::Function { name, .. }
             | HirModuleItem::Adt { name, .. }
             | HirModuleItem::TypeDef { name, .. }
+            | HirModuleItem::Const { name, .. }
             | HirModuleItem::Static { name, .. } => Some(name),
             HirModuleItem::Impl { .. } | HirModuleItem::ForeignMod { .. } => None,
         }
@@ -71,6 +79,7 @@ impl HirModuleItem {
             HirModuleItem::Function { span, .. }
             | HirModuleItem::Adt { span, .. }
             | HirModuleItem::TypeDef { span, .. }
+            | HirModuleItem::Const { span, .. }
             | HirModuleItem::Static { span, .. }
             | HirModuleItem::Impl { span, .. } => Some(*span),
             HirModuleItem::ForeignMod { .. } => None,

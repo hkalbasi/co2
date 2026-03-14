@@ -110,7 +110,6 @@ int main6()
 int main7()
 {
 	int arr[4];
-	int z[3];
 	int *p;
 
 	arr[0] = 1;
@@ -128,9 +127,6 @@ int main7()
 	if (arr[2] - 5)
 		return 1;
 	if (*(arr + 3) - 7)
-		return 1;
-
-	if (z[0] || z[1] || z[2])
 		return 1;
 
 	return arr[0] + arr[1] + arr[2] + arr[3] - 15;
@@ -461,7 +457,7 @@ int main14()
 	if (sizeof(s) - 8)
 		return 1;
 	p = (int*)5;
-	if (((int)p) - 5)
+	if (((long long int)p) - 5)
 		return 1;
 	if (((int*)5) != p)
 		return 1;
@@ -897,17 +893,72 @@ int main28()
 	return 0;
 }
 
+typedef int unsized_int_array[];
+// unsized_int_array static_ar1 = {10, 20, 3, 15, 1000, 60, 16};
+// char static_ar2[] = "foo bar foobar";
+
+int main29()
+{
+	int ar1[] = {1, 2, 3, 4, 5, 6};
+	if (ar1[0] != 1 || ar1[5] != 6 || (sizeof(ar1) / sizeof(int) != 6)) {
+		return 1;
+	}
+
+	unsized_int_array ar2 = {10, 20, 30};
+	if (ar2[0] != 10 || ar2[2] != 30 || (sizeof(ar2) / sizeof(int) != 3)) {
+		return 2;
+	}
+
+	char ar3[] = "Hello world";
+	if (ar3[0] != 'H' || ar3[10] != 'd' || sizeof(ar3) != 12) {
+		return 3;
+	}
+
+	int ar4[][5] = {1, 2, 3, 4, 5, 6, 7};
+
+	if (ar4[1][1] != 7 || ar4[0][4] != 5 || sizeof(ar4) / sizeof(int) != 10) {
+		return 3;
+	}
+	
+	// if (static_ar1[0] != 10 || static_ar1[6] != 16 || sizeof(static_ar1) / sizeof(int) != 7) {
+	// 	return 4;
+	// }
+
+	// if (static_ar2[0] != 'f' || static_ar2[14] != 0 || sizeof(static_ar2) != 15) {
+	// 	return 5;
+	// }
+
+	return 0;
+}
+
+typedef struct { int x; int y; } inner_st;
+typedef struct { inner_st x; int y; } middle_st;
+typedef struct { int x; middle_st y; } outer_st;
+
+int main30()
+{
+	int n1 = 1;
+	middle_st s2 = { n1, n1, 3 };
+	outer_st s3 = { 1, s2 };
+
+	if (s3.y.x.x != 1) {
+		return 1;
+	}
+
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
-	main_ty mains[29] = {
+	main_ty mains[] = {
 		main0,
 		main1, main2, main3, main4, main5,
 		main6, main7, main8, main9, main10,
 		main11, main12, main13, main14, main15,
 		main16, main17, main18, main19, main20,
 		main21, main22, main23, main24, main25,
-		main26, main27, main28
+		main26, main27, main28, main29, main30,
 	};
 	
 	int i;

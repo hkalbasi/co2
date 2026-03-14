@@ -16,9 +16,15 @@ pub enum HirTyKind {
     Adt(DefId, Vec<HirGenericArg>),
     Tuple(Vec<HirTy>),
     RawPtr(Mutability, Box<HirTy>),
-    Array(usize, Box<HirTy>),
+    Array(HirTyConst, Box<HirTy>),
     Ref(Mutability, HirLifetime, Box<HirTy>),
     FnPtr(Box<FunctionSignature>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum HirTyConst {
+    Literal(usize),
+    ConstDef(DefId),
 }
 
 #[derive(Clone, Debug)]
@@ -62,7 +68,7 @@ impl HirTy {
         }
     }
 
-    pub fn new_array(inner: HirTy, len: usize, span: Span) -> Self {
+    pub fn new_array(inner: HirTy, len: HirTyConst, span: Span) -> Self {
         HirTy {
             kind: HirTyKind::Array(len, Box::new(inner)),
             span,

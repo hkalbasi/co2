@@ -32,6 +32,7 @@ use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
 
 use crate::hir_structure::{FunctionAbi, FunctionSignature, StructField};
+use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{
     CrateGeneratorState, DependencyCrate, DependencyFunction, DependencyInfo, DependencyTrait,
@@ -205,12 +206,28 @@ impl ItemSignatureInfo {
                         span: *span,
                     });
                 }
+                crate::HirModuleItem::Const {
+                    id,
+                    span,
+                    ty,
+                    rhs,
+                    name: _,
+                } => {
+                    result.push(ItemSignatureInfo {
+                        id: *id,
+                        kind: ItemSignatureKind::Const {
+                            ty: ty.clone(),
+                            rhs: *rhs,
+                        },
+                        span: *span,
+                    });
+                }
                 crate::HirModuleItem::Static {
                     id,
                     span,
                     ty,
                     mutable,
-                    ..
+                    name: _,
                 } => {
                     result.push(ItemSignatureInfo {
                         id: *id,
@@ -272,6 +289,10 @@ pub enum ItemSignatureKind {
     Struct(Vec<StructField>),
     Union(Vec<StructField>),
     TypeDef(HirTy),
+    Const {
+        ty: HirTy,
+        rhs: DefId,
+    },
     Static {
         ty: HirTy,
         mutable: bool,
@@ -786,6 +807,98 @@ impl DefinedCrateInfo {
             items_hir.push((def_id, item_allocator));
         }
 
+        for (my_def_id, const_ty, rhs) in signatures.iter().filter_map(|item| match &item.kind {
+            ItemSignatureKind::Const { ty, rhs } => Some((item.id, ty, *rhs)),
+            _ => None,
+        }) {
+            let name = &self
+                .items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .unwrap()
+                .name;
+            let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+            let mut item_allocator = HirItemAllocator::new(def_id);
+            let body_hir_id = item_allocator.new_item();
+
+            let anon_const_def_id = my_def_id_to_rustc_def_id(tcx, rhs).expect_local();
+            let anon_const_hir_id = item_allocator.new_item();
+
+            let loop_expr = leak(hir::Block {
+                stmts: &[],
+                expr: None,
+                hir_id: item_allocator.new_item(),
+                rules: rustc_hir::BlockCheckMode::DefaultBlock,
+                span: DUMMY_SP,
+                targeted_by_break: false,
+            });
+            let body_kind =
+                hir::ExprKind::Loop(loop_expr, None, rustc_hir::LoopSource::Loop, DUMMY_SP);
+            let body_expr = leak(hir::Expr {
+                hir_id: body_hir_id,
+                kind: body_kind,
+                span: DUMMY_SP,
+            });
+            item_allocator.set_node(
+                body_expr.hir_id.local_id,
+                hir::Node::Expr(body_expr),
+                anon_const_hir_id.local_id,
+            );
+            item_allocator.set_node(
+                loop_expr.hir_id.local_id,
+                hir::Node::Block(loop_expr),
+                body_expr.hir_id.local_id,
+            );
+            let body = leak(hir::Body {
+                params: &[],
+                value: body_expr,
+            });
+            item_allocator.insert_body(body_expr.hir_id.local_id, body);
+
+            let anon_const = leak(hir::AnonConst {
+                hir_id: anon_const_hir_id,
+                def_id: anon_const_def_id,
+                body: body.id(),
+                span: DUMMY_SP,
+            });
+            insert_non_owner(
+                &mut owners,
+                anon_const_def_id,
+                hir::MaybeOwner::NonOwner(anon_const.hir_id),
+            );
+            let const_arg = leak(hir::ConstArg {
+                hir_id: item_allocator.new_item(),
+                span: DUMMY_SP,
+                kind: hir::ConstArgKind::Anon(anon_const),
+            });
+            item_allocator.set_node(
+                anon_const.hir_id.local_id,
+                hir::Node::AnonConst(anon_const),
+                const_arg.hir_id.local_id,
+            );
+            item_allocator.set_node(
+                const_arg.hir_id.local_id,
+                hir::Node::ConstArg(const_arg),
+                ItemLocalId::ZERO,
+            );
+
+            let item = hir::Item {
+                owner_id: OwnerId { def_id },
+                kind: hir::ItemKind::Const(
+                    Ident::from_str(name),
+                    hir::Generics::empty(),
+                    leak(hir_ty_to_rustc(tcx, def_id, const_ty, &mut item_allocator)),
+                    rustc_hir::ConstItemRhs::TypeConst(const_arg),
+                ),
+                span: DUMMY_SP,
+                vis_span: DUMMY_SP,
+                has_delayed_lints: false,
+                eii: false,
+            };
+            item_allocator.set_root_node(hir::Node::Item(leak(item)));
+            items_hir.push((def_id, item_allocator));
+        }
+
         let mut root_item_ids =
             Vec::with_capacity(1 + adt_items_hir.len() + items_hir.len() + impl_items_hir.len());
         root_item_ids.push(hir::ItemId {
@@ -889,6 +1002,14 @@ impl DefinedCrateInfo {
                     }
                 }
                 crate::HirModuleItem::TypeDef { id, .. } => DefinedItemKind::TypeDef(id),
+                crate::HirModuleItem::Const { id, rhs, .. } => {
+                    items.push(DefinedItemInfo {
+                        name: "".to_owned(),
+                        kind: DefinedItemKind::AnonConst(rhs),
+                        span: DUMMY_SP,
+                    });
+                    DefinedItemKind::Const(id)
+                }
                 crate::HirModuleItem::Static { id, .. } => DefinedItemKind::Static(id),
                 crate::HirModuleItem::Adt {
                     name: _,
@@ -1213,6 +1334,8 @@ impl DefinedCrateState {
             DefinedItemKind::ForeignMod(_) => DefKind::ForeignMod,
             DefinedItemKind::Function { .. } => DefKind::Fn,
             DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
+            DefinedItemKind::Const(_) => DefKind::Const,
+            DefinedItemKind::AnonConst(_) => DefKind::AnonConst,
             DefinedItemKind::Static(_) => DefKind::Static {
                 safety: hir::Safety::Safe,
                 mutability: rustc_ast::Mutability::Mut,
@@ -1275,6 +1398,8 @@ impl DefinedItemInfo {
             DefinedItemKind::ForeignMod(def_id)
             | DefinedItemKind::TypeDef(def_id)
             | DefinedItemKind::Static(def_id)
+            | DefinedItemKind::Const(def_id)
+            | DefinedItemKind::AnonConst(def_id)
             | DefinedItemKind::Field(def_id)
             | DefinedItemKind::Impl { def_id, .. }
             | DefinedItemKind::ImplItemFn(def_id) => def_id,
@@ -1287,6 +1412,8 @@ pub enum DefinedItemKind {
     ForeignMod(DefId),
     Function { fn_def: FnDef, abi: FunctionAbi },
     ForeignFunction(FnDef),
+    Const(DefId),
+    AnonConst(DefId),
     Static(DefId),
     Struct(AdtDef),
     Union(AdtDef),
@@ -1405,6 +1532,7 @@ pub fn allocate_def_id<'tcx>(
         crate::DefData::TypeNs(name) => DefPathData::TypeNs(Symbol::intern(name)),
         crate::DefData::LifetimeNs(name) => DefPathData::LifetimeNs(Symbol::intern(name)),
         crate::DefData::Impl => DefPathData::Impl,
+        crate::DefData::AnonConst => DefPathData::AnonConst,
     };
     let mut disamb = match kind {
         crate::DefData::Impl => {
@@ -2595,10 +2723,11 @@ fn make_prim_ty(owner: LocalDefId, prim: hir::PrimTy) -> hir::Ty<'static> {
     }
 }
 
-fn make_array_ty(
+fn make_array_ty<'tcx>(
+    tcx: TyCtxt<'tcx>,
     owner: LocalDefId,
     pointee: &'static hir::Ty<'static>,
-    len: usize,
+    len: HirTyConst,
 ) -> hir::Ty<'static> {
     hir::Ty {
         hir_id: HirId::make_owner(owner),
@@ -2608,12 +2737,19 @@ fn make_array_ty(
             leak(hir::ConstArg {
                 hir_id: HirId::make_owner(owner),
                 span: DUMMY_SP,
-                kind: hir::ConstArgKind::Literal {
-                    lit: rustc_ast::LitKind::Int(
-                        Pu128(len as u128),
-                        rustc_ast::LitIntType::Unsuffixed,
-                    ),
-                    negated: false,
+                kind: match len {
+                    HirTyConst::Literal(len) => hir::ConstArgKind::Literal {
+                        lit: rustc_ast::LitKind::Int(
+                            Pu128(len as u128),
+                            rustc_ast::LitIntType::Unsuffixed,
+                        ),
+                        negated: false,
+                    },
+                    HirTyConst::ConstDef(def_id) => hir::ConstArgKind::Path(make_def_id_qpath(
+                        tcx,
+                        owner,
+                        my_def_id_to_rustc_def_id(tcx, def_id),
+                    )),
                 },
             }),
         ),
@@ -2767,6 +2903,23 @@ fn make_unit_ty(owner: LocalDefId) -> hir::Ty<'static> {
     }
 }
 
+fn make_def_id_qpath<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: LocalDefId,
+    def_id: RustcDefId,
+) -> hir::QPath<'static> {
+    let kind = tcx.def_kind(def_id);
+    let ident = Ident::from_str(tcx.item_name(def_id).as_str());
+    let segment = hir::PathSegment::new(ident, HirId::make_owner(owner), Res::Def(kind, def_id));
+    let segments = leak(vec![segment].into_boxed_slice());
+    let path = leak(hir::Path {
+        span: DUMMY_SP,
+        res: Res::Def(kind, def_id),
+        segments,
+    });
+    hir::QPath::Resolved(None, path)
+}
+
 fn make_adt_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
     owner: LocalDefId,
@@ -2874,7 +3027,7 @@ fn hir_ty_to_rustc<'tcx>(
         }
         HirTyKind::Array(len, to) => {
             let pointee = leak(hir_ty_to_rustc(tcx, owner, &to, item_allocator));
-            make_array_ty(owner, pointee, *len)
+            make_array_ty(tcx, owner, pointee, *len)
         }
         HirTyKind::Ref(mutability, lifetime, to) => {
             let pointee = leak(hir_ty_to_rustc(tcx, owner, &to, item_allocator));

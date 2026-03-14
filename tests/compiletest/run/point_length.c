@@ -12,7 +12,7 @@ usize length(Human h) {
 
 int main() {
     Point point = { 3, 4 };
-    Human human = { point, 30 };
+    Human human = { 30, point };
     usize len = length(human);
     return len;
 }
