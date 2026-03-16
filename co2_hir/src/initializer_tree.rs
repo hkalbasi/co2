@@ -6,7 +6,7 @@ use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{RigidTy, Ty, TyKind};
 
 use crate::{
-    expr::{coerce_expr_to_type, HirExpr, HirExprKind},
+    expr::{HirExpr, HirExprKind, coerce_expr_to_type},
     item::{HirLocal, LocalId},
     resolver::HirCtx,
     ty::{

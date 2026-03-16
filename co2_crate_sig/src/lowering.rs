@@ -59,6 +59,7 @@ pub fn lower_crate_sig(
             source: src_static,
             struct_manager: StructManager::default(),
             unrepresentable_typedefs: HashMap::new(),
+            global_struct_tags: Rc::new(RefCell::new(im::HashMap::new())),
         })),
         hir_ctx: ctx,
         source_name,
@@ -282,10 +283,16 @@ pub fn lower_crate_sig(
         let span = ctx.co2_span_to_rustc(parser_span);
         let ty = ctx.base_ty_of_decl(specifiers, parser_span);
         let (_, ty) = ctx.lower_value_decl_type(ty, declarator.declarator);
-        ctx.hir_items
-            .push(HirModuleItem::Static { name, id, ty, span, mutable: true });
+        ctx.hir_items.push(HirModuleItem::Static {
+            name,
+            id,
+            ty,
+            span,
+            mutable: true,
+        });
         if let Some(initializer) = declarator.initializer {
-            ctx.mir_owners.insert(id, MirOwnerInfo::Static { initializer });
+            ctx.mir_owners
+                .insert(id, MirOwnerInfo::Static { initializer });
         } else {
             ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
         }

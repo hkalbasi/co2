@@ -970,6 +970,32 @@ int main32()
 	return count_inner_static() - 3;
 }
 
+struct T static_s1;
+struct T { int z; } static_s2;
+
+int main33()
+{
+	struct T s0;
+	s0.z = 100;
+	struct T { int x; } s1;
+	s1.x = 1;
+	{
+		struct T s4;
+		s4.x = 3;
+		struct T { int y; } s2;
+		s2.y = 1;
+		struct T s3;
+		s3.y = 10;
+		if (s0.z + s1.x + s2.y + s3.y + s4.x != 115)
+			return 1;
+	}
+	struct T s3 = s1;
+	if (s3.x != 1) {
+		return 2;
+	}
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -981,7 +1007,7 @@ int main() {
 		main16, main17, main18, main19, main20,
 		main21, main22, main23, main24, main25,
 		main26, main27, main28, main29, main30,
-		main31, main32,
+		main31, main32, main33,
 	};
 	
 	int i;

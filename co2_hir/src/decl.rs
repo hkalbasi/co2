@@ -18,10 +18,13 @@ use rustc_public_generative::{
     },
 };
 
-use crate::{expr::coerce_expr_to_type, item::{HirLocal, LocalId}};
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
 use crate::ty::{array_elem_ty, is_array_ty, is_maybe_uninit_fn_ptr_ty, ty_matches_expected};
+use crate::{
+    expr::coerce_expr_to_type,
+    item::{HirLocal, LocalId},
+};
 use crate::{
     expr::{HirExpr, HirExprKind},
     initializer_tree::InitializerTree,

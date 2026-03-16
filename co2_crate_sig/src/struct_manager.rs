@@ -27,12 +27,62 @@ pub(crate) struct PendingEnum {
 
 #[derive(Default)]
 pub(crate) struct StructManager {
-    name_to_def: HashMap<String, DefId>,
     definitions: HashMap<DefId, StructData>,
     pending_enum_consts: Vec<PendingEnum>,
 }
 
 const ANON_FIELD_PREFIX: &str = "__anon_field_";
+
+impl LocalResolver {
+    fn def_id_of_named(
+        &self,
+        name: &str,
+        kind: StructOrUnionKind,
+        span: Span,
+        redefine: bool,
+    ) -> DefId {
+        if let Some(def) = self.struct_tags.borrow().get(name) {
+            if !redefine
+                || self.base.borrow().struct_manager.definitions[def]
+                    .fields
+                    .is_none()
+            {
+                return *def;
+            }
+        }
+
+        let def_id = self.base.borrow_mut().allocate_undef(kind, span, name);
+        self.struct_tags
+            .borrow_mut()
+            .insert(name.to_owned(), def_id);
+        def_id
+    }
+
+    pub(crate) fn lower_struct_specifier(
+        &self,
+        kind: StructOrUnionKind,
+        specifier: StructOrUnionSpecifier<LocalResolver>,
+        parser_span: co2_ast::Span,
+    ) -> DefId {
+        let span = self.base.borrow_mut().co2_span_to_rustc(parser_span);
+        match specifier {
+            StructOrUnionSpecifier::Defined { ident, fields } => {
+                let def = self.def_id_of_named(&ident.0, kind, span, true);
+                self.base.borrow_mut().define_def(def, &fields, span);
+                def
+            }
+            StructOrUnionSpecifier::Declared { ident } => {
+                self.def_id_of_named(&ident.0, kind, span, false)
+            }
+            StructOrUnionSpecifier::Anonymous { fields } => {
+                let mut base = self.base.borrow_mut();
+                let def = base.allocate_undef(kind, span, "");
+                base.define_def(def, &fields, span);
+                def
+            }
+        }
+    }
+}
 
 impl LocalResolverBase {
     fn allocate_undef(&mut self, kind: StructOrUnionKind, span: Span, hint: &str) -> DefId {
@@ -55,42 +105,6 @@ impl LocalResolverBase {
         def_id
     }
 
-    fn def_id_of_named(&mut self, name: &str, kind: StructOrUnionKind, span: Span) -> DefId {
-        if let Some(def) = self.struct_manager.name_to_def.get(name) {
-            return *def;
-        }
-
-        let def_id = self.allocate_undef(kind, span, name);
-        self.struct_manager
-            .name_to_def
-            .insert(name.to_owned(), def_id);
-        def_id
-    }
-
-    pub(crate) fn lower_struct_specifier(
-        &mut self,
-        kind: StructOrUnionKind,
-        specifier: StructOrUnionSpecifier<LocalResolver>,
-        parser_span: co2_ast::Span,
-    ) -> DefId {
-        let span = self.co2_span_to_rustc(parser_span);
-        match specifier {
-            StructOrUnionSpecifier::Defined { ident, fields } => {
-                let def = self.def_id_of_named(&ident.0, kind, span);
-                self.define_def(def, &fields, span);
-                def
-            }
-            StructOrUnionSpecifier::Declared { ident } => {
-                self.def_id_of_named(&ident.0, kind, span)
-            }
-            StructOrUnionSpecifier::Anonymous { fields } => {
-                let def = self.allocate_undef(kind, span, "");
-                self.define_def(def, &fields, span);
-                def
-            }
-        }
-    }
-
     pub(crate) fn emit_structs(&mut self) -> impl Iterator<Item = StructData> + use<> {
         let taken = std::mem::take(&mut self.struct_manager.definitions);
         taken.into_values()
@@ -109,7 +123,7 @@ impl LocalResolverBase {
     ) {
         let data = self.struct_manager.definitions.get(&def).unwrap();
         if data.fields.is_some() {
-            return;
+            panic!("Redefinition happened");
         }
         let mut anon_field_count = 0;
         let fields = fields

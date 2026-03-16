@@ -1,7 +1,8 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use co2_ast::{
-    Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, InitDeclarator, RustPath, Spanned, StatelessResolver, StructOrUnionSpecifier, TypeQueryResult, TypeResolver
+    Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, InitDeclarator,
+    RustPath, Spanned, StatelessResolver, StructOrUnionSpecifier, TypeQueryResult, TypeResolver,
 };
 use rustc_public_generative::{DefData, FileId, HirStructureCtx, rustc_public::DefId};
 
@@ -35,6 +36,7 @@ pub struct LocalResolverBase {
     pub source: &'static str,
     pub(crate) struct_manager: StructManager,
     pub(crate) unrepresentable_typedefs: HashMap<String, CTy>,
+    pub(crate) global_struct_tags: Rc<RefCell<im::HashMap<String, DefId>>>,
 }
 
 impl LocalResolverBase {
@@ -51,13 +53,16 @@ impl LocalResolverBase {
 
 #[derive(Clone)]
 pub struct LocalResolver {
-    base: Rc<RefCell<LocalResolverBase>>,
-    locals: im::HashMap<String, (DefOrLocal, TypeQueryResult)>,
+    pub(crate) base: Rc<RefCell<LocalResolverBase>>,
+    pub(crate) locals: im::HashMap<String, (DefOrLocal, TypeQueryResult)>,
+    pub(crate) struct_tags: Rc<RefCell<im::HashMap<String, DefId>>>,
 }
 
 impl LocalResolver {
     pub fn new(base: Rc<RefCell<LocalResolverBase>>) -> Self {
+        let struct_tags = base.borrow().global_struct_tags.clone();
         LocalResolver {
+            struct_tags,
             base,
             locals: im::HashMap::new(),
         }
@@ -116,6 +121,8 @@ impl co2_ast::TypeResolver for LocalResolver {
 
     fn register_decl(&self, decl: &Declaration<Self>) -> Self {
         let mut next = self.clone();
+        let struct_tags = next.struct_tags.borrow().clone();
+        next.struct_tags = Rc::new(RefCell::new(struct_tags));
         match decl {
             Declaration::FunctionDefinition { .. } => next,
             Declaration::Declaration {
@@ -174,9 +181,7 @@ impl co2_ast::TypeResolver for LocalResolver {
         kind: co2_ast::StructOrUnionKind,
         (specifier, span): co2_ast::Spanned<co2_ast::StructOrUnionSpecifier<Self>>,
     ) -> Self::StructOrUnionIdentifier {
-        self.base
-            .borrow_mut()
-            .lower_struct_specifier(kind, specifier, span)
+        self.lower_struct_specifier(kind, specifier, span)
     }
 
     fn register_enum_specifier(
