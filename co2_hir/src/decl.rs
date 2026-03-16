@@ -18,7 +18,7 @@ use rustc_public_generative::{
     },
 };
 
-use crate::item::{HirLocal, LocalId};
+use crate::{expr::coerce_expr_to_type, item::{HirLocal, LocalId}};
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
 use crate::ty::{array_elem_ty, is_array_ty, is_maybe_uninit_fn_ptr_ty, ty_matches_expected};
@@ -145,7 +145,9 @@ impl HirCtx<'_> {
                     let initializer = if let Some(init) = initializer {
                         match init.0 {
                             Initializer::Expr(expr) if !needs_tree => {
-                                Some(self.lower_expr(expr, locals, local_map)?)
+                                let expr = self.lower_expr(expr, locals, local_map)?;
+                                let expr = coerce_expr_to_type(expr, ty)?;
+                                Some(expr)
                             }
                             _ if needs_tree => {
                                 let tree = self.lower_to_initializer_tree(

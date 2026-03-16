@@ -948,6 +948,15 @@ int main30()
 	return 0;
 }
 
+int main31()
+{
+	short s = 1;
+	long l = 1;
+
+	s -= l;
+	return s;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -959,6 +968,7 @@ int main() {
 		main16, main17, main18, main19, main20,
 		main21, main22, main23, main24, main25,
 		main26, main27, main28, main29, main30,
+		main31,
 	};
 	
 	int i;

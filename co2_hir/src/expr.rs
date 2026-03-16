@@ -975,3 +975,20 @@ fn int_suffix_ty(suffix: IntegerSuffix) -> Ty {
         }
     }
 }
+
+pub(crate) fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Result<HirExpr, String> {
+    if expr.ty == expected_ty {
+        return Ok(expr);
+    }
+    if needs_implicit_cast(expected_ty, expr.ty) {
+        return Ok(HirExpr {
+            kind: HirExprKind::Cast(Box::new(expr.clone())),
+            ty: expected_ty,
+            span: expr.span,
+        });
+    }
+    Err(format!(
+        "initializer type mismatch: expected {expected_ty:?}, got {:?}",
+        expr.ty
+    ))
+}
