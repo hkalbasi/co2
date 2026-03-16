@@ -957,6 +957,19 @@ int main31()
 	return s;
 }
 
+int count_inner_static() {
+	static int x = 0;
+	x += 1;
+	return x;
+}
+
+int main32()
+{
+	count_inner_static();
+	count_inner_static();
+	return count_inner_static() - 3;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -968,7 +981,7 @@ int main() {
 		main16, main17, main18, main19, main20,
 		main21, main22, main23, main24, main25,
 		main26, main27, main28, main29, main30,
-		main31,
+		main31, main32,
 	};
 	
 	int i;

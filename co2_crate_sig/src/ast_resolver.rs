@@ -1,8 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use co2_ast::{
-    Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, RustPath,
-    Spanned, StatelessResolver, StructOrUnionSpecifier, TypeQueryResult, TypeResolver,
+    Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, InitDeclarator, RustPath, Spanned, StatelessResolver, StructOrUnionSpecifier, TypeQueryResult, TypeResolver
 };
 use rustc_public_generative::{DefData, FileId, HirStructureCtx, rustc_public::DefId};
 
@@ -21,6 +20,13 @@ pub struct LocalResolverBase {
         String,
         Vec<co2_ast::Spanned<DeclarationSpecifier<LocalResolver>>>,
         Declarator<LocalResolver>,
+        co2_ast::Span,
+    )>,
+    pub pending_static: Vec<(
+        DefId,
+        String,
+        Vec<co2_ast::Spanned<DeclarationSpecifier<LocalResolver>>>,
+        InitDeclarator<LocalResolver>,
         co2_ast::Span,
     )>,
     pub hir_ctx: &'static HirStructureCtx<'static>,
@@ -117,6 +123,10 @@ impl co2_ast::TypeResolver for LocalResolver {
                 declarators,
             } => {
                 let is_typedef = declaration_specifiers.iter().any(|d| d.0.is_typedef());
+                let is_static = declaration_specifiers.iter().any(|d| d.0.is_static());
+                if is_typedef && is_static {
+                    todo!("Emit good error");
+                }
                 for decl in declarators {
                     let Some(name) = decl.0.declarator.0.ident() else {
                         continue;
@@ -134,6 +144,19 @@ impl co2_ast::TypeResolver for LocalResolver {
                         ));
                         next.locals
                             .insert(name.1, (DefOrLocal::Def(def_id), TypeQueryResult::Type));
+                    } else if is_static {
+                        let mut base = next.base.borrow_mut();
+                        let (def_id, fake_name) =
+                            base.emit_fake_def(rustc_public_generative::DefData::ValueNs);
+                        base.pending_static.push((
+                            def_id,
+                            fake_name,
+                            declaration_specifiers.clone(),
+                            decl.0.clone(),
+                            decl.1,
+                        ));
+                        next.locals
+                            .insert(name.1, (DefOrLocal::Def(def_id), TypeQueryResult::Expr));
                     } else {
                         next.locals.insert(
                             name.1,

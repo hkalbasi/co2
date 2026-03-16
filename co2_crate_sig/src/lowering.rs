@@ -52,6 +52,7 @@ pub fn lower_crate_sig(
             local_counter: 0,
             fake_defs_counter: 0,
             pending_typedefs: vec![],
+            pending_static: vec![],
             hir_ctx: unsafe { std::mem::transmute(ctx) },
             file_id,
             source_name: source_name.clone(),
@@ -274,6 +275,20 @@ pub fn lower_crate_sig(
         let (_, ty) = ctx.lower_value_decl_type(ty, (declarator, parser_span));
         ctx.hir_items
             .push(HirModuleItem::TypeDef { name, id, ty, span });
+    }
+
+    let pending_static = std::mem::take(&mut ctx.resolver.borrow_mut().pending_static);
+    for (id, name, specifiers, declarator, parser_span) in pending_static {
+        let span = ctx.co2_span_to_rustc(parser_span);
+        let ty = ctx.base_ty_of_decl(specifiers, parser_span);
+        let (_, ty) = ctx.lower_value_decl_type(ty, declarator.declarator);
+        ctx.hir_items
+            .push(HirModuleItem::Static { name, id, ty, span, mutable: true });
+        if let Some(initializer) = declarator.initializer {
+            ctx.mir_owners.insert(id, MirOwnerInfo::Static { initializer });
+        } else {
+            ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+        }
     }
 
     let structs = ctx.resolver.borrow_mut().emit_structs().collect::<Vec<_>>();
