@@ -996,6 +996,22 @@ int main33()
 	return 0;
 }
 
+int declared_static;
+int declared_static = 3;
+int declared_static;
+
+int declared_func();
+int declared_func() {
+	return 3;
+}
+int declared_func();
+typedef int declared_func_ty();
+declared_func_ty declared_func;
+
+int main34() {
+	return declared_static - declared_func();
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1007,7 +1023,7 @@ int main() {
 		main16, main17, main18, main19, main20,
 		main21, main22, main23, main24, main25,
 		main26, main27, main28, main29, main30,
-		main31, main32, main33,
+		main31, main32, main33, main34,
 	};
 	
 	int i;

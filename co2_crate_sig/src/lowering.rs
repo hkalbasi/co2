@@ -71,7 +71,7 @@ pub fn lower_crate_sig(
 
     {
         let name = "__builtin_va_list";
-        let id = ctx.resolve("__builtin_va_list").unwrap().0;
+        let id = ctx.resolve(name).unwrap().0;
         let adt = ctx.resolve("std::ffi::VaList").unwrap().0;
         let ty = HirTy::adt(
             adt,
@@ -86,6 +86,41 @@ pub fn lower_crate_sig(
         });
     }
 
+    let mut name_to_important_def = HashMap::new();
+    let mut tu_item_id: usize = 0;
+
+    for (item, _) in &tu.items {
+        match item {
+            Declaration::FunctionDefinition { declarator, .. } => {
+                let name = declarator.0.ident().unwrap();
+                name_to_important_def.insert(name, (tu_item_id, 3));
+                tu_item_id += 1;
+            }
+            Declaration::Declaration {
+                declaration_specifiers: _,
+                declarators,
+            } => {
+                for decl in declarators {
+                    let prio = if decl.0.initializer.is_some() { 2 } else { 1 };
+                    let name = decl.0.declarator.0.ident().unwrap();
+                    match name_to_important_def.entry(name) {
+                        std::collections::hash_map::Entry::Occupied(mut occupied_entry) => {
+                            if occupied_entry.get().1 < prio {
+                                *occupied_entry.get_mut() = (tu_item_id, prio);
+                            }
+                        }
+                        std::collections::hash_map::Entry::Vacant(vacant_entry) => {
+                            vacant_entry.insert((tu_item_id, prio));
+                        }
+                    }
+                    tu_item_id += 1;
+                }
+            }
+        }
+    }
+
+    tu_item_id = 0;
+
     for (item, parser_span) in tu.items {
         let span = ctx.co2_span_to_rustc(parser_span);
         match item {
@@ -94,16 +129,21 @@ pub fn lower_crate_sig(
                 declarator,
                 body,
             } => {
-                if has_static_storage(&declaration_specifiers) {
-                    continue;
-                }
-
                 let mut resolver = LocalResolver::new(ctx.resolver.clone());
                 let base =
                     ctx.base_ty_of_decl(declaration_specifiers.transform(&resolver), parser_span);
                 let (name, mut sig, param_names) = ctx
                     .lower_function_signature(base, declarator.transform(&resolver))
                     .expect("failed to lower function signature");
+
+                if let Some((id, _)) = name_to_important_def.get(&name) {
+                    if *id != tu_item_id {
+                        tu_item_id += 1;
+                        continue;
+                    }
+                    tu_item_id += 1;
+                }
+
                 let id = ctx.resolve_in_current([&*name]).unwrap().0;
                 if name == "main" && !no_main {
                     sig.abi = FunctionAbi::Rust;
@@ -169,6 +209,15 @@ pub fn lower_crate_sig(
                     if is_typedef {
                         let (name, ty) = ctx
                             .lower_value_decl_ctype(base.clone(), declarator.transform(&resolver));
+
+                        if let Some((id, _)) = name_to_important_def.get(&name) {
+                            if *id != tu_item_id {
+                                tu_item_id += 1;
+                                continue;
+                            }
+                            tu_item_id += 1;
+                        }
+
                         let ty = match ty {
                             CTy::Ty(ty) => ty,
                             _ => {
@@ -191,6 +240,15 @@ pub fn lower_crate_sig(
 
                     let (name, ty) =
                         ctx.lower_value_decl_ctype(base.clone(), declarator.transform(&resolver));
+
+                    if let Some((id, _)) = name_to_important_def.get(&name) {
+                        if *id != tu_item_id {
+                            tu_item_id += 1;
+                            continue;
+                        }
+                        tu_item_id += 1;
+                    }
+
                     match ty {
                         CTy::Ty(ty) => {
                             let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
@@ -407,15 +465,4 @@ pub fn lower_crate_sig(
         ctx.mir_owners,
         defs,
     )
-}
-
-fn has_static_storage(
-    specifiers: &[co2_ast::Spanned<DeclarationSpecifier<StatelessResolver>>],
-) -> bool {
-    specifiers.iter().any(|(spec, _)| {
-        matches!(
-            spec,
-            DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Static, _))
-        )
-    })
 }

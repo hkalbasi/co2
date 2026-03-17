@@ -196,6 +196,9 @@ impl Resolver {
         }
         this.current =
             ModuleData::forward_pass_parsed_module(ctx, p, ctx.root_crate_def_id(), foreign_mod);
+        this.current.insert_path(["__builtin_bswap16"].into_iter(), Some(this.resolve_in_deps("std", ["num", "<impl u16>", "swap_bytes"]).unwrap()));
+        this.current.insert_path(["__builtin_bswap32"].into_iter(), Some(this.resolve_in_deps("std", ["num", "<impl u32>", "swap_bytes"]).unwrap()));
+        this.current.insert_path(["__builtin_bswap64"].into_iter(), Some(this.resolve_in_deps("std", ["num", "<impl u64>", "swap_bytes"]).unwrap()));
         this
     }
 
