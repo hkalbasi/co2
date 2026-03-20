@@ -246,11 +246,14 @@ impl HirCtx<'_> {
                 }
 
                 if sig.inputs().len() != lowered_args.len() && !sig.c_variadic {
-                    return Err(format!(
-                        "call argument count mismatch: expected {}, got {}",
-                        sig.inputs().len(),
-                        lowered_args.len()
-                    ));
+                    self.terminate_with_error(
+                        parser_span,
+                        &format!(
+                            "call argument count mismatch: expected {}, got {}",
+                            sig.inputs().len(),
+                            lowered_args.len()
+                        ),
+                    );
                 }
 
                 for (idx, actual) in lowered_args.iter_mut().enumerate() {

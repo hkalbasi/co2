@@ -74,7 +74,7 @@ int main4()
 
 int main5()
 {
-start:
+	start:
 		goto next;
 		return 1;
 	success:
@@ -625,7 +625,11 @@ int main18()
 		return 1;
 	fp_static3 = 0;
 	if (fp_static3)
-		return 1;	
+		return 1;
+	
+	if (0) {
+		((void (*)(void))0) ();
+	}
 
 	return 0;
 }
@@ -1098,6 +1102,19 @@ int main39(void)
 	return (int) q;
 }
 
+struct S40 { int a; int b; };
+struct S40 *s40 = &(struct S40) { 1, 2 };
+
+int
+main40()
+{
+	if(s40->a != 1)
+		return 1;
+	if(s40->b != 2)
+		return 2;
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1110,7 +1127,7 @@ int main() {
 		main21, main22, main23, main24, main25,
 		main26, main27, main28, main29, main30,
 		main31, main32, main33, main34, main35,
-		main36, main37, main38,
+		main36, main37, main38, main39, main40,
 	};
 	
 	int i;

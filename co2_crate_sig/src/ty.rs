@@ -202,9 +202,8 @@ impl LocalResolverBase {
                 param_list,
             } => {
                 let mut inputs = Vec::with_capacity(param_list.parameters.len());
-                if !(param_list.parameters.len() == 1
-                    && parameter_is_void(&param_list.parameters[0]))
-                {
+                let c_variadic = param_list.effective_ellipsis();
+                if !param_list.empty_params() {
                     for param in param_list.parameters {
                         let param_base = self.base_ty_of_decl(param.0, span);
                         let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
@@ -236,7 +235,7 @@ impl LocalResolverBase {
                         output: ret,
                         abi: FunctionAbi::C,
                         is_unsafe: false,
-                        c_variadic: param_list.ellipsis,
+                        c_variadic,
                     }),
                     CTy::Function(_) => {
                         return Err("function returning function is not valid".to_owned());
@@ -329,22 +328,6 @@ fn function_param_names(decl: &Declarator<LocalResolver>) -> Option<Vec<Option<S
         | Declarator::ArrayDeclarator { declarator, .. } => function_param_names(&declarator.0),
         _ => None,
     }
-}
-
-fn parameter_is_void(
-    param: &(
-        Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
-        Spanned<Declarator<LocalResolver>>,
-    ),
-) -> bool {
-    let declarator_is_abstract = matches!(param.1.0, Declarator::Abstract);
-    let has_void_type = param.0.iter().any(|(spec, _)| {
-        matches!(
-            spec,
-            DeclarationSpecifier::TypeSpecifier((TypeSpecifier::Void, _))
-        )
-    });
-    declarator_is_abstract && has_void_type
 }
 
 #[derive(Debug, Clone, Copy)]

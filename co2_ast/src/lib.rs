@@ -698,6 +698,29 @@ pub struct ParameterList<R: TypeResolver> {
     pub ellipsis: bool,
 }
 
+impl<R: TypeResolver> ParameterList<R> {
+    pub fn empty_params(&self) -> bool {
+        match self.parameters.as_slice() {
+            [] => true,
+            [param] => {
+                let declarator_is_abstract = matches!(param.1.0, Declarator::Abstract);
+                let has_void_type = param.0.iter().any(|(spec, _)| {
+                    matches!(
+                        spec,
+                        DeclarationSpecifier::TypeSpecifier((TypeSpecifier::Void, _))
+                    )
+                });
+                declarator_is_abstract && has_void_type
+            }
+            _ => false,
+        }
+    }
+
+    pub fn effective_ellipsis(&self) -> bool {
+        self.ellipsis // || self.parameters.is_empty()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Declarator<R: TypeResolver> {
     Abstract,

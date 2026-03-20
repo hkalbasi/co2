@@ -315,21 +315,26 @@ impl HirCtx<'_> {
                 param_list,
             } => {
                 let mut inputs = Vec::with_capacity(param_list.parameters.len());
-                for param in param_list.parameters {
-                    let param_base = self.base_ty_of_decl(param.0, span)?;
-                    let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
-                    let mut param_ty = match param_decl_ty {
-                        CTy::Ty(ty) => ty,
-                        CTy::Function(_) => {
-                            return Err("function type is invalid in parameter position".to_owned());
+                let c_variadic = param_list.effective_ellipsis();
+                if !param_list.empty_params() {
+                    for param in param_list.parameters {
+                        let param_base = self.base_ty_of_decl(param.0, span)?;
+                        let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
+                        let mut param_ty = match param_decl_ty {
+                            CTy::Ty(ty) => ty,
+                            CTy::Function(_) => {
+                                return Err(
+                                    "function type is invalid in parameter position".to_owned()
+                                );
+                            }
+                            CTy::UnsizedArray(elem) => Ty::new_ptr(elem, Mutability::Mut),
+                        };
+                        // Function arguments are always decayed to pointer in C.
+                        if let Some(elem) = array_elem_ty(param_ty) {
+                            param_ty = Ty::new_ptr(elem, Mutability::Mut);
                         }
-                        CTy::UnsizedArray(elem) => Ty::new_ptr(elem, Mutability::Mut),
-                    };
-                    // Function arguments are always decayed to pointer in C.
-                    if let Some(elem) = array_elem_ty(param_ty) {
-                        param_ty = Ty::new_ptr(elem, Mutability::Mut);
+                        inputs.push(param_ty);
                     }
-                    inputs.push(param_ty);
                 }
                 let function_ty = match current {
                     CTy::Ty(ret) => {
@@ -337,7 +342,7 @@ impl HirCtx<'_> {
                         inputs_and_output.push(ret);
                         CTy::Function(FnSig {
                             inputs_and_output,
-                            c_variadic: param_list.ellipsis,
+                            c_variadic,
                             safety: Safety::Safe,
                             abi: Abi::C { unwind: false },
                         })

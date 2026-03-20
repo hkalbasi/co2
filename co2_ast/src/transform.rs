@@ -379,12 +379,33 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
                 type_name: type_name.transform(b),
                 expr: expr.transform(b),
             },
-            Expression::Call { .. } => todo!(),
-            Expression::Update { .. } => todo!(),
-            Expression::AssignWithOp { .. } => todo!(),
-            Expression::SizeofType(_) => todo!(),
-            Expression::Sizeof(_) => todo!(),
-            Expression::CompoundLiteral { .. } => todo!(),
+            Expression::Call { func, params } => Expression::Call {
+                func: func.transform(b),
+                params: params.transform(b),
+            },
+            Expression::Update {
+                expr,
+                op,
+                is_postfix,
+            } => Expression::Update {
+                expr: expr.transform(b),
+                op: *op,
+                is_postfix: *is_postfix,
+            },
+            Expression::AssignWithOp { lhs, op, rhs } => Expression::AssignWithOp {
+                lhs: lhs.transform(b),
+                op: *op,
+                rhs: rhs.transform(b),
+            },
+            Expression::SizeofType(t) => Expression::SizeofType(t.transform(b)),
+            Expression::Sizeof(e) => Expression::Sizeof(e.transform(b)),
+            Expression::CompoundLiteral {
+                type_name,
+                initializer,
+            } => Expression::CompoundLiteral {
+                type_name: type_name.transform(b),
+                initializer: initializer.transform(b),
+            },
             Expression::GnuStatementExpr { .. } => todo!(),
         }
     }
