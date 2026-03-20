@@ -11,8 +11,6 @@ use rustc_public_generative::rustc_public::{
     ty::{FloatTy, IntTy, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
 };
 
-use crate::decl::call_arg_type_compatible;
-use crate::initializer_tree::InitializerTree;
 use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, ResolvedValue};
 use crate::stmt::HirStmt;
@@ -21,6 +19,7 @@ use crate::ty::{
     is_maybe_uninit_fn_ptr_ty, is_numeric_ty, needs_implicit_cast, resolve_field_path_in_adt,
     ty_matches_expected,
 };
+use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
 #[derive(Clone)]
 pub struct HirExpr {
@@ -168,6 +167,18 @@ impl HirCtx<'_> {
         }
     }
 
+    fn emit_cast(&self, expr: HirExpr, ty: Ty) -> HirExpr {
+        if expr.ty == ty {
+            expr
+        } else {
+            HirExpr {
+                span: expr.span,
+                ty,
+                kind: HirExprKind::Cast(Box::new(expr)),
+            }
+        }
+    }
+
     pub(crate) fn lower_expr(
         &self,
         (expr, parser_span): Spanned<Expression<LocalResolver>>,
@@ -254,7 +265,7 @@ impl HirCtx<'_> {
                             span: actual.span,
                         };
                     }
-                    if !call_arg_type_compatible(expected, actual.ty) {
+                    if !ty_matches_expected(expected, actual.ty) {
                         return Err(format!(
                             "call argument type mismatch at index {idx}: expected {expected:?}, got {:?}",
                             actual.ty
@@ -692,29 +703,29 @@ impl HirCtx<'_> {
                 else_expr,
             } => {
                 let cond = self.lower_expr(*cond, locals, local_map)?;
-                let then_expr = self.lower_expr(*then_expr, locals, local_map)?;
-                let else_expr = self.lower_expr(*else_expr, locals, local_map)?;
+                let mut then_expr = self.lower_expr(*then_expr, locals, local_map)?;
+                let mut else_expr = self.lower_expr(*else_expr, locals, local_map)?;
 
-                let mut then_expr = then_expr;
-                let mut else_expr = else_expr;
                 self.array_to_pointer_decay_if_array(&mut then_expr);
                 self.array_to_pointer_decay_if_array(&mut else_expr);
 
-                if !ty_matches_expected(then_expr.ty, else_expr.ty) {
-                    return Err(format!(
-                        "ternary operator branches have mismatched types: {:?} vs {:?}",
-                        then_expr.ty, else_expr.ty
-                    ));
-                }
+                let Some(common_ty) = common_ternary_ty(then_expr.ty, else_expr.ty) else {
+                    self.terminate_with_error(
+                        parser_span,
+                        &format!(
+                            "ternary operator branches have mismatched types: {:?} vs {:?}",
+                            then_expr.ty, else_expr.ty,
+                        ),
+                    );
+                };
 
-                let result_ty = then_expr.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Conditional {
                         cond: Box::new(cond),
-                        then_expr: Box::new(then_expr),
-                        else_expr: Box::new(else_expr),
+                        then_expr: Box::new(self.emit_cast(then_expr, common_ty)),
+                        else_expr: Box::new(self.emit_cast(else_expr, common_ty)),
                     },
-                    ty: result_ty,
+                    ty: common_ty,
                     span,
                 })
             }

@@ -52,6 +52,31 @@ fn numeric_rank(ty: Ty) -> Option<(u8, bool)> {
     }
 }
 
+pub(crate) fn common_ternary_ty(lhs: Ty, rhs: Ty) -> Option<Ty> {
+    if let Some(r) = common_numeric_ty(lhs, rhs) {
+        return Some(r);
+    }
+    let TyKind::RigidTy(lhs) = lhs.kind() else {
+        return None;
+    };
+    let TyKind::RigidTy(rhs) = rhs.kind() else {
+        return None;
+    };
+    let lhs_is_ptr = matches!(lhs, RigidTy::RawPtr(..));
+    let rhs_is_ptr = matches!(rhs, RigidTy::RawPtr(..));
+    let one_is_ptr = lhs_is_ptr || rhs_is_ptr;
+
+    let lhs_is_integer = matches!(lhs, RigidTy::Int(..) | RigidTy::Uint(..));
+    let rhs_is_integer = matches!(rhs, RigidTy::Int(..) | RigidTy::Uint(..));
+    let one_is_integer = lhs_is_integer || rhs_is_integer;
+
+    if one_is_ptr && one_is_integer {
+        return Some(Ty::usize_ty());
+    }
+
+    None
+}
+
 pub(crate) fn common_numeric_ty(lhs: Ty, rhs: Ty) -> Option<Ty> {
     let (lhs_rank, lhs_unsigned) = numeric_rank(lhs)?;
     let (rhs_rank, rhs_unsigned) = numeric_rank(rhs)?;

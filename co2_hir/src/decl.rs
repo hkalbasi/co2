@@ -12,15 +12,15 @@ use rustc_public_generative::{
         CrateItem,
         mir::{Mutability, Safety},
         ty::{
-            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, IntTy, RigidTy,
-            Span as RustSpan, Ty, TyConst, TyKind,
+            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, RigidTy, Span as RustSpan, Ty,
+            TyConst,
         },
     },
 };
 
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
-use crate::ty::{array_elem_ty, is_array_ty, is_maybe_uninit_fn_ptr_ty, ty_matches_expected};
+use crate::ty::{array_elem_ty, is_array_ty};
 use crate::{
     expr::coerce_expr_to_type,
     item::{HirLocal, LocalId},
@@ -172,28 +172,12 @@ impl HirCtx<'_> {
                                 span,
                             }),
                         }
-                    } else if is_array_ty(ty)
-                        || matches!(ty.kind(), TyKind::RigidTy(RigidTy::Adt(_, _)))
-                    {
+                    } else {
                         Some(HirExpr {
                             kind: HirExprKind::Zeroed,
                             ty,
                             span,
                         })
-                    } else if matches!(ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(_, _)))
-                        || is_maybe_uninit_fn_ptr_ty(ty).is_some()
-                    {
-                        Some(HirExpr {
-                            kind: HirExprKind::Cast(Box::new(HirExpr {
-                                kind: HirExprKind::ConstInt(0),
-                                ty: Ty::signed_ty(IntTy::I32),
-                                span,
-                            })),
-                            ty,
-                            span,
-                        })
-                    } else {
-                        None
                     };
 
                     out.push(HirStmt::Decl(HirDecl {
@@ -432,11 +416,4 @@ impl HirCtx<'_> {
             }
         }
     }
-}
-
-pub(crate) fn call_arg_type_compatible(expected: Ty, actual: Ty) -> bool {
-    if expected == actual {
-        return true;
-    }
-    ty_matches_expected(expected, actual)
 }

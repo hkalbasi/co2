@@ -1070,6 +1070,34 @@ int main37()
 	return (*(*p)(0, 2))(2, 2);
 }
 
+
+int main38()
+{
+	int x;
+	int y = x;
+	struct { int a, b; } s;
+	s.a = x;
+	x = s.b;
+	return 0;
+}
+
+int main39(void)
+{
+	int i, *q;
+	void *p;
+
+	i = i ? 0 : 0l;
+	p = i ? (void *) 0 : 0;
+	p = i ? 0 : (void *) 0;
+	p = i ? 0 : (const void *) 0;
+	q = i ? 0 : p;
+	q = i ? p : 0;
+	q = i ? q : 0;
+	q = i ? 0 : q;
+
+	return (int) q;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1082,7 +1110,7 @@ int main() {
 		main21, main22, main23, main24, main25,
 		main26, main27, main28, main29, main30,
 		main31, main32, main33, main34, main35,
-		main36,
+		main36, main37, main38,
 	};
 	
 	int i;
