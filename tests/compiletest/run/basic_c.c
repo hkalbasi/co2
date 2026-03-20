@@ -590,6 +590,12 @@ int main18()
 	if (fp(3) - 3)
 		return 1;
 
+	void* fp_void = &fp_id;
+	fp = fp_void;
+
+	if (fp(3) - 3)
+		return 1;
+
 	fp_holder s = { .f = fp_id };
 	if (s.f(3) - 3)
 		return 1;
@@ -1030,6 +1036,20 @@ int main35() {
 	return 0;
 }
 
+int main36() {
+	int ar[] = {1, 2, 3};
+
+	if (ar == (void*)5) {
+		return 1;
+	}
+
+	if (&ar[0] >= &ar[2]) {
+		return 2;
+	}
+
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1042,6 +1062,7 @@ int main() {
 		main21, main22, main23, main24, main25,
 		main26, main27, main28, main29, main30,
 		main31, main32, main33, main34, main35,
+		main36,
 	};
 	
 	int i;

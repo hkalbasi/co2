@@ -764,6 +764,17 @@ impl Builder<'_> {
                 span,
             );
         }
+        if dst_is_ptr && src_is_fn_ptr {
+            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(tmp),
+                    Rvalue::Cast(CastKind::FnPtrToPtr, inner_op, dst_ty),
+                ),
+                span,
+            });
+            return MirOperand::Copy(place(tmp));
+        }
         if dst_mu_fn_ptr.is_some() && src_is_fn_ptr {
             return self.write_value_into_maybe_uninit_storage(dst_ty, inner_op, src_ty, span);
         }
@@ -846,16 +857,21 @@ impl Builder<'_> {
             });
             return MirOperand::Copy(place(dst_tmp));
         }
-        if src_is_int && dst_mu_fn_ptr.is_some() {
+        if (src_is_int || src_is_ptr) && dst_mu_fn_ptr.is_some() {
             let usize_ty = Ty::usize_ty();
             let usize_op = if src_ty == usize_ty {
                 inner_op
             } else {
                 let usize_tmp = self.new_temp(usize_ty, Mutability::Mut, span);
+                let cast_kind = if src_is_ptr {
+                    CastKind::PointerExposeAddress
+                } else {
+                    CastKind::IntToInt
+                };
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         place(usize_tmp),
-                        Rvalue::Cast(CastKind::IntToInt, inner_op, usize_ty),
+                        Rvalue::Cast(cast_kind, inner_op, usize_ty),
                     ),
                     span,
                 });

@@ -136,6 +136,15 @@ pub enum HirBinOp {
     Shr,
 }
 
+impl HirBinOp {
+    fn is_comparison(&self) -> bool {
+        matches!(
+            self,
+            HirBinOp::Eq | HirBinOp::Lt | HirBinOp::Le | HirBinOp::Ne | HirBinOp::Ge | HirBinOp::Gt
+        )
+    }
+}
+
 #[derive(Clone, Debug, Copy)]
 pub enum HirLogicalOp {
     Or,
@@ -781,6 +790,42 @@ impl HirCtx<'_> {
         span: RustSpan,
         is_assignment: bool,
     ) -> Result<HirExpr, String> {
+        let op = match op {
+            ParsedBinOp::Assign => unreachable!(),
+            ParsedBinOp::Add => HirBinOp::Add,
+            ParsedBinOp::Sub => HirBinOp::Sub,
+            ParsedBinOp::Mul => HirBinOp::Mul,
+            ParsedBinOp::Div => HirBinOp::Div,
+            ParsedBinOp::Rem => HirBinOp::Rem,
+            ParsedBinOp::BitOr => HirBinOp::BitOr,
+            ParsedBinOp::BitXor => HirBinOp::BitXor,
+            ParsedBinOp::BitAnd => HirBinOp::BitAnd,
+            ParsedBinOp::Eq => HirBinOp::Eq,
+            ParsedBinOp::Lt => HirBinOp::Lt,
+            ParsedBinOp::Le => HirBinOp::Le,
+            ParsedBinOp::Ne => HirBinOp::Ne,
+            ParsedBinOp::Ge => HirBinOp::Ge,
+            ParsedBinOp::Gt => HirBinOp::Gt,
+            ParsedBinOp::Shl => HirBinOp::Shl,
+            ParsedBinOp::Shr => HirBinOp::Shr,
+            ParsedBinOp::And | ParsedBinOp::Or => {
+                let logical_op = match op {
+                    ParsedBinOp::And => HirLogicalOp::And,
+                    ParsedBinOp::Or => HirLogicalOp::Or,
+                    _ => unreachable!(),
+                };
+                return Ok(HirExpr {
+                    kind: HirExprKind::Logical {
+                        op: logical_op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    ty: Ty::signed_ty(IntTy::I32),
+                    span,
+                });
+            }
+        };
+
         if is_assignment && is_array_ty(lhs.ty) {
             return Err("Type error - can not run binop on arrays.".to_owned());
         } else {
@@ -788,10 +833,10 @@ impl HirCtx<'_> {
         }
         self.array_to_pointer_decay_if_array(&mut rhs);
 
-        if matches!(op, ParsedBinOp::Add | ParsedBinOp::Sub) {
+        if matches!(op, HirBinOp::Add | HirBinOp::Sub) {
             let lhs_is_ptr = matches!(lhs.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(_, _)));
             let rhs_is_ptr = matches!(rhs.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(_, _)));
-            if matches!(op, ParsedBinOp::Add) {
+            if matches!(op, HirBinOp::Add) {
                 match (lhs_is_ptr, rhs_is_ptr) {
                     (true, false) if is_numeric_ty(rhs.ty) => {
                         return Ok(HirExpr {
@@ -878,56 +923,31 @@ impl HirCtx<'_> {
             }
         }
 
+        if op.is_comparison() && lhs.ty != rhs.ty {
+            let common_ty = Ty::usize_ty();
+            lhs = HirExpr {
+                kind: HirExprKind::Cast(Box::new(lhs.clone())),
+                ty: common_ty,
+                span: lhs.span,
+            };
+            rhs = HirExpr {
+                kind: HirExprKind::Cast(Box::new(rhs.clone())),
+                ty: common_ty,
+                span: rhs.span,
+            };
+        }
+
         if lhs.ty != rhs.ty && !is_assignment {
             return Err(format!(
                 "binary op type mismatch: lhs={:?}, rhs={:?}",
                 lhs.ty, rhs.ty
             ));
         }
-        if matches!(op, ParsedBinOp::And | ParsedBinOp::Or) {
-            let logical_op = match op {
-                ParsedBinOp::And => HirLogicalOp::And,
-                ParsedBinOp::Or => HirLogicalOp::Or,
-                _ => unreachable!(),
-            };
-            return Ok(HirExpr {
-                kind: HirExprKind::Logical {
-                    op: logical_op,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-                ty: Ty::signed_ty(IntTy::I32),
-                span,
-            });
-        }
-        let op = match op {
-            ParsedBinOp::Assign => unreachable!(),
-            ParsedBinOp::Add => HirBinOp::Add,
-            ParsedBinOp::Sub => HirBinOp::Sub,
-            ParsedBinOp::Mul => HirBinOp::Mul,
-            ParsedBinOp::Div => HirBinOp::Div,
-            ParsedBinOp::Rem => HirBinOp::Rem,
-            ParsedBinOp::BitOr => HirBinOp::BitOr,
-            ParsedBinOp::BitXor => HirBinOp::BitXor,
-            ParsedBinOp::BitAnd => HirBinOp::BitAnd,
-            ParsedBinOp::Eq => HirBinOp::Eq,
-            ParsedBinOp::Lt => HirBinOp::Lt,
-            ParsedBinOp::Le => HirBinOp::Le,
-            ParsedBinOp::Ne => HirBinOp::Ne,
-            ParsedBinOp::Ge => HirBinOp::Ge,
-            ParsedBinOp::Gt => HirBinOp::Gt,
-            ParsedBinOp::Shl => HirBinOp::Shl,
-            ParsedBinOp::Shr => HirBinOp::Shr,
-            ParsedBinOp::And | ParsedBinOp::Or => unreachable!(),
-        };
-        let ty = match op {
-            HirBinOp::Eq
-            | HirBinOp::Lt
-            | HirBinOp::Le
-            | HirBinOp::Ne
-            | HirBinOp::Ge
-            | HirBinOp::Gt => Ty::signed_ty(IntTy::I32),
-            _ => rhs.ty,
+
+        let ty = if op.is_comparison() {
+            Ty::signed_ty(IntTy::I32)
+        } else {
+            rhs.ty
         };
         Ok(HirExpr {
             kind: HirExprKind::Binary {

@@ -132,6 +132,7 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
     if dst == src {
         return false;
     }
+    let src_is_mu_fn_ptr = is_maybe_uninit_fn_ptr_ty(src).is_some();
     let dst_is_mu_fn_ptr = is_maybe_uninit_fn_ptr_ty(dst).is_some();
     matches!(
         (dst.kind(), src.kind()),
@@ -140,7 +141,7 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
             TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
         ) | (
             TyKind::RigidTy(RigidTy::RawPtr(_, _)),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _))
+            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
         ) | (
             TyKind::RigidTy(RigidTy::FnPtr(_)),
             TyKind::RigidTy(RigidTy::FnDef(_, _))
@@ -152,9 +153,18 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
         && matches!(
             src.kind(),
             TyKind::RigidTy(
-                RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::FnDef(_, _) | RigidTy::FnPtr(_)
+                RigidTy::Int(_)
+                    | RigidTy::Uint(_)
+                    | RigidTy::FnDef(_, _)
+                    | RigidTy::FnPtr(_)
+                    | RigidTy::RawPtr(..)
             )
         ))
+        || (src_is_mu_fn_ptr
+            && matches!(
+                dst.kind(),
+                TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..))
+            ))
         || (is_numeric_ty(dst) && is_numeric_ty(src))
 }
 
