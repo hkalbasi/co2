@@ -45,11 +45,14 @@ impl ModuleData {
     fn resolve_path<'a>(
         &self,
         mut path: impl Iterator<Item = &'a str>,
-    ) -> Option<(DefId, TypeQueryResult)> {
+    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
         let Some(seg1) = path.next() else {
-            return self.id;
+            return self.id.ok_or_else(|| format!("self id is None"));
         };
-        let part = self.items.get(seg1)?;
+        let part = self
+            .items
+            .get(seg1)
+            .ok_or_else(|| format!("Failed to lookup {seg1}"))?;
         part.resolve_path(path)
     }
 
@@ -93,7 +96,7 @@ impl ModuleData {
                             let Some(name) = extract_decl_name(&decl) else {
                                 continue;
                             };
-                            if this.resolve_path([&*name].into_iter()).is_some() {
+                            if this.resolve_path([&*name].into_iter()).is_ok() {
                                 continue;
                             }
                             let def_id = ctx.allocate_def_id(parent, DefData::TypeNs(name.clone()));
@@ -108,7 +111,7 @@ impl ModuleData {
                             let Some(name) = extract_decl_name(&decl) else {
                                 continue;
                             };
-                            if this.resolve_path([&*name].into_iter()).is_some() {
+                            if this.resolve_path([&*name].into_iter()).is_ok() {
                                 continue;
                             }
                             let parent = if decl.is_function() || is_extern {
@@ -214,20 +217,23 @@ impl Resolver {
         &self,
         mut crate_name: &str,
         path: impl IntoIterator<Item = &'a str>,
-    ) -> Option<(DefId, TypeQueryResult)> {
+    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
         normalize_crate_name(&mut crate_name);
-        let crate_data = self.dependencies.get(crate_name)?;
+        let crate_data = self
+            .dependencies
+            .get(crate_name)
+            .ok_or_else(|| format!("Crate {crate_name} not found"))?;
         crate_data.resolve_path(path.into_iter())
     }
 
     pub(crate) fn resolve_in_current<'a>(
         &self,
         path: impl IntoIterator<Item = &'a str>,
-    ) -> Option<(DefId, TypeQueryResult)> {
+    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
         self.current.resolve_path(path.into_iter())
     }
 
-    pub fn resolve(&self, path: &str) -> Option<(DefId, TypeQueryResult)> {
+    pub fn resolve(&self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
         let Some((mut crate_name, rest)) = path.split_once("::") else {
             return self.resolve_in_current([path]);
         };

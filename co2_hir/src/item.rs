@@ -5,7 +5,10 @@ use co2_crate_sig::LocalResolver;
 use la_arena::{Arena, Idx};
 use rustc_public_generative::rustc_public::{
     CrateItem, DefId,
-    ty::{FnDef, FnSig, Span as RustSpan, Ty},
+    ty::{
+        FnDef, FnSig, GenericArgKind, GenericArgs, Region, RegionKind, RigidTy, Span as RustSpan,
+        Ty,
+    },
 };
 
 use crate::{HirStmt, resolver::HirCtx};
@@ -31,6 +34,7 @@ pub struct HirBody {
     pub locals: Arena<HirLocal>,
     pub labels: Arena<HirLabel>,
     pub params: Vec<LocalId>,
+    pub c_variadic_local: Option<LocalId>,
     pub stmts: Vec<HirStmt>,
     pub span: RustSpan,
 }
@@ -47,6 +51,7 @@ impl HirBody {
             locals,
             labels: Arena::new(),
             params: vec![],
+            c_variadic_local: None,
             stmts: vec![],
             span,
         }
@@ -57,7 +62,7 @@ pub fn lower_function_body(
     tokens: Spanned<CompoundStatement<LocalResolver>>,
     def: FnDef,
     param_names: &[(usize, String)],
-    hir_ctx: &HirCtx<'_>,
+    hir_ctx: &mut HirCtx<'_>,
 ) -> Result<HirBody, String> {
     hir_ctx.lower_function_body(tokens, def, param_names)
 }
@@ -87,6 +92,7 @@ pub fn lower_static_body(
         locals,
         labels: hir_ctx.take_labels(),
         params: vec![],
+        c_variadic_local: None,
         stmts: vec![HirStmt::Return(Some(init_expr), body_span)],
         span: body_span,
     })
@@ -94,7 +100,7 @@ pub fn lower_static_body(
 
 impl HirCtx<'_> {
     pub(crate) fn lower_function_body(
-        &self,
+        &mut self,
         parsed: Spanned<CompoundStatement<LocalResolver>>,
         def: FnDef,
         param_names: &[(usize, String)],
@@ -104,7 +110,7 @@ impl HirCtx<'_> {
     }
 
     fn lower_compound_statement(
-        &self,
+        &mut self,
         (compound, parser_span): Spanned<CompoundStatement<LocalResolver>>,
         sig: &FnSig,
         param_names: &[(usize, String)],
@@ -130,6 +136,20 @@ impl HirCtx<'_> {
             params.push(id);
             local_map.insert(name.0, id);
         }
+        if sig.c_variadic {
+            let id = locals.alloc(HirLocal {
+                name: "__co2_c_vararg".to_owned(),
+                ty: Ty::from_rigid_kind(RigidTy::Adt(
+                    self.wellknown_defs.valist,
+                    GenericArgs(vec![GenericArgKind::Lifetime(Region {
+                        kind: RegionKind::ReErased,
+                    })]),
+                )),
+                span: body_span,
+            });
+            params.push(id);
+            self.c_variadic_local = Some(id);
+        }
 
         let mut stmts = Vec::new();
         self.lower_compound_items(compound, &mut stmts, &mut locals, &mut local_map)?;
@@ -138,6 +158,7 @@ impl HirCtx<'_> {
             locals,
             labels: self.take_labels(),
             params,
+            c_variadic_local: self.c_variadic_local,
             stmts,
             span: body_span,
         })

@@ -109,6 +109,10 @@ pub enum HirExprKind {
         statements: Vec<HirStmt>,
         tail: Box<HirExpr>,
     },
+    
+    VaStart(Box<HirExpr>),
+    VaArg(Box<HirExpr>),
+    VaEnd(Box<HirExpr>),
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -718,6 +722,31 @@ impl HirCtx<'_> {
                     span,
                 })
             }
+            Expression::VaStart { args, last_param: _ } => {
+                let args = Box::new(self.lower_expr(*args, locals, local_map)?);
+                Ok(HirExpr {
+                    kind: HirExprKind::VaStart(args),
+                    ty: Ty::new_tuple(&[]),
+                    span,
+                })
+            },
+            Expression::VaArg { args, type_name } => {
+                let args = Box::new(self.lower_expr(*args, locals, local_map)?);
+                let ty = self.lower_type_name(type_name, parser_span)?;
+                Ok(HirExpr {
+                    kind: HirExprKind::VaArg(args),
+                    ty,
+                    span,
+                })
+            },
+            Expression::VaEnd { args } => {
+                let args = Box::new(self.lower_expr(*args, locals, local_map)?);
+                Ok(HirExpr {
+                    kind: HirExprKind::VaEnd(args),
+                    ty: Ty::new_tuple(&[]),
+                    span,
+                })
+            },
             Expression::Empty => Err("empty expression is invalid here".to_owned()),
             Expression::Conditional {
                 cond,

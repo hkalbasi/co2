@@ -118,17 +118,17 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 let span_converter = |span: co2_ast::Span| {
                     ctx.span_in_file(self.file_id, span.start as u32, span.end as u32)
                 };
-                let hir_ctx = HirCtx::new(
-                    self.wellknown_defs.maybe_uninit,
+                let mut hir_ctx = HirCtx::new(
+                    self.wellknown_defs,
                     &span_converter,
                     self.src_static,
                     self.source_name.clone(),
                     def.fn_sig().skip_binder().output(),
                 );
 
-                let hir = co2_hir::lower_function_body(body, def, &param_names, &hir_ctx).unwrap();
+                let hir = co2_hir::lower_function_body(body, def, &param_names, &mut hir_ctx).unwrap();
 
-                co2_mir::build_mir_for_body(&hir, &self.deps, &ctx, self.file_id)
+                co2_mir::build_mir_for_body(&hir, &self.deps, &ctx, self.file_id, self.wellknown_defs)
             }
         }
     }
@@ -145,7 +145,7 @@ impl Co2GeneratorState {
             ctx.span_in_file(self.file_id, span.start as u32, span.end as u32)
         };
         let hir_ctx = HirCtx::new(
-            self.wellknown_defs.maybe_uninit,
+            self.wellknown_defs,
             &span_converter,
             self.src_static,
             self.source_name.clone(),
@@ -154,7 +154,7 @@ impl Co2GeneratorState {
 
         let hir = co2_hir::lower_static_body(initializer, def, &hir_ctx).unwrap();
 
-        co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id)
+        co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id, self.wellknown_defs)
     }
 
     fn build_enum_prev_plus_body(
@@ -186,7 +186,7 @@ impl Co2GeneratorState {
             span,
         )];
 
-        co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id)
+        co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id, self.wellknown_defs)
     }
 }
 

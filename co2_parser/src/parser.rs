@@ -384,8 +384,40 @@ where
                 initializer: Box::new(initializer),
             });
 
+        let va_exp = choice((
+            just(Token::VaStart).ignore_then(
+                rec.clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(identifier())
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .map(|(args, last_param)| {
+                        let args = Box::new(args);
+                        Expression::VaStart { args, last_param }
+                    }),
+            ),
+            just(Token::VaArg).ignore_then(
+                rec.clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(type_name(resolver.clone(), rec.clone()))
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .map(|(args, type_name)| {
+                        let args = Box::new(args);
+                        Expression::VaArg { args, type_name }
+                    }),
+            ),
+            just(Token::VaEnd).ignore_then(
+                rec.clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .map(|args| {
+                        let args = Box::new(args);
+                        Expression::VaEnd { args }
+                    }),
+            ),
+        ));
+
         let primary_expression = choice((
             compound_literal,
+            va_exp,
             just(Token::LParen)
                 .then_ignore(look_ahead(Token::LBrace))
                 .ignore_then(stmt_rec.clone())

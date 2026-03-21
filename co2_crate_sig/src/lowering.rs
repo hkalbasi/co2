@@ -23,8 +23,11 @@ use crate::{
     ty::CTy,
 };
 
+#[derive(Clone, Copy)]
 pub struct WellknownDefs {
-    pub maybe_uninit: DefId,
+    pub maybe_uninit: AdtDef,
+    pub valist: AdtDef,
+    pub valist_fn_arg: FnDef,
     pub zeroed: FnDef,
 }
 
@@ -486,7 +489,9 @@ pub fn lower_crate_sig(
     }
 
     let defs = WellknownDefs {
-        maybe_uninit: ctx.resolve("core::mem::MaybeUninit").unwrap().0,
+        maybe_uninit: AdtDef(ctx.resolve("core::mem::MaybeUninit").unwrap().0),
+        valist: AdtDef(ctx.resolve("core::ffi::VaList").unwrap().0),
+        valist_fn_arg: FnDef(ctx.resolve("core::ffi::VaList::<'f>::arg").unwrap().0),
         zeroed: FnDef(ctx.resolve("core::mem::zeroed").unwrap().0),
     };
     (

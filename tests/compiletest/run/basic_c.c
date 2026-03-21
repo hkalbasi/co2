@@ -1089,7 +1089,7 @@ int main38()
 	return 0;
 }
 
-int main39(void)
+int main39()
 {
 	int i, *q;
 	void *p;

@@ -1,3 +1,4 @@
+use co2_crate_sig::WellknownDefs;
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
     ty::{FnDef, RigidTy, Span as RustSpan, Ty, TyKind},
@@ -39,13 +40,14 @@ impl ResolvedValue {
 type ParserSpan = co2_ast::Span;
 
 pub struct HirCtx<'a> {
-    pub(crate) maybe_uninit_def: DefId,
+    pub(crate) wellknown_defs: WellknownDefs,
     span_converter: &'a dyn Fn(ParserSpan) -> RustSpan,
     labels: RefCell<Arena<HirLabel>>,
     named_labels: RefCell<HashMap<String, LabelId>>,
     continue_labels: RefCell<Vec<LabelId>>,
     break_labels: RefCell<Vec<LabelId>>,
     switch_scopes: RefCell<Vec<SwitchScope>>,
+    pub(crate) c_variadic_local: Option<LocalId>,
     pub(crate) source_name: String,
     pub(crate) source: &'static str,
     pub(crate) ret_ty: Ty,
@@ -53,20 +55,21 @@ pub struct HirCtx<'a> {
 
 impl<'a> HirCtx<'a> {
     pub fn new(
-        maybe_uninit_def: DefId,
+        wellknown_defs: WellknownDefs,
         span_converter: &'a dyn Fn(ParserSpan) -> RustSpan,
         source: &'static str,
         source_name: String,
         ret_ty: Ty,
     ) -> Self {
         Self {
-            maybe_uninit_def,
+            wellknown_defs,
             span_converter,
             labels: RefCell::new(Arena::new()),
             named_labels: RefCell::new(HashMap::new()),
             continue_labels: RefCell::new(Vec::new()),
             break_labels: RefCell::new(Vec::new()),
             switch_scopes: RefCell::new(Vec::new()),
+            c_variadic_local: None,
             source,
             source_name,
             ret_ty,

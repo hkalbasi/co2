@@ -296,10 +296,8 @@ impl LocalResolverBase {
         inner: HirTy,
         span: rustc_public_generative::rustc_public::ty::Span,
     ) -> Result<HirTy, String> {
-        if let Some((def, _)) = self.resolver.resolve("core::mem::MaybeUninit") {
-            return Ok(HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span));
-        }
-        Err("failed to resolve core/std MaybeUninit".to_owned())
+        let (def, _) = self.resolver.resolve("core::mem::MaybeUninit")?;
+        return Ok(HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span));
     }
 
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {

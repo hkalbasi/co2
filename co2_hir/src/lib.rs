@@ -16,3 +16,4 @@ pub use item::{
 pub use resolver::{HirCtx, ResolvedValue};
 pub use stmt::HirStmt;
 pub use ty::primitive_type;
+pub use co2_crate_sig::WellknownDefs;

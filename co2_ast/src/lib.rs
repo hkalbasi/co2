@@ -114,6 +114,17 @@ pub enum Expression<R: TypeResolver> {
     GnuStatementExpr {
         body: Box<Spanned<CompoundStatement<R>>>,
     },
+    VaStart {
+        args: Box<Spanned<Expression<R>>>,
+        last_param: Spanned<String>,
+    },
+    VaArg {
+        args: Box<Spanned<Expression<R>>>,
+        type_name: TypeName<R>,
+    },
+    VaEnd {
+        args: Box<Spanned<Expression<R>>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -480,6 +491,11 @@ pub enum Token {
     // Preprocessor
     Preprocessor(String),
 
+    // Vararg tokens
+    VaStart,
+    VaArg,
+    VaEnd,
+
     // Special
     Ellipsis, // ...
     Hash,     // #
@@ -532,6 +548,10 @@ impl Display for Token {
             Token::Void => write!(f, "void"),
             Token::Volatile => write!(f, "volatile"),
             Token::While => write!(f, "while"),
+
+            Token::VaStart => write!(f, "va_start"),
+            Token::VaArg => write!(f, "va_arg"),
+            Token::VaEnd => write!(f, "va_end"),
 
             Token::Ident(s) => write!(f, "{}", s),
 
@@ -718,7 +738,7 @@ impl<R: TypeResolver> ParameterList<R> {
     }
 
     pub fn effective_ellipsis(&self) -> bool {
-        self.ellipsis // || self.parameters.is_empty()
+        self.ellipsis || self.parameters.is_empty()
     }
 }
 

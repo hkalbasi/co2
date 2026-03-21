@@ -1,2 +1,0 @@
-- We have a lower_stmt and a lower_switch_stmt which is non sense
-- allow_path_types_in_type_name in parser is garbage

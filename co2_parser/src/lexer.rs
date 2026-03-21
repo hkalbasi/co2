@@ -281,8 +281,7 @@ pub fn lexer<'src: 'static>()
             "int" => Token::Int,
             "long" => Token::Long,
             "register" => Token::Register,
-            "restrict" => Token::Restrict,
-            "__restrict" => Token::Restrict,
+            "restrict" | "__restrict" => Token::Restrict,
             "return" => Token::Return,
             "short" => Token::Short,
             "signed" => Token::Signed,
@@ -297,6 +296,11 @@ pub fn lexer<'src: 'static>()
             "void" => Token::Void,
             "volatile" => Token::Volatile,
             "while" => Token::While,
+
+            "va_start" | "__builtin_va_start" | "__builtin_c23_va_start" => Token::VaStart,
+            "va_arg" | "__builtin_va_arg" | "__builtin_c23_va_arg" => Token::VaArg,
+            "va_end" | "__builtin_va_end" | "__builtin_c23_va_end" => Token::VaEnd,
+
             _ => Token::Ident(ident),
         });
 

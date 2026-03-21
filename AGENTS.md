@@ -3,6 +3,7 @@
 ## TODO:
 * Compile and run sqlite
 * Find perf problems
+* Use wellknown defs in mir.
 * Remove direct deps from co2_hir and co2_mir????
 * Use rustc span in emit errors and more.
 * stick arena to hir_ctx.

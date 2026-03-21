@@ -33,14 +33,14 @@ impl CrateSigCtx<'_> {
         self.hir_ctx.allocate_def_id(parent, data)
     }
 
-    pub(crate) fn resolve(&self, path: &str) -> Option<(DefId, co2_ast::TypeQueryResult)> {
+    pub(crate) fn resolve(&self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
         self.resolver.borrow().resolver.resolve(path)
     }
 
     pub(crate) fn resolve_in_current<'a>(
         &self,
         path: impl IntoIterator<Item = &'a str>,
-    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
+    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
         self.resolver.borrow().resolver.resolve_in_current(path)
     }
 }

@@ -1,16 +1,13 @@
 use co2_hir::{HirExpr, HirExprKind, HirLogicalOp, ResolvedValue, ReturnSemantic};
 use rustc_public_generative::rustc_public::{
-    CrateDefType,
     mir::{
         AggregateKind, BorrowKind, CastKind, ConstOperand, MutBorrowKind, Mutability,
         Operand as MirOperand, PointerCoercion, ProjectionElem as MirProjection, RawPtrKind,
         Rvalue, Safety, Statement as MirStatement, StatementKind as MirStatementKind,
         SwitchTargets, TerminatorKind,
-    },
-    ty::{
-        FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, RigidTy, Span as RustSpan, Ty,
-        TyKind,
-    },
+    }, ty::{
+        FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy, Span as RustSpan, Ty, TyKind
+    }, CrateDefType
 };
 
 use crate::{
@@ -206,6 +203,71 @@ impl Builder<'_> {
                 });
                 MirOperand::Copy(place(ptr_local))
             }
+            HirExprKind::VaStart(args) => {
+                let Some(args) = self.lower_expr_to_place(args) else {
+                    panic!("VaStart operand was not lvalue");
+                };
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(
+                        args,
+                        Rvalue::Use(
+                            MirOperand::Move(place(self.c_variadic_local.unwrap())),
+                        ),
+                    ),
+                    span: expr.span,
+                });
+                let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
+                MirOperand::Copy(place(temp))
+            }
+            HirExprKind::VaArg(args) => {
+                let reg = Region { kind: RegionKind::ReErased };
+                let arg_ref_ty = Ty::new_ref(reg.clone(), args.ty, Mutability::Mut);
+                let Some(args) = self.lower_expr_to_place(args) else {
+                    panic!("VaArg operand was not lvalue");
+                };
+                let arg_ref = {
+                    let tmp = self.new_temp(
+                        arg_ref_ty,
+                        Mutability::Mut, expr.span);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(
+                            place(tmp),
+                            Rvalue::Ref(
+                                reg.clone(),
+                                BorrowKind::Mut { kind: MutBorrowKind::Default },
+                                args,
+                            ),
+                        ),
+                        span: expr.span,
+                    });
+                    MirOperand::Move(place(tmp))
+                };
+
+                let ret_local = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                let generic_args = vec![
+                    GenericArgKind::Lifetime(reg),
+                    GenericArgKind::Type(expr.ty),
+                ];
+                self.emit_call_block(
+                    fn_const_operand(self.wellknown_defs.valist_fn_arg, generic_args, expr.span),
+                    vec![
+                        arg_ref
+                    ],
+                    place(ret_local),
+                    expr.span,
+                );
+                MirOperand::Copy(place(ret_local))
+            }
+            HirExprKind::VaEnd(args) => {
+                let Some(_args) = self.lower_expr_to_place(args) else {
+                    panic!("VaEnd operand was not lvalue");
+                };
+                let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
+                MirOperand::Copy(place(temp))    
+            }
+            
             HirExprKind::Zeroed => {
                 let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
                 self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);

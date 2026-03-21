@@ -124,7 +124,7 @@ impl co2_ast::TypeResolver for LocalResolver {
             ));
         }
         let (def, class) = self.locals.borrow().get(&path).cloned().or_else(|| {
-            let (def_id, class) = base.resolver.resolve(&path)?;
+            let (def_id, class) = base.resolver.resolve(&path).ok()?;
             Some((DefOrLocal::Def(def_id), class))
         })?;
         Some((class, def))

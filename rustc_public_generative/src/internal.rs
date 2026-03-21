@@ -735,8 +735,14 @@ impl DefinedCrateInfo {
                 hir::Node::Block(loop_expr),
                 body_expr.hir_id.local_id,
             );
+            let mut params = vec![];
+
+            if function.c_variadic {
+                params.push(make_c_variadic_param(&mut item_allocator));
+            }
+
             let body = leak(hir::Body {
-                params: &[],
+                params: leak(params.into_boxed_slice()),
                 value: body_expr,
             });
             for p in body.params {
@@ -2255,6 +2261,34 @@ fn build_owner_nodes_for_item(item: &'static hir::Item<'static>) -> hir::OwnerNo
         opt_hash_including_bodies: Some(random_fingerprint()),
         nodes,
         bodies: rustc_data_structures::sorted_map::SortedMap::new(),
+    }
+}
+
+fn make_c_variadic_param(item_allocator: &mut HirItemAllocator) -> hir::Param<'static> {
+    let pat_hir_id = item_allocator.new_item();
+    let pat = hir::Pat {
+        hir_id: pat_hir_id,
+        kind: hir::PatKind::Binding(
+            hir::BindingMode(hir::ByRef::No, hir::Mutability::Mut),
+            pat_hir_id,
+            Ident::from_str("__co2_c_varargs"),
+            None,
+        ),
+        span: DUMMY_SP,
+        default_binding_modes: false,
+    };
+    let param_hir_id = item_allocator.new_item();
+    let pat = leak(pat);
+    item_allocator.set_node(
+        pat_hir_id.local_id,
+        hir::Node::Pat(pat),
+        param_hir_id.local_id,
+    );
+    hir::Param {
+        hir_id: param_hir_id,
+        pat,
+        ty_span: DUMMY_SP,
+        span: DUMMY_SP,
     }
 }
 

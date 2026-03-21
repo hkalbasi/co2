@@ -46,7 +46,7 @@ pub struct HirDecl {
 impl HirCtx<'_> {
     fn maybe_uninit_of(&self, inner: Ty) -> Result<Ty, String> {
         return Ok(Ty::from_rigid_kind(RigidTy::Adt(
-            AdtDef(self.maybe_uninit_def),
+            self.wellknown_defs.maybe_uninit,
             GenericArgs(vec![GenericArgKind::Type(inner)]),
         )));
     }

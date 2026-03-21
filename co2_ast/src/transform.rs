@@ -416,7 +416,10 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
                 type_name: type_name.transform(b),
                 initializer: initializer.transform(b),
             },
-            Expression::GnuStatementExpr { .. } => todo!(),
+            Expression::VaArg { .. }
+            | Expression::VaStart { .. }
+            | Expression::VaEnd { .. }
+            | Expression::GnuStatementExpr { .. } => todo!(),
         }
     }
 }

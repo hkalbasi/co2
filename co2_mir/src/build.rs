@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use co2_hir::{HirBody, LabelId, LocalId};
+use co2_hir::{HirBody, LabelId, LocalId, WellknownDefs};
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
     mir::{Body, ConstOperand, LocalDecl as MirLocalDecl, Mutability},
@@ -15,6 +15,7 @@ pub fn build_mir_for_body(
     deps: &rustc_gen::DependencyInfo,
     ctx: &rustc_gen::HirStructureCtx,
     file_id: rustc_gen::FileId,
+    wellknown_defs: WellknownDefs,
 ) -> Body {
     let span = ctx.span_in_file(file_id, 0, 0);
 
@@ -31,6 +32,7 @@ pub fn build_mir_for_body(
     }
 
     let mut builder = Builder {
+        c_variadic_local: body.c_variadic_local.map(|l| local_indices[&l]),
         deps,
         local_indices,
         locals,
@@ -40,6 +42,7 @@ pub fn build_mir_for_body(
         label_blocks: HashMap::new(),
         pending_gotos: Vec::new(),
         span,
+        wellknown_defs,
     };
 
     for stmt in &body.stmts {
@@ -61,6 +64,7 @@ pub fn build_mir_for_body(
 
 pub(crate) struct Builder<'a> {
     pub(crate) deps: &'a rustc_gen::DependencyInfo,
+    pub(crate) wellknown_defs: WellknownDefs,
     pub(crate) local_indices: HashMap<LocalId, usize>,
     pub(crate) locals: Vec<MirLocalDecl>,
     pub(crate) extra_locals: Vec<MirLocalDecl>,
@@ -69,6 +73,7 @@ pub(crate) struct Builder<'a> {
     pub(crate) label_blocks: HashMap<LabelId, usize>,
     pub(crate) pending_gotos: Vec<(usize, LabelId)>,
     pub(crate) span: RustSpan,
+    pub(crate) c_variadic_local: Option<usize>,
 }
 
 pub(crate) fn variant_idx(id: usize) -> VariantIdx {
