@@ -343,6 +343,11 @@ impl Builder<'_> {
                 );
                 MirOperand::Copy(place(ret_local))
             }
+            HirExprKind::Comma { lhs, rhs } => {
+                let _lhs = self.lower_expr_to_operand(lhs);
+                let rhs = self.lower_expr_to_operand(rhs);
+                rhs
+            }
             HirExprKind::Binary { op, lhs, rhs } => {
                 let lhs = self.lower_expr_to_operand(lhs);
                 let rhs = self.lower_expr_to_operand(rhs);

@@ -134,6 +134,7 @@ pub enum UnaryOp {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinOp {
+    Comma,
     Assign,
     Add,
     Sub,

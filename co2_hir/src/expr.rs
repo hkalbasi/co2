@@ -62,6 +62,10 @@ pub enum HirExprKind {
         lhs: Box<HirExpr>,
         rhs: Box<HirExpr>,
     },
+    Comma {
+        lhs: Box<HirExpr>,
+        rhs: Box<HirExpr>,
+    },
     Logical {
         op: HirLogicalOp,
         lhs: Box<HirExpr>,
@@ -348,6 +352,16 @@ impl HirCtx<'_> {
                 })
             }
             Expression::BinOp(lhs, op, rhs) => {
+                if matches!(op, ParsedBinOp::Comma) {
+                    let lhs = Box::new(self.lower_expr(*lhs, locals, local_map)?);
+                    let rhs = Box::new(self.lower_expr(*rhs, locals, local_map)?);
+                    let ty = rhs.ty;
+                    return Ok(HirExpr {
+                        kind: HirExprKind::Comma { lhs, rhs },
+                        ty,
+                        span,
+                    });
+                }
                 if matches!(op, ParsedBinOp::Assign) {
                     let lhs = self.lower_expr(*lhs, locals, local_map)?;
                     if !is_place_expr(&lhs) {
@@ -813,7 +827,7 @@ impl HirCtx<'_> {
         is_assignment: bool,
     ) -> Result<HirExpr, String> {
         let op = match op {
-            ParsedBinOp::Assign => unreachable!(),
+            ParsedBinOp::Comma | ParsedBinOp::Assign => unreachable!(),
             ParsedBinOp::Add => HirBinOp::Add,
             ParsedBinOp::Sub => HirBinOp::Sub,
             ParsedBinOp::Mul => HirBinOp::Mul,
