@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use co2_ast::{Designator, Expression, Initializer, InitializerItem, Spanned};
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
-use rustc_public_generative::rustc_public::ty::{RigidTy, Ty, TyKind};
+use rustc_public_generative::rustc_public::ty::{AdtKind, RigidTy, Ty, TyKind};
 
 use crate::{
     expr::{HirExpr, HirExprKind, coerce_expr_to_type},
@@ -197,7 +197,10 @@ fn children_count_of_ty(ty: Ty) -> usize {
     let count = match ty.kind() {
         TyKind::RigidTy(rigid_ty) => match rigid_ty {
             RigidTy::Array(_, ty_const) => ty_const.eval_target_usize().unwrap() as usize,
-            RigidTy::Adt(..) => 1,
+            RigidTy::Adt(def, _) => match def.kind() {
+                AdtKind::Struct => adt_field_tys(ty).unwrap().len(),
+                _ => 1,
+            },
             _ => panic!("Can't go through primitive ty {ty}"),
         },
         _ => todo!(),

@@ -22,24 +22,14 @@ impl Builder<'_> {
         match &expr.kind {
             HirExprKind::Local(local) => Some(place(self.local_to_index(*local))),
             HirExprKind::Field { base, index } => {
-                let mut base_place = self.lower_expr_to_place(base)?;
+                let mut base_place = self.lower_expr_to_place_or_temp(base);
                 base_place
                     .projection
                     .push(MirProjection::Field(*index, expr.ty));
                 Some(base_place)
             }
             HirExprKind::Deref(inner) => {
-                let mut base_place = if let Some(place) = self.lower_expr_to_place(inner) {
-                    place
-                } else {
-                    let tmp = self.new_temp(inner.ty, Mutability::Mut, inner.span);
-                    let value = self.lower_expr_to_operand(inner);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
-                        span: inner.span,
-                    });
-                    place(tmp)
-                };
+                let mut base_place = self.lower_expr_to_place_or_temp(inner);
                 base_place.projection.push(MirProjection::Deref);
                 Some(base_place)
             }
@@ -65,6 +55,20 @@ impl Builder<'_> {
                 self.lower_expr_to_place(tail)
             }
             _ => None,
+        }
+    }
+
+    fn lower_expr_to_place_or_temp(&mut self, inner: &Box<HirExpr>) -> MirPlace {
+        if let Some(place) = self.lower_expr_to_place(inner) {
+            place
+        } else {
+            let tmp = self.new_temp(inner.ty, Mutability::Mut, inner.span);
+            let value = self.lower_expr_to_operand(inner);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
+                span: inner.span,
+            });
+            place(tmp)
         }
     }
 }

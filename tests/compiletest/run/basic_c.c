@@ -729,6 +729,9 @@ int main21()
 		return 1;
 	if (p2->b - 4)
 		return 1;
+	if (((S2) { .a=3 }).a != 3) {
+		return 1;
+	}
 
 	return 0;
 }
