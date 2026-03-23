@@ -837,9 +837,9 @@ where
     })
 }
 
-fn parse_integer_constant(text: &str) -> i64 {
+fn parse_integer_constant(text: &str) -> i128 {
     parse_unsigned_integer_constant(text)
-        .map(|v| v as i64)
+        .map(|v| v as i128)
         .unwrap_or_else(|e| panic!("invalid integer literal `{text}`: {e}"))
 }
 

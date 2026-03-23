@@ -40,7 +40,7 @@ impl std::fmt::Debug for HirExpr {
 #[derive(Clone, Debug)]
 pub enum HirExprKind {
     Local(LocalId),
-    ConstInt(i64),
+    ConstInt(i128),
     ConstFloat(f64),
     ConstStr(String),
     ArrayToPointer(Box<HirExpr>),
@@ -225,7 +225,7 @@ impl HirCtx<'_> {
             },
             Expression::Constant(Constant::Int(v, suffix)) => Ok(HirExpr {
                 kind: HirExprKind::ConstInt(v),
-                ty: int_suffix_ty(suffix),
+                ty: int_suffix_ty(suffix, v),
                 span,
             }),
             Expression::Constant(Constant::Float(v)) => Ok(HirExpr {
@@ -234,7 +234,7 @@ impl HirCtx<'_> {
                 span,
             }),
             Expression::Constant(Constant::Char(ch)) => Ok(HirExpr {
-                kind: HirExprKind::ConstInt(ch as i64),
+                kind: HirExprKind::ConstInt(ch as i128),
                 ty: Ty::signed_ty(IntTy::I32),
                 span,
             }),
@@ -516,7 +516,7 @@ impl HirCtx<'_> {
                     .size
                     .bytes();
                 Ok(HirExpr {
-                    kind: HirExprKind::ConstInt(size as i64),
+                    kind: HirExprKind::ConstInt(size as i128),
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
                 })
@@ -575,7 +575,7 @@ impl HirCtx<'_> {
                     .size
                     .bytes();
                 Ok(HirExpr {
-                    kind: HirExprKind::ConstInt(size as i64),
+                    kind: HirExprKind::ConstInt(size as i128),
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
                 })
@@ -1106,9 +1106,22 @@ pub(crate) fn is_place_expr(expr: &HirExpr) -> bool {
     }
 }
 
-fn int_suffix_ty(suffix: IntegerSuffix) -> Ty {
+fn int_suffix_ty(suffix: IntegerSuffix, value: i128) -> Ty {
     match suffix {
-        IntegerSuffix::None => Ty::signed_ty(IntTy::I32),
+        IntegerSuffix::None => {
+            let value = value.abs();
+            if value <= (i32::MAX as i128) {
+                Ty::signed_ty(IntTy::I32)
+            } else if value <= (u32::MAX as i128) {
+                Ty::unsigned_ty(UintTy::U32)
+            } else if value <= (i64::MAX as i128) {
+                Ty::signed_ty(IntTy::I64)
+            } else if value <= (u64::MAX as i128) {
+                Ty::unsigned_ty(UintTy::U64)
+            } else {
+                Ty::signed_ty(IntTy::I128)
+            }
+        },
         IntegerSuffix::Long | IntegerSuffix::LongLong => Ty::signed_ty(IntTy::I64),
         IntegerSuffix::Unsigned => Ty::unsigned_ty(UintTy::U32),
         IntegerSuffix::UnsignedLong | IntegerSuffix::UnsignedLongLong => {

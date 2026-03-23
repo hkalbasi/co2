@@ -6,6 +6,6 @@
 //@ debug-command: print x
 //@ debug-check: = 42
 
-void main() {
+void main(void) {
     int x = 42;
 }

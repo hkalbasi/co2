@@ -1,4 +1,4 @@
-use co2_ast::{DeclarationSpecifier, Declarator, Span, Spanned, TypeSpecifier};
+use co2_ast::{DeclarationSpecifier, Declarator, Span, Spanned, StructOrUnionKind, TypeResolver, TypeSpecifier};
 use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst, HirTyKind};
 use rustc_public_generative::{
     HirGenericArg,
@@ -15,6 +15,134 @@ pub enum CTy {
     Ty(HirTy),
     Function(FunctionSignature),
     UnsizedArray(HirTy),
+}
+
+pub enum CompressedTypeSpecifier {
+    Void,
+    PrimitiveTy(PrimitiveTy),
+    StructOrUnion {
+        kind: StructOrUnionKind,
+        specifier: Spanned<<LocalResolver as TypeResolver>::StructOrUnionIdentifier>,
+    },
+    Enum(Spanned<<LocalResolver as TypeResolver>::EnumIdentifier>),
+    TypedefName(Spanned<<LocalResolver as TypeResolver>::ResolvedRustPath>),
+}
+
+impl CompressedTypeSpecifier {
+    pub fn build(
+        specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
+    ) -> Result<Self, String> {
+        let specifiers = specifiers.into_iter().filter_map(|x| match x.0 {
+            DeclarationSpecifier::TypeSpecifier(s) => Some(s.0),
+            DeclarationSpecifier::TypeQualifier(_) => None,
+            DeclarationSpecifier::StorageSpecifier(_) => None,
+        }).collect::<Vec<_>>();
+        if specifiers.is_empty() {
+            return Err("no type specifier found".to_owned());
+        }
+        if let [specifier] = specifiers.as_slice() {
+            'b: {
+                return Ok(match specifier {
+                    TypeSpecifier::Void => CompressedTypeSpecifier::Void,
+                    TypeSpecifier::Float => CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F32)),
+                    TypeSpecifier::Bool => CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::IntTy(IntTy::I8)),
+                    &TypeSpecifier::StructOrUnion { kind, specifier } => CompressedTypeSpecifier::StructOrUnion { kind, specifier },
+                    &TypeSpecifier::Enum(e) => CompressedTypeSpecifier::Enum(e),
+                    TypeSpecifier::TypedefName(t) => CompressedTypeSpecifier::TypedefName(t.clone()),
+                    _ => break 'b,
+                });
+            }
+        }
+        enum Base {
+            Int,
+            Double,
+            Char,
+        }
+        let mut base = None;
+        let mut signed = None;
+        let mut long = 0u32;
+        let mut short = 0u32;
+        for spec in specifiers {
+            match spec {
+                TypeSpecifier::Int
+                | TypeSpecifier::Char
+                | TypeSpecifier::Double => {
+                    if base.is_some() {
+                        return Err("duplicate base specifier found".to_owned());
+                    }
+                    base = Some(match spec {
+                        TypeSpecifier::Int => Base::Int,
+                        TypeSpecifier::Char => Base::Char,
+                        TypeSpecifier::Double => Base::Double,
+                        _ => unreachable!(),
+                    });
+                },
+                TypeSpecifier::Short => short += 1,
+                TypeSpecifier::Long => long += 1,
+                TypeSpecifier::Signed |
+                TypeSpecifier::Unsigned => {
+                    if base.is_some() {
+                        return Err("duplicate sign specifier found".to_owned());
+                    }
+                    signed = Some(matches!(spec, TypeSpecifier::Signed));
+                },
+                TypeSpecifier::Bool
+                | TypeSpecifier::Void
+                | TypeSpecifier::Float
+                | TypeSpecifier::StructOrUnion { .. }
+                | TypeSpecifier::Enum(_)
+                | TypeSpecifier::TypedefName(_) => {
+                    return Err("This specifier should be used alone".to_owned());
+                },
+            }
+        }
+        let base = base.unwrap_or(Base::Int);
+        Ok(CompressedTypeSpecifier::PrimitiveTy(match base {
+            Base::Int => {
+                let signed = signed.unwrap_or(true);
+                match (long, short, signed) {
+                    (1.., 1.., _) => {
+                        return Err("Mixed short and long".to_owned())
+                    }
+                    (3.., _, _) => {
+                        return Err("long repeated too many times".to_owned())
+                    }
+                    (_, 2.., _) => {
+                        return Err("short repeated too many times".to_owned())
+                    }
+                    (0, 0, true) => PrimitiveTy::IntTy(IntTy::I32),
+                    (0, 0, false) => PrimitiveTy::UintTy(UintTy::U32),
+                    (0, 1, true) => PrimitiveTy::IntTy(IntTy::I16),
+                    (0, 1, false) => PrimitiveTy::UintTy(UintTy::U16),
+                    (1..=2, 0, true) => PrimitiveTy::IntTy(IntTy::I64),
+                    (1..=2, 0, false) => PrimitiveTy::UintTy(UintTy::U64),
+                }
+            },
+            Base::Double => {
+                if short > 0 {
+                    return Err("short double is invalid".to_owned())
+                }
+                if signed.is_some() {
+                    return Err("signedness for double is invalid".to_owned());
+                }
+                PrimitiveTy::FloatTy(if long > 0 {
+                    FloatTy::F128
+                } else {
+                    FloatTy::F64
+                })
+            },
+            Base::Char => {
+                if short > 0 || long > 0 {
+                    return Err("short and long char is invalid".to_owned())
+                }
+                match signed {
+                    Some(true) => PrimitiveTy::IntTy(IntTy::I8),
+                    Some(false) => PrimitiveTy::UintTy(UintTy::U8),
+                    None => PrimitiveTy::IntTy(IntTy::I8),
+                }
+            },
+        }))
+    }
 }
 
 impl CrateSigCtx<'_> {
@@ -125,67 +253,49 @@ impl LocalResolverBase {
         }
     }
 
+    fn hir_ty_of_prim(
+        &mut self,
+        primitive_ty: PrimitiveTy,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) -> HirTy {
+        match primitive_ty {
+            PrimitiveTy::IntTy(int_ty) => HirTy::signed_ty(int_ty, span),
+            PrimitiveTy::UintTy(uint_ty) => HirTy::unsigned_ty(uint_ty, span),
+            PrimitiveTy::FloatTy(float_ty) => HirTy::float_ty(float_ty, span),
+        }
+    }
+
     pub(crate) fn base_ty_of_decl(
         &mut self,
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         parser_span: Span,
     ) -> CTy {
         let span = self.co2_span_to_rustc(parser_span);
-        for (specifier, _) in specifiers {
-            if let DeclarationSpecifier::TypeSpecifier((type_specifier, _)) = specifier {
-                let ty = match type_specifier {
-                    TypeSpecifier::Int => HirTy::signed_ty(IntTy::I32, span),
-                    TypeSpecifier::Bool => HirTy {
-                        kind: HirTyKind::Bool,
-                        span,
-                    },
-                    TypeSpecifier::Void => HirTy::new_tuple(vec![], span),
-                    TypeSpecifier::Char => HirTy::signed_ty(IntTy::I8, span),
-                    TypeSpecifier::Short => HirTy::signed_ty(IntTy::I16, span),
-                    TypeSpecifier::Long => HirTy::signed_ty(IntTy::I64, span),
-                    TypeSpecifier::Float => HirTy::float_ty(FloatTy::F32, span),
-                    TypeSpecifier::Double => HirTy::float_ty(FloatTy::F64, span),
-                    TypeSpecifier::Signed | TypeSpecifier::Unsigned => continue,
-                    TypeSpecifier::Enum(_) => HirTy::signed_ty(IntTy::I32, span),
-                    TypeSpecifier::StructOrUnion { kind: _, specifier } => {
-                        HirTy::adt(specifier.0, vec![], span)
-                    }
-                    TypeSpecifier::TypedefName((path, _)) => {
-                        match path {
-                            crate::DefOrLocal::Def(def_id) => HirTy::adt(def_id, vec![], span),
-                            crate::DefOrLocal::Local(_) => panic!("invalid parsing"),
-                            crate::DefOrLocal::Prim(primitive_ty) => match primitive_ty {
-                                PrimitiveTy::IntTy(int_ty) => HirTy::signed_ty(int_ty, span),
-                                PrimitiveTy::UintTy(uint_ty) => HirTy::unsigned_ty(uint_ty, span),
-                                PrimitiveTy::FloatTy(float_ty) => HirTy::float_ty(float_ty, span),
-                            },
-                            crate::DefOrLocal::UnrepresentableType(ty) => {
-                                return ty;
-                            }
-                        }
-                        // let path = path.to_pretty();
-                        // if let Some(prim) = PrimitiveTy::parse(&path) {
-                        //     match prim {
-                        //         PrimitiveTy::IntTy(int_ty) => HirTy::signed_ty(int_ty, span),
-                        //         PrimitiveTy::UintTy(uint_ty) => HirTy::unsigned_ty(uint_ty, span),
-                        //         PrimitiveTy::FloatTy(float_ty) => HirTy::float_ty(float_ty, span),
-                        //     }
-                        // } else if let Some((def_id, _)) = self.resolve(&path) {
-                        //     HirTy::adt(def_id, vec![], span)
-                        // } else if let Some(sig) = self.unrepresentable_typedefs.get(&path) {
-                        //     return TyOrFunction::Function(sig.clone());
-                        // } else {
-                        //     self.terminate_with_error(parser_span, "Failed to resolve type");
-                        // }
-                    }
-                };
-                return CTy::Ty(ty);
+        let specifier = match CompressedTypeSpecifier::build(specifiers) {
+            Ok(s) => s,
+            Err(e) => self.terminate_with_error(parser_span, &e),
+        };
+        let ty = match specifier {
+            CompressedTypeSpecifier::Void => HirTy::new_tuple(vec![], span),
+            CompressedTypeSpecifier::PrimitiveTy(ty) => {
+                self.hir_ty_of_prim(ty, span)
             }
-        }
-        self.terminate_with_error(
-            parser_span,
-            &format!("no suitable type specifier at span {span:?}"),
-        )
+            CompressedTypeSpecifier::Enum(_) => HirTy::signed_ty(IntTy::I32, span),
+            CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
+                HirTy::adt(specifier.0, vec![], span)
+            }
+            CompressedTypeSpecifier::TypedefName((path, _)) => {
+                match path {
+                    crate::DefOrLocal::Def(def_id) => HirTy::adt(def_id, vec![], span),
+                    crate::DefOrLocal::Local(_) => panic!("invalid parsing"),
+                    crate::DefOrLocal::Prim(primitive_ty) => self.hir_ty_of_prim(primitive_ty, span),
+                    crate::DefOrLocal::UnrepresentableType(ty) => {
+                        return ty;
+                    }
+                }
+            }   
+        };
+        CTy::Ty(ty)
     }
 
     fn extract_decl_type(

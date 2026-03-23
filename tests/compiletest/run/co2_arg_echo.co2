@@ -9,7 +9,7 @@ use std::iter::Iterator;
 
 int write(int, u8*, usize);
 
-void main() {
+void main(void) {
     std::env::Args args = std::env::args();
     core::option::Option<alloc::string::String> skip0 = std::iter::Iterator<std::env::Args>::next(args);
     core::option::Option<alloc::string::String> opt = std::iter::Iterator<std::env::Args>::next(args);

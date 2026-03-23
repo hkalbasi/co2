@@ -1163,6 +1163,39 @@ int main41()
 	return 0;
 }
 
+int main42()
+{
+	int x;
+	long long l;
+	
+	x = 0;
+	l = 0;
+	
+	x = ~x;
+	if (x != 0xffffffff)
+		return 1;
+	
+	l = ~l;
+	if (x != 0xffffffffffffffff)
+		return 2;
+
+	return 0;
+}
+
+int main43() {
+	unsigned int uint = 5;
+	signed int sint = -3;
+
+    if (-uint < 0) {
+		return 1;
+	}
+	if ((sint << uint) < 0) {
+		return 2;
+	}
+
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1176,7 +1209,7 @@ int main() {
 		main26, main27, main28, main29, main30,
 		main31, main32, main33, main34, main35,
 		main36, main37, main38, main39, main40,
-		main41,
+		main41, main42,
 	};
 	
 	int i;

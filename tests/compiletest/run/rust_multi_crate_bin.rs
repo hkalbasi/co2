@@ -2,7 +2,22 @@
 //@ aux-lib: support_lib rust_multi_crate_lib.aux.co2
 //@ run-status: 0
 
-use support_lib::{Point, PointPtr, add, hypot, Union1, S7Type, S7};
+use support_lib::{Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG};
+
+const _: () = {
+    use std::ptr::null;
+    use core::ffi;
+    let _: *const support_lib::Co2Int = null::<ffi::c_int>(); 
+    let _: *const support_lib::Co2Long = null::<ffi::c_long>(); 
+    let _: *const support_lib::Co2LongLong = null::<ffi::c_longlong>();
+    let _: *const support_lib::Co2UInt = null::<ffi::c_uint>(); 
+    let _: *const support_lib::Co2ULong = null::<ffi::c_ulong>(); 
+    let _: *const support_lib::Co2ULongLong = null::<ffi::c_ulonglong>();
+    let _: *const support_lib::Co2Float = null::<ffi::c_float>(); 
+    let _: *const support_lib::Co2Double = null::<ffi::c_double>(); 
+    let _: *const support_lib::Co2Char = null::<ffi::c_char>(); 
+    let _: *const support_lib::Co2UChar = null::<ffi::c_uchar>(); 
+};
 
 fn main() {
     let mut p = Point { x: 4, y: -1 };
@@ -21,4 +36,5 @@ fn main() {
 
     let s7_copy: S7Type = unsafe { S7 };
     assert_eq!(s7_copy.x[2], b'n' as i8);
+    assert_eq!(unsafe { HUGE_LONG }, 0xabcd00000000);
 }

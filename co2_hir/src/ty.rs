@@ -1,5 +1,3 @@
-use co2_ast::{Span, TypeSpecifier};
-use co2_crate_sig::LocalResolver;
 use rustc_public_generative::rustc_public::ty::{
     Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx,
 };
@@ -245,28 +243,6 @@ pub(crate) fn adt_field_tys(base: Ty) -> Option<Vec<Ty>> {
     )
 }
 
-pub(crate) fn type_specifier_to_ty(
-    type_specifier: &TypeSpecifier<LocalResolver>,
-) -> Result<Option<Ty>, String> {
-    let ty = match type_specifier {
-        TypeSpecifier::Int => Some(Ty::signed_ty(IntTy::I32)),
-        TypeSpecifier::Bool => Some(Ty::bool_ty()),
-        TypeSpecifier::Void => Some(Ty::new_tuple(&[])),
-        TypeSpecifier::Char => Some(Ty::signed_ty(IntTy::I8)),
-        TypeSpecifier::Short => Some(Ty::signed_ty(IntTy::I16)),
-        TypeSpecifier::Long => Some(Ty::signed_ty(IntTy::I64)),
-        TypeSpecifier::Float => Some(Ty::from_rigid_kind(RigidTy::Float(FloatTy::F32))),
-        TypeSpecifier::Double => Some(Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64))),
-        TypeSpecifier::Signed | TypeSpecifier::Unsigned => None,
-        TypeSpecifier::Enum(_) => Some(Ty::signed_ty(IntTy::I32)),
-        TypeSpecifier::StructOrUnion { .. } => {
-            return Err("struct/union types are not supported yet".to_owned());
-        }
-        TypeSpecifier::TypedefName(_) => None,
-    };
-    Ok(ty)
-}
-
 pub(crate) fn variant_idx(id: usize) -> VariantIdx {
     unsafe { std::mem::transmute::<usize, VariantIdx>(id) }
 }
@@ -338,8 +314,4 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
         }
         _ => false,
     }
-}
-
-pub(crate) fn no_type_specifier_err(span: Span) -> String {
-    format!("no suitable type specifier at span {span:?}")
 }

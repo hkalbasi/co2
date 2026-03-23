@@ -21,3 +21,16 @@ typedef union {
 struct S7 { char x[7]; } S7 = { "lmnopqr" };
 
 typedef struct S7 S7Type;
+
+typedef int Co2Int;
+typedef long Co2Long;
+typedef long long Co2LongLong;
+typedef unsigned int Co2UInt;
+typedef unsigned long Co2ULong;
+typedef unsigned long long Co2ULongLong;
+typedef float Co2Float;
+typedef double Co2Double;
+typedef char Co2Char;
+typedef unsigned char Co2UChar;
+
+long long int HUGE_LONG = 0xabcd00000000;

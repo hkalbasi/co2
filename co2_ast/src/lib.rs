@@ -62,7 +62,7 @@ pub enum Statement<R: TypeResolver> {
 
 #[derive(Debug, Clone)]
 pub enum Constant {
-    Int(i64, IntegerSuffix),
+    Int(i128, IntegerSuffix),
     Float(f64),
     Char(char),
     String(String),
@@ -678,7 +678,7 @@ impl LazySubscription {
         self.tokens.len() == 2
     }
 
-    pub fn constant_len(&self) -> Option<u64> {
+    pub fn constant_len(&self) -> Option<u128> {
         let mut len = None;
         for (token, _) in &self.tokens {
             let next = match token {
@@ -695,7 +695,7 @@ impl LazySubscription {
                     if !text.chars().all(|c| c.is_ascii_digit()) {
                         return None;
                     }
-                    text.parse::<u64>().ok()
+                    text.parse::<u128>().ok()
                 }
                 _ => None,
             };
@@ -841,16 +841,16 @@ pub struct UseItem {
     pub path: Vec<Spanned<String>>,
 }
 
-pub fn parse_unsigned_integer_constant(text: &str) -> Result<u64, String> {
+pub fn parse_unsigned_integer_constant(text: &str) -> Result<u128, String> {
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        return u64::from_str_radix(hex, 16).map_err(|e| e.to_string());
+        return u128::from_str_radix(hex, 16).map_err(|e| e.to_string());
     }
 
     if text.len() > 1
         && let Some(octal) = text.strip_prefix('0')
     {
-        return u64::from_str_radix(octal, 8).map_err(|e| e.to_string());
+        return u128::from_str_radix(octal, 8).map_err(|e| e.to_string());
     }
 
-    text.parse::<u64>().map_err(|e| e.to_string())
+    text.parse::<u128>().map_err(|e| e.to_string())
 }

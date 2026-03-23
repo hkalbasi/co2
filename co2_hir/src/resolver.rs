@@ -21,7 +21,7 @@ pub(crate) struct SwitchScope {
 #[derive(Clone, Debug)]
 pub enum ResolvedValue {
     Fn(FnDef),
-    ConstInt(i64),
+    ConstInt(i128),
     Static(DefId),
 }
 

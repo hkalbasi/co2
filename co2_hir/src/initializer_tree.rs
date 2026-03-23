@@ -208,7 +208,7 @@ fn children_count_of_ty(ty: Ty) -> usize {
     if count == 567_567 { 0 } else { count }
 }
 
-fn eval_const_int(expr: &HirExpr) -> Result<i64, String> {
+fn eval_const_int(expr: &HirExpr) -> Result<i128, String> {
     match &expr.kind {
         HirExprKind::ConstInt(v) => Ok(*v),
         HirExprKind::Binary { op, lhs, rhs } => match op {
@@ -408,7 +408,7 @@ impl HirCtx<'_> {
                         initializer: (
                             Initializer::Expr((
                                 Expression::Constant(co2_ast::Constant::Int(
-                                    ch as i64,
+                                    ch as i128,
                                     co2_ast::IntegerSuffix::None,
                                 )),
                                 span,

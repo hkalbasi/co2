@@ -4,6 +4,6 @@
 
 int write(int fd, char* buf, int len);
 
-void main() {
+void main(void) {
     write(1, "co2\n", 4);
 }

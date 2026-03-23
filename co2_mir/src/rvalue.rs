@@ -12,7 +12,7 @@ use crate::{
     place::place,
 };
 
-pub(crate) fn int_literal_bits(value: i64, target_ty: Ty) -> (UintTy, u128) {
+pub(crate) fn int_literal_bits(value: i128, target_ty: Ty) -> (UintTy, u128) {
     let TyKind::RigidTy(rigid) = target_ty.kind() else {
         return (UintTy::U32, value as i32 as u32 as u128);
     };

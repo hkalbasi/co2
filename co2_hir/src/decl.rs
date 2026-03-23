@@ -4,18 +4,14 @@ use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
     Initializer, Spanned, TypeName,
 };
-use co2_crate_sig::LocalResolver;
+use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver};
 use la_arena::Arena;
 use rustc_public_generative::{
-    HirTy,
     rustc_public::{
-        CrateItem,
-        mir::{Mutability, Safety},
-        ty::{
-            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, RigidTy, Span as RustSpan, Ty,
-            TyConst,
-        },
-    },
+        mir::{Mutability, Safety}, ty::{
+            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, IntTy, RigidTy, Span as RustSpan, Ty, TyConst
+        }, CrateItem
+    }, HirTy
 };
 
 use crate::resolver::HirCtx;
@@ -196,7 +192,7 @@ impl HirCtx<'_> {
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> Result<(Spanned<(usize, String)>, CTy), String> {
-        let base = self.base_ty_of_decl(declaration_specifiers, declarator.1)?;
+        let base = self.base_ty_of_decl(declaration_specifiers, declarator.1);
         let (decl_ty, name) = self.extract_decl_type(base, declarator)?;
         let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
         Ok((name, decl_ty))
@@ -234,7 +230,7 @@ impl HirCtx<'_> {
                 (s, span)
             })
             .collect::<Vec<_>>();
-        let base = self.base_ty_of_decl(specifiers, span)?;
+        let base = self.base_ty_of_decl(specifiers, span);
         let ty = match type_name.abstract_declarator {
             None => base,
             Some(decl) => {
@@ -260,46 +256,39 @@ impl HirCtx<'_> {
         &self,
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         span: co2_ast::Span,
-    ) -> Result<CTy, String> {
-        for (specifier, _) in &specifiers {
-            if let DeclarationSpecifier::TypeSpecifier((type_specifier, _)) = specifier {
-                if let co2_ast::TypeSpecifier::StructOrUnion { kind: _, specifier } = type_specifier
-                {
-                    return Ok(CTy::Ty(Ty::from_rigid_kind(RigidTy::Adt(
-                        AdtDef(specifier.0),
-                        GenericArgs(vec![]),
-                    ))));
-                }
-                if let Some(ty) = crate::ty::type_specifier_to_ty(type_specifier)? {
-                    return Ok(CTy::Ty(ty));
-                }
-                if let co2_ast::TypeSpecifier::TypedefName(path) = type_specifier {
-                    return Ok(match &path.0 {
-                        co2_crate_sig::DefOrLocal::Def(def_id) => CTy::Ty(CrateItem(*def_id).ty()),
-                        co2_crate_sig::DefOrLocal::Local(_) => {
-                            panic!("Invalid local in type position")
-                        }
-                        co2_crate_sig::DefOrLocal::Prim(primitive_ty) => {
-                            CTy::Ty(match *primitive_ty {
-                                co2_crate_sig::PrimitiveTy::IntTy(int_ty) => {
-                                    Ty::from_rigid_kind(RigidTy::Int(int_ty))
-                                }
-                                co2_crate_sig::PrimitiveTy::UintTy(uint_ty) => {
-                                    Ty::from_rigid_kind(RigidTy::Uint(uint_ty))
-                                }
-                                co2_crate_sig::PrimitiveTy::FloatTy(float_ty) => {
-                                    Ty::from_rigid_kind(RigidTy::Float(float_ty))
-                                }
-                            })
-                        }
-                        co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
-                            self.sig_cty_to_cty(sig_ty)
-                        }
-                    });
-                }
-            }
-        }
-        Err(crate::ty::no_type_specifier_err(span))
+    ) -> CTy {
+        let specifier = match CompressedTypeSpecifier::build(specifiers) {
+            Ok(s) => s,
+            Err(e) => self.terminate_with_error(span, &e),
+        };
+
+        let ty = match specifier {
+            CompressedTypeSpecifier::Void => Ty::new_tuple(&[]),
+            CompressedTypeSpecifier::PrimitiveTy(primitive_ty) => prim_ty_to_ty(primitive_ty),
+            CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
+                Ty::from_rigid_kind(RigidTy::Adt(
+                    AdtDef(specifier.0),
+                    GenericArgs(vec![]),
+                ))
+            },
+            CompressedTypeSpecifier::Enum(_) => Ty::signed_ty(IntTy::I32),
+            CompressedTypeSpecifier::TypedefName(path) => {
+                return match &path.0 {
+                    co2_crate_sig::DefOrLocal::Def(def_id) => CTy::Ty(CrateItem(*def_id).ty()),
+                    co2_crate_sig::DefOrLocal::Local(_) => {
+                        panic!("Invalid local in type position")
+                    }
+                    co2_crate_sig::DefOrLocal::Prim(primitive_ty) => {
+                        CTy::Ty(prim_ty_to_ty(*primitive_ty))
+                    }
+                    co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
+                        self.sig_cty_to_cty(sig_ty)
+                    }
+                };
+            },
+        };
+        
+        CTy::Ty(ty)
     }
 
     fn extract_decl_type(
@@ -318,7 +307,7 @@ impl HirCtx<'_> {
                 let c_variadic = param_list.effective_ellipsis();
                 if !param_list.empty_params() {
                     for param in param_list.parameters {
-                        let param_base = self.base_ty_of_decl(param.0, span)?;
+                        let param_base = self.base_ty_of_decl(param.0, span);
                         let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
                         let mut param_ty = match param_decl_ty {
                             CTy::Ty(ty) => ty,
@@ -378,7 +367,7 @@ impl HirCtx<'_> {
                     CTy::Ty(inner) => {
                         if let Some(size) = subscription.0.constant_len() {
                             CTy::Ty(
-                                Ty::try_new_array(inner, size)
+                                Ty::try_new_array(inner, size as u64)
                                     .map_err(|e| format!("failed to build array type: {e}"))?,
                             )
                         } else if subscription.0.is_unsized() {
@@ -419,6 +408,20 @@ impl HirCtx<'_> {
             co2_crate_sig::CTy::UnsizedArray(hir_ty) => {
                 CTy::UnsizedArray(self.hir_ty_to_ty(hir_ty))
             }
+        }
+    }
+}
+
+fn prim_ty_to_ty(primitive_ty: co2_crate_sig::PrimitiveTy) -> Ty {
+    match primitive_ty {
+        co2_crate_sig::PrimitiveTy::IntTy(int_ty) => {
+            Ty::from_rigid_kind(RigidTy::Int(int_ty))
+        }
+        co2_crate_sig::PrimitiveTy::UintTy(uint_ty) => {
+            Ty::from_rigid_kind(RigidTy::Uint(uint_ty))
+        }
+        co2_crate_sig::PrimitiveTy::FloatTy(float_ty) => {
+            Ty::from_rigid_kind(RigidTy::Float(float_ty))
         }
     }
 }
