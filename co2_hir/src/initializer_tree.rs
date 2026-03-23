@@ -326,17 +326,48 @@ impl HirCtx<'_> {
                             local_map,
                         )?;
                     }
+                    if cursor.stack.is_empty() {
+                        // Overflowing item, emit warning
+                        continue;
+                    }
                     let node = if let Initializer::Expr(expr) = item.initializer.0 {
-                        let expr = self.lower_expr(expr, locals, local_map)?;
-                        loop {
-                            if let Ok(coerced) = coerce_expr_to_type(expr.clone(), cursor.ty()) {
-                                break InitializerTree::Leaf(coerced);
+                        if matches!(expr.0, Expression::Constant(co2_ast::Constant::String(_))) {
+                            loop {
+                                let terminal = match cursor.ty().kind() {
+                                    TyKind::RigidTy(rigid_ty) => match rigid_ty {
+                                        RigidTy::Adt(..) => false,
+                                        RigidTy::Array(inner, _) => inner.kind().is_primitive(),
+                                        _ => true,
+                                    },
+                                    _ => false,
+                                };
+                                if terminal {
+                                    break self.lower_to_initializer_tree(
+                                        cursor.ty(),
+                                        (Initializer::Expr(expr), item_span),
+                                        locals,
+                                        local_map,
+                                    );
+                                }
+                                if !cursor.go_through() {
+                                    self.terminate_with_error(
+                                        item_span,
+                                        "failed to lower string literal as initializer tree",
+                                    );
+                                }
                             }
-                            if !cursor.go_through() {
-                                self.terminate_with_error(
-                                    item_span,
-                                    "failed to lower initializer tree",
-                                );
+                        } else {
+                            let expr = self.lower_expr(expr, locals, local_map)?;
+                            loop {
+                                if let Ok(coerced) = coerce_expr_to_type(expr.clone(), cursor.ty()) {
+                                    break InitializerTree::Leaf(coerced);
+                                }
+                                if !cursor.go_through() {
+                                    self.terminate_with_error(
+                                        item_span,
+                                        "failed to lower initializer tree",
+                                    );
+                                }
                             }
                         }
                     } else {
