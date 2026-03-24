@@ -466,6 +466,8 @@ int main14()
 	if (((int*)5) != p)
 		return 1;
 
+	(void)*p;
+
 	return 0;
 }
 

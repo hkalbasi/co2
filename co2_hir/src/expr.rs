@@ -537,10 +537,13 @@ impl HirCtx<'_> {
                 ) || is_maybe_uninit_fn_ptr_ty(target_ty).is_some();
                 let src_is_fn_item =
                     matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
+                let dst_is_void =
+                    matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
                 if !((src_is_int && dst_is_int)
                     || (src_is_ptr_like && dst_is_ptr_like)
                     || (src_is_int && dst_is_ptr_like)
                     || (src_is_ptr_like && dst_is_int)
+                    || dst_is_void
                     || (src_is_fn_item
                         && (matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
                             || is_maybe_uninit_fn_ptr_ty(target_ty).is_some())))

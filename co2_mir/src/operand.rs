@@ -762,6 +762,11 @@ impl Builder<'_> {
         let src_is_fn_def = matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
         let src_mu_fn_ptr = maybe_uninit_fn_ptr_inner(src_ty);
         let dst_mu_fn_ptr = maybe_uninit_fn_ptr_inner(dst_ty);
+        let dst_is_void = matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
+        if dst_is_void {
+            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
+            return MirOperand::Copy(place(tmp));
+        }
         if src_is_int && dst_is_int {
             let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
