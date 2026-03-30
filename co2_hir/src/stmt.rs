@@ -218,6 +218,7 @@ impl HirCtx<'_> {
                 let cond_label = self.fresh_label();
                 let end_label = self.fresh_label();
 
+                out.push(HirStmt::Goto(body_label, span));
                 out.push(HirStmt::Label(body_label, span));
                 let mut body_map = local_map.clone();
                 self.enter_loop(cond_label, end_label);

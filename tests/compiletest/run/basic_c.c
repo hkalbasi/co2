@@ -1198,6 +1198,18 @@ int main43() {
 	return 0;
 }
 
+static int i44 = 5;
+
+int main44() {
+	// The point of this test is to keep the do while at the start of function
+	do {
+		if (i44 == 0) {
+			return i44;
+		}
+		i44 -= 1;
+	} while(1);
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1211,7 +1223,7 @@ int main() {
 		main26, main27, main28, main29, main30,
 		main31, main32, main33, main34, main35,
 		main36, main37, main38, main39, main40,
-		main41, main42, main43,
+		main41, main42, main43, main44,
 	};
 	
 	int i;
