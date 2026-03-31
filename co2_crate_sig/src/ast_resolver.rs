@@ -5,7 +5,9 @@ use co2_ast::{
     InitDeclarator, RustPath, Spanned, StatelessResolver, StructOrUnionSpecifier, TypeQueryResult,
     TypeResolver,
 };
+use co2_parser::parse_expression_tokens;
 use rustc_public_generative::{DefData, FileId, HirStructureCtx, rustc_public::DefId};
+use rustc_public_generative::HirTy;
 
 use crate::{
     Resolver,
@@ -37,14 +39,31 @@ pub struct LocalResolverBase {
         InitDeclarator<LocalResolver>,
         co2_ast::Span,
     )>,
+    pub pending_array_len_consts:
+        Vec<(DefId, String, co2_ast::Spanned<Expression<LocalResolver>>, co2_ast::Span)>,
+    pub array_len_consts: HashMap<(usize, usize), RegisteredArrayLenConst>,
+    pub array_len_const_exprs: HashMap<DefId, co2_ast::Spanned<Expression<LocalResolver>>>,
     pub hir_ctx: &'static HirStructureCtx<'static>,
     pub file_id: FileId,
     pub source_name: String,
     pub source: &'static str,
     pub(crate) struct_manager: StructManager,
     pub(crate) unrepresentable_typedefs: HashMap<String, CTy>,
+    pub(crate) typedef_tys: HashMap<DefId, HirTy>,
     pub(crate) global_struct_tags: Rc<RefCell<StructAndEnumData>>,
     pub(crate) global_locals: Rc<RefCell<im::HashMap<String, (DefOrLocal, TypeQueryResult)>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegisteredArrayLenConst {
+    pub def_id: DefId,
+    pub expr: co2_ast::Spanned<Expression<LocalResolver>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegisteredSubscription {
+    pub raw: co2_ast::LazySubscription,
+    pub array_len_const: Option<DefId>,
 }
 
 impl LocalResolverBase {
@@ -57,6 +76,39 @@ impl LocalResolverBase {
         );
         (def_id, fake_name)
     }
+
+    pub fn take_pending_array_len_consts(
+        &mut self,
+    ) -> Vec<(DefId, String, co2_ast::Spanned<Expression<LocalResolver>>, co2_ast::Span)> {
+        std::mem::take(&mut self.pending_array_len_consts)
+    }
+
+    pub fn lookup_array_len_const(
+        &self,
+        span: co2_ast::Span,
+    ) -> Option<RegisteredArrayLenConst> {
+        self.array_len_consts
+            .get(&(span.start, span.end))
+            .cloned()
+    }
+
+    pub fn lookup_array_len_const_expr(
+        &self,
+        def_id: DefId,
+    ) -> Option<co2_ast::Spanned<Expression<LocalResolver>>> {
+        self.array_len_const_exprs.get(&def_id).cloned()
+    }
+}
+
+pub fn eval_registered_array_len_const(
+    resolver: &LocalResolver,
+    def_id: DefId,
+) -> Result<usize, String> {
+    let mut base = resolver.base.borrow_mut();
+    let expr = base
+        .lookup_array_len_const_expr(def_id)
+        .ok_or_else(|| "missing registered array size constant expression".to_owned())?;
+    base.eval_array_len_expr(&expr)
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +143,37 @@ impl LocalResolver {
             .insert(name, (DefOrLocal::Local(id as u32), TypeQueryResult::Expr));
         id
     }
+
+    fn register_array_len_const(
+        &self,
+        subscription: Spanned<co2_ast::LazySubscription>,
+    ) -> Option<RegisteredArrayLenConst> {
+        if subscription.0.is_unsized() || subscription.0.constant_len().is_some() {
+            return None;
+        }
+        let key = (subscription.1.start, subscription.1.end);
+        if let Some(existing) = self.base.borrow().array_len_consts.get(&key).cloned() {
+            return Some(existing);
+        }
+        let tokens = subscription
+            .0
+            .tokens
+            .get(1..subscription.0.tokens.len().saturating_sub(1))?;
+        let expr = parse_expression_tokens(
+            tokens,
+            self.base.borrow().source_name.clone(),
+            self.base.borrow().source,
+            self.clone(),
+        );
+        let mut base = self.base.borrow_mut();
+        let (def_id, fake_name) = base.emit_fake_def(DefData::ValueNs);
+        let registered = RegisteredArrayLenConst { def_id, expr: expr.clone() };
+        base.pending_array_len_consts
+            .push((def_id, fake_name, expr, subscription.1));
+        base.array_len_const_exprs.insert(def_id, registered.expr.clone());
+        base.array_len_consts.insert(key, registered.clone());
+        Some(registered)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +190,7 @@ impl co2_ast::TypeResolver for LocalResolver {
     type StructOrUnionIdentifier = DefId;
     type EnumIdentifier = ();
     type EnumeratorIdentifier = (DefId, String, Option<Spanned<Expression<Self>>>);
+    type SubscriptionIdentifier = RegisteredSubscription;
 
     fn classify_path(
         &self,
@@ -190,6 +274,8 @@ impl co2_ast::TypeResolver for LocalResolver {
                         next.locals
                             .borrow_mut()
                             .insert(name.1, (DefOrLocal::Def(def_id), TypeQueryResult::Expr));
+                    } else if decl.0.declarator.0.is_function() {
+                        // TODO: detect if we need to emit an extern function here.
                     } else {
                         next.locals.borrow_mut().insert(
                             name.1,
@@ -223,6 +309,18 @@ impl co2_ast::TypeResolver for LocalResolver {
     ) -> Self::EnumIdentifier {
         self.collect_enum_constants(specifier, span);
     }
+
+    fn register_subscription(
+        &self,
+        subscription: Spanned<co2_ast::LazySubscription>,
+    ) -> Self::SubscriptionIdentifier {
+        RegisteredSubscription {
+            raw: subscription.0.clone(),
+            array_len_const: self
+                .register_array_len_const(subscription)
+                .map(|registered| registered.def_id),
+        }
+    }
 }
 
 impl co2_ast::Transformable<StatelessResolver> for LocalResolver {
@@ -248,6 +346,13 @@ impl co2_ast::Transformable<StatelessResolver> for LocalResolver {
                 .terminate_with_error(*span, "Unresolved name");
         };
         (r.1, *span)
+    }
+
+    fn transform_subscription(
+        &self,
+        subscription: &Spanned<<StatelessResolver as TypeResolver>::SubscriptionIdentifier>,
+    ) -> Spanned<Self::SubscriptionIdentifier> {
+        (self.register_subscription(subscription.clone()), subscription.1)
     }
 
     fn transform_enumerator(

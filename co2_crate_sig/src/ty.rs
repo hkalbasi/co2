@@ -1,9 +1,10 @@
 use co2_ast::{
-    DeclarationSpecifier, Declarator, Span, Spanned, StructOrUnionKind, TypeResolver, TypeSpecifier,
+    BinOp, Constant, DeclarationSpecifier, Declarator, Expression, Span, Spanned,
+    StructOrUnionKind, TypeName, TypeResolver, TypeSpecifier, UnaryOp,
 };
 use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst, HirTyKind};
 use rustc_public_generative::{
-    HirGenericArg,
+    HirGenericArg, HirModuleItem,
     rustc_public::{
         mir::Mutability,
         ty::{FloatTy, IntTy, UintTy},
@@ -174,18 +175,15 @@ impl CrateSigCtx<'_> {
         &mut self,
         base: CTy,
         declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> (String, CTy) {
+        resolver: &LocalResolver,
+    ) -> (String, CTy, Option<co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>>) {
         let span = declarator.1;
-        match self
-            .resolver
-            .borrow_mut()
-            .extract_decl_type(base, declarator)
-        {
-            Ok((ty, name)) => {
+        match self.extract_decl_type_with_consts(base, declarator, resolver) {
+            Ok((ty, name, array_len)) => {
                 let Some(name) = name else {
                     self.terminate_with_error(span, "Unexpected abstract declarator");
                 };
-                (name, ty)
+                (name, ty, array_len)
             }
             Err(e) => {
                 self.terminate_with_error(span, &e);
@@ -193,18 +191,478 @@ impl CrateSigCtx<'_> {
         }
     }
 
-    pub(crate) fn lower_value_decl_type(
+    fn extract_decl_type_with_consts(
         &mut self,
-        base: CTy,
-        declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> (String, HirTy) {
-        self.resolver
-            .borrow_mut()
-            .lower_value_decl_type(base, declarator)
+        current: CTy,
+        (decl, span): Spanned<Declarator<LocalResolver>>,
+        resolver: &LocalResolver,
+    ) -> Result<
+        (
+            CTy,
+            Option<String>,
+            Option<co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>>,
+        ),
+        String,
+    > {
+        let rust_span = self.co2_span_to_rustc(span);
+        match decl {
+            Declarator::Abstract => Ok((current, None, None)),
+            Declarator::Identifier((ident, _)) => Ok((current, Some(ident.1), None)),
+            Declarator::FunctionDeclarator {
+                declarator,
+                param_list,
+            } => {
+                let mut inputs = Vec::with_capacity(param_list.parameters.len());
+                let c_variadic = param_list.effective_ellipsis();
+                if !param_list.empty_params() {
+                    for param in param_list.parameters {
+                        let param_base = self.base_ty_of_decl(param.0, span);
+                        let (param_decl_ty, _) = self
+                            .resolver
+                            .borrow_mut()
+                            .extract_decl_type(param_base, param.1)?;
+                        let param_ty = match param_decl_ty {
+                            CTy::Ty(ty) => {
+                                if let HirTyKind::Array(_, inner) = ty.kind {
+                                    HirTy::new_ptr(*inner, Mutability::Mut, ty.span)
+                                } else {
+                                    ty
+                                }
+                            }
+                            CTy::Function(_) => {
+                                return Err(
+                                    "function type is invalid in parameter position".to_owned()
+                                );
+                            }
+                            CTy::UnsizedArray(elem) => {
+                                let span = elem.span;
+                                HirTy::new_ptr(elem, Mutability::Mut, span)
+                            }
+                        };
+                        inputs.push(param_ty);
+                    }
+                }
+                let function_ty = match current {
+                    CTy::Ty(ret) => CTy::Function(FunctionSignature {
+                        lifetimes: vec![],
+                        inputs,
+                        output: ret,
+                        abi: FunctionAbi::C,
+                        is_unsafe: false,
+                        c_variadic,
+                    }),
+                    CTy::Function(_) => {
+                        return Err("function returning function is not valid".to_owned());
+                    }
+                    CTy::UnsizedArray(_) => {
+                        return Err("function returning unsized array is not valid".to_owned());
+                    }
+                };
+                self.extract_decl_type_with_consts(function_ty, *declarator, resolver)
+            }
+            Declarator::PointerDeclarator { declarator, .. } => {
+                let ptr_or_fn_ptr = match current {
+                    CTy::Ty(inner) => CTy::Ty(HirTy::new_ptr(inner, Mutability::Mut, rust_span)),
+                    CTy::Function(sig) => CTy::Ty(self.resolver.borrow().maybe_uninit_of(
+                        HirTy {
+                            kind: HirTyKind::FnPtr(Box::new(sig)),
+                            span: rust_span,
+                        },
+                        rust_span,
+                    )?),
+                    CTy::UnsizedArray(inner) => CTy::Ty(HirTy::new_ptr(
+                        HirTy::new_ptr(inner, Mutability::Mut, rust_span),
+                        Mutability::Mut,
+                        rust_span,
+                    )),
+                };
+                self.extract_decl_type_with_consts(ptr_or_fn_ptr, *declarator, resolver)
+            }
+            Declarator::ArrayDeclarator {
+                declarator,
+                subscription,
+            } => {
+                let inner = match current {
+                    CTy::Ty(inner) => inner,
+                    CTy::Function(_) => {
+                        return Err("array of functions is not valid".to_owned());
+                    }
+                    CTy::UnsizedArray(_) => {
+                        return Err("array of unsized arrays is not valid".to_owned());
+                    }
+                };
+                let len = if let Some(len) = subscription.0.raw.constant_len() {
+                    (HirTyConst::Literal(len as usize), None)
+                } else if subscription.0.raw.is_unsized() {
+                    return self.extract_decl_type_with_consts(
+                        CTy::UnsizedArray(inner),
+                        *declarator,
+                        resolver,
+                    );
+                } else {
+                    let def_id = subscription
+                        .0
+                        .array_len_const
+                        .as_ref()
+                        .ok_or_else(|| "missing registered array size constant".to_owned())?;
+                    let expr = self
+                        .resolver
+                        .borrow()
+                        .lookup_array_len_const_expr(*def_id)
+                        .ok_or_else(|| "missing registered array size constant expression".to_owned())?;
+                    let literal_len = self.eval_array_len_expr(&expr)?;
+                    (HirTyConst::Literal(literal_len), None)
+                };
+                let array_ty = CTy::Ty(HirTy::new_array(inner, len.0, rust_span));
+                let (ty, name, nested_len) =
+                    self.extract_decl_type_with_consts(array_ty, *declarator, resolver)?;
+                Ok((ty, name, nested_len.or(len.1)))
+            }
+        }
+    }
+
+    pub(crate) fn eval_array_len_expr(
+        &mut self,
+        expr: &Spanned<Expression<LocalResolver>>,
+    ) -> Result<usize, String> {
+        let value = self.eval_const_expr(expr)?;
+        usize::try_from(value)
+            .map_err(|_| format!("array size must be a non-negative integer, got {value}"))
+    }
+
+    pub(crate) fn eval_const_expr(
+        &mut self,
+        (expr, span): &Spanned<Expression<LocalResolver>>,
+    ) -> Result<i128, String> {
+        match expr {
+            Expression::Constant(Constant::Int(v, _)) => Ok(*v),
+            Expression::Constant(Constant::Char(ch)) => Ok(*ch as i128),
+            Expression::UnaryOp(op, inner) => {
+                let inner = self.eval_const_expr(inner)?;
+                match op {
+                    UnaryOp::Plus => Ok(inner),
+                    UnaryOp::Minus => Ok(-inner),
+                    UnaryOp::Not => Ok((inner == 0) as i128),
+                    UnaryOp::Com => Ok(!inner),
+                    _ => Err("unsupported unary op in array size".to_owned()),
+                }
+            }
+            Expression::BinOp(lhs, op, rhs) => {
+                let lhs = self.eval_const_expr(lhs)?;
+                let rhs = self.eval_const_expr(rhs)?;
+                match op {
+                    BinOp::Add => Ok(lhs + rhs),
+                    BinOp::Sub => Ok(lhs - rhs),
+                    BinOp::Mul => Ok(lhs * rhs),
+                    BinOp::Div => Ok(lhs / rhs),
+                    BinOp::Rem => Ok(lhs % rhs),
+                    BinOp::BitOr => Ok(lhs | rhs),
+                    BinOp::BitXor => Ok(lhs ^ rhs),
+                    BinOp::BitAnd => Ok(lhs & rhs),
+                    BinOp::Eq => Ok((lhs == rhs) as i128),
+                    BinOp::Lt => Ok((lhs < rhs) as i128),
+                    BinOp::Le => Ok((lhs <= rhs) as i128),
+                    BinOp::Ne => Ok((lhs != rhs) as i128),
+                    BinOp::Ge => Ok((lhs >= rhs) as i128),
+                    BinOp::Gt => Ok((lhs > rhs) as i128),
+                    BinOp::Shl => Ok(lhs << rhs),
+                    BinOp::Shr => Ok(lhs >> rhs),
+                    BinOp::And => Ok(((lhs != 0) && (rhs != 0)) as i128),
+                    BinOp::Or => Ok(((lhs != 0) || (rhs != 0)) as i128),
+                    BinOp::Comma | BinOp::Assign => {
+                        Err("unsupported binary op in array size".to_owned())
+                    }
+                }
+            }
+            Expression::Conditional {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
+                if self.eval_const_expr(cond)? != 0 {
+                    self.eval_const_expr(then_expr)
+                } else {
+                    self.eval_const_expr(else_expr)
+                }
+            }
+            Expression::Cast { expr, .. } => self.eval_const_expr(expr),
+            Expression::SizeofType(type_name) => {
+                let ty = self.lower_type_name(*type_name.clone(), *span)?;
+                Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
+            }
+            _ => Err("unsupported constant expression in array size".to_owned()),
+        }
+    }
+
+    fn lower_type_name(
+        &mut self,
+        type_name: TypeName<LocalResolver>,
+        span: Span,
+    ) -> Result<HirTy, String> {
+        let specifiers = type_name
+            .specifier_qualifier_list
+            .into_iter()
+            .map(|(s, span)| {
+                let s = match s {
+                    co2_ast::SpecifierQualifier::TypeSpecifier(t) => {
+                        DeclarationSpecifier::TypeSpecifier(t)
+                    }
+                    co2_ast::SpecifierQualifier::TypeQualifier(t) => {
+                        DeclarationSpecifier::TypeQualifier(t)
+                    }
+                };
+                (s, span)
+            })
+            .collect::<Vec<_>>();
+        let base = self.base_ty_of_decl(specifiers, span);
+        let ty = match type_name.abstract_declarator {
+            None => base,
+            Some(decl) => self.resolver.borrow_mut().extract_decl_type(base, decl)?.0,
+        };
+        match ty {
+            CTy::Ty(ty) => Ok(ty),
+            CTy::Function(_) => Err("function is invalid as a type name".to_owned()),
+            CTy::UnsizedArray(_) => Err("unsized array is invalid as a type name".to_owned()),
+        }
+    }
+
+    fn sizeof_hir_ty(&self, ty: &HirTy) -> Result<(usize, usize), String> {
+        match &ty.kind {
+            HirTyKind::Bool | HirTyKind::Char | HirTyKind::Int(IntTy::I8) | HirTyKind::Uint(UintTy::U8) => {
+                Ok((1, 1))
+            }
+            HirTyKind::Int(IntTy::I16) | HirTyKind::Uint(UintTy::U16) => Ok((2, 2)),
+            HirTyKind::Int(IntTy::I32)
+            | HirTyKind::Uint(UintTy::U32)
+            | HirTyKind::Float(FloatTy::F32) => Ok((4, 4)),
+            HirTyKind::Int(IntTy::I64)
+            | HirTyKind::Uint(UintTy::U64)
+            | HirTyKind::Int(IntTy::Isize)
+            | HirTyKind::Uint(UintTy::Usize)
+            | HirTyKind::Float(FloatTy::F64)
+            | HirTyKind::RawPtr(..)
+            | HirTyKind::Ref(..)
+            | HirTyKind::FnPtr(_) => Ok((8, 8)),
+            HirTyKind::Int(IntTy::I128)
+            | HirTyKind::Uint(UintTy::U128)
+            | HirTyKind::Float(FloatTy::F128) => Ok((16, 16)),
+            HirTyKind::Float(FloatTy::F16) => Ok((2, 2)),
+            HirTyKind::Tuple(inner) if inner.is_empty() => Ok((0, 1)),
+            HirTyKind::Array(HirTyConst::Literal(len), inner) => {
+                let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
+                Ok((elem_size * len, elem_align))
+            }
+            HirTyKind::Adt(def, _) => {
+                if let Some((kind, fields)) = self.resolver.borrow().adt_layout_info(*def) {
+                    let mut size = 0usize;
+                    let mut align = 1usize;
+                    match kind {
+                        co2_ast::StructOrUnionKind::Struct => {
+                            for field in fields {
+                                let (field_size, field_align) = self.sizeof_hir_ty(&field)?;
+                                align = align.max(field_align);
+                                size = round_up(size, field_align);
+                                size += field_size;
+                            }
+                        }
+                        co2_ast::StructOrUnionKind::Union => {
+                            for field in fields {
+                                let (field_size, field_align) = self.sizeof_hir_ty(&field)?;
+                                align = align.max(field_align);
+                                size = size.max(field_size);
+                            }
+                        }
+                    }
+                    Ok((round_up(size, align), align))
+                } else if let Some(HirModuleItem::TypeDef { ty, .. }) = self
+                    .hir_items
+                    .iter()
+                    .find(|item| matches!(item, HirModuleItem::TypeDef { id, .. } if *id == *def))
+                {
+                    self.sizeof_hir_ty(ty)
+                } else {
+                    Err("unsupported ADT in sizeof(array size expr)".to_owned())
+                }
+            }
+            _ => Err("unsupported type in sizeof(array size expr)".to_owned()),
+        }
+    }
+
+}
+
+fn round_up(value: usize, align: usize) -> usize {
+    if align <= 1 {
+        value
+    } else {
+        value.div_ceil(align) * align
     }
 }
 
 impl LocalResolverBase {
+    pub(crate) fn eval_array_len_expr(
+        &mut self,
+        expr: &Spanned<Expression<LocalResolver>>,
+    ) -> Result<usize, String> {
+        let value = self.eval_const_expr(expr)?;
+        usize::try_from(value)
+            .map_err(|_| format!("array size must be a non-negative integer, got {value}"))
+    }
+
+    pub(crate) fn eval_const_expr(
+        &mut self,
+        (expr, span): &Spanned<Expression<LocalResolver>>,
+    ) -> Result<i128, String> {
+        match expr {
+            Expression::Constant(Constant::Int(v, _)) => Ok(*v),
+            Expression::Constant(Constant::Char(ch)) => Ok(*ch as i128),
+            Expression::UnaryOp(op, inner) => {
+                let inner = self.eval_const_expr(inner)?;
+                match op {
+                    UnaryOp::Plus => Ok(inner),
+                    UnaryOp::Minus => Ok(-inner),
+                    UnaryOp::Not => Ok((inner == 0) as i128),
+                    UnaryOp::Com => Ok(!inner),
+                    _ => Err("unsupported unary op in array size".to_owned()),
+                }
+            }
+            Expression::BinOp(lhs, op, rhs) => {
+                let lhs = self.eval_const_expr(lhs)?;
+                let rhs = self.eval_const_expr(rhs)?;
+                match op {
+                    BinOp::Add => Ok(lhs + rhs),
+                    BinOp::Sub => Ok(lhs - rhs),
+                    BinOp::Mul => Ok(lhs * rhs),
+                    BinOp::Div => Ok(lhs / rhs),
+                    BinOp::Rem => Ok(lhs % rhs),
+                    BinOp::BitOr => Ok(lhs | rhs),
+                    BinOp::BitXor => Ok(lhs ^ rhs),
+                    BinOp::BitAnd => Ok(lhs & rhs),
+                    BinOp::Eq => Ok((lhs == rhs) as i128),
+                    BinOp::Lt => Ok((lhs < rhs) as i128),
+                    BinOp::Le => Ok((lhs <= rhs) as i128),
+                    BinOp::Ne => Ok((lhs != rhs) as i128),
+                    BinOp::Ge => Ok((lhs >= rhs) as i128),
+                    BinOp::Gt => Ok((lhs > rhs) as i128),
+                    BinOp::Shl => Ok(lhs << rhs),
+                    BinOp::Shr => Ok(lhs >> rhs),
+                    BinOp::And => Ok(((lhs != 0) && (rhs != 0)) as i128),
+                    BinOp::Or => Ok(((lhs != 0) || (rhs != 0)) as i128),
+                    BinOp::Comma | BinOp::Assign => {
+                        Err("unsupported binary op in array size".to_owned())
+                    }
+                }
+            }
+            Expression::Conditional {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
+                if self.eval_const_expr(cond)? != 0 {
+                    self.eval_const_expr(then_expr)
+                } else {
+                    self.eval_const_expr(else_expr)
+                }
+            }
+            Expression::Cast { expr, .. } => self.eval_const_expr(expr),
+            Expression::SizeofType(type_name) => {
+                let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
+                Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
+            }
+            _ => Err("unsupported constant expression in array size".to_owned()),
+        }
+    }
+
+    fn lower_type_name_for_const(
+        &mut self,
+        type_name: TypeName<LocalResolver>,
+        span: Span,
+    ) -> Result<HirTy, String> {
+        let specifiers = type_name
+            .specifier_qualifier_list
+            .into_iter()
+            .map(|(s, span)| {
+                let s = match s {
+                    co2_ast::SpecifierQualifier::TypeSpecifier(t) => {
+                        DeclarationSpecifier::TypeSpecifier(t)
+                    }
+                    co2_ast::SpecifierQualifier::TypeQualifier(t) => {
+                        DeclarationSpecifier::TypeQualifier(t)
+                    }
+                };
+                (s, span)
+            })
+            .collect::<Vec<_>>();
+        let base = self.base_ty_of_decl(specifiers, span);
+        let ty = match type_name.abstract_declarator {
+            None => base,
+            Some(decl) => self.extract_decl_type(base, decl)?.0,
+        };
+        match ty {
+            CTy::Ty(ty) => Ok(ty),
+            CTy::Function(_) => Err("function is invalid as a type name".to_owned()),
+            CTy::UnsizedArray(_) => Err("unsized array is invalid as a type name".to_owned()),
+        }
+    }
+
+    fn sizeof_hir_ty(&self, ty: &HirTy) -> Result<(usize, usize), String> {
+        match &ty.kind {
+            HirTyKind::Bool
+            | HirTyKind::Char
+            | HirTyKind::Int(IntTy::I8)
+            | HirTyKind::Uint(UintTy::U8) => Ok((1, 1)),
+            HirTyKind::Int(IntTy::I16) | HirTyKind::Uint(UintTy::U16) => Ok((2, 2)),
+            HirTyKind::Int(IntTy::I32)
+            | HirTyKind::Uint(UintTy::U32)
+            | HirTyKind::Float(FloatTy::F32) => Ok((4, 4)),
+            HirTyKind::Int(IntTy::I64)
+            | HirTyKind::Uint(UintTy::U64)
+            | HirTyKind::Int(IntTy::Isize)
+            | HirTyKind::Uint(UintTy::Usize)
+            | HirTyKind::Float(FloatTy::F64)
+            | HirTyKind::RawPtr(..)
+            | HirTyKind::Ref(..)
+            | HirTyKind::FnPtr(_) => Ok((8, 8)),
+            HirTyKind::Int(IntTy::I128)
+            | HirTyKind::Uint(UintTy::U128)
+            | HirTyKind::Float(FloatTy::F128) => Ok((16, 16)),
+            HirTyKind::Float(FloatTy::F16) => Ok((2, 2)),
+            HirTyKind::Tuple(inner) if inner.is_empty() => Ok((0, 1)),
+            HirTyKind::Array(HirTyConst::Literal(len), inner) => {
+                let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
+                Ok((elem_size * len, elem_align))
+            }
+            HirTyKind::Adt(def, _) => {
+                if let Some((kind, fields)) = self.adt_layout_info(*def) {
+                    let mut size = 0usize;
+                    let mut align = 1usize;
+                    match kind {
+                        co2_ast::StructOrUnionKind::Struct => {
+                            for field in fields {
+                                let (field_size, field_align) = self.sizeof_hir_ty(&field)?;
+                                align = align.max(field_align);
+                                size = round_up(size, field_align);
+                                size += field_size;
+                            }
+                        }
+                        co2_ast::StructOrUnionKind::Union => {
+                            for field in fields {
+                                let (field_size, field_align) = self.sizeof_hir_ty(&field)?;
+                                align = align.max(field_align);
+                                size = size.max(field_size);
+                            }
+                        }
+                    }
+                    Ok((round_up(size, align), align))
+                } else if let Some(ty) = self.typedef_tys.get(def) {
+                    self.sizeof_hir_ty(ty)
+                } else {
+                    Err("unsupported ADT in sizeof(array size expr)".to_owned())
+                }
+            }
+            _ => Err("unsupported type in sizeof(array size expr)".to_owned()),
+        }
+    }
+
     pub(crate) fn lower_function_signature(
         &mut self,
         base: CTy,
@@ -387,13 +845,20 @@ impl LocalResolverBase {
                         return Err("array of unsized arrays is not valid".to_owned());
                     }
                 };
-                let len = if let Some(len) = subscription.0.constant_len() {
+                let len = if let Some(len) = subscription.0.raw.constant_len() {
                     HirTyConst::Literal(len as usize)
-                } else if subscription.0.is_unsized() {
+                } else if subscription.0.raw.is_unsized() {
                     return self.extract_decl_type(CTy::UnsizedArray(inner), *declarator);
                 } else {
-                    // self.terminate_with_error(subscription.1, "Can not handle complex subscriptions");
-                    HirTyConst::Literal(555)
+                    let def_id = subscription
+                        .0
+                        .array_len_const
+                        .as_ref()
+                        .ok_or_else(|| "Can not calculate subscription".to_owned())?;
+                    let expr = self
+                        .lookup_array_len_const_expr(*def_id)
+                        .ok_or_else(|| "Can not calculate subscription".to_owned())?;
+                    HirTyConst::Literal(self.eval_array_len_expr(&expr)?)
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len, rust_span));
                 self.extract_decl_type(array_ty, *declarator)

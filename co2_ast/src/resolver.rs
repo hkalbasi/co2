@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
 use crate::{
-    Declaration, EnumSpecifier, Enumerator, RustPath, Spanned, StructOrUnionKind,
-    StructOrUnionSpecifier, TypeQueryResult,
+    Declaration, EnumSpecifier, Enumerator, LazySubscription, RustPath, Spanned,
+    StructOrUnionKind, StructOrUnionSpecifier, TypeQueryResult,
 };
 
 pub trait TypeResolver: Clone + 'static {
@@ -11,6 +11,7 @@ pub trait TypeResolver: Clone + 'static {
     type StructOrUnionIdentifier: Debug + Clone;
     type EnumIdentifier: Debug + Clone;
     type EnumeratorIdentifier: Debug + Clone;
+    type SubscriptionIdentifier: Debug + Clone;
 
     fn classify_path(&self, path: &RustPath) -> Option<(TypeQueryResult, Self::ResolvedRustPath)>;
     fn register_ident(&self, name: String) -> Self::DeclarationIdent;
@@ -29,6 +30,10 @@ pub trait TypeResolver: Clone + 'static {
         &self,
         specifier: Spanned<EnumSpecifier<Self>>,
     ) -> Self::EnumIdentifier;
+    fn register_subscription(
+        &self,
+        subscription: Spanned<LazySubscription>,
+    ) -> Self::SubscriptionIdentifier;
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +45,7 @@ impl TypeResolver for StatelessResolver {
     type StructOrUnionIdentifier = StructOrUnionSpecifier<Self>;
     type EnumIdentifier = EnumSpecifier<Self>;
     type EnumeratorIdentifier = Enumerator<Self>;
+    type SubscriptionIdentifier = LazySubscription;
 
     fn classify_path(&self, path: &RustPath) -> Option<(TypeQueryResult, RustPath)> {
         Some((TypeQueryResult::Unsure, path.clone()))
@@ -77,5 +83,12 @@ impl TypeResolver for StatelessResolver {
         specifier: Spanned<EnumSpecifier<Self>>,
     ) -> Self::EnumIdentifier {
         specifier.0
+    }
+
+    fn register_subscription(
+        &self,
+        subscription: Spanned<LazySubscription>,
+    ) -> Self::SubscriptionIdentifier {
+        subscription.0
     }
 }

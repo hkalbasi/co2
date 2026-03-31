@@ -1,8 +1,8 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use co2_ast::{
-    Declaration, DeclarationSpecifier, DoTransform as _, InitDeclarator, StatelessResolver,
-    StorageClassSpecifier, StructOrUnionKind, TranslationUnit, TypeResolver,
+    Declaration, DeclarationSpecifier, Designator, DoTransform as _, InitDeclarator,
+    StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit, TypeResolver,
 };
 use co2_parser::parse_compound_statement;
 use rustc_public_generative::{
@@ -128,12 +128,16 @@ pub fn lower_crate_sig(
             fake_defs_counter: 0,
             pending_typedefs: vec![],
             pending_static: vec![],
+            pending_array_len_consts: vec![],
+            array_len_consts: HashMap::new(),
+            array_len_const_exprs: HashMap::new(),
             hir_ctx: unsafe { std::mem::transmute(ctx) },
             file_id,
             source_name: source_name.clone(),
             source: src_static,
             struct_manager: StructManager::default(),
             unrepresentable_typedefs: HashMap::new(),
+            typedef_tys: HashMap::new(),
             global_struct_tags: Rc::new(RefCell::new(StructAndEnumData::default())),
             global_locals: Rc::new(RefCell::new(im::HashMap::new())),
         })),
@@ -201,7 +205,7 @@ pub fn lower_crate_sig(
                     &body.0.tokens.0,
                     ctx.source_name.clone(),
                     ctx.source,
-                    resolver,
+                    resolver.clone(),
                 );
 
                 ctx.mir_owners.insert(
@@ -209,6 +213,7 @@ pub fn lower_crate_sig(
                     MirOwnerInfo::Fn {
                         def: id,
                         param_names,
+                        resolver: resolver.clone(),
                         body,
                     },
                 );
@@ -246,9 +251,10 @@ pub fn lower_crate_sig(
                         declarator,
                         initializer,
                     } = init.0;
+                    let declarator = declarator.transform(&resolver);
 
-                    let (name, ty) =
-                        ctx.lower_value_decl_ctype(base.clone(), declarator.transform(&resolver));
+                    let (name, ty, array_len) =
+                        ctx.lower_value_decl_ctype(base.clone(), declarator, &resolver);
 
                     ctx.resolver
                         .borrow()
@@ -268,6 +274,10 @@ pub fn lower_crate_sig(
                             }
                         };
                         let type_def = ctx.resolve_in_current([&*name]).unwrap().0;
+                        ctx.resolver
+                            .borrow_mut()
+                            .typedef_tys
+                            .insert(type_def, ty.clone());
                         ctx.hir_items.push(HirModuleItem::TypeDef {
                             name,
                             id: type_def,
@@ -283,8 +293,16 @@ pub fn lower_crate_sig(
                             if let Some((initializer, span)) = initializer {
                                 let initializer = initializer.transform(&resolver);
                                 let initializer = (initializer, span);
-                                ctx.mir_owners
-                                    .insert(id, MirOwnerInfo::Static { initializer });
+                                ctx.mir_owners.insert(
+                                    id,
+                                    match array_len {
+                                        Some(array_len) => MirOwnerInfo::StaticWithArrayLen {
+                                            initializer,
+                                            array_len,
+                                        },
+                                        None => MirOwnerInfo::Static { initializer },
+                                    },
+                                );
                             } else {
                                 ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
                             }
@@ -308,21 +326,19 @@ pub fn lower_crate_sig(
                         }
                         CTy::UnsizedArray(elem_ty) => {
                             let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
-                            let (len_id, len_name) =
-                                ctx.resolver.borrow_mut().emit_fake_def(DefData::ValueNs);
-                            let len_rhs = ctx.allocate_def_id(len_id, DefData::AnonConst);
-                            if let Some((initializer, span)) = initializer {
-                                let initializer = initializer.transform(&resolver);
-                                let initializer = (initializer, span);
-                                ctx.mir_owners
-                                    .insert(id, MirOwnerInfo::Static { initializer });
+                            let initializer = if let Some((initializer, span)) = initializer {
+                                (initializer.transform(&resolver), span)
                             } else {
                                 ctx.terminate_with_error(
                                     parser_span,
                                     "static with unsized array type should have initializer",
                                 );
-                            }
-                            let ty = HirTy::new_array(elem_ty, HirTyConst::ConstDef(len_id), span);
+                            };
+                            ctx.mir_owners
+                                .insert(id, MirOwnerInfo::Static { initializer: initializer.clone() });
+                            let len = infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
+                                .unwrap_or_else(|err| ctx.terminate_with_error(parser_span, &err));
+                            let ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
                             ctx.hir_items.push(HirModuleItem::Static {
                                 name,
                                 id,
@@ -330,15 +346,6 @@ pub fn lower_crate_sig(
                                 mutable: true,
                                 span,
                             });
-                            ctx.hir_items.push(HirModuleItem::Const {
-                                name: len_name,
-                                id: len_id,
-                                ty: HirTy::usize_ty(span),
-                                rhs: len_rhs,
-                                span,
-                            });
-                            ctx.mir_owners
-                                .insert(len_rhs, MirOwnerInfo::StaticArraySizeInference { span });
                         }
                         CTy::Function(sig) => {
                             let def_id = ctx.resolve_in_current([&*name]).unwrap().0;
@@ -369,7 +376,12 @@ pub fn lower_crate_sig(
     for (id, name, specifiers, declarator, parser_span) in pending_typedefs {
         let span = ctx.co2_span_to_rustc(parser_span);
         let ty = ctx.base_ty_of_decl(specifiers, parser_span);
-        let (_, ty) = ctx.lower_value_decl_type(ty, (declarator, parser_span));
+        let resolver = LocalResolver::new(ctx.resolver.clone());
+        let (_, ty, _) = ctx.lower_value_decl_ctype(ty, (declarator, parser_span), &resolver);
+        let CTy::Ty(ty) = ty else {
+            ctx.terminate_with_error(parser_span, "typedef did not lower to a first-class type");
+        };
+        ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
         ctx.hir_items
             .push(HirModuleItem::TypeDef { name, id, ty, span });
     }
@@ -378,7 +390,11 @@ pub fn lower_crate_sig(
     for (id, name, specifiers, declarator, parser_span) in pending_static {
         let span = ctx.co2_span_to_rustc(parser_span);
         let ty = ctx.base_ty_of_decl(specifiers, parser_span);
-        let (_, ty) = ctx.lower_value_decl_type(ty, declarator.declarator);
+        let resolver = LocalResolver::new(ctx.resolver.clone());
+        let (_, ty, _) = ctx.lower_value_decl_ctype(ty, declarator.declarator, &resolver);
+        let CTy::Ty(ty) = ty else {
+            ctx.terminate_with_error(parser_span, "static did not lower to a first-class type");
+        };
         ctx.hir_items.push(HirModuleItem::Static {
             name,
             id,
@@ -392,6 +408,21 @@ pub fn lower_crate_sig(
         } else {
             ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
         }
+    }
+
+    let pending_array_len_consts = ctx.resolver.borrow_mut().take_pending_array_len_consts();
+    for (id, name, expr, span) in pending_array_len_consts {
+        let span = ctx.co2_span_to_rustc(span);
+        let rhs = ctx.allocate_def_id(id, DefData::AnonConst);
+        ctx.hir_items.push(HirModuleItem::Const {
+            name,
+            id,
+            ty: HirTy::usize_ty(span),
+            rhs,
+            span,
+        });
+        ctx.mir_owners
+            .insert(rhs, MirOwnerInfo::EnumConstExplicit { initializer: expr });
     }
 
     let structs = ctx.resolver.borrow_mut().emit_structs().collect::<Vec<_>>();
@@ -505,4 +536,110 @@ pub fn lower_crate_sig(
         ctx.mir_owners,
         defs,
     )
+}
+
+// TODO: this function is AI garbage and is duplicate logic from what is in co2_hir
+fn infer_unsized_array_len(
+    initializer: &co2_ast::Initializer<LocalResolver>,
+    resolver: &LocalResolver,
+    elem_ty: &HirTy,
+) -> Result<usize, String> {
+    match initializer {
+        co2_ast::Initializer::Expr((co2_ast::Expression::Constant(co2_ast::Constant::String(s)), _)) => {
+            Ok(s.chars().count() + 1)
+        }
+        co2_ast::Initializer::List(items) => {
+            let slots_per_elem = flattened_scalar_slots(elem_ty, resolver)?;
+            let mut next_index = 0usize;
+            let mut max_len = 0usize;
+            let mut used_slots_in_current = 0usize;
+            for (item, _) in items {
+                let index = match &item.designators {
+                    None => next_index,
+                    Some(designators) => match designators.first() {
+                        None => next_index,
+                        Some((first, _)) => match first {
+                            Designator::Subscript(expr) => {
+                                let value = {
+                                    let mut base = resolver.base.borrow_mut();
+                                    let value = base.eval_const_expr(expr)?;
+                                    usize::try_from(value).map_err(|_| {
+                                        format!("array designator index must be non-negative, got {value}")
+                                    })?
+                                };
+                                value
+                            }
+                            Designator::Field(_) => {
+                                return Err("field designator is invalid for unsized array length inference".to_owned());
+                            }
+                        },
+                    },
+                };
+                if index != next_index {
+                    used_slots_in_current = 0;
+                }
+                let consumed_slots =
+                    consumed_initializer_slots(&item.initializer.0, elem_ty, resolver)?;
+                let element_advance = if consumed_slots == 0 { 1 } else { consumed_slots };
+                let total_slots = used_slots_in_current + element_advance;
+                let fully_covered = total_slots.div_ceil(slots_per_elem);
+                max_len = max_len.max(index + fully_covered);
+                next_index = index + total_slots / slots_per_elem;
+                used_slots_in_current = total_slots % slots_per_elem;
+            }
+            Ok(max_len)
+        }
+        _ => Err("static with unsized array type should have list or string initializer".to_owned()),
+    }
+}
+
+fn consumed_initializer_slots(
+    initializer: &co2_ast::Initializer<LocalResolver>,
+    target_ty: &HirTy,
+    resolver: &LocalResolver,
+) -> Result<usize, String> {
+    match initializer {
+        co2_ast::Initializer::Expr(_) => Ok(1),
+        co2_ast::Initializer::List(_) => flattened_scalar_slots(target_ty, resolver),
+    }
+}
+
+fn flattened_scalar_slots(
+    ty: &HirTy,
+    resolver: &LocalResolver,
+) -> Result<usize, String> {
+    match &ty.kind {
+        rustc_public_generative::HirTyKind::Bool
+        | rustc_public_generative::HirTyKind::Char
+        | rustc_public_generative::HirTyKind::Int(_)
+        | rustc_public_generative::HirTyKind::Uint(_)
+        | rustc_public_generative::HirTyKind::Float(_)
+        | rustc_public_generative::HirTyKind::RawPtr(_, _)
+        | rustc_public_generative::HirTyKind::Ref(_, _, _)
+        | rustc_public_generative::HirTyKind::FnPtr(_) => Ok(1),
+        rustc_public_generative::HirTyKind::Array(HirTyConst::Literal(len), inner) => {
+            Ok(len * flattened_scalar_slots(inner, resolver)?)
+        }
+        rustc_public_generative::HirTyKind::Adt(def, _) => {
+            let base = resolver.base.borrow();
+            if let Some((kind, fields)) = base.adt_layout_info(*def) {
+                match kind {
+                    StructOrUnionKind::Struct => fields
+                        .iter()
+                        .try_fold(0usize, |acc, field| {
+                            Ok(acc + flattened_scalar_slots(field, resolver)?)
+                        }),
+                    StructOrUnionKind::Union => fields
+                        .first()
+                        .map(|field| flattened_scalar_slots(field, resolver))
+                        .unwrap_or(Ok(1)),
+                }
+            } else if let Some(aliased) = base.typedef_tys.get(def) {
+                flattened_scalar_slots(aliased, resolver)
+            } else {
+                Err("unsupported element type in unsized array inference".to_owned())
+            }
+        }
+        _ => Err("unsupported element type in unsized array inference".to_owned()),
+    }
 }

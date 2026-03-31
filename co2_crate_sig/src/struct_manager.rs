@@ -11,7 +11,7 @@ use rustc_public_generative::{
 
 use crate::{DefOrLocal, LocalResolver, LocalResolverBase, MirOwnerInfo, ty::CTy};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct StructData {
     pub(crate) def_id: DefId,
     pub(crate) name: String,
@@ -161,13 +161,26 @@ impl LocalResolverBase {
     }
 
     pub(crate) fn emit_structs(&mut self) -> impl Iterator<Item = StructData> + use<> {
-        let taken = std::mem::take(&mut self.struct_manager.definitions);
-        taken.into_values()
+        self.struct_manager.definitions.clone().into_values()
     }
 
     pub(crate) fn emit_enums(&mut self) -> impl Iterator<Item = PendingEnum> + use<> {
         let taken = std::mem::take(&mut self.struct_manager.pending_enum_consts);
         taken.into_iter()
+    }
+
+    pub(crate) fn adt_layout_info(
+        &self,
+        def: DefId,
+    ) -> Option<(StructOrUnionKind, Vec<rustc_public_generative::HirTy>)> {
+        let data = self.struct_manager.definitions.get(&def)?;
+        let fields = data
+            .fields
+            .as_ref()?
+            .iter()
+            .map(|field| field.ty.clone())
+            .collect();
+        Some((data.kind, fields))
     }
 
     fn define_def(

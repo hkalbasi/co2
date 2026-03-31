@@ -208,14 +208,59 @@ fn children_count_of_ty(ty: Ty) -> usize {
     if count == 567_567 { 0 } else { count }
 }
 
-fn eval_const_int(expr: &HirExpr) -> Result<i128, String> {
+pub(crate) fn eval_const_int(expr: &HirExpr) -> Result<i128, String> {
     match &expr.kind {
         HirExprKind::ConstInt(v) => Ok(*v),
-        HirExprKind::Binary { op, lhs, rhs } => match op {
-            crate::expr::HirBinOp::Add => Ok(eval_const_int(lhs)? + eval_const_int(rhs)?),
-            crate::expr::HirBinOp::Sub => Ok(eval_const_int(lhs)? - eval_const_int(rhs)?),
-            _ => Err("designator subscript must be constant integer expression".to_owned()),
-        },
+        HirExprKind::Path(crate::ResolvedValue::ConstInt(v)) => Ok(*v),
+        HirExprKind::Binary { op, lhs, rhs } => {
+            let lhs = eval_const_int(lhs)?;
+            let rhs = eval_const_int(rhs)?;
+            match op {
+                crate::expr::HirBinOp::Add => Ok(lhs + rhs),
+                crate::expr::HirBinOp::Sub => Ok(lhs - rhs),
+                crate::expr::HirBinOp::Mul => Ok(lhs * rhs),
+                crate::expr::HirBinOp::Div => lhs
+                    .checked_div(rhs)
+                    .ok_or_else(|| "constant integer expression division failed".to_owned()),
+                crate::expr::HirBinOp::Rem => lhs
+                    .checked_rem(rhs)
+                    .ok_or_else(|| "constant integer expression remainder failed".to_owned()),
+                crate::expr::HirBinOp::BitOr => Ok(lhs | rhs),
+                crate::expr::HirBinOp::BitXor => Ok(lhs ^ rhs),
+                crate::expr::HirBinOp::BitAnd => Ok(lhs & rhs),
+                crate::expr::HirBinOp::Eq => Ok((lhs == rhs) as i128),
+                crate::expr::HirBinOp::Lt => Ok((lhs < rhs) as i128),
+                crate::expr::HirBinOp::Le => Ok((lhs <= rhs) as i128),
+                crate::expr::HirBinOp::Ne => Ok((lhs != rhs) as i128),
+                crate::expr::HirBinOp::Ge => Ok((lhs >= rhs) as i128),
+                crate::expr::HirBinOp::Gt => Ok((lhs > rhs) as i128),
+                crate::expr::HirBinOp::Shl => Ok(lhs << rhs),
+                crate::expr::HirBinOp::Shr => Ok(lhs >> rhs),
+            }
+        }
+        HirExprKind::Comma { rhs, .. } => eval_const_int(rhs),
+        HirExprKind::Logical { op, lhs, rhs } => {
+            let lhs = eval_const_int(lhs)? != 0;
+            let rhs = eval_const_int(rhs)? != 0;
+            Ok(match op {
+                crate::expr::HirLogicalOp::Or => (lhs || rhs) as i128,
+                crate::expr::HirLogicalOp::And => (lhs && rhs) as i128,
+            })
+        }
+        HirExprKind::LogicalNot(inner) => Ok((eval_const_int(inner)? == 0) as i128),
+        HirExprKind::BitNot(inner) => Ok(!eval_const_int(inner)?),
+        HirExprKind::Cast(inner) => eval_const_int(inner),
+        HirExprKind::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            if eval_const_int(cond)? != 0 {
+                eval_const_int(then_expr)
+            } else {
+                eval_const_int(else_expr)
+            }
+        }
         _ => Err("designator subscript must be constant integer expression".to_owned()),
     }
 }

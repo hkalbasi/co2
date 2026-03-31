@@ -474,6 +474,7 @@ int main14()
 int main15()
 {
 	int a[5] = { [2] = 7, [0] = 9, 1 };
+	int b[5] = { [sizeof(char)] = 9, 1 };
 	struct { int x; int y; int z; } s = { .z = 8, .x = 3 };
 	struct { int x; int y; } p[2] = {
 		[1] = { .y = 6, .x = 5 },
@@ -484,6 +485,8 @@ int main15()
 	if (a[3] || a[4])
 		return 1;
 	if (a[0] - 9 || a[1] - 1 || a[2] - 7)
+		return 1;
+	if (b[1] - 9 || b[2] - 1)
 		return 1;
 	if (s.x - 3 || s.y || s.z - 8)
 		return 1;
@@ -911,8 +914,18 @@ int main28()
 }
 
 typedef int unsized_int_array[];
-// unsized_int_array static_ar1 = {10, 20, 3, 15, 1000, 60, 16};
-// char static_ar2[] = "foo bar foobar";
+unsized_int_array static_ar1 = {10, 20, 3, 15, 1000, 60, 16};
+char static_ar2[] = "foo bar foobar";
+int static_ar3[(1 + 2) * 2] = {0, 1, 2, 3, 4, 5};
+typedef struct {
+	char field1[2];
+	int field2;
+	int field3[2 * 2 + sizeof(int)];
+	int field4[1024 / (8 * (int) sizeof (char))];
+} complex_size;
+int static_ar4[sizeof(complex_size)] = {5};
+unsized_int_array static_ar5 = {[3] = 2, 4};
+struct { int x, y; } static_ar6[] = {1, 2, 3};
 
 int main29()
 {
@@ -937,13 +950,44 @@ int main29()
 		return 3;
 	}
 	
-	// if (static_ar1[0] != 10 || static_ar1[6] != 16 || sizeof(static_ar1) / sizeof(int) != 7) {
-	// 	return 4;
-	// }
+	if (static_ar1[0] != 10 || static_ar1[6] != 16 || sizeof(static_ar1) / sizeof(int) != 7) {
+		return 4;
+	}
 
-	// if (static_ar2[0] != 'f' || static_ar2[14] != 0 || sizeof(static_ar2) != 15) {
-	// 	return 5;
-	// }
+	if (static_ar2[0] != 'f' || static_ar2[14] != 0 || sizeof(static_ar2) != 15) {
+		return 5;
+	}
+
+	char* local_ar2 = static_ar2;
+	if (local_ar2[0] != 'f' || local_ar2[14] != 0 || sizeof(local_ar2) != sizeof(char*)) {
+		return 5;
+	}
+
+	int ar5[sizeof(complex_size) * 2];
+	if (sizeof(ar5) / sizeof(int) != sizeof(complex_size) * 2) {
+		return 6;
+	}
+
+	if (static_ar3[0] != 0 || static_ar3[5] != 5
+		|| sizeof(static_ar3) / sizeof(int) != 6) {
+		return 7;
+	}
+
+	if (static_ar4[0] != 5 || static_ar4[1] != 0
+		|| sizeof(static_ar4) / sizeof(int) != sizeof(complex_size)) {
+		return 8;
+	}
+
+	if (sizeof(static_ar5) / sizeof(int) != 5
+		|| static_ar5[0] != 0 || static_ar5[2] != 0
+		|| static_ar5[3] != 2 || static_ar5[4] != 4) {
+		return 9;
+	}
+
+	if (sizeof(static_ar6) / sizeof(struct { int x, y; }) != 2
+		|| static_ar6[0].x != 1 || static_ar6[0].y != 2 || static_ar6[1].x != 3) {
+		return 10;
+	}
 
 	return 0;
 }
@@ -1026,6 +1070,7 @@ typedef int declared_func_ty();
 declared_func_ty declared_func;
 
 int main34() {
+	int declared_func();
 	return declared_static - declared_func();
 }
 

@@ -43,7 +43,6 @@ pub enum HirExprKind {
     ConstInt(i128),
     ConstFloat(f64),
     ConstStr(String),
-    ArrayToPointer(Box<HirExpr>),
     Zeroed,
     Field {
         base: Box<HirExpr>,
@@ -100,6 +99,8 @@ pub enum HirExprKind {
     AddrOf(Box<HirExpr>),
     Deref(Box<HirExpr>),
     Cast(Box<HirExpr>),
+    // TODO: this variant is just a cast duplicate
+    ArrayToPointer(Box<HirExpr>),
     Conditional {
         cond: Box<HirExpr>,
         then_expr: Box<HirExpr>,

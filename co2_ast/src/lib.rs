@@ -680,7 +680,7 @@ impl LazySubscription {
 
     pub fn constant_len(&self) -> Option<u128> {
         let mut len = None;
-        for (token, _) in &self.tokens {
+        if let [_, (token, _), _] = &self.tokens[..] {
             let next = match token {
                 Token::Integer(text, suffix) => {
                     if !matches!(suffix, IntegerSuffix::None) {
@@ -756,7 +756,7 @@ pub enum Declarator<R: TypeResolver> {
     },
     ArrayDeclarator {
         declarator: Box<Spanned<Declarator<R>>>,
-        subscription: Spanned<LazySubscription>,
+        subscription: Spanned<R::SubscriptionIdentifier>,
     },
 }
 

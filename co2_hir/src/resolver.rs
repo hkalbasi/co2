@@ -1,4 +1,4 @@
-use co2_crate_sig::WellknownDefs;
+use co2_crate_sig::{LocalResolver, WellknownDefs};
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
     ty::{FnDef, RigidTy, Span as RustSpan, Ty, TyKind},
@@ -48,6 +48,7 @@ pub struct HirCtx<'a> {
     break_labels: RefCell<Vec<LabelId>>,
     switch_scopes: RefCell<Vec<SwitchScope>>,
     pub(crate) c_variadic_local: Option<LocalId>,
+    pub(crate) decl_resolver: Option<LocalResolver>,
     pub(crate) source_name: String,
     pub(crate) source: &'static str,
     pub(crate) ret_ty: Ty,
@@ -70,10 +71,15 @@ impl<'a> HirCtx<'a> {
             break_labels: RefCell::new(Vec::new()),
             switch_scopes: RefCell::new(Vec::new()),
             c_variadic_local: None,
+            decl_resolver: None,
             source,
             source_name,
             ret_ty,
         }
+    }
+
+    pub fn set_decl_resolver(&mut self, resolver: LocalResolver) {
+        self.decl_resolver = Some(resolver);
     }
 
     pub(crate) fn resolve_value(&self, def_id: DefId) -> ResolvedValue {

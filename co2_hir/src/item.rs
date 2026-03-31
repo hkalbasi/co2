@@ -10,8 +10,10 @@ use rustc_public_generative::rustc_public::{
         Ty,
     },
 };
+use rustc_public_generative::rustc_public::ty::TyConst;
 
 use crate::{HirStmt, resolver::HirCtx};
+use crate::initializer_tree::{InitializerTree, eval_const_int};
 
 #[derive(Clone, Debug)]
 pub struct HirLocal {
@@ -72,15 +74,26 @@ pub fn lower_static_body(
     def: DefId,
     hir_ctx: &HirCtx<'_>,
 ) -> Result<HirBody, String> {
+    lower_static_body_for_ty(
+        (initializer, parser_span),
+        CrateItem(def).ty(),
+        hir_ctx,
+    )
+}
+
+pub fn lower_static_body_for_ty(
+    (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
+    target_ty: Ty,
+    hir_ctx: &HirCtx<'_>,
+) -> Result<HirBody, String> {
     let body_span = hir_ctx.to_rust_span(parser_span);
     let mut locals = Arena::new();
     let mut local_map: HashMap<usize, LocalId> = HashMap::new();
     locals.alloc(HirLocal {
         name: "_ret".to_owned(),
-        ty: CrateItem(def).ty(),
+        ty: target_ty,
         span: body_span,
     });
-    let target_ty = CrateItem(def).ty();
     let tree = hir_ctx.lower_to_initializer_tree(
         target_ty,
         (initializer, parser_span),
@@ -96,6 +109,47 @@ pub fn lower_static_body(
         stmts: vec![HirStmt::Return(Some(init_expr), body_span)],
         span: body_span,
     })
+}
+
+pub fn infer_array_len_from_initializer(
+    (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
+    elem_ty: Ty,
+    hir_ctx: &HirCtx<'_>,
+) -> Result<u64, String> {
+    let fake_ty = Ty::from_rigid_kind(RigidTy::Array(
+        elem_ty,
+        TyConst::try_from_target_usize(567_567).unwrap(),
+    ));
+    let mut locals = Arena::new();
+    let mut local_map: HashMap<usize, LocalId> = HashMap::new();
+    let tree = hir_ctx.lower_to_initializer_tree(
+        fake_ty,
+        (initializer, parser_span),
+        &mut locals,
+        &mut local_map,
+    );
+    let InitializerTree::Middle { children } = tree else {
+        return Err("invalid initializer for unsized array".to_owned());
+    };
+    Ok(children.len() as u64)
+}
+
+pub fn eval_usize_initializer(
+    (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
+    hir_ctx: &HirCtx<'_>,
+) -> Result<u64, String> {
+    let target_ty = Ty::usize_ty();
+    let mut locals = Arena::new();
+    let mut local_map: HashMap<usize, LocalId> = HashMap::new();
+    let tree = hir_ctx.lower_to_initializer_tree(
+        target_ty,
+        (initializer, parser_span),
+        &mut locals,
+        &mut local_map,
+    );
+    let expr = hir_ctx.initializer_tree_to_expr(&tree, target_ty, parser_span);
+    let value = eval_const_int(&expr)?;
+    u64::try_from(value).map_err(|_| format!("expected non-negative usize constant, got {value}"))
 }
 
 impl HirCtx<'_> {

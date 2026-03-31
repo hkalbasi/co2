@@ -4,7 +4,7 @@ use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
     Initializer, Spanned, TypeName,
 };
-use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver};
+use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver, eval_registered_array_len_const};
 use la_arena::Arena;
 use rustc_public_generative::{
     HirTy,
@@ -27,7 +27,6 @@ use crate::{
 };
 use crate::{
     expr::{HirExpr, HirExprKind},
-    initializer_tree::InitializerTree,
 };
 
 pub enum CTy {
@@ -84,30 +83,23 @@ impl HirCtx<'_> {
                                     "Unsized array without initializer is invalid",
                                 );
                             };
-                            let fake_ty = Ty::from_rigid_kind(RigidTy::Array(
+                            let real_len = crate::infer_array_len_from_initializer(
+                                initializer.clone(),
                                 elem,
-                                TyConst::try_from_target_usize(567_567).unwrap(),
-                            ));
-                            let tree = self.lower_to_initializer_tree(
-                                fake_ty,
-                                initializer,
-                                locals,
-                                local_map,
-                            );
-                            let real_len = if let InitializerTree::Middle { children } = &tree {
-                                children.len() as u64
-                            } else {
-                                self.terminate_with_error(
-                                    parser_span,
-                                    "invalid initializer for unsized array",
-                                );
-                            };
+                                self,
+                            )
+                            .unwrap_or_else(|err| self.terminate_with_error(parser_span, &err));
                             let real_ty = Ty::from_rigid_kind(RigidTy::Array(
                                 elem,
                                 TyConst::try_from_target_usize(real_len).unwrap(),
                             ));
-                            let tree_expr =
-                                self.initializer_tree_to_expr(&tree, real_ty, parser_span);
+                            let tree = self.lower_to_initializer_tree(
+                                real_ty,
+                                initializer,
+                                locals,
+                                local_map,
+                            );
+                            let tree_expr = self.initializer_tree_to_expr(&tree, real_ty, parser_span);
 
                             let span = self.to_rust_span(parser_span);
                             let local = locals.alloc(HirLocal {
@@ -149,7 +141,16 @@ impl HirCtx<'_> {
                         match init.0 {
                             Initializer::Expr(expr) if !needs_tree => {
                                 let parser_span = expr.1;
-                                let expr = self.lower_expr(expr, locals, local_map)?;
+                                let mut expr = self.lower_expr(expr, locals, local_map)?;
+                                if is_array_ty(expr.ty) && !is_array_ty(ty) {
+                                    let elem = array_elem_ty(expr.ty)
+                                        .expect("array type should have element type");
+                                    expr = HirExpr {
+                                        kind: HirExprKind::ArrayToPointer(Box::new(expr.clone())),
+                                        ty: Ty::new_ptr(elem, Mutability::Mut),
+                                        span: expr.span,
+                                    };
+                                }
                                 let expr = match coerce_expr_to_type(expr, ty) {
                                     Ok(it) => it,
                                     Err(err) => self.terminate_with_error(parser_span, &err),
@@ -366,15 +367,34 @@ impl HirCtx<'_> {
             } => {
                 let array_ty = match current {
                     CTy::Ty(inner) => {
-                        if let Some(size) = subscription.0.constant_len() {
+                        if let Some(size) = subscription.0.raw.constant_len() {
                             CTy::Ty(
                                 Ty::try_new_array(inner, size as u64)
                                     .map_err(|e| format!("failed to build array type: {e}"))?,
                             )
-                        } else if subscription.0.is_unsized() {
+                        } else if subscription.0.raw.is_unsized() {
                             CTy::UnsizedArray(inner)
                         } else {
-                            return Err("Can not calculate subscription".to_owned());
+                            let len = self
+                                .decl_resolver
+                                .as_ref()
+                                .and_then(|resolver| {
+                                    subscription
+                                        .0
+                                        .array_len_const
+                                        .as_ref()
+                                        .copied()
+                                        .map(|def_id| (resolver, def_id))
+                                })
+                                .ok_or_else(|| "Can not calculate subscription".to_owned())
+                                .and_then(|(resolver, def_id)| {
+                                    eval_registered_array_len_const(resolver, def_id)
+                                        .map_err(|err| format!("Can not calculate subscription: {err}"))
+                                })?;
+                            CTy::Ty(
+                                Ty::try_new_array(inner, len as u64)
+                                    .map_err(|e| format!("failed to build array type: {e}"))?,
+                            )
                         }
                     }
                     CTy::Function(_) => {

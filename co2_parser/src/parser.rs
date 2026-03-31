@@ -311,7 +311,7 @@ where
     comma
 }
 
-fn assignment_expression<'src, I, R: TypeResolver>(
+pub(crate) fn assignment_expression<'src, I, R: TypeResolver>(
     resolver: R,
     stmt_rec: impl Parser<'src, I, Spanned<Statement<R>>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
@@ -1285,8 +1285,17 @@ where
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        let param_list = parameter_type_list(rec, assign_expression_rec, resolver).map(Err);
-        let subscription = lazy_subscription().map(Ok);
+        let param_list = parameter_type_list(rec, assign_expression_rec, resolver.clone()).map(Err);
+        let subscription_resolver = resolver.clone();
+        let subscription = lazy_subscription()
+            .map(move |subscription| {
+                let span = subscription.1;
+                (
+                    subscription_resolver.register_subscription(subscription),
+                    span,
+                )
+            })
+            .map(Ok);
 
         let direct_declarator = choice((grouped, ident))
             .then(param_list.or(subscription).repeated().collect())
@@ -1525,7 +1534,7 @@ where
 #[test]
 fn parser_is_constructible() {
     use chumsky::input::Input;
-    let parser = translation_unit(&crate::StatelessResolver);
+    let parser = translation_unit(crate::StatelessResolver);
     parser.parse((&[]).map(
         SimpleSpan {
             start: 1,

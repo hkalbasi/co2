@@ -11,7 +11,10 @@ mod ty;
 
 pub(crate) use ctx::CrateSigCtx;
 
-pub use ast_resolver::{DefOrLocal, LocalResolver, LocalResolverBase};
+pub use ast_resolver::{
+    DefOrLocal, LocalResolver, LocalResolverBase, RegisteredArrayLenConst,
+    RegisteredSubscription, eval_registered_array_len_const,
+};
 pub use lowering::{WellknownDefs, lower_crate_sig};
 pub use mir::MirOwnerInfo;
 pub use resolver::Resolver;

@@ -6,8 +6,12 @@ use std::sync::{Mutex, OnceLock};
 
 use co2_ast::Initializer;
 use co2_crate_sig::{LocalResolver, MirOwnerInfo, WellknownDefs};
-use co2_hir::{HirBody, HirCtx, HirExpr, HirStmt, ResolvedValue};
-use rustc_public_generative::rustc_public::ty::{IntTy, UintTy};
+use co2_hir::{
+    HirBody, HirCtx, HirExpr, HirStmt, ResolvedValue, eval_usize_initializer,
+    infer_array_len_from_initializer,
+    lower_static_body_for_ty,
+};
+use rustc_public_generative::rustc_public::ty::IntTy;
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
     mir::{
@@ -100,8 +104,11 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             MirOwnerInfo::Static { initializer } => {
                 self.lower_explicit_static_mir(&ctx, def, initializer)
             }
-            MirOwnerInfo::StaticArraySizeInference { span } => {
-                build_const_int_initializer_body(UintTy::Usize, 7, span)
+            MirOwnerInfo::StaticWithArrayLen {
+                initializer,
+                array_len,
+            } => {
+                self.lower_explicit_static_mir_with_array_len(&ctx, def, initializer, array_len)
             }
             MirOwnerInfo::StaticZeroed | MirOwnerInfo::EnumConstZeroed => {
                 build_zeroed_static_initializer_body(
@@ -113,6 +120,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             MirOwnerInfo::Fn {
                 def,
                 param_names,
+                resolver,
                 body,
             } => {
                 let span_converter = |span: co2_ast::Span| {
@@ -125,6 +133,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     self.source_name.clone(),
                     def.fn_sig().skip_binder().output(),
                 );
+                hir_ctx.set_decl_resolver(resolver);
 
                 let hir =
                     co2_hir::lower_function_body(body, def, &param_names, &mut hir_ctx).unwrap();
@@ -159,8 +168,64 @@ impl Co2GeneratorState {
             CrateItem(def).ty(),
         );
 
-        let hir = co2_hir::lower_static_body(initializer, def, &hir_ctx).unwrap();
+        let mut target_ty = CrateItem(def).ty();
+        if let TyKind::RigidTy(RigidTy::Array(elem_ty, len)) = target_ty.kind() {
+            if len.eval_target_usize().is_err() {
+                let inferred_len = infer_array_len_from_initializer(initializer.clone(), elem_ty, &hir_ctx)
+                    .expect("failed to infer static array length");
+                target_ty = Ty::from_rigid_kind(RigidTy::Array(
+                    elem_ty,
+                    rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(inferred_len)
+                        .expect("failed to materialize inferred array length"),
+                ));
+            }
+        }
 
+        let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
+
+        co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id, self.wellknown_defs)
+    }
+
+    fn lower_explicit_static_mir_with_array_len(
+        &mut self,
+        ctx: &HirStructureCtx<'_>,
+        def: DefId,
+        initializer: co2_ast::Spanned<Initializer<LocalResolver>>,
+        array_len: co2_ast::Spanned<Initializer<LocalResolver>>,
+    ) -> Body {
+        let mut target_ty = CrateItem(def).ty();
+        if let TyKind::RigidTy(RigidTy::Array(elem_ty, len)) = target_ty.kind() {
+            if len.eval_target_usize().is_err() {
+                let len_span_converter = |span: co2_ast::Span| {
+                    ctx.span_in_file(self.file_id, span.start as u32, span.end as u32)
+                };
+                let len_hir_ctx = HirCtx::new(
+                    self.wellknown_defs,
+                    &len_span_converter,
+                    self.src_static,
+                    self.source_name.clone(),
+                    Ty::usize_ty(),
+                );
+                let evaluated_len = eval_usize_initializer(array_len, &len_hir_ctx)
+                    .expect("failed to evaluate static array length");
+                target_ty = Ty::from_rigid_kind(RigidTy::Array(
+                    elem_ty,
+                    rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(evaluated_len)
+                        .expect("failed to materialize static array length"),
+                ));
+            }
+        }
+        let span_converter = |span: co2_ast::Span| {
+            ctx.span_in_file(self.file_id, span.start as u32, span.end as u32)
+        };
+        let hir_ctx = HirCtx::new(
+            self.wellknown_defs,
+            &span_converter,
+            self.src_static,
+            self.source_name.clone(),
+            target_ty,
+        );
+        let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
         co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id, self.wellknown_defs)
     }
 
@@ -243,39 +308,6 @@ fn collect_param_bindings(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>)
         }
         _ => {}
     }
-}
-
-fn build_const_int_initializer_body(
-    ty: UintTy,
-    value: u128,
-    span: rustc_public_generative::rustc_public::ty::Span,
-) -> Body {
-    let locals = vec![LocalDecl {
-        ty: Ty::unsigned_ty(ty),
-        span,
-        mutability: Mutability::Mut,
-    }];
-    let return_block = BasicBlock {
-        statements: vec![Statement {
-            span,
-            kind: StatementKind::Assign(
-                rustc_public_generative::rustc_public::mir::Place {
-                    local: 0,
-                    projection: vec![],
-                },
-                Rvalue::Use(Operand::Constant(ConstOperand {
-                    span,
-                    user_ty: None,
-                    const_: MirConst::try_from_uint(value, ty).unwrap(),
-                })),
-            ),
-        }],
-        terminator: Terminator {
-            kind: TerminatorKind::Return,
-            span,
-        },
-    };
-    Body::new(vec![return_block], locals, 0, vec![], None, span)
 }
 
 fn build_zeroed_static_initializer_body(

@@ -24,6 +24,10 @@ pub trait Transformable<F: TypeResolver>: TypeResolver {
         &self,
         path: &Spanned<F::ResolvedRustPath>,
     ) -> Spanned<Self::ResolvedRustPath>;
+    fn transform_subscription(
+        &self,
+        subscription: &Spanned<F::SubscriptionIdentifier>,
+    ) -> Spanned<Self::SubscriptionIdentifier>;
 }
 
 pub trait DoTransform {
@@ -209,7 +213,7 @@ impl<A: TypeResolver> DoTransform for Declarator<A> {
                 subscription,
             } => Declarator::ArrayDeclarator {
                 declarator: declarator.transform(b),
-                subscription: subscription.clone(),
+                subscription: b.transform_subscription(subscription),
             },
         }
     }
