@@ -416,6 +416,10 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
             },
             Expression::SizeofType(t) => Expression::SizeofType(t.transform(b)),
             Expression::Sizeof(e) => Expression::Sizeof(e.transform(b)),
+            Expression::Offsetof { ty, field } => Expression::Offsetof {
+                ty: ty.transform(b),
+                field: field.clone(),
+            },
             Expression::CompoundLiteral {
                 type_name,
                 initializer,

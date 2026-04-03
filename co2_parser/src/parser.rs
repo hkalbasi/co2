@@ -535,6 +535,18 @@ where
                     .map(|ty| Expression::SizeofType(Box::new(ty)))
                     .map_with(|r, e| (r, e.span()));
 
+                let offsetof_expression = just(Token::Offsetof)
+                    .ignore_then(just(Token::LParen))
+                    .ignore_then(type_name(resolver.clone(), rec.clone()))
+                    .then_ignore(just(Token::Comma))
+                    .then(select! { Token::Ident(s) => s })
+                    .then_ignore(just(Token::RParen))
+                    .map(|(ty, field)| Expression::Offsetof {
+                        ty: Box::new(ty),
+                        field,
+                    })
+                    .map_with(|r, e| (r, e.span()));
+
                 let prefix_inc_expression = just(Token::Inc)
                     .ignore_then(unary.clone())
                     .map(|expr| Expression::Update {
@@ -565,6 +577,7 @@ where
 
                 choice((
                     sizeof_type_expression,
+                    offsetof_expression,
                     prefix_inc_expression,
                     prefix_dec_expression,
                     unary_operator_expression,

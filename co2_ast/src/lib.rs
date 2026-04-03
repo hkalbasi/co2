@@ -96,6 +96,10 @@ pub enum Expression<R: TypeResolver> {
     },
     SizeofType(Box<TypeName<R>>),
     Sizeof(Box<Spanned<Expression<R>>>),
+    Offsetof {
+        ty: Box<TypeName<R>>,
+        field: String,
+    },
     UnaryOp(UnaryOp, Box<Spanned<Expression<R>>>),
     BinOp(
         Box<Spanned<Expression<R>>>,
@@ -413,6 +417,7 @@ pub enum Token {
     Short,
     Signed,
     Sizeof,
+    Offsetof,
     Static,
     Atomic,
     Struct,
@@ -543,6 +548,7 @@ impl Display for Token {
             Token::Short => write!(f, "short"),
             Token::Signed => write!(f, "signed"),
             Token::Sizeof => write!(f, "sizeof"),
+            Token::Offsetof => write!(f, "offsetof"),
             Token::Static => write!(f, "static"),
             Token::Atomic => write!(f, "_Atomic"),
             Token::Struct => write!(f, "struct"),

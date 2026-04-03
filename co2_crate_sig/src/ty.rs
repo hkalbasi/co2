@@ -4,7 +4,7 @@ use co2_ast::{
 };
 use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst, HirTyKind};
 use rustc_public_generative::{
-    HirGenericArg, HirModuleItem,
+    HirGenericArg,
     rustc_public::{
         mir::Mutability,
         ty::{FloatTy, IntTy, UintTy},
@@ -333,162 +333,10 @@ impl CrateSigCtx<'_> {
 
     pub(crate) fn eval_const_expr(
         &mut self,
-        (expr, span): &Spanned<Expression<LocalResolver>>,
+        expr: &Spanned<Expression<LocalResolver>>,
     ) -> Result<i128, String> {
-        match expr {
-            Expression::Constant(Constant::Int(v, _)) => Ok(*v),
-            Expression::Constant(Constant::Char(ch)) => Ok(*ch as i128),
-            Expression::UnaryOp(op, inner) => {
-                let inner = self.eval_const_expr(inner)?;
-                match op {
-                    UnaryOp::Plus => Ok(inner),
-                    UnaryOp::Minus => Ok(-inner),
-                    UnaryOp::Not => Ok((inner == 0) as i128),
-                    UnaryOp::Com => Ok(!inner),
-                    _ => Err("unsupported unary op in array size".to_owned()),
-                }
-            }
-            Expression::BinOp(lhs, op, rhs) => {
-                let lhs = self.eval_const_expr(lhs)?;
-                let rhs = self.eval_const_expr(rhs)?;
-                match op {
-                    BinOp::Add => Ok(lhs + rhs),
-                    BinOp::Sub => Ok(lhs - rhs),
-                    BinOp::Mul => Ok(lhs * rhs),
-                    BinOp::Div => Ok(lhs / rhs),
-                    BinOp::Rem => Ok(lhs % rhs),
-                    BinOp::BitOr => Ok(lhs | rhs),
-                    BinOp::BitXor => Ok(lhs ^ rhs),
-                    BinOp::BitAnd => Ok(lhs & rhs),
-                    BinOp::Eq => Ok((lhs == rhs) as i128),
-                    BinOp::Lt => Ok((lhs < rhs) as i128),
-                    BinOp::Le => Ok((lhs <= rhs) as i128),
-                    BinOp::Ne => Ok((lhs != rhs) as i128),
-                    BinOp::Ge => Ok((lhs >= rhs) as i128),
-                    BinOp::Gt => Ok((lhs > rhs) as i128),
-                    BinOp::Shl => Ok(lhs << rhs),
-                    BinOp::Shr => Ok(lhs >> rhs),
-                    BinOp::And => Ok(((lhs != 0) && (rhs != 0)) as i128),
-                    BinOp::Or => Ok(((lhs != 0) || (rhs != 0)) as i128),
-                    BinOp::Comma | BinOp::Assign => {
-                        Err("unsupported binary op in array size".to_owned())
-                    }
-                }
-            }
-            Expression::Conditional {
-                cond,
-                then_expr,
-                else_expr,
-            } => {
-                if self.eval_const_expr(cond)? != 0 {
-                    self.eval_const_expr(then_expr)
-                } else {
-                    self.eval_const_expr(else_expr)
-                }
-            }
-            Expression::Cast { expr, .. } => self.eval_const_expr(expr),
-            Expression::SizeofType(type_name) => {
-                let ty = self.lower_type_name(*type_name.clone(), *span)?;
-                Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
-            }
-            _ => Err("unsupported constant expression in array size".to_owned()),
-        }
+        self.resolver.borrow_mut().eval_const_expr(expr)
     }
-
-    fn lower_type_name(
-        &mut self,
-        type_name: TypeName<LocalResolver>,
-        span: Span,
-    ) -> Result<HirTy, String> {
-        let specifiers = type_name
-            .specifier_qualifier_list
-            .into_iter()
-            .map(|(s, span)| {
-                let s = match s {
-                    co2_ast::SpecifierQualifier::TypeSpecifier(t) => {
-                        DeclarationSpecifier::TypeSpecifier(t)
-                    }
-                    co2_ast::SpecifierQualifier::TypeQualifier(t) => {
-                        DeclarationSpecifier::TypeQualifier(t)
-                    }
-                };
-                (s, span)
-            })
-            .collect::<Vec<_>>();
-        let base = self.base_ty_of_decl(specifiers, span);
-        let ty = match type_name.abstract_declarator {
-            None => base,
-            Some(decl) => self.resolver.borrow_mut().extract_decl_type(base, decl)?.0,
-        };
-        match ty {
-            CTy::Ty(ty) => Ok(ty),
-            CTy::Function(_) => Err("function is invalid as a type name".to_owned()),
-            CTy::UnsizedArray(_) => Err("unsized array is invalid as a type name".to_owned()),
-        }
-    }
-
-    fn sizeof_hir_ty(&self, ty: &HirTy) -> Result<(usize, usize), String> {
-        match &ty.kind {
-            HirTyKind::Bool | HirTyKind::Char | HirTyKind::Int(IntTy::I8) | HirTyKind::Uint(UintTy::U8) => {
-                Ok((1, 1))
-            }
-            HirTyKind::Int(IntTy::I16) | HirTyKind::Uint(UintTy::U16) => Ok((2, 2)),
-            HirTyKind::Int(IntTy::I32)
-            | HirTyKind::Uint(UintTy::U32)
-            | HirTyKind::Float(FloatTy::F32) => Ok((4, 4)),
-            HirTyKind::Int(IntTy::I64)
-            | HirTyKind::Uint(UintTy::U64)
-            | HirTyKind::Int(IntTy::Isize)
-            | HirTyKind::Uint(UintTy::Usize)
-            | HirTyKind::Float(FloatTy::F64)
-            | HirTyKind::RawPtr(..)
-            | HirTyKind::Ref(..)
-            | HirTyKind::FnPtr(_) => Ok((8, 8)),
-            HirTyKind::Int(IntTy::I128)
-            | HirTyKind::Uint(UintTy::U128)
-            | HirTyKind::Float(FloatTy::F128) => Ok((16, 16)),
-            HirTyKind::Float(FloatTy::F16) => Ok((2, 2)),
-            HirTyKind::Tuple(inner) if inner.is_empty() => Ok((0, 1)),
-            HirTyKind::Array(HirTyConst::Literal(len), inner) => {
-                let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
-                Ok((elem_size * len, elem_align))
-            }
-            HirTyKind::Adt(def, _) => {
-                if let Some((kind, fields)) = self.resolver.borrow().adt_layout_info(*def) {
-                    let mut size = 0usize;
-                    let mut align = 1usize;
-                    match kind {
-                        co2_ast::StructOrUnionKind::Struct => {
-                            for field in fields {
-                                let (field_size, field_align) = self.sizeof_hir_ty(&field)?;
-                                align = align.max(field_align);
-                                size = round_up(size, field_align);
-                                size += field_size;
-                            }
-                        }
-                        co2_ast::StructOrUnionKind::Union => {
-                            for field in fields {
-                                let (field_size, field_align) = self.sizeof_hir_ty(&field)?;
-                                align = align.max(field_align);
-                                size = size.max(field_size);
-                            }
-                        }
-                    }
-                    Ok((round_up(size, align), align))
-                } else if let Some(HirModuleItem::TypeDef { ty, .. }) = self
-                    .hir_items
-                    .iter()
-                    .find(|item| matches!(item, HirModuleItem::TypeDef { id, .. } if *id == *def))
-                {
-                    self.sizeof_hir_ty(ty)
-                } else {
-                    Err("unsupported ADT in sizeof(array size expr)".to_owned())
-                }
-            }
-            _ => Err("unsupported type in sizeof(array size expr)".to_owned()),
-        }
-    }
-
 }
 
 fn round_up(value: usize, align: usize) -> usize {
@@ -509,6 +357,7 @@ impl LocalResolverBase {
             .map_err(|_| format!("array size must be a non-negative integer, got {value}"))
     }
 
+    // TODO: this function is probably wrong and should be removed
     pub(crate) fn eval_const_expr(
         &mut self,
         (expr, span): &Spanned<Expression<LocalResolver>>,
@@ -566,6 +415,10 @@ impl LocalResolverBase {
             }
             Expression::Cast { expr, .. } => self.eval_const_expr(expr),
             Expression::SizeofType(type_name) => {
+                let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
+                Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
+            }
+            Expression::Offsetof { ty: type_name, field: _ } => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
             }
@@ -924,6 +777,8 @@ impl PrimitiveTy {
             "i64" => Some(PrimitiveTy::IntTy(IntTy::I64)),
             "usize" => Some(PrimitiveTy::UintTy(UintTy::Usize)),
             "isize" => Some(PrimitiveTy::IntTy(IntTy::Isize)),
+            "_Float32" | "_Float32x" => Some(PrimitiveTy::FloatTy(FloatTy::F32)),
+            "_Float64" | "_Float64x" => Some(PrimitiveTy::FloatTy(FloatTy::F64)),
             "_Float128" => Some(PrimitiveTy::FloatTy(FloatTy::F128)),
             _ => None,
         }

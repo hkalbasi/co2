@@ -1,6 +1,8 @@
 //@ mode: c
 //@ run-status: 0
 
+#include <stddef.h>
+
 int main0() {
 	return 0;
 }
@@ -751,7 +753,7 @@ int main22() {
 int counter = 0;
 int uninit;
 
-inline int count() {
+static inline int count() {
 	counter += 1;
 	return counter;
 }
@@ -1267,9 +1269,20 @@ int main45_aux(unsigned long input) {
 }
 
 int main45() {
-	return main45_aux(1) + 2 * main45_aux(2) + 3 * main45_aux(3) - 59;
+	return main45_aux(1) + 2 * main45_aux(2) + 3 * main45_aux(3) - 49;
 }
 
+int main46()
+{
+	if (offsetof(struct { int x; int y; int z; }, x) != 0)
+		return 1;
+	if (offsetof(struct { int x; int y; int z; }, y) != 4)
+		return 2;
+	if (offsetof(struct { int x; int y; int z; }, z) != 8)
+		return 3;
+
+	return 0;
+}
 typedef int (*main_ty)();
 
 int main() {
@@ -1283,7 +1296,8 @@ int main() {
 		main26, main27, main28, main29, main30,
 		main31, main32, main33, main34, main35,
 		main36, main37, main38, main39, main40,
-		main41, main42, main43, main44,
+		main41, main42, main43, main44, main45,
+		main46,
 	};
 	
 	int i;

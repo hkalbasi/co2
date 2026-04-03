@@ -9,6 +9,7 @@ use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
     mir::Mutability,
     ty::{FloatTy, IntTy, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
+    abi::FieldsShape,
 };
 
 use crate::item::{HirLocal, LocalId};
@@ -580,6 +581,39 @@ impl HirCtx<'_> {
                     .bytes();
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(size as i128),
+                    ty: Ty::signed_ty(IntTy::I32),
+                    span,
+                })
+            }
+            Expression::Offsetof { ty: type_name, field } => {
+                let ty = self.lower_type_name(*type_name, parser_span)?;
+                let (indices, _field_ty) = resolve_field_path_in_adt(ty, &field)
+                    .ok_or_else(|| format!("offsetof: field '{field}' not found in type"))?;
+                // Walk the type hierarchy following `indices` to accumulate the byte offset.
+                let mut offset_bytes: u64 = 0;
+                let mut cur_ty = ty;
+                for &field_idx in &indices {
+                    let layout = cur_ty
+                        .layout()
+                        .map_err(|e| format!("offsetof: failed to compute layout: {e}"))?;
+                    let field_offset = match &layout.shape().fields {
+                        FieldsShape::Arbitrary { offsets, .. } => {
+                            let off = offsets.get(field_idx)
+                                .ok_or_else(|| format!("offsetof: field index {field_idx} out of bounds"))?
+                                .bytes();
+                            eprintln!("DEBUG offsetof: field '{field}' idx={field_idx} offset={off} all_offsets={:?}", offsets.iter().map(|s| s.bytes()).collect::<Vec<_>>());
+                            off
+                        }
+                        other => return Err(format!("offsetof: unsupported layout kind for type: {other:?}")),
+                    };
+                    offset_bytes += field_offset as u64;
+                    // Descend into the field type for next iteration.
+                    cur_ty = adt_field_tys(cur_ty)
+                        .and_then(|tys| tys.into_iter().nth(field_idx))
+                        .ok_or_else(|| format!("offsetof: failed to get field type at index {field_idx}"))?;
+                }
+                Ok(HirExpr {
+                    kind: HirExprKind::ConstInt(offset_bytes as i128),
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
                 })
