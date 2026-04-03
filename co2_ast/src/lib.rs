@@ -342,6 +342,11 @@ pub enum TypeQualifier {
     Volatile,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum FunctionSpecifier {
+    Inline,
+}
+
 #[derive(Debug, Clone)]
 pub enum SpecifierQualifier<R: TypeResolver> {
     TypeSpecifier(Spanned<TypeSpecifier<R>>),
@@ -796,6 +801,7 @@ pub enum DeclarationSpecifier<R: TypeResolver> {
     TypeSpecifier(Spanned<TypeSpecifier<R>>),
     TypeQualifier(Spanned<TypeQualifier>),
     StorageSpecifier(Spanned<StorageClassSpecifier>),
+    FunctionSpecifier(Spanned<FunctionSpecifier>),
 }
 
 impl<R: TypeResolver> DeclarationSpecifier<R> {
@@ -806,6 +812,7 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Typedef)
             }
+            DeclarationSpecifier::FunctionSpecifier(_) => false,
         }
     }
 
@@ -816,6 +823,7 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Extern)
             }
+            DeclarationSpecifier::FunctionSpecifier(_) => false,
         }
     }
 
@@ -826,6 +834,7 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Static)
             }
+            DeclarationSpecifier::FunctionSpecifier(_) => false,
         }
     }
 }

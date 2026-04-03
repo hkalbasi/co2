@@ -151,6 +151,9 @@ impl<A: TypeResolver> DoTransform for DeclarationSpecifier<A> {
             }
             DeclarationSpecifier::TypeQualifier(e) => DeclarationSpecifier::TypeQualifier(*e),
             DeclarationSpecifier::StorageSpecifier(e) => DeclarationSpecifier::StorageSpecifier(*e),
+            DeclarationSpecifier::FunctionSpecifier(e) => {
+                DeclarationSpecifier::FunctionSpecifier(*e)
+            }
         }
     }
 }

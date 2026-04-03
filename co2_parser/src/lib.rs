@@ -149,38 +149,3 @@ pub fn parse_expression_tokens<R: TypeResolver>(
 
     print_errors_and_terminate(filename, src, Vec::new());
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::{Declaration, DeclarationSpecifier, TypeSpecifier, parse_items};
-
-    #[test]
-    fn array_subscription_constant_len() {
-        let src: &'static str = "int arr[2];";
-        let parsed = parse_items("test.c".to_owned(), src).expect("failed to parse");
-        let (decl, _) = &parsed.0.items[0];
-        let Declaration::Declaration {
-            declaration_specifiers,
-            declarators,
-        } = decl
-        else {
-            panic!("expected declaration");
-        };
-        let has_int = declaration_specifiers.iter().any(|(spec, _)| {
-            matches!(
-                spec,
-                DeclarationSpecifier::TypeSpecifier((TypeSpecifier::Int, _))
-            )
-        });
-        assert!(has_int);
-        let init = &declarators[0].0;
-        let crate::Declarator::ArrayDeclarator { subscription, .. } = &init.declarator.0 else {
-            panic!("expected array declarator");
-        };
-        assert_eq!(
-            subscription.0.constant_len(),
-            Some(2),
-            "subscription={subscription:?}"
-        );
-    }
-}

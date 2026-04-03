@@ -751,7 +751,7 @@ int main22() {
 int counter = 0;
 int uninit;
 
-int count() {
+inline int count() {
 	counter += 1;
 	return counter;
 }

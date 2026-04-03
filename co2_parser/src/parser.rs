@@ -1113,6 +1113,17 @@ where
     .map_with(|r, e| (r, e.span()))
 }
 
+fn function_specifier<'src, I>()
+-> impl Parser<'src, I, Spanned<FunctionSpecifier>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    choice([just(Token::Inline).to(FunctionSpecifier::Inline)])
+        .labelled("Function specifier")
+        .map_with(|r, e| (r, e.span()))
+}
+
 fn specifier_qualifier<'src, I, R: TypeResolver>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator<R>>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
@@ -1192,6 +1203,7 @@ where
             .map(DeclarationSpecifier::TypeSpecifier),
         type_qualifier().map(DeclarationSpecifier::TypeQualifier),
         storage_class_specifier().map(DeclarationSpecifier::StorageSpecifier),
+        function_specifier().map(DeclarationSpecifier::FunctionSpecifier),
     ))
     .map_with(|r, e| (r, e.span()))
 }
