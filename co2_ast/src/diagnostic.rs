@@ -12,6 +12,15 @@ pub fn take_errors() -> Vec<Rich<'static, Token, SimpleSpan>> {
     std::mem::take(&mut *guard)
 }
 
+pub fn safe_range(span: SimpleSpan, src_len: usize) -> std::ops::Range<usize> {
+    let mut start = span.start.min(src_len);
+    let mut end = span.end.min(src_len);
+    if end < start {
+        std::mem::swap(&mut start, &mut end);
+    }
+    start..end
+}
+
 pub fn print_errors_and_terminate(
     filename: String,
     src: &'static str,
@@ -25,16 +34,17 @@ pub fn print_errors_and_terminate(
                 .map(|e| e.map_token(|tok| tok.to_string())),
         )
         .for_each(|e| {
-            Report::build(ReportKind::Error, (filename.clone(), e.span().into_range()))
+            let range = safe_range(*e.span(), src.len());
+            Report::build(ReportKind::Error, (filename.clone(), range.clone()))
                 .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
                 .with_message(e.to_string())
                 .with_label(
-                    Label::new((filename.clone(), e.span().into_range()))
+                    Label::new((filename.clone(), range))
                         .with_message(e.reason().to_string())
                         .with_color(Color::Red),
                 )
                 .with_labels(e.contexts().map(|(label, span)| {
-                    Label::new((filename.clone(), span.into_range()))
+                    Label::new((filename.clone(), safe_range(*span, src.len())))
                         .with_message(format!("while parsing this {label}"))
                         .with_color(Color::Yellow)
                 }))

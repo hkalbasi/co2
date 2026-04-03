@@ -11,7 +11,7 @@ pub type Span = chumsky::span::SimpleSpan<usize>;
 pub type Spanned<T> = (T, Span);
 
 pub use chumsky::prelude::Rich;
-pub use diagnostic::{print_errors_and_terminate, take_errors};
+pub use diagnostic::{print_errors_and_terminate, safe_range, take_errors};
 pub use resolver::{StatelessResolver, TypeResolver};
 pub use transform::{DoTransform, Transformable};
 

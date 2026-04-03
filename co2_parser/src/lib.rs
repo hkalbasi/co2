@@ -32,16 +32,17 @@ pub fn parse_translation_unit<R: TypeResolver>(
         } else {
             for err in parse_errs {
                 let e = err.map_token(|tok| tok.to_string());
-                Report::build(ReportKind::Error, (filename.clone(), e.span().into_range()))
+                let range = co2_ast::safe_range(*e.span(), src.len());
+                Report::build(ReportKind::Error, (filename.clone(), range.clone()))
                     .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
                     .with_message(e.to_string())
                     .with_label(
-                        Label::new((filename.clone(), e.span().into_range()))
+                        Label::new((filename.clone(), range))
                             .with_message(e.reason().to_string())
                             .with_color(Color::Red),
                     )
                     .with_labels(e.contexts().map(|(label, span)| {
-                        Label::new((filename.clone(), span.into_range()))
+                        Label::new((filename.clone(), co2_ast::safe_range(*span, src.len())))
                             .with_message(format!("while parsing this {label}"))
                             .with_color(Color::Yellow)
                     }))
@@ -81,16 +82,17 @@ pub fn parse_compound_statement<R: TypeResolver>(
     } else {
         for err in parse_errs {
             let e = err.map_token(|tok| tok.to_string());
-            Report::build(ReportKind::Error, (filename.clone(), e.span().into_range()))
+            let range = co2_ast::safe_range(*e.span(), src.len());
+            Report::build(ReportKind::Error, (filename.clone(), range.clone()))
                 .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
                 .with_message(e.to_string())
                 .with_label(
-                    Label::new((filename.clone(), e.span().into_range()))
+                    Label::new((filename.clone(), range))
                         .with_message(e.reason().to_string())
                         .with_color(Color::Red),
                 )
                 .with_labels(e.contexts().map(|(label, span)| {
-                    Label::new((filename.clone(), span.into_range()))
+                    Label::new((filename.clone(), co2_ast::safe_range(*span, src.len())))
                         .with_message(format!("while parsing this {label}"))
                         .with_color(Color::Yellow)
                 }))
@@ -124,16 +126,17 @@ pub fn parse_expression_tokens<R: TypeResolver>(
     } else {
         for err in parse_errs {
             let e = err.map_token(|tok| tok.to_string());
-            Report::build(ReportKind::Error, (filename.clone(), e.span().into_range()))
+            let range = co2_ast::safe_range(*e.span(), src.len());
+            Report::build(ReportKind::Error, (filename.clone(), range.clone()))
                 .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
                 .with_message(e.to_string())
                 .with_label(
-                    Label::new((filename.clone(), e.span().into_range()))
+                    Label::new((filename.clone(), range))
                         .with_message(e.reason().to_string())
                         .with_color(Color::Red),
                 )
                 .with_labels(e.contexts().map(|(label, span)| {
-                    Label::new((filename.clone(), span.into_range()))
+                    Label::new((filename.clone(), co2_ast::safe_range(*span, src.len())))
                         .with_message(format!("while parsing this {label}"))
                         .with_color(Color::Yellow)
                 }))
