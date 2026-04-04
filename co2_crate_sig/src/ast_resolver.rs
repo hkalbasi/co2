@@ -221,6 +221,16 @@ impl co2_ast::TypeResolver for LocalResolver {
         (id, name)
     }
 
+    fn declare_ident_as_local(&self, ident: &(usize, String)) -> Self {
+        let mut next = self.clone();
+        next.localize();
+        next.locals.borrow_mut().insert(
+            ident.1.clone(),
+            (DefOrLocal::Local(ident.0 as u32), TypeQueryResult::Expr),
+        );
+        next
+    }
+
     fn start_new_scope(&self) -> Self {
         let mut next = self.clone();
         next.localize();

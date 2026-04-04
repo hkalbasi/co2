@@ -15,6 +15,11 @@ pub trait TypeResolver: Clone + 'static {
 
     fn classify_path(&self, path: &RustPath) -> Option<(TypeQueryResult, Self::ResolvedRustPath)>;
     fn register_ident(&self, name: String) -> Self::DeclarationIdent;
+    /// Per C11 6.2.1p7, the scope of a declared identifier begins at the end of its declarator,
+    /// before its initializer. This registers a single already-parsed declarator identifier as a
+    /// local expression value so it is visible when parsing subsequent initializers in the same
+    /// declaration.
+    fn declare_ident_as_local(&self, ident: &Self::DeclarationIdent) -> Self;
     fn register_decl(&self, decl: &Declaration<Self>) -> Self;
     fn start_new_scope(&self) -> Self;
     fn register_struct_or_union_specifier(
@@ -53,6 +58,10 @@ impl TypeResolver for StatelessResolver {
 
     fn register_ident(&self, name: String) -> Self::DeclarationIdent {
         name
+    }
+
+    fn declare_ident_as_local(&self, _ident: &String) -> Self {
+        self.clone()
     }
 
     fn register_decl(&self, _decl: &Declaration<Self>) -> Self {

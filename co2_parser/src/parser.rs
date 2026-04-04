@@ -1437,23 +1437,65 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    declarator(
-        resolver.clone(),
-        assignment_expression(resolver.clone(), stmt_rec.clone()),
-    )
-    .filter(|decl| declarator_has_name(&decl.0))
-    .then(
-        just(Token::Assign)
-            .ignore_then(initializer(resolver, stmt_rec.clone()))
-            .or_not(),
-    )
-    .map(|(declarator, initializer)| InitDeclarator {
-        declarator,
-        initializer,
+    // Per C11 6.2.1p7, the scope of each declared identifier begins at the end of its
+    // declarator, before its initializer is evaluated. Process declarators one-by-one,
+    // registering each name into the resolver before parsing the corresponding initializer.
+    // This also makes each name visible in subsequent initializers within the same declaration
+    // (e.g. `int a = x, x = sizeof(x), b = x` sees the inner `x` in `sizeof(x)` and `b = x`).
+    custom(move |inp| {
+        let mut current_resolver = resolver.clone();
+        let mut result = Vec::new();
+
+        loop {
+            // Save position before each declarator attempt. On failure (including the
+            // empty-declarator case for declarations like `enum E {...};`), we rewind here
+            // so the cursor is back to where the caller expects it.
+            let declarator_checkpoint = inp.save();
+            let item_start = inp.cursor();
+
+            let decl = match inp.parse(
+                declarator(
+                    current_resolver.clone(),
+                    assignment_expression(current_resolver.clone(), stmt_rec.clone()),
+                )
+                .filter(|d| declarator_has_name(&d.0)),
+            ) {
+                Ok(d) => d,
+                Err(_) => {
+                    inp.rewind(declarator_checkpoint);
+                    break;
+                }
+            };
+
+            // Scope of identifier begins at the end of its declarator (C11 6.2.1p7).
+            if let Some(ident) = decl.0.ident() {
+                current_resolver = current_resolver.declare_ident_as_local(&ident);
+            }
+
+            let init: Option<Spanned<Initializer<R>>> = inp.parse(
+                just(Token::Assign)
+                    .ignore_then(initializer(current_resolver.clone(), stmt_rec.clone()))
+                    .or_not(),
+            )?;
+
+            let item_span = inp.span_since(&item_start);
+            result.push((
+                InitDeclarator {
+                    declarator: decl,
+                    initializer: init,
+                },
+                item_span,
+            ));
+
+            let comma_checkpoint = inp.save();
+            if inp.parse(just(Token::Comma)).is_err() {
+                inp.rewind(comma_checkpoint);
+                break;
+            }
+        }
+
+        Ok(result)
     })
-    .map_with(|r, e| (r, e.span()))
-    .separated_by(just(Token::Comma))
-    .collect()
 }
 
 fn declarator_has_name<R: TypeResolver>(decl: &Declarator<R>) -> bool {

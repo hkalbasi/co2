@@ -1283,6 +1283,21 @@ int main46()
 
 	return 0;
 }
+
+int main47() {
+	char x = sizeof(x);
+	{
+		int a = x, x = sizeof(x), b = x;
+		if (x != sizeof(int) || a != sizeof(char) || b != x) {
+			return 1;
+		}
+	}
+	if (x != sizeof(char)) {
+		return 2;
+	}
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1297,7 +1312,7 @@ int main() {
 		main31, main32, main33, main34, main35,
 		main36, main37, main38, main39, main40,
 		main41, main42, main43, main44, main45,
-		main46,
+		main46, main47,
 	};
 	
 	int i;
