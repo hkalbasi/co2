@@ -1311,6 +1311,20 @@ int main48() {
 	return 0;
 }
 
+/* Unsized array of function pointers: size inferred from initializer count. */
+static int add_one(int x) { return x + 1; }
+static int add_two(int x) { return x + 2; }
+static int add_three(int x) { return x + 3; }
+
+int main49() {
+	int (*fns[])(int) = { add_one, add_two, add_three };
+	if (sizeof(fns) / sizeof(fns[0]) != 3) return 1;
+	if (fns[0](10) != 11) return 2;
+	if (fns[1](10) != 12) return 3;
+	if (fns[2](10) != 13) return 4;
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1325,7 +1339,7 @@ int main() {
 		main31, main32, main33, main34, main35,
 		main36, main37, main38, main39, main40,
 		main41, main42, main43, main44, main45,
-		main46, main47, main48,
+		main46, main47, main48, main49,
 	};
 	
 	int i;

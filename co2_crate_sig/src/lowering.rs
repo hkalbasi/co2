@@ -637,9 +637,13 @@ fn flattened_scalar_slots(
             } else if let Some(aliased) = base.typedef_tys.get(def) {
                 flattened_scalar_slots(aliased, resolver)
             } else {
-                Err("unsupported element type in unsized array inference".to_owned())
+                // Unknown ADT (e.g. MaybeUninit<fn(...)> for function pointers, or
+                // other Rust stdlib types): opaque to our layout model, counts as one
+                // initializer slot just like any scalar.
+                Ok(1)
             }
         }
-        _ => Err("unsupported element type in unsized array inference".to_owned()),
+        // Tuple (including unit `()`) and any other opaque types: treat as one slot.
+        _ => Ok(1),
     }
 }
