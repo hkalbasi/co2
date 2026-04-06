@@ -777,11 +777,14 @@ where
             })
             .boxed();
 
+        // C grammar: logical-OR-expression ? expression : conditional-expression
+        // The "then" branch is a full expression (comma operator allowed);
+        // the "else" branch is conditional-expression (no top-level comma).
         let conditional_expr = logical_or_expr
             .clone()
             .then(
                 just(Token::Question)
-                    .ignore_then(rec.clone())
+                    .ignore_then(expression(rec.clone()))
                     .then_ignore(just(Token::Colon))
                     .then(rec.clone())
                     .map(|(then_expr, else_expr)| (then_expr, else_expr))

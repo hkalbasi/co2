@@ -1298,6 +1298,19 @@ int main47() {
 	return 0;
 }
 
+/* Comma operator: in ternary then-branch, for-loop increment, standalone. */
+int main48() {
+	int a = 0, b = 0;
+	/* comma in ternary then-branch (C grammar: ? expression : cond-expr) */
+	int x = 1 ? (a = 10, b = 20, a + b) : -1;
+	if (x != 30 || a != 10 || b != 20) return 1;
+	/* comma in for init and increment */
+	int i, j;
+	for (i = 0, j = 10; i < 3; i++, j--) {}
+	if (i != 3 || j != 7) return 2;
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1312,7 +1325,7 @@ int main() {
 		main31, main32, main33, main34, main35,
 		main36, main37, main38, main39, main40,
 		main41, main42, main43, main44, main45,
-		main46, main47,
+		main46, main47, main48,
 	};
 	
 	int i;
