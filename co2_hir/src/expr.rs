@@ -601,7 +601,6 @@ impl HirCtx<'_> {
                             let off = offsets.get(field_idx)
                                 .ok_or_else(|| format!("offsetof: field index {field_idx} out of bounds"))?
                                 .bytes();
-                            eprintln!("DEBUG offsetof: field '{field}' idx={field_idx} offset={off} all_offsets={:?}", offsets.iter().map(|s| s.bytes()).collect::<Vec<_>>());
                             off
                         }
                         other => return Err(format!("offsetof: unsupported layout kind for type: {other:?}")),

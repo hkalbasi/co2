@@ -1026,11 +1026,27 @@ int count_inner_static() {
 	return x;
 }
 
+int count_inner_static_array() {
+	static int x[] = {0, 1, 2};
+	x[0] += 10;
+	x[1] += 20;
+	return x[0] + x[1] + x[2];
+}
+
 int main32()
 {
 	count_inner_static();
 	count_inner_static();
-	return count_inner_static() - 3;
+	if (count_inner_static() != 3) {
+		return 1;
+	}
+
+	count_inner_static_array();
+	count_inner_static_array();
+	if (count_inner_static_array() != 93) {
+		return 2;
+	}
+	return 0;
 }
 
 struct T static_s1;
@@ -1325,6 +1341,16 @@ int main49() {
 	return 0;
 }
 
+int main50() {
+	static int primes[] = { 2, 3, 5, 7, 11 };
+	if (sizeof(primes) / sizeof(primes[0]) != 5) return 1;
+	if (primes[0] != 2) return 2;
+	if (primes[4] != 11) return 3;
+	primes[0] = 99;
+	if (primes[0] != 99) return 4;
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1339,7 +1365,7 @@ int main() {
 		main31, main32, main33, main34, main35,
 		main36, main37, main38, main39, main40,
 		main41, main42, main43, main44, main45,
-		main46, main47, main48, main49,
+		main46, main47, main48, main49, main50,
 	};
 	
 	int i;

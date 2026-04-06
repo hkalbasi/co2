@@ -389,24 +389,50 @@ pub fn lower_crate_sig(
     let pending_static = std::mem::take(&mut ctx.resolver.borrow_mut().pending_static);
     for (id, name, specifiers, declarator, parser_span) in pending_static {
         let span = ctx.co2_span_to_rustc(parser_span);
-        let ty = ctx.base_ty_of_decl(specifiers, parser_span);
+        let base_ty = ctx.base_ty_of_decl(specifiers, parser_span);
         let resolver = LocalResolver::new(ctx.resolver.clone());
-        let (_, ty, _) = ctx.lower_value_decl_ctype(ty, declarator.declarator, &resolver);
-        let CTy::Ty(ty) = ty else {
-            ctx.terminate_with_error(parser_span, "static did not lower to a first-class type");
-        };
-        ctx.hir_items.push(HirModuleItem::Static {
-            name,
-            id,
-            ty,
-            span,
-            mutable: true,
-        });
-        if let Some(initializer) = declarator.initializer {
-            ctx.mir_owners
-                .insert(id, MirOwnerInfo::Static { initializer });
-        } else {
-            ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+        let (_, ty, _) = ctx.lower_value_decl_ctype(base_ty, declarator.declarator, &resolver);
+        match ty {
+            CTy::Ty(ty) => {
+                ctx.hir_items.push(HirModuleItem::Static {
+                    name,
+                    id,
+                    ty,
+                    span,
+                    mutable: true,
+                });
+                if let Some(initializer) = declarator.initializer {
+                    ctx.mir_owners
+                        .insert(id, MirOwnerInfo::Static { initializer });
+                } else {
+                    ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+                }
+            }
+            CTy::UnsizedArray(elem_ty) => {
+                let initializer = if let Some((initializer, init_span)) = declarator.initializer {
+                    (initializer, init_span)
+                } else {
+                    ctx.terminate_with_error(
+                        parser_span,
+                        "local static with unsized array type must have an initializer",
+                    );
+                };
+                let len = infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
+                    .unwrap_or_else(|err| ctx.terminate_with_error(parser_span, &err));
+                let sized_ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
+                ctx.hir_items.push(HirModuleItem::Static {
+                    name,
+                    id,
+                    ty: sized_ty,
+                    span,
+                    mutable: true,
+                });
+                ctx.mir_owners
+                    .insert(id, MirOwnerInfo::Static { initializer });
+            }
+            _ => {
+                ctx.terminate_with_error(parser_span, "static did not lower to a first-class type");
+            }
         }
     }
 
