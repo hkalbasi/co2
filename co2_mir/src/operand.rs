@@ -48,6 +48,48 @@ fn find_ptr_offset_from_fn(
         .and_then(|f| f.fn_def)
 }
 
+fn find_ptr_offset_fn(
+    deps: &rustc_public_generative::DependencyInfo,
+    mutability: Mutability,
+) -> Option<rustc_public_generative::rustc_public::ty::FnDef> {
+    let exact = match mutability {
+        Mutability::Mut => [
+            "core::ptr::mut_ptr::offset",
+            "std::ptr::mut_ptr::offset",
+            "core::ptr::const_ptr::offset",
+            "std::ptr::const_ptr::offset",
+        ],
+        Mutability::Not => [
+            "core::ptr::const_ptr::offset",
+            "std::ptr::const_ptr::offset",
+            "core::ptr::mut_ptr::offset",
+            "std::ptr::mut_ptr::offset",
+        ],
+    };
+    for wanted in exact {
+        if let Some(found) = deps
+            .functions
+            .iter()
+            .find(|f| f.fn_def.is_some() && f.path.contains(wanted))
+            .and_then(|f| f.fn_def)
+        {
+            return Some(found);
+        }
+    }
+
+    deps.functions
+        .iter()
+        .find(|f| {
+            f.fn_def.is_some()
+                && f.path.ends_with("::offset")
+                && match mutability {
+                    Mutability::Mut => f.path.contains("::ptr::mut_ptr::"),
+                    Mutability::Not => f.path.contains("::ptr::const_ptr::"),
+                }
+        })
+        .and_then(|f| f.fn_def)
+}
+
 fn maybe_uninit_fn_ptr_inner(ty: Ty) -> Option<Ty> {
     let TyKind::RigidTy(RigidTy::Adt(_, args)) = ty.kind() else {
         return None;
@@ -78,6 +120,52 @@ fn callable_sig(
 }
 
 impl Builder<'_> {
+    fn emit_ptr_offset(
+        &mut self,
+        base_op: MirOperand,
+        pointee_ty: Ty,
+        ptr_mutability: Mutability,
+        index: &HirExpr,
+        out_ty: Ty,
+        span: RustSpan,
+    ) -> MirOperand {
+        let isize_ty = Ty::signed_ty(IntTy::Isize);
+        let idx_local = self.new_temp(isize_ty, Mutability::Mut, span);
+        let idx_op = self.lower_expr_to_operand(index);
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(
+                place(idx_local),
+                Rvalue::Cast(CastKind::IntToInt, idx_op, isize_ty),
+            ),
+            span,
+        });
+
+        let offset = find_ptr_offset_fn(self.deps, ptr_mutability)
+            .expect("missing pointer offset dependency function");
+        let generic_args = match offset.ty().kind() {
+            TyKind::RigidTy(RigidTy::FnDef(_, existing)) if !existing.0.is_empty() => existing
+                .0
+                .iter()
+                .map(|arg| match arg {
+                    GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_)) => {
+                        GenericArgKind::Type(pointee_ty)
+                    }
+                    _ => arg.clone(),
+                })
+                .collect(),
+            _ => vec![GenericArgKind::Type(pointee_ty)],
+        };
+
+        let ret_local = self.new_temp(out_ty, Mutability::Mut, span);
+        self.emit_call_block(
+            fn_const_operand(offset, generic_args, span),
+            vec![base_op, MirOperand::Copy(place(idx_local))],
+            place(ret_local),
+            span,
+        );
+        MirOperand::Copy(place(ret_local))
+    }
+
     fn write_value_into_maybe_uninit_storage(
         &mut self,
         dst_maybe_ty: Ty,
@@ -337,29 +425,10 @@ impl Builder<'_> {
             }
             HirExprKind::PtrOffset { base, index } => {
                 let base_op = self.lower_expr_to_operand(base);
-                let isize_ty = Ty::signed_ty(IntTy::Isize);
-                let idx_local = self.new_temp(isize_ty, Mutability::Mut, expr.span);
-                let idx_op = self.lower_expr_to_operand(index);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(idx_local),
-                        Rvalue::Cast(CastKind::IntToInt, idx_op, isize_ty),
-                    ),
-                    span: expr.span,
-                });
-                let ret_local = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(ret_local),
-                        Rvalue::BinaryOp(
-                            rustc_public_generative::rustc_public::mir::BinOp::Offset,
-                            base_op,
-                            MirOperand::Copy(place(idx_local)),
-                        ),
-                    ),
-                    span: expr.span,
-                });
-                MirOperand::Copy(place(ret_local))
+                let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, mutability)) = base.ty.kind() else {
+                    panic!("ptr offset base must be raw pointer, got {:?}", base.ty);
+                };
+                self.emit_ptr_offset(base_op, pointee_ty, mutability, index, expr.ty, expr.span)
             }
             HirExprKind::PtrDiff { lhs, rhs } => {
                 let lhs_op = self.lower_expr_to_operand(lhs);
@@ -661,32 +730,21 @@ impl Builder<'_> {
                     ),
                     span: expr.span,
                 });
-                let rhs_op = self.lower_expr_to_operand(rhs);
-                let isize_ty = Ty::signed_ty(IntTy::Isize);
-                let idx_local = self.new_temp(isize_ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(idx_local),
-                        Rvalue::Cast(CastKind::IntToInt, rhs_op, isize_ty),
-                    ),
-                    span: expr.span,
-                });
-                let new_ptr = self.new_temp(lhs.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(new_ptr),
-                        Rvalue::BinaryOp(
-                            rustc_public_generative::rustc_public::mir::BinOp::Offset,
-                            MirOperand::Copy(place(old_lhs)),
-                            MirOperand::Copy(place(idx_local)),
-                        ),
-                    ),
-                    span: expr.span,
-                });
+                let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, mutability)) = lhs.ty.kind() else {
+                    panic!("ptr offset assignment lhs must be raw pointer, got {:?}", lhs.ty);
+                };
+                let new_ptr = self.emit_ptr_offset(
+                    MirOperand::Copy(place(old_lhs)),
+                    pointee_ty,
+                    mutability,
+                    rhs,
+                    lhs.ty,
+                    expr.span,
+                );
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         lhs_place.clone(),
-                        Rvalue::Use(MirOperand::Copy(place(new_ptr))),
+                        Rvalue::Use(new_ptr),
                     ),
                     span: expr.span,
                 });

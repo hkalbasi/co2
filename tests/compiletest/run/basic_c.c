@@ -1365,6 +1365,15 @@ int main51() {
 	return main51_aux(&s);
 }
 
+static unsigned char main52_data[] = { 1, 2, 3, 4, 5 };
+static unsigned char *main52_ptr = &main52_data[2];
+
+int main52() {
+	if (main52_ptr[0] != 3) return 1;
+	if (main52_ptr[1] != 4) return 2;
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1380,7 +1389,7 @@ int main() {
 		main36, main37, main38, main39, main40,
 		main41, main42, main43, main44, main45,
 		main46, main47, main48, main49, main50,
-		main51,
+		main51, main52,
 	};
 	
 	int i;
