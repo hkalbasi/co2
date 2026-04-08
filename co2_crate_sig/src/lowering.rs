@@ -126,9 +126,9 @@ pub fn lower_crate_sig(
             resolver: Resolver::new(&ctx, deps, &tu, foreign_mod),
             local_counter: 0,
             fake_defs_counter: 0,
+            local_tys: HashMap::new(),
             pending_typedefs: vec![],
             pending_static: vec![],
-            pending_array_len_consts: vec![],
             array_len_consts: HashMap::new(),
             array_len_const_exprs: HashMap::new(),
             hir_ctx: unsafe { std::mem::transmute(ctx) },
@@ -185,6 +185,7 @@ pub fn lower_crate_sig(
                 if name == "main" && !no_main {
                     sig.abi = FunctionAbi::Rust;
                 }
+                let param_tys = sig.inputs.clone();
                 let id = FnDef(id);
                 ctx.hir_items.push(HirModuleItem::Function {
                     name,
@@ -196,8 +197,10 @@ pub fn lower_crate_sig(
                 resolver = resolver.start_new_scope();
                 let param_names = param_names
                     .into_iter()
-                    .map(|name| {
+                    .zip(param_tys.into_iter())
+                    .map(|(name, ty)| {
                         let id = resolver.add_local(name.clone());
+                        resolver.base.borrow_mut().set_local_ty(id as u32, ty);
                         (id, name)
                     })
                     .collect();
@@ -434,21 +437,6 @@ pub fn lower_crate_sig(
                 ctx.terminate_with_error(parser_span, "static did not lower to a first-class type");
             }
         }
-    }
-
-    let pending_array_len_consts = ctx.resolver.borrow_mut().take_pending_array_len_consts();
-    for (id, name, expr, span) in pending_array_len_consts {
-        let span = ctx.co2_span_to_rustc(span);
-        let rhs = ctx.allocate_def_id(id, DefData::AnonConst);
-        ctx.hir_items.push(HirModuleItem::Const {
-            name,
-            id,
-            ty: HirTy::usize_ty(span),
-            rhs,
-            span,
-        });
-        ctx.mir_owners
-            .insert(rhs, MirOwnerInfo::EnumConstExplicit { initializer: expr });
     }
 
     let structs = ctx.resolver.borrow_mut().emit_structs().collect::<Vec<_>>();

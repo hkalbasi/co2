@@ -418,12 +418,83 @@ impl LocalResolverBase {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
             }
+            Expression::Sizeof(expr) => {
+                let ty = self.type_of_expr_for_sizeof(expr)?;
+                Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
+            }
             Expression::Offsetof { ty: type_name, field: _ } => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
             }
             _ => Err("unsupported constant expression in array size".to_owned()),
         }
+    }
+
+    fn type_of_expr_for_sizeof(
+        &mut self,
+        (expr, span): &Spanned<Expression<LocalResolver>>,
+    ) -> Result<HirTy, String> {
+        let rust_span = self.co2_span_to_rustc(*span);
+        match expr {
+            Expression::Identifier((resolved, _)) => match resolved {
+                crate::DefOrLocal::Local(local) => self
+                    .local_tys
+                    .get(local)
+                    .cloned()
+                    .ok_or_else(|| format!("missing local type for local {local}")),
+                crate::DefOrLocal::Prim(primitive_ty) => Ok(self.hir_ty_of_prim(*primitive_ty, rust_span)),
+                _ => Err("unsupported identifier in sizeof(array size expr)".to_owned()),
+            },
+            Expression::Field(base, field) => {
+                let base_ty = self.type_of_expr_for_sizeof(base)?;
+                self.lookup_field_ty_for_sizeof(base_ty, &field.0)
+            }
+            Expression::Arrow(base, field) => {
+                let base_ty = self.type_of_expr_for_sizeof(base)?;
+                let pointee = match base_ty.kind {
+                    HirTyKind::RawPtr(_, inner) | HirTyKind::Ref(_, _, inner) => *inner,
+                    _ => {
+                        return Err("arrow base must be a pointer in sizeof(array size expr)".to_owned());
+                    }
+                };
+                self.lookup_field_ty_for_sizeof(pointee, &field.0)
+            }
+            Expression::Subscript(base, _) => {
+                let base_ty = self.type_of_expr_for_sizeof(base)?;
+                match base_ty.kind {
+                    HirTyKind::Array(_, inner)
+                    | HirTyKind::RawPtr(_, inner)
+                    | HirTyKind::Ref(_, _, inner) => Ok(*inner),
+                    _ => Err("subscript base must be array or pointer in sizeof(array size expr)".to_owned()),
+                }
+            }
+            Expression::Cast { type_name, .. } => self.lower_type_name_for_const(*type_name.clone(), *span),
+            Expression::UnaryOp(op, inner) => match op {
+                UnaryOp::Deref => {
+                    let inner_ty = self.type_of_expr_for_sizeof(inner)?;
+                    match inner_ty.kind {
+                        HirTyKind::RawPtr(_, pointee) | HirTyKind::Ref(_, _, pointee) => Ok(*pointee),
+                        _ => Err("cannot dereference non-pointer in sizeof(array size expr)".to_owned()),
+                    }
+                }
+                UnaryOp::AddrOf => {
+                    let inner_ty = self.type_of_expr_for_sizeof(inner)?;
+                    Ok(HirTy::new_ptr(inner_ty, Mutability::Mut, rust_span))
+                }
+                UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::Com => {
+                    self.type_of_expr_for_sizeof(inner)
+                }
+            },
+            _ => Err("unsupported sizeof operand in array size".to_owned()),
+        }
+    }
+
+    fn lookup_field_ty_for_sizeof(&self, base_ty: HirTy, field_name: &str) -> Result<HirTy, String> {
+        let HirTyKind::Adt(def, _) = base_ty.kind else {
+            return Err("field access requires struct or union type in sizeof(array size expr)".to_owned());
+        };
+        self.adt_field_ty(def, field_name)
+            .ok_or_else(|| format!("unknown field `{field_name}` in sizeof(array size expr)"))
     }
 
     fn lower_type_name_for_const(

@@ -25,6 +25,7 @@ pub struct LocalResolverBase {
     pub resolver: Resolver,
     pub local_counter: usize,
     pub fake_defs_counter: usize,
+    pub local_tys: HashMap<u32, HirTy>,
     pub pending_typedefs: Vec<(
         DefId,
         String,
@@ -39,10 +40,8 @@ pub struct LocalResolverBase {
         InitDeclarator<LocalResolver>,
         co2_ast::Span,
     )>,
-    pub pending_array_len_consts:
-        Vec<(DefId, String, co2_ast::Spanned<Expression<LocalResolver>>, co2_ast::Span)>,
     pub array_len_consts: HashMap<(usize, usize), RegisteredArrayLenConst>,
-    pub array_len_const_exprs: HashMap<DefId, co2_ast::Spanned<Expression<LocalResolver>>>,
+    pub array_len_const_exprs: HashMap<usize, co2_ast::Spanned<Expression<LocalResolver>>>,
     pub hir_ctx: &'static HirStructureCtx<'static>,
     pub file_id: FileId,
     pub source_name: String,
@@ -56,14 +55,14 @@ pub struct LocalResolverBase {
 
 #[derive(Debug, Clone)]
 pub struct RegisteredArrayLenConst {
-    pub def_id: DefId,
+    pub id: usize,
     pub expr: co2_ast::Spanned<Expression<LocalResolver>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RegisteredSubscription {
     pub raw: co2_ast::LazySubscription,
-    pub array_len_const: Option<DefId>,
+    pub array_len_const: Option<usize>,
 }
 
 impl LocalResolverBase {
@@ -77,12 +76,6 @@ impl LocalResolverBase {
         (def_id, fake_name)
     }
 
-    pub fn take_pending_array_len_consts(
-        &mut self,
-    ) -> Vec<(DefId, String, co2_ast::Spanned<Expression<LocalResolver>>, co2_ast::Span)> {
-        std::mem::take(&mut self.pending_array_len_consts)
-    }
-
     pub fn lookup_array_len_const(
         &self,
         span: co2_ast::Span,
@@ -94,19 +87,23 @@ impl LocalResolverBase {
 
     pub fn lookup_array_len_const_expr(
         &self,
-        def_id: DefId,
+        id: usize,
     ) -> Option<co2_ast::Spanned<Expression<LocalResolver>>> {
-        self.array_len_const_exprs.get(&def_id).cloned()
+        self.array_len_const_exprs.get(&id).cloned()
+    }
+
+    pub fn set_local_ty(&mut self, local: u32, ty: HirTy) {
+        self.local_tys.insert(local, ty);
     }
 }
 
 pub fn eval_registered_array_len_const(
     resolver: &LocalResolver,
-    def_id: DefId,
+    id: usize,
 ) -> Result<usize, String> {
     let mut base = resolver.base.borrow_mut();
     let expr = base
-        .lookup_array_len_const_expr(def_id)
+        .lookup_array_len_const_expr(id)
         .ok_or_else(|| "missing registered array size constant expression".to_owned())?;
     base.eval_array_len_expr(&expr)
 }
@@ -167,11 +164,9 @@ impl LocalResolver {
         let source = self.base.borrow().source;
         let expr = parse_expression_tokens(tokens, source_name, source, self.clone());
         let mut base = self.base.borrow_mut();
-        let (def_id, fake_name) = base.emit_fake_def(DefData::ValueNs);
-        let registered = RegisteredArrayLenConst { def_id, expr: expr.clone() };
-        base.pending_array_len_consts
-            .push((def_id, fake_name, expr, subscription.1));
-        base.array_len_const_exprs.insert(def_id, registered.expr.clone());
+        let id = base.array_len_consts.len();
+        let registered = RegisteredArrayLenConst { id, expr: expr.clone() };
+        base.array_len_const_exprs.insert(id, registered.expr.clone());
         base.array_len_consts.insert(key, registered.clone());
         Some(registered)
     }
@@ -329,7 +324,7 @@ impl co2_ast::TypeResolver for LocalResolver {
             raw: subscription.0.clone(),
             array_len_const: self
                 .register_array_len_const(subscription)
-                .map(|registered| registered.def_id),
+                .map(|registered| registered.id),
         }
     }
 }

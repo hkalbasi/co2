@@ -183,6 +183,19 @@ impl LocalResolverBase {
         Some((data.kind, fields))
     }
 
+    pub(crate) fn adt_field_ty(
+        &self,
+        def: DefId,
+        field_name: &str,
+    ) -> Option<rustc_public_generative::HirTy> {
+        let data = self.struct_manager.definitions.get(&def)?;
+        data.fields
+            .as_ref()?
+            .iter()
+            .find(|field| field.name == field_name)
+            .map(|field| field.ty.clone())
+    }
+
     fn define_def(
         &mut self,
         def: DefId,

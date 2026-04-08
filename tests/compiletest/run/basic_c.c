@@ -1351,6 +1351,20 @@ int main50() {
 	return 0;
 }
 
+struct main51_s {
+	char bytes[16];
+};
+
+static int main51_aux(struct main51_s *p) {
+	char copy[sizeof(p->bytes)];
+	return sizeof(copy) != sizeof(p->bytes);
+}
+
+int main51() {
+	struct main51_s s;
+	return main51_aux(&s);
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1366,6 +1380,7 @@ int main() {
 		main36, main37, main38, main39, main40,
 		main41, main42, main43, main44, main45,
 		main46, main47, main48, main49, main50,
+		main51,
 	};
 	
 	int i;
