@@ -304,7 +304,7 @@ pub enum TypeSpecifier<R: TypeResolver> {
 
 #[derive(Debug, Clone)]
 pub struct StructOrUnionField<R: TypeResolver> {
-    pub specifiers: Vec<Spanned<TypeSpecifier<R>>>,
+    pub specifiers: Vec<Spanned<SpecifierQualifier<R>>>,
     pub declarators: Vec<Spanned<StructDeclarator<R>>>,
 }
 

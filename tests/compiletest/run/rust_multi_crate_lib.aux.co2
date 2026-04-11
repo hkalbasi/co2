@@ -39,5 +39,11 @@ typedef Union1* Union1MutPtr;
 typedef const Union1* Union1ConstPtr;
 typedef Union1 * const * ConstPtrToMutPtrToUnion1;
 typedef const Union1 ** MutPtrToConstPtrToUnion1;
+typedef struct {
+    int int_field;
+    char* char_star;
+    const char* const_char_star;
+    const char* const* const_const_char_star;
+} ComplexStruct;
 
 long long int HUGE_LONG = 0xabcd00000000;

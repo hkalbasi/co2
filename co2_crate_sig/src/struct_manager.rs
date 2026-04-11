@@ -225,7 +225,17 @@ impl LocalResolverBase {
                 let specifiers = field
                     .specifiers
                     .iter()
-                    .map(|f| (DeclarationSpecifier::TypeSpecifier(f.clone()), f.1))
+                    .map(|f| {
+                        let spec = match &f.0 {
+                            co2_ast::SpecifierQualifier::TypeSpecifier(ts) => {
+                                DeclarationSpecifier::TypeSpecifier(ts.clone())
+                            }
+                            co2_ast::SpecifierQualifier::TypeQualifier(tq) => {
+                                DeclarationSpecifier::TypeQualifier(*tq)
+                            }
+                        };
+                        (spec, f.1)
+                    })
                     .collect::<Vec<_>>();
                 let base_const = has_const_qualifier_in_decl_specs(&specifiers);
                 let base = self.base_ty_of_decl(specifiers, *span);

@@ -988,17 +988,19 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    let single = type_qualifier()
-        .repeated()
-        .ignore_then(left_recursion(
-            struct_declarator(declarator_rec)
-                .separated_by(just(Token::Comma))
-                .collect()
-                .then_ignore(just(Token::Semicolon)),
-            type_specifier_rec,
+    let single = left_recursion(
+        struct_declarator(declarator_rec)
+            .separated_by(just(Token::Comma))
+            .collect()
+            .then_ignore(just(Token::Semicolon)),
+        choice((
+            type_specifier_rec.map(SpecifierQualifier::TypeSpecifier),
+            type_qualifier().map(SpecifierQualifier::TypeQualifier),
         ))
-    .map(|(specifiers, declarators)| StructOrUnionField {
-        specifiers,
+        .map_with(|r, e| (r, e.span())),
+    )
+    .map(|(specs, declarators)| StructOrUnionField {
+        specifiers: specs,
         declarators,
     })
     .map_with(|r, e| (r, e.span()));

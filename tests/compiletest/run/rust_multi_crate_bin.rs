@@ -2,7 +2,7 @@
 //@ aux-lib: support_lib rust_multi_crate_lib.aux.co2
 //@ run-status: 0
 
-use support_lib::{Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG};
+use support_lib::{Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG, ComplexStruct};
 
 const _: () = {
     use std::ptr::null;
@@ -21,7 +21,18 @@ const _: () = {
     let _: *const support_lib::Union1MutPtr = null::<*mut Union1>(); 
     let _: *const support_lib::Union1ConstPtr = null::<*const Union1>(); 
     let _: *const support_lib::ConstPtrToMutPtrToUnion1 = null::<*const *mut Union1>(); 
-    let _: *const support_lib::MutPtrToConstPtrToUnion1 = null::<*mut *const Union1>(); 
+    let _: *const support_lib::MutPtrToConstPtrToUnion1 = null::<*mut *const Union1>();
+
+    let dummy: *const ComplexStruct = null();
+
+    if false {
+        unsafe {
+            let _: *const ffi::c_int = &raw const (*dummy).int_field;
+            let _: *const *mut ffi::c_char = &raw const (*dummy).char_star;
+            let _: *const *const ffi::c_char = &raw const (*dummy).const_char_star;
+            let _: *const *const *const ffi::c_char = &raw const (*dummy).const_const_char_star;
+        }
+    }
 };
 
 fn main() {

@@ -1374,6 +1374,19 @@ int main52() {
 	return 0;
 }
 
+typedef int main53_i32;
+struct main53_s {
+	main53_i32 const *p;
+};
+
+int main53() {
+	main53_i32 v = 7;
+	struct main53_s s;
+	s.p = &v;
+	if (*s.p != 7) return 1;
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1389,7 +1402,7 @@ int main() {
 		main36, main37, main38, main39, main40,
 		main41, main42, main43, main44, main45,
 		main46, main47, main48, main49, main50,
-		main51, main52,
+		main51, main52, main53,
 	};
 	
 	int i;
