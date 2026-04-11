@@ -415,9 +415,36 @@ where
             ),
         ));
 
+        let generic_selection = just(Token::Generic).ignore_then(
+            rec.clone()
+                .then_ignore(just(Token::Comma))
+                .then(
+                    choice((
+                        just(Token::Default)
+                            .ignore_then(just(Token::Colon))
+                            .ignore_then(rec.clone())
+                            .map(|expr| GenericAssociation::Default { expr }),
+                        type_name(resolver.clone(), rec.clone())
+                            .then_ignore(just(Token::Colon))
+                            .then(rec.clone())
+                            .map(|(type_name, expr)| GenericAssociation::Type { type_name, expr }),
+                    ))
+                    .map_with(|assoc, e| (assoc, e.span()))
+                    .separated_by(just(Token::Comma))
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
+                )
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .map(|(controlling, associations)| Expression::GenericSelection {
+                    controlling: Box::new(controlling),
+                    associations,
+                }),
+        );
+
         let primary_expression = choice((
             compound_literal,
             va_exp,
+            generic_selection,
             just(Token::LParen)
                 .then_ignore(look_ahead(Token::LBrace))
                 .ignore_then(stmt_rec.clone())
@@ -961,13 +988,15 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    let single = left_recursion(
-        struct_declarator(declarator_rec)
-            .separated_by(just(Token::Comma))
-            .collect()
-            .then_ignore(just(Token::Semicolon)),
-        type_specifier_rec,
-    )
+    let single = type_qualifier()
+        .repeated()
+        .ignore_then(left_recursion(
+            struct_declarator(declarator_rec)
+                .separated_by(just(Token::Comma))
+                .collect()
+                .then_ignore(just(Token::Semicolon)),
+            type_specifier_rec,
+        ))
     .map(|(specifiers, declarators)| StructOrUnionField {
         specifiers,
         declarators,

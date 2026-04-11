@@ -198,9 +198,6 @@ fn strip_extension_keywords(src: &str) -> String {
                     | "__inline__"
                     | "__restrict"
                     | "__restrict__"
-                    | "const"
-                    | "volatile"
-                    | "restrict"
                     | "_Complex"
                     | "_Noreturn"
             );

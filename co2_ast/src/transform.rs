@@ -1,8 +1,8 @@
 use crate::{
     DeclarationSpecifier, Declarator, Designator, EnumSpecifier, Enumerator, Expression,
-    Initializer, InitializerItem, ParameterList, Spanned, SpecifierQualifier, StructDeclarator,
-    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeName, TypeResolver,
-    TypeSpecifier,
+    GenericAssociation, Initializer, InitializerItem, ParameterList, Spanned, SpecifierQualifier,
+    StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeName,
+    TypeResolver, TypeSpecifier,
 };
 
 pub trait Transformable<F: TypeResolver>: TypeResolver {
@@ -426,6 +426,29 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
             } => Expression::CompoundLiteral {
                 type_name: type_name.transform(b),
                 initializer: initializer.transform(b),
+            },
+            Expression::GenericSelection {
+                controlling,
+                associations,
+            } => Expression::GenericSelection {
+                controlling: controlling.transform(b),
+                associations: associations
+                    .iter()
+                    .map(|assoc| {
+                        let transformed = match &assoc.0 {
+                            GenericAssociation::Type { type_name, expr } => {
+                                GenericAssociation::Type {
+                                    type_name: type_name.transform(b),
+                                    expr: expr.transform(b),
+                                }
+                            }
+                            GenericAssociation::Default { expr } => GenericAssociation::Default {
+                                expr: expr.transform(b),
+                            },
+                        };
+                        (transformed, assoc.1)
+                    })
+                    .collect(),
             },
             Expression::VaArg { .. }
             | Expression::VaStart { .. }

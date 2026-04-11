@@ -1,6 +1,6 @@
 use co2_ast::{
     BinOp, Constant, DeclarationSpecifier, Declarator, Expression, Span, Spanned,
-    StructOrUnionKind, TypeName, TypeResolver, TypeSpecifier, UnaryOp,
+    StructOrUnionKind, TypeName, TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp,
 };
 use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst, HirTyKind};
 use rustc_public_generative::{
@@ -151,6 +151,17 @@ impl CompressedTypeSpecifier {
     }
 }
 
+fn has_const_qualifier_in_decl_specs(
+    specs: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+) -> bool {
+    specs.iter().any(|(spec, _)| {
+        matches!(
+            spec,
+            DeclarationSpecifier::TypeQualifier((TypeQualifier::Const, _))
+        )
+    })
+}
+
 impl CrateSigCtx<'_> {
     pub(crate) fn base_ty_of_decl(
         &mut self,
@@ -165,21 +176,23 @@ impl CrateSigCtx<'_> {
     pub(crate) fn lower_function_signature(
         &mut self,
         base: CTy,
+        base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> Result<(String, FunctionSignature, Vec<String>), String> {
         self.resolver
             .borrow_mut()
-            .lower_function_signature(base, declarator)
+            .lower_function_signature(base, base_const, declarator)
     }
 
     pub(crate) fn lower_value_decl_ctype(
         &mut self,
         base: CTy,
+        base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
         resolver: &LocalResolver,
     ) -> (String, CTy, Option<co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>>) {
         let span = declarator.1;
-        match self.extract_decl_type_with_consts(base, declarator, resolver) {
+        match self.extract_decl_type_with_consts(base, base_const, declarator, resolver) {
             Ok((ty, name, array_len)) => {
                 let Some(name) = name else {
                     self.terminate_with_error(span, "Unexpected abstract declarator");
@@ -195,6 +208,7 @@ impl CrateSigCtx<'_> {
     fn extract_decl_type_with_consts(
         &mut self,
         current: CTy,
+        current_const: bool,
         (decl, span): Spanned<Declarator<LocalResolver>>,
         resolver: &LocalResolver,
     ) -> Result<
@@ -217,11 +231,12 @@ impl CrateSigCtx<'_> {
                 let c_variadic = param_list.effective_ellipsis();
                 if !param_list.empty_params() {
                     for param in param_list.parameters {
+                        let param_base_const = has_const_qualifier_in_decl_specs(&param.0);
                         let param_base = self.base_ty_of_decl(param.0, span);
                         let (param_decl_ty, _) = self
                             .resolver
                             .borrow_mut()
-                            .extract_decl_type(param_base, param.1)?;
+                            .extract_decl_type(param_base, param_base_const, param.1)?;
                         let param_ty = match param_decl_ty {
                             CTy::Ty(ty) => {
                                 if let HirTyKind::Array(_, inner) = ty.kind {
@@ -259,11 +274,19 @@ impl CrateSigCtx<'_> {
                         return Err("function returning unsized array is not valid".to_owned());
                     }
                 };
-                self.extract_decl_type_with_consts(function_ty, *declarator, resolver)
+                self.extract_decl_type_with_consts(function_ty, false, *declarator, resolver)
             }
-            Declarator::PointerDeclarator { declarator, .. } => {
+            Declarator::PointerDeclarator {
+                declarator,
+                qualifiers,
+            } => {
+                let ptr_mutability = if current_const {
+                    Mutability::Not
+                } else {
+                    Mutability::Mut
+                };
                 let ptr_or_fn_ptr = match current {
-                    CTy::Ty(inner) => CTy::Ty(HirTy::new_ptr(inner, Mutability::Mut, rust_span)),
+                    CTy::Ty(inner) => CTy::Ty(HirTy::new_ptr(inner, ptr_mutability, rust_span)),
                     CTy::Function(sig) => CTy::Ty(self.resolver.borrow().maybe_uninit_of(
                         HirTy {
                             kind: HirTyKind::FnPtr(Box::new(sig)),
@@ -273,11 +296,19 @@ impl CrateSigCtx<'_> {
                     )?),
                     CTy::UnsizedArray(inner) => CTy::Ty(HirTy::new_ptr(
                         HirTy::new_ptr(inner, Mutability::Mut, rust_span),
-                        Mutability::Mut,
+                        ptr_mutability,
                         rust_span,
                     )),
                 };
-                self.extract_decl_type_with_consts(ptr_or_fn_ptr, *declarator, resolver)
+                let next_const = qualifiers
+                    .iter()
+                    .any(|(q, _)| matches!(q, TypeQualifier::Const));
+                self.extract_decl_type_with_consts(
+                    ptr_or_fn_ptr,
+                    next_const,
+                    *declarator,
+                    resolver,
+                )
             }
             Declarator::ArrayDeclarator {
                 declarator,
@@ -297,6 +328,7 @@ impl CrateSigCtx<'_> {
                 } else if subscription.0.raw.is_unsized() {
                     return self.extract_decl_type_with_consts(
                         CTy::UnsizedArray(inner),
+                        current_const,
                         *declarator,
                         resolver,
                     );
@@ -316,7 +348,7 @@ impl CrateSigCtx<'_> {
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len.0, rust_span));
                 let (ty, name, nested_len) =
-                    self.extract_decl_type_with_consts(array_ty, *declarator, resolver)?;
+                    self.extract_decl_type_with_consts(array_ty, current_const, *declarator, resolver)?;
                 Ok((ty, name, nested_len.or(len.1)))
             }
         }
@@ -517,10 +549,11 @@ impl LocalResolverBase {
                 (s, span)
             })
             .collect::<Vec<_>>();
+        let base_const = has_const_qualifier_in_decl_specs(&specifiers);
         let base = self.base_ty_of_decl(specifiers, span);
         let ty = match type_name.abstract_declarator {
             None => base,
-            Some(decl) => self.extract_decl_type(base, decl)?.0,
+            Some(decl) => self.extract_decl_type(base, base_const, decl)?.0,
         };
         match ty {
             CTy::Ty(ty) => Ok(ty),
@@ -591,10 +624,11 @@ impl LocalResolverBase {
     pub(crate) fn lower_function_signature(
         &mut self,
         base: CTy,
+        base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> Result<(String, FunctionSignature, Vec<String>), String> {
         let parsed_param_names = function_param_names(&declarator.0);
-        let (decl_ty, name) = self.extract_decl_type(base, declarator)?;
+        let (decl_ty, name) = self.extract_decl_type(base, base_const, declarator)?;
         let name = name.ok_or_else(|| "missing function name".to_owned())?;
         let CTy::Function(sig) = decl_ty else {
             return Err("it wasn't function".to_owned());
@@ -611,10 +645,11 @@ impl LocalResolverBase {
     pub(crate) fn lower_value_decl_type(
         &mut self,
         base: CTy,
+        base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> (String, HirTy) {
         let span = declarator.1;
-        match self.try_lower_value_decl_type(base, declarator) {
+        match self.try_lower_value_decl_type(base, base_const, declarator) {
             Ok(x) => x,
             Err(e) => {
                 self.terminate_with_error(span, &e);
@@ -625,9 +660,10 @@ impl LocalResolverBase {
     pub(crate) fn try_lower_value_decl_type(
         &mut self,
         base: CTy,
+        base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> Result<(String, HirTy), String> {
-        let (decl_ty, name) = self.extract_decl_type(base, declarator)?;
+        let (decl_ty, name) = self.extract_decl_type(base, base_const, declarator)?;
         let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
         match decl_ty {
             CTy::Ty(ty) => Ok((name, ty)),
@@ -684,6 +720,7 @@ impl LocalResolverBase {
     fn extract_decl_type(
         &mut self,
         current: CTy,
+        current_const: bool,
         (decl, span): Spanned<Declarator<LocalResolver>>,
     ) -> Result<(CTy, Option<String>), String> {
         let rust_span = self.co2_span_to_rustc(span);
@@ -698,8 +735,10 @@ impl LocalResolverBase {
                 let c_variadic = param_list.effective_ellipsis();
                 if !param_list.empty_params() {
                     for param in param_list.parameters {
+                        let param_base_const = has_const_qualifier_in_decl_specs(&param.0);
                         let param_base = self.base_ty_of_decl(param.0, span);
-                        let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
+                        let (param_decl_ty, _) =
+                            self.extract_decl_type(param_base, param_base_const, param.1)?;
                         let param_ty = match param_decl_ty {
                             CTy::Ty(ty) => {
                                 if let HirTyKind::Array(_, inner) = ty.kind {
@@ -737,11 +776,19 @@ impl LocalResolverBase {
                         return Err("function returning unsized array is not valid".to_owned());
                     }
                 };
-                self.extract_decl_type(function_ty, *declarator)
+                self.extract_decl_type(function_ty, false, *declarator)
             }
-            Declarator::PointerDeclarator { declarator, .. } => {
+            Declarator::PointerDeclarator {
+                declarator,
+                qualifiers,
+            } => {
+                let ptr_mutability = if current_const {
+                    Mutability::Not
+                } else {
+                    Mutability::Mut
+                };
                 let ptr_or_fn_ptr = match current {
-                    CTy::Ty(inner) => CTy::Ty(HirTy::new_ptr(inner, Mutability::Mut, rust_span)),
+                    CTy::Ty(inner) => CTy::Ty(HirTy::new_ptr(inner, ptr_mutability, rust_span)),
                     CTy::Function(sig) => CTy::Ty(self.maybe_uninit_of(
                         HirTy {
                             kind: HirTyKind::FnPtr(Box::new(sig)),
@@ -751,11 +798,14 @@ impl LocalResolverBase {
                     )?),
                     CTy::UnsizedArray(inner) => CTy::Ty(HirTy::new_ptr(
                         HirTy::new_ptr(inner, Mutability::Mut, rust_span),
-                        Mutability::Mut,
+                        ptr_mutability,
                         rust_span,
                     )),
                 };
-                self.extract_decl_type(ptr_or_fn_ptr, *declarator)
+                let next_const = qualifiers
+                    .iter()
+                    .any(|(q, _)| matches!(q, TypeQualifier::Const));
+                self.extract_decl_type(ptr_or_fn_ptr, next_const, *declarator)
             }
             Declarator::ArrayDeclarator {
                 declarator,
@@ -773,7 +823,11 @@ impl LocalResolverBase {
                 let len = if let Some(len) = subscription.0.raw.constant_len() {
                     HirTyConst::Literal(len as usize)
                 } else if subscription.0.raw.is_unsized() {
-                    return self.extract_decl_type(CTy::UnsizedArray(inner), *declarator);
+                    return self.extract_decl_type(
+                        CTy::UnsizedArray(inner),
+                        current_const,
+                        *declarator,
+                    );
                 } else {
                     let def_id = subscription
                         .0
@@ -786,7 +840,7 @@ impl LocalResolverBase {
                     HirTyConst::Literal(self.eval_array_len_expr(&expr)?)
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len, rust_span));
-                self.extract_decl_type(array_ty, *declarator)
+                self.extract_decl_type(array_ty, current_const, *declarator)
             }
         }
     }

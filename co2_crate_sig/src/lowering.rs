@@ -2,7 +2,8 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Designator, DoTransform as _, InitDeclarator,
-    StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit, TypeResolver,
+    StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit, TypeQualifier,
+    TypeResolver,
 };
 use co2_parser::parse_compound_statement;
 use rustc_public_generative::{
@@ -29,6 +30,17 @@ pub struct WellknownDefs {
     pub valist: AdtDef,
     pub valist_fn_arg: FnDef,
     pub zeroed: FnDef,
+}
+
+fn has_const_qualifier_in_decl_specs(
+    specs: &[co2_ast::Spanned<DeclarationSpecifier<LocalResolver>>],
+) -> bool {
+    specs.iter().any(|(spec, _)| {
+        matches!(
+            spec,
+            DeclarationSpecifier::TypeQualifier((TypeQualifier::Const, _))
+        )
+    })
 }
 
 fn deduplicate_tu_items(
@@ -175,10 +187,11 @@ pub fn lower_crate_sig(
                 body,
             } => {
                 let mut resolver = LocalResolver::new(ctx.resolver.clone());
-                let base =
-                    ctx.base_ty_of_decl(declaration_specifiers.transform(&resolver), parser_span);
+                let transformed_specs = declaration_specifiers.transform(&resolver);
+                let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
+                let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
                 let (name, mut sig, param_names) = ctx
-                    .lower_function_signature(base, declarator.transform(&resolver))
+                    .lower_function_signature(base, base_const, declarator.transform(&resolver))
                     .expect("failed to lower function signature");
 
                 let id = ctx.resolve_in_current([&*name]).unwrap().0;
@@ -247,7 +260,9 @@ pub fn lower_crate_sig(
                 }
 
                 let resolver = LocalResolver::new(ctx.resolver.clone());
-                let base = ctx.base_ty_of_decl(cleaned_specs.transform(&resolver), parser_span);
+                let transformed_specs = cleaned_specs.transform(&resolver);
+                let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
+                let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
 
                 for init in declarators {
                     let InitDeclarator {
@@ -257,7 +272,7 @@ pub fn lower_crate_sig(
                     let declarator = declarator.transform(&resolver);
 
                     let (name, ty, array_len) =
-                        ctx.lower_value_decl_ctype(base.clone(), declarator, &resolver);
+                        ctx.lower_value_decl_ctype(base.clone(), base_const, declarator, &resolver);
 
                     ctx.resolver
                         .borrow()
@@ -378,9 +393,11 @@ pub fn lower_crate_sig(
     let pending_typedefs = std::mem::take(&mut ctx.resolver.borrow_mut().pending_typedefs);
     for (id, name, specifiers, declarator, parser_span) in pending_typedefs {
         let span = ctx.co2_span_to_rustc(parser_span);
+        let base_const = has_const_qualifier_in_decl_specs(&specifiers);
         let ty = ctx.base_ty_of_decl(specifiers, parser_span);
         let resolver = LocalResolver::new(ctx.resolver.clone());
-        let (_, ty, _) = ctx.lower_value_decl_ctype(ty, (declarator, parser_span), &resolver);
+        let (_, ty, _) =
+            ctx.lower_value_decl_ctype(ty, base_const, (declarator, parser_span), &resolver);
         let CTy::Ty(ty) = ty else {
             ctx.terminate_with_error(parser_span, "typedef did not lower to a first-class type");
         };
@@ -392,9 +409,11 @@ pub fn lower_crate_sig(
     let pending_static = std::mem::take(&mut ctx.resolver.borrow_mut().pending_static);
     for (id, name, specifiers, declarator, parser_span) in pending_static {
         let span = ctx.co2_span_to_rustc(parser_span);
+        let base_const = has_const_qualifier_in_decl_specs(&specifiers);
         let base_ty = ctx.base_ty_of_decl(specifiers, parser_span);
         let resolver = LocalResolver::new(ctx.resolver.clone());
-        let (_, ty, _) = ctx.lower_value_decl_ctype(base_ty, declarator.declarator, &resolver);
+        let (_, ty, _) =
+            ctx.lower_value_decl_ctype(base_ty, base_const, declarator.declarator, &resolver);
         match ty {
             CTy::Ty(ty) => {
                 ctx.hir_items.push(HirModuleItem::Static {

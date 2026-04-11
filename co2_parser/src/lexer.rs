@@ -297,6 +297,7 @@ pub fn lexer<'src: 'static>()
             "void" => Token::Void,
             "volatile" => Token::Volatile,
             "while" => Token::While,
+            "_Generic" => Token::Generic,
 
             "__builtin_va_start" | "__builtin_c23_va_start" => Token::VaStart,
             "__builtin_va_arg" | "__builtin_c23_va_arg" => Token::VaArg,

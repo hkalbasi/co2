@@ -129,6 +129,21 @@ pub enum Expression<R: TypeResolver> {
     VaEnd {
         args: Box<Spanned<Expression<R>>>,
     },
+    GenericSelection {
+        controlling: Box<Spanned<Expression<R>>>,
+        associations: Vec<Spanned<GenericAssociation<R>>>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum GenericAssociation<R: TypeResolver> {
+    Type {
+        type_name: TypeName<R>,
+        expr: Spanned<Expression<R>>,
+    },
+    Default {
+        expr: Spanned<Expression<R>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -428,6 +443,7 @@ pub enum Token {
     Void,
     Volatile,
     While,
+    Generic,
 
     // Identifiers
     Ident(String),
@@ -559,6 +575,7 @@ impl Display for Token {
             Token::Void => write!(f, "void"),
             Token::Volatile => write!(f, "volatile"),
             Token::While => write!(f, "while"),
+            Token::Generic => write!(f, "_Generic"),
 
             Token::VaStart => write!(f, "va_start"),
             Token::VaArg => write!(f, "va_arg"),

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
-    Initializer, Spanned, TypeName,
+    Initializer, Spanned, TypeName, TypeQualifier,
 };
 use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver, eval_registered_array_len_const};
 use la_arena::Arena;
@@ -198,7 +198,8 @@ impl HirCtx<'_> {
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> Result<(Spanned<(usize, String)>, CTy), String> {
         let base = self.base_ty_of_decl(declaration_specifiers, declarator.1);
-        let (decl_ty, name) = self.extract_decl_type(base, declarator)?;
+        let base_const = has_const_qualifier_in_decl_specs(&base.1);
+        let (decl_ty, name) = self.extract_decl_type(base.0, base_const, declarator)?;
         let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
         Ok((name, decl_ty))
     }
@@ -237,9 +238,13 @@ impl HirCtx<'_> {
             .collect::<Vec<_>>();
         let base = self.base_ty_of_decl(specifiers, span);
         let ty = match type_name.abstract_declarator {
-            None => base,
+            None => base.0,
             Some(decl) => {
-                let (ty, name) = self.extract_decl_type(base, decl)?;
+                let (ty, name) = self.extract_decl_type(
+                    base.0,
+                    has_const_qualifier_in_decl_specs(&base.1),
+                    decl,
+                )?;
                 if let Some((_, span)) = name {
                     self.terminate_with_error(span, "type name should not have name");
                 }
@@ -261,8 +266,8 @@ impl HirCtx<'_> {
         &self,
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         span: co2_ast::Span,
-    ) -> CTy {
-        let specifier = match CompressedTypeSpecifier::build(specifiers) {
+    ) -> (CTy, Vec<Spanned<DeclarationSpecifier<LocalResolver>>>) {
+        let specifier = match CompressedTypeSpecifier::build(specifiers.clone()) {
             Ok(s) => s,
             Err(e) => self.terminate_with_error(span, &e),
         };
@@ -276,26 +281,29 @@ impl HirCtx<'_> {
             CompressedTypeSpecifier::Enum(_) => Ty::signed_ty(IntTy::I32),
             CompressedTypeSpecifier::TypedefName(path) => {
                 return match &path.0 {
-                    co2_crate_sig::DefOrLocal::Def(def_id) => CTy::Ty(CrateItem(*def_id).ty()),
+                    co2_crate_sig::DefOrLocal::Def(def_id) => {
+                        (CTy::Ty(CrateItem(*def_id).ty()), specifiers)
+                    }
                     co2_crate_sig::DefOrLocal::Local(_) => {
                         panic!("Invalid local in type position")
                     }
                     co2_crate_sig::DefOrLocal::Prim(primitive_ty) => {
-                        CTy::Ty(prim_ty_to_ty(*primitive_ty))
+                        (CTy::Ty(prim_ty_to_ty(*primitive_ty)), specifiers)
                     }
                     co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
-                        self.sig_cty_to_cty(sig_ty)
+                        (self.sig_cty_to_cty(sig_ty), specifiers)
                     }
                 };
             }
         };
 
-        CTy::Ty(ty)
+        (CTy::Ty(ty), specifiers)
     }
 
     fn extract_decl_type(
         &self,
         current: CTy,
+        current_const: bool,
         (decl, span): Spanned<Declarator<LocalResolver>>,
     ) -> Result<(CTy, Option<Spanned<(usize, String)>>), String> {
         match decl {
@@ -310,7 +318,9 @@ impl HirCtx<'_> {
                 if !param_list.empty_params() {
                     for param in param_list.parameters {
                         let param_base = self.base_ty_of_decl(param.0, span);
-                        let (param_decl_ty, _) = self.extract_decl_type(param_base, param.1)?;
+                        let param_base_const = has_const_qualifier_in_decl_specs(&param_base.1);
+                        let (param_decl_ty, _) =
+                            self.extract_decl_type(param_base.0, param_base_const, param.1)?;
                         let mut param_ty = match param_decl_ty {
                             CTy::Ty(ty) => ty,
                             CTy::Function(_) => {
@@ -345,21 +355,32 @@ impl HirCtx<'_> {
                         return Err("returning unsized array is not valid".to_owned());
                     }
                 };
-                self.extract_decl_type(function_ty, *declarator)
+                self.extract_decl_type(function_ty, false, *declarator)
             }
-            Declarator::PointerDeclarator { declarator, .. } => {
+            Declarator::PointerDeclarator {
+                declarator,
+                qualifiers,
+            } => {
+                let ptr_mutability = if current_const {
+                    Mutability::Not
+                } else {
+                    Mutability::Mut
+                };
                 let ptr_or_fn_ptr = match current {
-                    CTy::Ty(inner) => CTy::Ty(Ty::new_ptr(inner, Mutability::Mut)),
+                    CTy::Ty(inner) => CTy::Ty(Ty::new_ptr(inner, ptr_mutability)),
                     CTy::Function(sig) => {
                         let fn_ptr = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
                         CTy::Ty(self.maybe_uninit_of(fn_ptr)?)
                     }
                     CTy::UnsizedArray(elem) => CTy::Ty(Ty::new_ptr(
                         Ty::new_ptr(elem, Mutability::Mut),
-                        Mutability::Mut,
+                        ptr_mutability,
                     )),
                 };
-                self.extract_decl_type(ptr_or_fn_ptr, *declarator)
+                let next_const = qualifiers
+                    .iter()
+                    .any(|(q, _)| matches!(q, TypeQualifier::Const));
+                self.extract_decl_type(ptr_or_fn_ptr, next_const, *declarator)
             }
             Declarator::ArrayDeclarator {
                 declarator,
@@ -404,7 +425,7 @@ impl HirCtx<'_> {
                         return Err("array of unsized arrays is invalid".to_owned());
                     }
                 };
-                self.extract_decl_type(array_ty, *declarator)
+                self.extract_decl_type(array_ty, current_const, *declarator)
             }
         }
     }
@@ -431,6 +452,17 @@ impl HirCtx<'_> {
             }
         }
     }
+}
+
+fn has_const_qualifier_in_decl_specs(
+    specs: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+) -> bool {
+    specs.iter().any(|(spec, _)| {
+        matches!(
+            spec,
+            DeclarationSpecifier::TypeQualifier((TypeQualifier::Const, _))
+        )
+    })
 }
 
 fn prim_ty_to_ty(primitive_ty: co2_crate_sig::PrimitiveTy) -> Ty {

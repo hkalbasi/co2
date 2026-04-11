@@ -33,4 +33,11 @@ typedef double Co2Double;
 typedef char Co2Char;
 typedef unsigned char Co2UChar;
 
+typedef Union1* Union1MutPtr;
+typedef const Union1* Union1ConstPtr;
+typedef Union1* Union1MutPtr;
+typedef const Union1* Union1ConstPtr;
+typedef Union1 * const * ConstPtrToMutPtrToUnion1;
+typedef const Union1 ** MutPtrToConstPtrToUnion1;
+
 long long int HUGE_LONG = 0xabcd00000000;

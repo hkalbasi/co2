@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use co2_ast::{
     DeclarationSpecifier, Declarator, EnumSpecifier, Enumerator, Expression, Spanned,
-    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeQueryResult,
+    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeQualifier,
+    TypeQueryResult,
 };
 use rustc_public_generative::{
     DefData, StructField,
@@ -34,6 +35,17 @@ pub(crate) struct StructManager {
 }
 
 const ANON_FIELD_PREFIX: &str = "__anon_field_";
+
+fn has_const_qualifier_in_decl_specs(
+    specs: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+) -> bool {
+    specs.iter().any(|(spec, _)| {
+        matches!(
+            spec,
+            DeclarationSpecifier::TypeQualifier((TypeQualifier::Const, _))
+        )
+    })
+}
 
 impl LocalResolver {
     fn def_id_of_named(
@@ -215,6 +227,7 @@ impl LocalResolverBase {
                     .iter()
                     .map(|f| (DeclarationSpecifier::TypeSpecifier(f.clone()), f.1))
                     .collect::<Vec<_>>();
+                let base_const = has_const_qualifier_in_decl_specs(&specifiers);
                 let base = self.base_ty_of_decl(specifiers, *span);
                 field
                     .declarators
@@ -235,7 +248,7 @@ impl LocalResolverBase {
                             };
                             (format!("{ANON_FIELD_PREFIX}{id}"), ty)
                         } else {
-                            self.lower_value_decl_type(base.clone(), declarator.declarator)
+                            self.lower_value_decl_type(base.clone(), base_const, declarator.declarator)
                         };
 
                         let id = self

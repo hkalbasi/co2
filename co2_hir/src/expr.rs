@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use co2_ast::{
-    BinOp as ParsedBinOp, Constant, Expression, IntegerSuffix, Spanned, Statement,
-    StatementOrDeclaration, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
+    BinOp as ParsedBinOp, Constant, Expression, GenericAssociation, IntegerSuffix, Spanned,
+    Statement, StatementOrDeclaration,
+    UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
@@ -798,6 +799,44 @@ impl HirCtx<'_> {
                     ty: Ty::new_tuple(&[]),
                     span,
                 })
+            }
+            Expression::GenericSelection {
+                controlling,
+                associations,
+            } => {
+                let mut controlling_expr =
+                    self.lower_expr((controlling.0.clone(), controlling.1), locals, local_map)?;
+                self.array_to_pointer_decay_if_array(&mut controlling_expr);
+                let controlling_ty = controlling_expr.ty;
+
+                let mut default_expr = None;
+                for (assoc, assoc_span) in associations {
+                    match assoc {
+                        GenericAssociation::Default { expr } => {
+                            if default_expr.is_some() {
+                                self.terminate_with_error(
+                                    assoc_span,
+                                    "duplicate default association in _Generic",
+                                );
+                            }
+                            default_expr = Some(expr);
+                        }
+                        GenericAssociation::Type { type_name, expr } => {
+                            let assoc_ty = self.lower_type_name(type_name, assoc_span)?;
+                            if ty_matches_expected(assoc_ty, controlling_ty) {
+                                return self.lower_expr(expr, locals, local_map);
+                            }
+                        }
+                    }
+                }
+                if let Some(expr) = default_expr {
+                    self.lower_expr(expr, locals, local_map)
+                } else {
+                    self.terminate_with_error(
+                        parser_span,
+                        "no matching association in _Generic and no default provided",
+                    );
+                }
             }
             Expression::Empty => {
                 Ok(HirExpr {
