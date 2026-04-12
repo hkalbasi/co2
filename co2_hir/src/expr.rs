@@ -162,7 +162,7 @@ pub enum HirLogicalOp {
 }
 
 impl HirCtx<'_> {
-    fn array_to_pointer_decay_if_array(&self, expr: &mut HirExpr) {
+    pub(crate) fn array_to_pointer_decay_if_array(&self, expr: &mut HirExpr) {
         if !is_array_ty(expr.ty) {
             return;
         }

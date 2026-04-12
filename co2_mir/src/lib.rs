@@ -3,7 +3,6 @@
 mod allocation;
 mod basic_block;
 mod build;
-mod initializer_tree;
 mod operand;
 mod optimization;
 mod place;

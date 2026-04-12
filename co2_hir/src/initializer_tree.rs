@@ -405,7 +405,8 @@ impl HirCtx<'_> {
                                 }
                             }
                         } else {
-                            let expr = self.lower_expr(expr, locals, local_map)?;
+                            let mut expr = self.lower_expr(expr, locals, local_map)?;
+                            self.array_to_pointer_decay_if_array(&mut expr);
                             loop {
                                 if let Ok(coerced) = coerce_expr_to_type(expr.clone(), cursor.ty())
                                 {
