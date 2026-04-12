@@ -1396,6 +1396,16 @@ int main54() {
 	return 0;
 }
 
+int main55() {
+	struct Foo { int a; int b; } s1 = { 1, 2 }, s2 = { 3, 4 };
+	struct Foo s3 = 1 ? s1 : s2;
+	struct Foo s4 = 0 ? s1 : s2;
+	if (s3.a != 1 || s3.b != 2 || s4.a != 3) {
+		return 1;
+	}
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1411,7 +1421,7 @@ int main() {
 		main36, main37, main38, main39, main40,
 		main41, main42, main43, main44, main45,
 		main46, main47, main48, main49, main50,
-		main51, main52, main53, main54,
+		main51, main52, main53, main54, main55,
 	};
 	
 	int i;

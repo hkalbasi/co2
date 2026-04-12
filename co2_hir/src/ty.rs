@@ -51,6 +51,9 @@ fn numeric_rank(ty: Ty) -> Option<(u8, bool)> {
 }
 
 pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
+    if lhs_ty == rhs_ty {
+        return Some(lhs_ty);
+    }
     if let Some(r) = common_numeric_ty(lhs_ty, rhs_ty) {
         return Some(r);
     }
