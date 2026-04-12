@@ -645,7 +645,7 @@ impl HirCtx<'_> {
                             ) {
                                 return Ok(HirExpr {
                                     kind: HirExprKind::AddrOf(Box::new(inner.clone())),
-                                    ty: Ty::new_ptr(inner.ty, Mutability::Mut),
+                                    ty: Ty::new_ptr(inner.ty, addr_of_mutability(&inner)),
                                     span,
                                 });
                             }
@@ -656,7 +656,7 @@ impl HirCtx<'_> {
                         }
                         Ok(HirExpr {
                             kind: HirExprKind::AddrOf(Box::new(inner.clone())),
-                            ty: Ty::new_ptr(inner.ty, Mutability::Mut),
+                            ty: Ty::new_ptr(inner.ty, addr_of_mutability(&inner)),
                             span,
                         })
                     }
@@ -1222,6 +1222,17 @@ pub(crate) fn is_place_expr(expr: &HirExpr) -> bool {
         HirExprKind::BitNot(_) => false,
         HirExprKind::Deref(_) => true,
         _ => false,
+    }
+}
+
+fn addr_of_mutability(expr: &HirExpr) -> Mutability {
+    match &expr.kind {
+        HirExprKind::Deref(inner) => match inner.ty.kind() {
+            TyKind::RigidTy(RigidTy::RawPtr(_, mutability)) => mutability,
+            _ => Mutability::Mut,
+        },
+        HirExprKind::Field { base, .. } => addr_of_mutability(base),
+        _ => Mutability::Mut,
     }
 }
 

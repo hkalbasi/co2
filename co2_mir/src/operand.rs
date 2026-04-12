@@ -8,7 +8,7 @@ use rustc_public_generative::rustc_public::{
         SwitchTargets, TerminatorKind,
     },
     ty::{
-        FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
+        GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
         Span as RustSpan, Ty, TyKind,
     },
 };
@@ -402,18 +402,16 @@ impl Builder<'_> {
             }
             HirExprKind::ConstFloat(v) => {
                 let span = expr.span;
-                let c =
-                    MirConst::try_from_float(*v, FloatTy::F64).expect("failed to build int const");
+                let TyKind::RigidTy(RigidTy::Float(float_ty)) = expr.ty.kind() else {
+                    panic!("float const must have float type, got {:?}", expr.ty);
+                };
+                let c = MirConst::try_from_float(*v, float_ty)
+                    .expect("failed to build float const");
                 let const_op = MirOperand::Constant(ConstOperand {
                     span,
                     user_ty: None,
                     const_: c,
                 });
-
-                assert_eq!(
-                    expr.ty.kind(),
-                    TyKind::RigidTy(RigidTy::Float(FloatTy::F64))
-                );
 
                 const_op
             }
@@ -754,6 +752,9 @@ impl Builder<'_> {
                 }
             }
             HirExprKind::AddrOf(inner) => {
+                let TyKind::RigidTy(RigidTy::RawPtr(_, mutability)) = expr.ty.kind() else {
+                    panic!("address-of expression must have raw pointer type, got {:?}", expr.ty);
+                };
                 let target_place = if let Some(place) = self.lower_expr_to_place(inner) {
                     place
                 } else {
@@ -770,7 +771,11 @@ impl Builder<'_> {
                     kind: MirStatementKind::Assign(
                         place(tmp),
                         Rvalue::AddressOf(
-                            rustc_public_generative::rustc_public::mir::RawPtrKind::Mut,
+                            if mutability == Mutability::Mut {
+                                RawPtrKind::Mut
+                            } else {
+                                RawPtrKind::Const
+                            },
                             target_place,
                         ),
                     ),

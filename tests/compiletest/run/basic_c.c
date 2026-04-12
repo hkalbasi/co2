@@ -1406,6 +1406,31 @@ int main55() {
 	return 0;
 }
 
+int main56() {
+	float x = 1.5f;
+	if (-x > -1.4f) {
+		return 1;
+	}
+	if (-x < -1.6f) {
+		return 2;
+	}
+	return 0;
+}
+
+static int main57_expect_const_char(const char *p) {
+	return p[0] != 'b';
+}
+
+int main57() {
+	const char *z = "abc";
+	return main57_expect_const_char(&z[1]);
+}
+
+int main58() {
+	const void *p = 0 ? (const char *)"x" : (void *)1;
+	return p != (void *)1;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1422,6 +1447,7 @@ int main() {
 		main41, main42, main43, main44, main45,
 		main46, main47, main48, main49, main50,
 		main51, main52, main53, main54, main55,
+		main56, main57, main58,
 	};
 	
 	int i;

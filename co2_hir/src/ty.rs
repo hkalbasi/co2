@@ -71,12 +71,38 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
     let rhs_is_integer = matches!(rhs, RigidTy::Int(..) | RigidTy::Uint(..));
     let one_is_integer = lhs_is_integer || rhs_is_integer;
 
-    let lhs_is_void = matches!(lhs, RigidTy::Tuple(l) if l.is_empty());
-    let rhs_is_void = matches!(rhs, RigidTy::Tuple(l) if l.is_empty());
+    let lhs_is_void = matches!(lhs, RigidTy::Tuple(ref l) if l.is_empty());
+    let rhs_is_void = matches!(rhs, RigidTy::Tuple(ref l) if l.is_empty());
     let one_is_void = lhs_is_void || rhs_is_void;
     
     if one_is_void {
         return Some(Ty::new_tuple(&[]));
+    }
+
+    if let (
+        RigidTy::RawPtr(lhs_pointee, lhs_mutability),
+        RigidTy::RawPtr(rhs_pointee, rhs_mutability),
+    ) = (lhs, rhs)
+    {
+        let common_mutability = if matches!(
+            (lhs_mutability, rhs_mutability),
+            (rustc_public_generative::rustc_public::mir::Mutability::Not, _)
+                | (_, rustc_public_generative::rustc_public::mir::Mutability::Not)
+        ) {
+            rustc_public_generative::rustc_public::mir::Mutability::Not
+        } else {
+            rustc_public_generative::rustc_public::mir::Mutability::Mut
+        };
+
+        if lhs_pointee == rhs_pointee {
+            return Some(Ty::new_ptr(lhs_pointee, common_mutability));
+        }
+
+        let lhs_is_void_pointee = matches!(lhs_pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
+        let rhs_is_void_pointee = matches!(rhs_pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
+        if lhs_is_void_pointee || rhs_is_void_pointee {
+            return Some(Ty::new_ptr(Ty::new_tuple(&[]), common_mutability));
+        }
     }
 
     if one_is_ptr && one_is_integer {
