@@ -40,7 +40,6 @@ fn pending_compile_cell() -> &'static Mutex<Option<PendingCompile>> {
     CELL.get_or_init(|| Mutex::new(None))
 }
 struct Co2GeneratorState {
-    deps: rustc_gen::DependencyInfo,
     file_id: rustc_gen::FileId,
     source_name: String,
     src_static: &'static str,
@@ -60,7 +59,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             .expect("missing pending compile input");
 
         let file_id = ctx.add_custom_file(&pending.source_path, pending.source.clone());
-        let deps = ctx.dependencies();
         let source_name = pending.source_path.to_string_lossy().into_owned();
         let src_static: &'static str = Box::leak(pending.source.into_boxed_str());
 
@@ -74,7 +72,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
 
         (
             Co2GeneratorState {
-                deps,
                 wellknown_defs,
                 file_id,
                 pending_mirs,
@@ -140,7 +137,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
 
                 co2_mir::build_mir_for_body(
                     &hir,
-                    &self.deps,
                     &ctx,
                     self.file_id,
                     self.wellknown_defs,
@@ -183,7 +179,7 @@ impl Co2GeneratorState {
 
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
 
-        co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(&hir, ctx, self.file_id, self.wellknown_defs)
     }
 
     fn lower_explicit_static_mir_with_array_len(
@@ -226,7 +222,7 @@ impl Co2GeneratorState {
             target_ty,
         );
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
-        co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(&hir, ctx, self.file_id, self.wellknown_defs)
     }
 
     fn build_enum_prev_plus_body(
@@ -258,7 +254,7 @@ impl Co2GeneratorState {
             span,
         )];
 
-        co2_mir::build_mir_for_body(&hir, &self.deps, ctx, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(&hir, ctx, self.file_id, self.wellknown_defs)
     }
 }
 

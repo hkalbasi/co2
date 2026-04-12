@@ -9,7 +9,7 @@ use rustc_public_generative::rustc_public::{
 };
 
 use crate::{
-    build::{Builder, dep_fn_any, fn_const_operand, infer_fn_generic_args},
+    build::{Builder, fn_const_operand, infer_fn_generic_args},
     place::place,
 };
 
@@ -26,7 +26,7 @@ fn is_maybe_uninit_fn_ptr_ty(ty: Ty) -> bool {
     matches!(inner.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
 }
 
-impl Builder<'_> {
+impl Builder {
     pub(crate) fn new_temp(&mut self, ty: Ty, mutability: Mutability, span: RustSpan) -> usize {
         let local = self.locals.len() + self.extra_locals.len();
         self.extra_locals.push(MirLocalDecl {
@@ -78,13 +78,7 @@ impl Builder<'_> {
                 span,
             });
         } else if is_maybe_uninit_fn_ptr_ty(ty) {
-            let uninit_fn = dep_fn_any(
-                self.deps,
-                &[
-                    "core::mem::MaybeUninit::uninit",
-                    "std::mem::MaybeUninit::uninit",
-                ],
-            );
+            let uninit_fn = self.wellknown_defs.maybe_uninit_uninit;
             let sig = uninit_fn
                 .ty()
                 .kind()

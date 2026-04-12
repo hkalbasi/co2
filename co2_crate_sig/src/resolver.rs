@@ -52,7 +52,7 @@ impl ModuleData {
         let part = self
             .items
             .get(seg1)
-            .ok_or_else(|| format!("Failed to lookup {seg1}"))?;
+            .ok_or_else(|| format!("Failed to lookup {seg1}.\nAvailable items are: {:?}", self.items.keys()))?;
         part.resolve_path(path)
     }
 

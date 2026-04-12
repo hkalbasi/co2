@@ -7,10 +7,7 @@ use rustc_public_generative::rustc_public::{
     ty::{IntTy, MirConst, Span as RustSpan, Ty, TyKind, UintTy},
 };
 
-use crate::{
-    build::{Builder, dep_fn_any},
-    place::place,
-};
+use crate::{build::Builder, place::place};
 
 pub(crate) fn int_literal_bits(value: i128, target_ty: Ty) -> (UintTy, u128) {
     let TyKind::RigidTy(rigid) = target_ty.kind() else {
@@ -58,7 +55,7 @@ pub(crate) fn int_literal_bits(value: i128, target_ty: Ty) -> (UintTy, u128) {
     }
 }
 
-impl Builder<'_> {
+impl Builder {
     pub(crate) fn lower_bin_op(&self, op: HirBinOp) -> MirBinOp {
         match op {
             HirBinOp::Add => MirBinOp::Add,
@@ -86,7 +83,7 @@ impl Builder<'_> {
             value.push('\0');
         }
 
-        let as_ptr = dep_fn_any(self.deps, &["core::str::as_ptr", "std::str::as_ptr"]);
+        let as_ptr = self.wellknown_defs.str_as_ptr;
         let ptr_u8_ty = Ty::new_ptr(Ty::unsigned_ty(UintTy::U8), Mutability::Not);
         let ptr_u8_local = self.new_temp(ptr_u8_ty, Mutability::Mut, span);
         self.emit_call_block(

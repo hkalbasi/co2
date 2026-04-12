@@ -17,7 +17,7 @@ pub(crate) fn place(local: usize) -> MirPlace {
     }
 }
 
-impl Builder<'_> {
+impl Builder {
     pub(crate) fn lower_expr_to_place(&mut self, expr: &HirExpr) -> Option<MirPlace> {
         match &expr.kind {
             HirExprKind::Local(local) => Some(place(self.local_to_index(*local))),

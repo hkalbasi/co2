@@ -9,7 +9,7 @@ use rustc_public_generative::rustc_public::{
 
 use crate::{build::Builder, place::place};
 
-impl Builder<'_> {
+impl Builder {
     pub(crate) fn lower_stmt(&mut self, stmt: &HirStmt) {
         match stmt {
             HirStmt::Decl(HirDecl {

@@ -1,4 +1,4 @@
-use co2_hir::{HirExpr, HirExprKind, HirLogicalOp, ResolvedValue, ReturnSemantic};
+use co2_hir::{HirExpr, HirExprKind, HirLogicalOp, ResolvedValue, ReturnSemantic, WellknownDefs};
 use rustc_public_generative::rustc_public::{
     CrateDefType,
     mir::{
@@ -18,76 +18,14 @@ use crate::{
     place::place,
 };
 
-fn find_ptr_offset_from_fn(
-    deps: &rustc_public_generative::DependencyInfo,
-) -> Option<rustc_public_generative::rustc_public::ty::FnDef> {
-    let exact = [
-        "core::ptr::mut_ptr::offset_from",
-        "core::ptr::const_ptr::offset_from",
-        "std::ptr::mut_ptr::offset_from",
-        "std::ptr::const_ptr::offset_from",
-    ];
-    for wanted in exact {
-        if let Some(found) = deps
-            .functions
-            .iter()
-            .find(|f| f.fn_def.is_some() && f.path.contains(wanted))
-            .and_then(|f| f.fn_def)
-        {
-            return Some(found);
-        }
-    }
-
-    deps.functions
-        .iter()
-        .find(|f| {
-            f.fn_def.is_some()
-                && f.path.ends_with("::offset_from")
-                && (f.path.contains("::ptr::mut_ptr::") || f.path.contains("::ptr::const_ptr::"))
-        })
-        .and_then(|f| f.fn_def)
-}
-
 fn find_ptr_offset_fn(
-    deps: &rustc_public_generative::DependencyInfo,
+    deps: &WellknownDefs,
     mutability: Mutability,
-) -> Option<rustc_public_generative::rustc_public::ty::FnDef> {
-    let exact = match mutability {
-        Mutability::Mut => [
-            "core::ptr::mut_ptr::offset",
-            "std::ptr::mut_ptr::offset",
-            "core::ptr::const_ptr::offset",
-            "std::ptr::const_ptr::offset",
-        ],
-        Mutability::Not => [
-            "core::ptr::const_ptr::offset",
-            "std::ptr::const_ptr::offset",
-            "core::ptr::mut_ptr::offset",
-            "std::ptr::mut_ptr::offset",
-        ],
-    };
-    for wanted in exact {
-        if let Some(found) = deps
-            .functions
-            .iter()
-            .find(|f| f.fn_def.is_some() && f.path.contains(wanted))
-            .and_then(|f| f.fn_def)
-        {
-            return Some(found);
-        }
+) -> rustc_public_generative::rustc_public::ty::FnDef {
+    match mutability {
+        Mutability::Mut => deps.offset_mut,
+        Mutability::Not => deps.offset_const,
     }
-
-    deps.functions
-        .iter()
-        .find(|f| {
-            f.fn_def.is_some()
-                && f.path.ends_with("::offset")
-                && match mutability {
-                    Mutability::Mut => f.path.contains("::ptr::mut_ptr::"),
-                    Mutability::Not => f.path.contains("::ptr::const_ptr::"),
-                }
-        })
-        .and_then(|f| f.fn_def)
 }
 
 fn maybe_uninit_fn_ptr_inner(ty: Ty) -> Option<Ty> {
@@ -119,7 +57,7 @@ fn callable_sig(
         .or_else(|| maybe_uninit_fn_ptr_inner(ty).and_then(|inner| inner.kind().fn_sig()))
 }
 
-impl Builder<'_> {
+impl Builder {
     fn emit_ptr_offset(
         &mut self,
         base_op: MirOperand,
@@ -140,8 +78,7 @@ impl Builder<'_> {
             span,
         });
 
-        let offset = find_ptr_offset_fn(self.deps, ptr_mutability)
-            .expect("missing pointer offset dependency function");
+        let offset = find_ptr_offset_fn(&self.wellknown_defs, ptr_mutability);
         let generic_args = match offset.ty().kind() {
             TyKind::RigidTy(RigidTy::FnDef(_, existing)) if !existing.0.is_empty() => existing
                 .0
@@ -299,10 +236,7 @@ impl Builder<'_> {
                 let Some(args) = self.lower_expr_to_place(args) else {
                     panic!("VaStart operand was not lvalue");
                 };
-                let transmute_fn = crate::build::dep_fn_any(
-                    self.deps,
-                    &["core::mem::transmute", "std::mem::transmute"],
-                );
+                let transmute_fn = self.wellknown_defs.transmute;
                 let src_local = self.c_variadic_local.unwrap();
                 let src_ty = self.locals[src_local].ty;
                 let generic_args = vec![
@@ -446,8 +380,10 @@ impl Builder<'_> {
                 };
                 let isize_ty = Ty::signed_ty(IntTy::Isize);
                 let ret_local = self.new_temp(isize_ty, Mutability::Mut, expr.span);
-                let offset_from = find_ptr_offset_from_fn(self.deps)
-                    .expect("missing pointer offset_from dependency function");
+                let offset_from = {
+                    let deps: &WellknownDefs = &self.wellknown_defs;
+                    deps.offset_from
+                };
                 let const_ptr_ty = Ty::new_ptr(pointee_ty, Mutability::Not);
                 let lhs_cast = self.new_temp(const_ptr_ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
@@ -1335,8 +1271,7 @@ impl Builder<'_> {
         span: RustSpan,
         ret_ty: Ty,
     ) {
-        let zeroed_fn =
-            crate::build::dep_fn_any(self.deps, &["std::mem::zeroed", "core::mem::zeroed"]);
+        let zeroed_fn = self.wellknown_defs.zeroed;
         let sig = zeroed_fn
             .ty()
             .kind()
@@ -1380,10 +1315,7 @@ impl Builder<'_> {
                     span: arg.span,
                 });
 
-                let transmute_copy_fn = crate::build::dep_fn_any(
-                    self.deps,
-                    &["core::mem::transmute_copy", "std::mem::transmute_copy"],
-                );
+                let transmute_copy_fn = self.wellknown_defs.transmute_copy;
                 let generic_args = vec![
                     GenericArgKind::Type(arg.ty),
                     GenericArgKind::Type(expected_ty),

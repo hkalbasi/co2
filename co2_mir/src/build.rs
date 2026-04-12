@@ -12,7 +12,6 @@ use rustc_public_generative::rustc_public::{
 
 pub fn build_mir_for_body(
     body: &HirBody,
-    deps: &rustc_gen::DependencyInfo,
     ctx: &rustc_gen::HirStructureCtx,
     file_id: rustc_gen::FileId,
     wellknown_defs: WellknownDefs,
@@ -33,7 +32,6 @@ pub fn build_mir_for_body(
 
     let mut builder = Builder {
         c_variadic_local: body.c_variadic_local.map(|l| local_indices[&l]),
-        deps,
         local_indices,
         locals,
         extra_locals: Vec::new(),
@@ -62,8 +60,7 @@ pub fn build_mir_for_body(
     )
 }
 
-pub(crate) struct Builder<'a> {
-    pub(crate) deps: &'a rustc_gen::DependencyInfo,
+pub(crate) struct Builder {
     pub(crate) wellknown_defs: WellknownDefs,
     pub(crate) local_indices: HashMap<LocalId, usize>,
     pub(crate) locals: Vec<MirLocalDecl>,
@@ -163,99 +160,4 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
         }
         _ => expected == actual,
     }
-}
-
-pub(crate) fn dep_fn_any(deps: &rustc_gen::DependencyInfo, paths: &[&str]) -> FnDef {
-    for path in paths {
-        if let Some(found) = find_dep_fn(deps, path) {
-            return found;
-        }
-    }
-    panic!("missing dependency function (any of): {}", paths.join(", "));
-}
-
-fn find_dep_fn(deps: &rustc_gen::DependencyInfo, path: &str) -> Option<FnDef> {
-    let normalized_path = normalize_dep_path(path);
-
-    if let Some(found) = deps
-        .functions
-        .iter()
-        .find(|f| normalize_dep_path(&f.path) == normalized_path && f.fn_def.is_some())
-        .and_then(|f| f.fn_def)
-    {
-        return Some(found);
-    }
-
-    if let Some(found) = deps
-        .functions
-        .iter()
-        .find(|f| {
-            let normalized = normalize_dep_path(&f.path);
-            (if path.contains("::") {
-                normalized.ends_with(&normalized_path)
-            } else {
-                normalized.ends_with(&format!("::{normalized_path}"))
-            }) && f.fn_def.is_some()
-                && !f.path.contains("::{closure")
-                && !f.path.contains("{{")
-        })
-        .and_then(|f| f.fn_def)
-    {
-        return Some(found);
-    }
-
-    if let Some(last) = path.rsplit("::").next() {
-        let required_segments = normalized_path
-            .split("::")
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>();
-        if let Some(found) = deps
-            .functions
-            .iter()
-            .find(|f| {
-                let normalized = normalize_dep_path(&f.path);
-                normalized.ends_with(&format!("::{last}"))
-                    && f.fn_def.is_some()
-                    && !f.path.contains("::{closure")
-                    && !f.path.contains("{{")
-                    && required_segments.iter().all(|seg| normalized.contains(seg))
-            })
-            .and_then(|f| f.fn_def)
-        {
-            return Some(found);
-        }
-        if let Some(found) = deps
-            .functions
-            .iter()
-            .find(|f| {
-                f.path.ends_with(&format!("::{last}"))
-                    && f.fn_def.is_some()
-                    && !f.path.contains("::{closure")
-                    && !f.path.contains("{{")
-            })
-            .and_then(|f| f.fn_def)
-        {
-            return Some(found);
-        }
-    }
-
-    None
-}
-
-fn normalize_dep_path(path: &str) -> String {
-    let mut no_generics = String::with_capacity(path.len());
-    let mut depth = 0usize;
-    for ch in path.chars() {
-        match ch {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => no_generics.push(ch),
-            _ => {}
-        }
-    }
-    no_generics
-        .split("::")
-        .filter(|seg| !seg.is_empty() && !seg.starts_with('{') && !seg.ends_with('}'))
-        .collect::<Vec<_>>()
-        .join("::")
 }

@@ -27,9 +27,16 @@ use crate::{
 #[derive(Clone, Copy)]
 pub struct WellknownDefs {
     pub maybe_uninit: AdtDef,
+    pub maybe_uninit_uninit: FnDef,
     pub valist: AdtDef,
     pub valist_fn_arg: FnDef,
+    pub transmute: FnDef,
+    pub transmute_copy: FnDef,
+    pub offset_mut: FnDef,
+    pub offset_const: FnDef,
+    pub offset_from: FnDef,
     pub zeroed: FnDef,
+    pub str_as_ptr: FnDef,
 }
 
 fn has_const_qualifier_in_decl_specs(
@@ -554,9 +561,16 @@ pub fn lower_crate_sig(
 
     let defs = WellknownDefs {
         maybe_uninit: AdtDef(ctx.resolve("core::mem::MaybeUninit").unwrap().0),
+        maybe_uninit_uninit: FnDef(ctx.resolve("core::mem::MaybeUninit::<T>::uninit").unwrap().0),
         valist: AdtDef(ctx.resolve("core::ffi::VaList").unwrap().0),
         valist_fn_arg: FnDef(ctx.resolve("core::ffi::VaList::<'f>::arg").unwrap().0),
         zeroed: FnDef(ctx.resolve("core::mem::zeroed").unwrap().0),
+        transmute: FnDef(ctx.resolve("core::intrinsics::transmute").unwrap().0),
+        transmute_copy: FnDef(ctx.resolve("core::mem::transmute_copy").unwrap().0),
+        str_as_ptr: FnDef(ctx.resolve("core::str::<impl str>::as_ptr").unwrap().0),
+        offset_mut: FnDef(ctx.resolve("core::ptr::mut_ptr::<impl *mut T>::offset").unwrap().0),
+        offset_const: FnDef(ctx.resolve("core::ptr::const_ptr::<impl *const T>::offset").unwrap().0),
+        offset_from: FnDef(ctx.resolve("core::ptr::const_ptr::<impl *const T>::offset_from").unwrap().0),
     };
     (
         HirStructure {
