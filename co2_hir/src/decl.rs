@@ -43,11 +43,11 @@ pub struct HirDecl {
 }
 
 impl HirCtx<'_> {
-    fn maybe_uninit_of(&self, inner: Ty) -> Result<Ty, String> {
-        return Ok(Ty::from_rigid_kind(RigidTy::Adt(
+    pub(crate) fn maybe_uninit_of(&self, inner: Ty) -> Ty {
+        return Ty::from_rigid_kind(RigidTy::Adt(
             self.wellknown_defs.maybe_uninit,
             GenericArgs(vec![GenericArgKind::Type(inner)]),
-        )));
+        ));
     }
 
     pub(crate) fn lower_decl(
@@ -370,7 +370,7 @@ impl HirCtx<'_> {
                     CTy::Ty(inner) => CTy::Ty(Ty::new_ptr(inner, ptr_mutability)),
                     CTy::Function(sig) => {
                         let fn_ptr = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
-                        CTy::Ty(self.maybe_uninit_of(fn_ptr)?)
+                        CTy::Ty(self.maybe_uninit_of(fn_ptr))
                     }
                     CTy::UnsizedArray(elem) => CTy::Ty(Ty::new_ptr(
                         Ty::new_ptr(elem, Mutability::Mut),

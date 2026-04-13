@@ -30,6 +30,17 @@ pub struct HirExpr {
     pub span: RustSpan,
 }
 
+impl HirExpr {
+    fn is_null_like(&self) -> bool {
+        match &self.kind {
+            HirExprKind::Zeroed => true,
+            HirExprKind::ConstInt(0) => true,
+            HirExprKind::Cast(inner) => inner.is_null_like(),
+            _ => false,
+        }
+    }
+}
+
 impl std::fmt::Debug for HirExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.kind {
@@ -176,6 +187,41 @@ impl HirCtx<'_> {
             ty: Ty::new_ptr(elem, Mutability::Mut),
             span: expr.span,
         }
+    }
+
+    pub(crate) fn fn_def_to_c_fn_ptr_decay_if_fn_def(&self, expr: &mut HirExpr) {
+        if !matches!(expr.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(..))) {
+            return;
+        }
+        *expr = self.fn_def_to_c_fn_ptr_decay(expr.clone());
+    }
+
+    fn fn_def_to_fn_ptr_decay(&self, expr: HirExpr) -> HirExpr {
+        let sig = expr
+            .ty
+            .kind()
+            .fn_sig()
+            .expect("FnDef should have fn signature");
+        return HirExpr {
+            span: expr.span,
+            kind: HirExprKind::Cast(Box::new(expr)),
+            ty: Ty::from_rigid_kind(RigidTy::FnPtr(sig)),
+        };
+    }
+
+    fn fn_def_to_c_fn_ptr_decay(&self, expr: HirExpr) -> HirExpr {
+        let sig = expr
+            .ty
+            .kind()
+            .fn_sig()
+            .expect("FnDef should have fn signature");
+        let ty = Ty::from_rigid_kind(RigidTy::FnPtr(sig));
+        let ty = self.maybe_uninit_of(ty);
+        return HirExpr {
+            span: expr.span,
+            kind: HirExprKind::Cast(Box::new(expr)),
+            ty,
+        };
     }
 
     fn emit_cast(&self, expr: HirExpr, ty: Ty) -> HirExpr {
@@ -626,17 +672,7 @@ impl HirCtx<'_> {
                             return Ok(self.array_to_pointer_decay(inner));
                         }
                         if matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _))) {
-                            // In C, `&f` for a function designator has function-pointer type.
-                            let sig = inner
-                                .ty
-                                .kind()
-                                .fn_sig()
-                                .expect("FnDef should have fn signature");
-                            return Ok(HirExpr {
-                                kind: HirExprKind::Cast(Box::new(inner)),
-                                ty: Ty::from_rigid_kind(RigidTy::FnPtr(sig)),
-                                span,
-                            });
+                            return Ok(self.fn_def_to_fn_ptr_decay(inner));
                         }
                         if !is_place_expr(&inner) {
                             if matches!(
@@ -857,7 +893,16 @@ impl HirCtx<'_> {
                 self.array_to_pointer_decay_if_array(&mut then_expr);
                 self.array_to_pointer_decay_if_array(&mut else_expr);
 
-                let Some(common_ty) = common_ternary_ty(then_expr.ty, else_expr.ty) else {
+                self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut then_expr);
+                self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut else_expr);
+
+                let common_ty = if then_expr.is_null_like() {
+                    else_expr.ty
+                } else if else_expr.is_null_like() {
+                    then_expr.ty
+                } else if let Some(common_ty) = common_ternary_ty(then_expr.ty, else_expr.ty) {
+                    common_ty
+                } else {
                     self.terminate_with_error(
                         parser_span,
                         &format!(

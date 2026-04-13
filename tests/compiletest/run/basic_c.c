@@ -1482,6 +1482,14 @@ int main63() {
 	return sizeof(buf) != 4;
 }
 
+static int main64_fn(int x) {
+	return x + 1;
+}
+
+int main64() {
+	return (1 ? main64_fn : 0)(1) != 2;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1499,7 +1507,7 @@ int main() {
 		main46, main47, main48, main49, main50,
 		main51, main52, main53, main54, main55,
 		main56, main57, main58, main59, main60,
-		main61, main62, main63,
+		main61, main62, main63, main64,
 	};
 	
 	int i;

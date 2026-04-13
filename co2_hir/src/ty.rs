@@ -63,14 +63,6 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
     let TyKind::RigidTy(rhs) = rhs_ty.kind() else {
         return None;
     };
-    let lhs_is_ptr = matches!(lhs, RigidTy::RawPtr(..));
-    let rhs_is_ptr = matches!(rhs, RigidTy::RawPtr(..));
-    let one_is_ptr = lhs_is_ptr || rhs_is_ptr;
-
-    let lhs_is_integer = matches!(lhs, RigidTy::Int(..) | RigidTy::Uint(..));
-    let rhs_is_integer = matches!(rhs, RigidTy::Int(..) | RigidTy::Uint(..));
-    let one_is_integer = lhs_is_integer || rhs_is_integer;
-
     let lhs_is_void = matches!(lhs, RigidTy::Tuple(ref l) if l.is_empty());
     let rhs_is_void = matches!(rhs, RigidTy::Tuple(ref l) if l.is_empty());
     let one_is_void = lhs_is_void || rhs_is_void;
@@ -104,11 +96,6 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
             return Some(Ty::new_ptr(Ty::new_tuple(&[]), common_mutability));
         }
     }
-
-    if one_is_ptr && one_is_integer {
-        return Some(Ty::usize_ty());
-    }
-
     None
 }
 
