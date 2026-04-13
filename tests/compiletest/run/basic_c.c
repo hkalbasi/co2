@@ -1446,6 +1446,15 @@ int main59() {
 	return v.name[1] != 'b';
 }
 
+extern long write(int, const void *buf, unsigned long count);
+
+typedef void (*main60_syscall_ptr)();
+
+int main60() {
+	main60_syscall_ptr p = (main60_syscall_ptr)write;
+	return p == 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1462,7 +1471,7 @@ int main() {
 		main41, main42, main43, main44, main45,
 		main46, main47, main48, main49, main50,
 		main51, main52, main53, main54, main55,
-		main56, main57, main58, main59,
+		main56, main57, main58, main59, main60,
 	};
 	
 	int i;

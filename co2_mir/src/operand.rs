@@ -823,6 +823,39 @@ impl Builder {
             return MirOperand::Copy(place(tmp));
         }
         if src_is_fn_def && dst_is_fn_ptr {
+            let src_sig = src_ty
+                .kind()
+                .fn_sig()
+                .expect("fn def should have signature");
+            let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig));
+            if !ty_matches_expected(dst_ty, src_fn_ptr_ty) {
+                let fn_ptr_local = self.new_temp(src_fn_ptr_ty, Mutability::Mut, span);
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(
+                        place(fn_ptr_local),
+                        Rvalue::Cast(
+                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
+                            inner_op,
+                            src_fn_ptr_ty,
+                        ),
+                    ),
+                    span,
+                });
+                let dst_local = self.new_temp(dst_ty, Mutability::Mut, span);
+                let generic_args = vec![
+                    GenericArgKind::Type(src_fn_ptr_ty),
+                    GenericArgKind::Type(dst_ty),
+                ];
+                self.emit_call_block(
+                    fn_const_operand(self.wellknown_defs.transmute, generic_args, span),
+                    vec![MirOperand::Copy(place(fn_ptr_local))],
+                    place(dst_local),
+                    span,
+                );
+                return MirOperand::Copy(place(dst_local));
+            }
+        }
+        if src_is_fn_def && dst_is_fn_ptr {
             let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(
@@ -836,6 +869,45 @@ impl Builder {
                 span,
             });
             return MirOperand::Copy(place(tmp));
+        }
+        if dst_mu_fn_ptr.is_some() && src_is_fn_def {
+            let fn_ptr_ty = dst_mu_fn_ptr.expect("checked is_some");
+            let src_sig = src_ty
+                .kind()
+                .fn_sig()
+                .expect("fn def should have signature");
+            let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig));
+            if !ty_matches_expected(fn_ptr_ty, src_fn_ptr_ty) {
+                let src_fn_ptr_local = self.new_temp(src_fn_ptr_ty, Mutability::Mut, span);
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(
+                        place(src_fn_ptr_local),
+                        Rvalue::Cast(
+                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
+                            inner_op,
+                            src_fn_ptr_ty,
+                        ),
+                    ),
+                    span,
+                });
+                let dst_fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
+                let generic_args = vec![
+                    GenericArgKind::Type(src_fn_ptr_ty),
+                    GenericArgKind::Type(fn_ptr_ty),
+                ];
+                self.emit_call_block(
+                    fn_const_operand(self.wellknown_defs.transmute, generic_args, span),
+                    vec![MirOperand::Copy(place(src_fn_ptr_local))],
+                    place(dst_fn_ptr_local),
+                    span,
+                );
+                return self.write_value_into_maybe_uninit_storage(
+                    dst_ty,
+                    MirOperand::Copy(place(dst_fn_ptr_local)),
+                    fn_ptr_ty,
+                    span,
+                );
+            }
         }
         if dst_mu_fn_ptr.is_some() && src_is_fn_def {
             let fn_ptr_ty = dst_mu_fn_ptr.expect("checked is_some");
