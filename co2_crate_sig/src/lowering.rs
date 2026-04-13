@@ -157,6 +157,7 @@ pub fn lower_crate_sig(
             struct_manager: StructManager::default(),
             unrepresentable_typedefs: HashMap::new(),
             typedef_tys: HashMap::new(),
+            global_value_tys: HashMap::new(),
             global_struct_tags: Rc::new(RefCell::new(StructAndEnumData::default())),
             global_locals: Rc::new(RefCell::new(im::HashMap::new())),
         })),
@@ -312,6 +313,14 @@ pub fn lower_crate_sig(
                         continue;
                     }
 
+                    if let CTy::Ty(ty) = &ty {
+                        let id = ctx.resolve_in_current([&*name]).unwrap().0;
+                        ctx.resolver
+                            .borrow_mut()
+                            .global_value_tys
+                            .insert(id, ty.clone());
+                    }
+
                     match ty {
                         CTy::Ty(ty) => {
                             let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
@@ -364,6 +373,7 @@ pub fn lower_crate_sig(
                             let len = infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
                                 .unwrap_or_else(|err| ctx.terminate_with_error(parser_span, &err));
                             let ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
+                            ctx.resolver.borrow_mut().global_value_tys.insert(id, ty.clone());
                             ctx.hir_items.push(HirModuleItem::Static {
                                 name,
                                 id,
@@ -421,6 +431,9 @@ pub fn lower_crate_sig(
         let resolver = LocalResolver::new(ctx.resolver.clone());
         let (_, ty, _) =
             ctx.lower_value_decl_ctype(base_ty, base_const, declarator.declarator, &resolver);
+        if let CTy::Ty(ty) = &ty {
+            ctx.resolver.borrow_mut().global_value_tys.insert(id, ty.clone());
+        }
         match ty {
             CTy::Ty(ty) => {
                 ctx.hir_items.push(HirModuleItem::Static {
@@ -449,6 +462,10 @@ pub fn lower_crate_sig(
                 let len = infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
                     .unwrap_or_else(|err| ctx.terminate_with_error(parser_span, &err));
                 let sized_ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
+                ctx.resolver
+                    .borrow_mut()
+                    .global_value_tys
+                    .insert(id, sized_ty.clone());
                 ctx.hir_items.push(HirModuleItem::Static {
                     name,
                     id,

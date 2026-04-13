@@ -1475,6 +1475,13 @@ int main62() {
 	return b(1) != main62_helper(1);
 }
 
+static const unsigned char main63_magic[] = { 1, 2, 3 };
+
+int main63() {
+	unsigned char buf[sizeof(main63_magic) + 1];
+	return sizeof(buf) != 4;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1492,7 +1499,7 @@ int main() {
 		main46, main47, main48, main49, main50,
 		main51, main52, main53, main54, main55,
 		main56, main57, main58, main59, main60,
-		main61, main62,
+		main61, main62, main63,
 	};
 	
 	int i;

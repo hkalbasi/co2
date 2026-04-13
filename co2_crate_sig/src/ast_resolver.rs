@@ -49,6 +49,7 @@ pub struct LocalResolverBase {
     pub(crate) struct_manager: StructManager,
     pub(crate) unrepresentable_typedefs: HashMap<String, CTy>,
     pub(crate) typedef_tys: HashMap<DefId, HirTy>,
+    pub(crate) global_value_tys: HashMap<DefId, HirTy>,
     pub(crate) global_struct_tags: Rc<RefCell<StructAndEnumData>>,
     pub(crate) global_locals: Rc<RefCell<im::HashMap<String, (DefOrLocal, TypeQueryResult)>>>,
 }

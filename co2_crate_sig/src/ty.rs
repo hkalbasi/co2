@@ -474,6 +474,11 @@ impl LocalResolverBase {
                     .get(local)
                     .cloned()
                     .ok_or_else(|| format!("missing local type for local {local}")),
+                crate::DefOrLocal::Def(def) => self
+                    .global_value_tys
+                    .get(def)
+                    .cloned()
+                    .ok_or_else(|| format!("missing global type for def {def:?}")),
                 crate::DefOrLocal::Prim(primitive_ty) => Ok(self.hir_ty_of_prim(*primitive_ty, rust_span)),
                 _ => Err("unsupported identifier in sizeof(array size expr)".to_owned()),
             },
