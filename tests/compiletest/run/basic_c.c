@@ -1463,6 +1463,18 @@ int main61() {
 	return 1;
 }
 
+int main62_helper(int x) {
+	return x + 1;
+}
+
+int main62() {
+	typedef int (*main62_fn1)(int);
+	typedef int (*main62_fn2)(unsigned);
+	main62_fn1 a = main62_helper;
+	main62_fn2 b = (main62_fn2)a;
+	return b(1) != main62_helper(1);
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1480,7 +1492,7 @@ int main() {
 		main46, main47, main48, main49, main50,
 		main51, main52, main53, main54, main55,
 		main56, main57, main58, main59, main60,
-		main61,
+		main61, main62,
 	};
 	
 	int i;

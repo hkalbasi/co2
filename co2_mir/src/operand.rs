@@ -1048,6 +1048,28 @@ impl Builder {
         if src_mu_fn_ptr.is_some() && dst_is_fn_ptr {
             return self.read_maybe_uninit_as(inner_op, src_ty, dst_ty, span);
         }
+        if src_mu_fn_ptr.is_some() && dst_mu_fn_ptr.is_some() {
+            let src_fn_ptr_ty = src_mu_fn_ptr.expect("checked is_some");
+            let dst_fn_ptr_ty = dst_mu_fn_ptr.expect("checked is_some");
+            let src_fn_ptr_op = self.read_maybe_uninit_as(inner_op, src_ty, src_fn_ptr_ty, span);
+            let coerced_op = if ty_matches_expected(dst_fn_ptr_ty, src_fn_ptr_ty) {
+                src_fn_ptr_op
+            } else {
+                let dst_fn_ptr_local = self.new_temp(dst_fn_ptr_ty, Mutability::Mut, span);
+                let generic_args = vec![
+                    GenericArgKind::Type(src_fn_ptr_ty),
+                    GenericArgKind::Type(dst_fn_ptr_ty),
+                ];
+                self.emit_call_block(
+                    fn_const_operand(self.wellknown_defs.transmute, generic_args, span),
+                    vec![src_fn_ptr_op],
+                    place(dst_fn_ptr_local),
+                    span,
+                );
+                MirOperand::Copy(place(dst_fn_ptr_local))
+            };
+            return self.write_value_into_maybe_uninit_storage(dst_ty, coerced_op, dst_fn_ptr_ty, span);
+        }
         panic!("unsupported cast from {:?} to {:?}", src_ty, dst_ty);
     }
 
