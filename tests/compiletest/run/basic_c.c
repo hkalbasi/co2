@@ -1622,6 +1622,45 @@ int main75() {
 	return main75_expect_true(&x);
 }
 
+int main76_x = 0;
+
+int
+main76()
+{
+	switch(main76_x)
+		case 0:
+			;
+	switch(main76_x)
+		case 0:
+			switch(main76_x) {
+				case 0:
+					goto next;
+				default:
+					return 1;
+			}
+	return 1;
+	next:
+	switch(main76_x)
+		case 1:
+			return 1;
+	switch(main76_x) {
+		{
+			main76_x = 1 + 1;
+			foo:
+			case 1:
+				return 1;
+		}
+	}
+	switch(main76_x) {
+		case 0:
+			return main76_x;
+		case 1:
+			return 1;
+		default:
+			return 1;
+	}
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1642,6 +1681,7 @@ int main() {
 		main61, main62, main63, main64, main65,
 		main66, main67, main68, main69, main70,
 		main71, main72, main73, main74, main75,
+		main76,
 	};
 	
 	int i;

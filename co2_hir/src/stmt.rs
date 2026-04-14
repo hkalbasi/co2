@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use co2_ast::{CompoundStatement, Statement, StatementOrDeclaration};
 use co2_crate_sig::LocalResolver;
@@ -346,23 +346,6 @@ impl HirCtx<'_> {
                 let scope = self.exit_switch_scope();
                 body_res?;
 
-                let mut case_entry_labels = scope
-                    .case_labels
-                    .iter()
-                    .map(|(_, label)| *label)
-                    .collect::<HashSet<_>>();
-                if let Some(default_label) = scope.default_label {
-                    case_entry_labels.insert(default_label);
-                }
-                let first_case_idx = body_stmts
-                    .iter()
-                    .position(|stmt| {
-                        matches!(stmt, HirStmt::Label(label, _) if case_entry_labels.contains(label))
-                    })
-                    .unwrap_or(body_stmts.len());
-                let case_stmts = body_stmts.split_off(first_case_idx);
-                out.extend(body_stmts);
-
                 for (cond, label) in scope.case_labels {
                     out.push(HirStmt::If {
                         cond,
@@ -375,7 +358,7 @@ impl HirCtx<'_> {
                     scope.default_label.unwrap_or(end_label),
                     span,
                 ));
-                out.extend(case_stmts);
+                out.extend(body_stmts);
                 out.push(HirStmt::Label(end_label, span));
             }
             Statement::Compound(nested) => {
