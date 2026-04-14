@@ -208,12 +208,22 @@ impl Builder {
                 else {
                     panic!("array decay expects array type, got {:?}", inner.ty);
                 };
-                let array_ptr_ty = Ty::new_ptr(inner.ty, Mutability::Mut);
+                let TyKind::RigidTy(RigidTy::RawPtr(_, ptr_mutability)) = expr.ty.kind() else {
+                    panic!("array decay expects pointer type, got {:?}", expr.ty);
+                };
+                let array_ptr_ty = Ty::new_ptr(inner.ty, ptr_mutability);
                 let array_ptr_local = self.new_temp(array_ptr_ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         place(array_ptr_local),
-                        Rvalue::AddressOf(RawPtrKind::Mut, base_place),
+                        Rvalue::AddressOf(
+                            if ptr_mutability == Mutability::Mut {
+                                RawPtrKind::Mut
+                            } else {
+                                RawPtrKind::Const
+                            },
+                            base_place,
+                        ),
                     ),
                     span: expr.span,
                 });
@@ -435,8 +445,6 @@ impl Builder {
                 rhs
             }
             HirExprKind::Binary { op, lhs, rhs } => {
-                let lhs = self.lower_expr_to_operand(lhs);
-                let rhs = self.lower_expr_to_operand(rhs);
                 if matches!(
                     op,
                     co2_hir::HirBinOp::Eq
@@ -446,6 +454,23 @@ impl Builder {
                         | co2_hir::HirBinOp::Ge
                         | co2_hir::HirBinOp::Gt
                 ) {
+                    let normalize_cmp_operand = |expr: &HirExpr| {
+                        if matches!(
+                            expr.ty.kind(),
+                            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
+                        ) || maybe_uninit_fn_ptr_inner(expr.ty).is_some()
+                        {
+                            HirExpr {
+                                kind: HirExprKind::Cast(Box::new(expr.clone())),
+                                ty: Ty::usize_ty(),
+                                span: expr.span,
+                            }
+                        } else {
+                            expr.clone()
+                        }
+                    };
+                    let lhs = self.lower_expr_to_operand(&normalize_cmp_operand(lhs));
+                    let rhs = self.lower_expr_to_operand(&normalize_cmp_operand(rhs));
                     let bool_local = self.new_temp(Ty::bool_ty(), Mutability::Mut, expr.span);
                     self.stmts.push(MirStatement {
                         kind: MirStatementKind::Assign(
@@ -469,6 +494,8 @@ impl Builder {
                     });
                     return MirOperand::Copy(place(tmp));
                 }
+                let lhs = self.lower_expr_to_operand(lhs);
+                let rhs = self.lower_expr_to_operand(rhs);
                 let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
@@ -954,6 +981,72 @@ impl Builder {
                 span,
             });
             return MirOperand::Copy(place(tmp));
+        }
+        if (src_is_fn_def || src_is_fn_ptr) && dst_is_int {
+            let fn_ptr_ty = if src_is_fn_def {
+                let src_sig = src_ty
+                    .kind()
+                    .fn_sig()
+                    .expect("fn def should have signature");
+                Ty::from_rigid_kind(RigidTy::FnPtr(src_sig))
+            } else {
+                src_ty
+            };
+            let fn_ptr_op = if src_is_fn_def {
+                let fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(
+                        place(fn_ptr_local),
+                        Rvalue::Cast(
+                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
+                            inner_op,
+                            fn_ptr_ty,
+                        ),
+                    ),
+                    span,
+                });
+                MirOperand::Copy(place(fn_ptr_local))
+            } else {
+                inner_op
+            };
+            let raw_ptr_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Not);
+            let raw_ptr_local = self.new_temp(raw_ptr_ty, Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(raw_ptr_local),
+                    Rvalue::Cast(CastKind::FnPtrToPtr, fn_ptr_op, raw_ptr_ty),
+                ),
+                span,
+            });
+            let usize_ty = Ty::usize_ty();
+            let usize_tmp = self.new_temp(usize_ty, Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(usize_tmp),
+                    Rvalue::Cast(
+                        CastKind::PointerExposeAddress,
+                        MirOperand::Copy(place(raw_ptr_local)),
+                        usize_ty,
+                    ),
+                ),
+                span,
+            });
+            if dst_ty == usize_ty {
+                return MirOperand::Copy(place(usize_tmp));
+            }
+            let dst_tmp = self.new_temp(dst_ty, Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(dst_tmp),
+                    Rvalue::Cast(
+                        CastKind::IntToInt,
+                        MirOperand::Copy(place(usize_tmp)),
+                        dst_ty,
+                    ),
+                ),
+                span,
+            });
+            return MirOperand::Copy(place(dst_tmp));
         }
         if src_is_ptr && dst_is_int {
             let usize_ty = Ty::usize_ty();

@@ -182,9 +182,10 @@ impl HirCtx<'_> {
 
     fn array_to_pointer_decay(&self, expr: HirExpr) -> HirExpr {
         let elem = array_elem_ty(expr.ty).expect("Expr is not array");
+        let mutability = addr_of_mutability(&expr);
         HirExpr {
             kind: HirExprKind::ArrayToPointer(Box::new(expr.clone())),
-            ty: Ty::new_ptr(elem, Mutability::Mut),
+            ty: Ty::new_ptr(elem, mutability),
             span: expr.span,
         }
     }
@@ -593,6 +594,7 @@ impl HirCtx<'_> {
                     || (src_is_int && dst_is_ptr_like)
                     || (src_is_ptr_like && dst_is_int)
                     || dst_is_void
+                    || (src_is_fn_item && dst_is_int)
                     || (src_is_fn_item
                         && (matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
                             || is_maybe_uninit_fn_ptr_ty(target_ty).is_some())))

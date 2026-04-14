@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use co2_ast::{CompoundStatement, Statement, StatementOrDeclaration};
 use co2_crate_sig::LocalResolver;
@@ -34,16 +34,37 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<(), String> {
+        let mut hoisted_zeroed_decls = Vec::new();
+        let mut body_stmts = Vec::new();
         for (stmt_or_decl, _) in compound.statements {
+            let mut lowered = Vec::new();
             match stmt_or_decl {
                 StatementOrDeclaration::Statement((stmt, span)) => {
-                    self.lower_stmt(stmt, span, out, locals, local_map)?;
+                    self.lower_stmt(stmt, span, &mut lowered, locals, local_map)?;
                 }
                 StatementOrDeclaration::Declaration((decl, _)) => {
-                    self.lower_decl(decl, out, locals, local_map)?;
+                    self.lower_decl(decl, &mut lowered, locals, local_map)?;
+                }
+            }
+            for stmt in lowered {
+                if matches!(
+                    &stmt,
+                    HirStmt::Decl(HirDecl {
+                        initializer: Some(HirExpr {
+                            kind: HirExprKind::Zeroed,
+                            ..
+                        }),
+                        ..
+                    })
+                ) {
+                    hoisted_zeroed_decls.push(stmt);
+                } else {
+                    body_stmts.push(stmt);
                 }
             }
         }
+        out.extend(hoisted_zeroed_decls);
+        out.extend(body_stmts);
         Ok(())
     }
 
@@ -126,6 +147,8 @@ impl HirCtx<'_> {
             Statement::Return(expr) => {
                 if let Some(expr) = expr {
                     let mut expr = self.lower_expr((expr.0, expr.1), locals, local_map)?;
+                    self.array_to_pointer_decay_if_array(&mut expr);
+                    self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
                     if needs_implicit_cast(self.ret_ty, expr.ty) {
                         expr = HirExpr {
                             kind: HirExprKind::Cast(Box::new(expr.clone())),
@@ -323,6 +346,23 @@ impl HirCtx<'_> {
                 let scope = self.exit_switch_scope();
                 body_res?;
 
+                let mut case_entry_labels = scope
+                    .case_labels
+                    .iter()
+                    .map(|(_, label)| *label)
+                    .collect::<HashSet<_>>();
+                if let Some(default_label) = scope.default_label {
+                    case_entry_labels.insert(default_label);
+                }
+                let first_case_idx = body_stmts
+                    .iter()
+                    .position(|stmt| {
+                        matches!(stmt, HirStmt::Label(label, _) if case_entry_labels.contains(label))
+                    })
+                    .unwrap_or(body_stmts.len());
+                let case_stmts = body_stmts.split_off(first_case_idx);
+                out.extend(body_stmts);
+
                 for (cond, label) in scope.case_labels {
                     out.push(HirStmt::If {
                         cond,
@@ -335,7 +375,7 @@ impl HirCtx<'_> {
                     scope.default_label.unwrap_or(end_label),
                     span,
                 ));
-                out.extend(body_stmts);
+                out.extend(case_stmts);
                 out.push(HirStmt::Label(end_label, span));
             }
             Statement::Compound(nested) => {

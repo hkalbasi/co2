@@ -17,8 +17,8 @@ impl Builder {
             }) => {
                 if let Some(init) = initializer {
                     let local_index = self.local_to_index(*local);
+                    let local_ty = self.locals[local_index].ty;
                     if let HirExprKind::Zeroed = &init.kind {
-                        let local_ty = self.locals[local_index].ty;
                         self.lower_zeroed_to_destination(place(local_index), init.span, local_ty);
                     } else {
                         let value = self.lower_expr_to_operand(init);
@@ -138,7 +138,10 @@ impl Builder {
     }
 
     fn bind_label(&mut self, label: LabelId, span: RustSpan) {
-        let target = if self.stmts.is_empty() {
+        let target = if self.stmts.is_empty() && self.blocks.is_empty() {
+            self.push_terminator(TerminatorKind::Goto { target: 1 }, span);
+            1
+        } else if self.stmts.is_empty() {
             self.blocks.len()
         } else {
             let next = self.blocks.len() + 1;

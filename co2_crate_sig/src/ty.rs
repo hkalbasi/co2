@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use co2_ast::{
     BinOp, Constant, DeclarationSpecifier, Declarator, Expression, Span, Spanned,
     StructOrUnionKind, TypeName, TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp,
@@ -527,11 +529,28 @@ impl LocalResolverBase {
     }
 
     fn lookup_field_ty_for_sizeof(&self, base_ty: HirTy, field_name: &str) -> Result<HirTy, String> {
+        let base_ty = self.peel_typedefs_for_sizeof(base_ty);
         let HirTyKind::Adt(def, _) = base_ty.kind else {
             return Err("field access requires struct or union type in sizeof(array size expr)".to_owned());
         };
         self.adt_field_ty(def, field_name)
             .ok_or_else(|| format!("unknown field `{field_name}` in sizeof(array size expr)"))
+    }
+
+    fn peel_typedefs_for_sizeof(&self, mut ty: HirTy) -> HirTy {
+        let mut seen = HashSet::new();
+        loop {
+            let HirTyKind::Adt(def, _) = ty.kind else {
+                return ty;
+            };
+            if !seen.insert(def) {
+                return ty;
+            }
+            let Some(next_ty) = self.typedef_tys.get(&def).cloned() else {
+                return ty;
+            };
+            ty = next_ty;
+        }
     }
 
     fn lower_type_name_for_const(

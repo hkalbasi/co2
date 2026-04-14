@@ -1360,9 +1360,25 @@ static int main51_aux(struct main51_s *p) {
 	return sizeof(copy) != sizeof(p->bytes);
 }
 
+typedef struct main51_typedef_s {
+	char bytes[16];
+} main51_typedef_s;
+
+static int main51_typedef_aux(main51_typedef_s *p) {
+	char copy[sizeof(p->bytes)];
+	return sizeof(copy) != sizeof(p->bytes);
+}
+
 int main51() {
 	struct main51_s s;
-	return main51_aux(&s);
+	if (main51_aux(&s)) {
+		return 1;
+	}
+	main51_typedef_s s2;
+	if (main51_typedef_aux(&s2)) {
+		return 2;
+	}
+	return 0;
 }
 
 static unsigned char main52_data[] = { 1, 2, 3, 4, 5 };
@@ -1490,6 +1506,92 @@ int main64() {
 	return (1 ? main64_fn : 0)(1) != 2;
 }
 
+static int main65_fn(int x) {
+	return x + 1;
+}
+
+int main65() {
+	unsigned long long addr = (unsigned long long)main65_fn;
+	return addr == 0;
+}
+
+typedef struct {
+	int vals[3];
+} main66_s;
+
+int main66() {
+	static const main66_s s = {{4, 5, 6}};
+	const main66_s *p = &s;
+	return p->vals[1] != 5;
+}
+
+typedef union {
+	int x;
+	int y;
+} main67_u;
+
+static int main67_flag = 1;
+
+int main67() {
+	switch (main67_flag) {
+	main67_u u;
+	case 1:
+		u.x = 7;
+		return u.x != 7;
+	}
+	return 0;
+}
+
+static int main68_fill(double *p) {
+	*p = 3.5;
+	return 0;
+}
+
+static int main68_flag = 1;
+
+int main68() {
+	if (main68_flag) goto main68_label;
+	double r;
+main68_label:
+	if (main68_fill(&r)) return 1;
+	return r != 3.5;
+}
+
+typedef int (*main69_fp)();
+
+static int main69_a() {
+	return 1;
+}
+
+static int main69_b() {
+	return 2;
+}
+
+int main69() {
+	main69_fp a = main69_a;
+	main69_fp b = main69_b;
+	return (a != a) || (a == b);
+}
+
+static const char main70_text[] = "co2";
+
+const char *main70_get() {
+	return main70_text;
+}
+
+int main70() {
+	return main70_get()[1] != 'o';
+}
+
+static int main71_i;
+
+int main71() {
+	while (main71_i < 3 && main71_i >= 0) {
+		main71_i += 1;
+	}
+	return main71_i != 3;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1507,7 +1609,9 @@ int main() {
 		main46, main47, main48, main49, main50,
 		main51, main52, main53, main54, main55,
 		main56, main57, main58, main59, main60,
-		main61, main62, main63, main64,
+		main61, main62, main63, main64, main65,
+		main66, main67, main68, main69, main70,
+		main71,
 	};
 	
 	int i;
