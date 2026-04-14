@@ -56,6 +56,30 @@ int sum_using_helper_fn(int n, ...) {
 	return total;
 }
 
+int read_one(va_list *ap) {
+	return va_arg(*ap, int);
+}
+
+int reuse(int n, ...) {
+	va_list ap;
+	va_start(ap, n);
+	if (read_one(&ap) != 1) {
+		va_end(ap);
+		return 1;
+	}
+	va_end(ap);
+	va_start(ap, n);
+	if (read_one(&ap) != 1) {
+		va_end(ap);
+		return 2;
+	}
+    if (read_one(&ap) != 2) {
+		va_end(ap);
+		return 3;
+	}
+	va_end(ap);
+	return 0;
+}
 
 int main() {
     if (simple_varargs(5, 2, "salam") != 5) {
@@ -70,6 +94,9 @@ int main() {
     }
     if (sum_using_helper_fn(3, 1, 2, 4) != 7) {
         return 4;
+    }
+    if (reuse(2, 1, 2)) {
+        return 50 + reuse(2, 1, 2);
     }
 
     return 0;

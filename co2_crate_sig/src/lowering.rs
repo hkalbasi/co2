@@ -30,6 +30,7 @@ pub struct WellknownDefs {
     pub maybe_uninit_uninit: FnDef,
     pub valist: AdtDef,
     pub valist_fn_arg: FnDef,
+    pub clone: FnDef,
     pub transmute: FnDef,
     pub transmute_copy: FnDef,
     pub offset_mut: FnDef,
@@ -172,12 +173,13 @@ pub fn lower_crate_sig(
     {
         let name = "__builtin_va_list";
         let id = ctx.resolve(name).unwrap().0;
-        let adt = ctx.resolve("std::ffi::VaList").unwrap().0;
+        let adt = ctx.resolve("core::ffi::VaList").unwrap().0;
         let ty = HirTy::adt(
             adt,
             vec![HirGenericArg::Lifetime(HirLifetime::Static)],
             span,
         );
+        ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
         ctx.hir_items.push(HirModuleItem::TypeDef {
             name: name.to_owned(),
             id,
@@ -581,6 +583,7 @@ pub fn lower_crate_sig(
         maybe_uninit_uninit: FnDef(ctx.resolve("core::mem::MaybeUninit::<T>::uninit").unwrap().0),
         valist: AdtDef(ctx.resolve("core::ffi::VaList").unwrap().0),
         valist_fn_arg: FnDef(ctx.resolve("core::ffi::VaList::<'f>::arg").unwrap().0),
+        clone: FnDef(ctx.resolve("core::clone::Clone::clone").unwrap().0),
         zeroed: FnDef(ctx.resolve("core::mem::zeroed").unwrap().0),
         transmute: FnDef(ctx.resolve("core::intrinsics::transmute").unwrap().0),
         transmute_copy: FnDef(ctx.resolve("core::mem::transmute_copy").unwrap().0),

@@ -246,16 +246,41 @@ impl Builder {
                 let Some(args) = self.lower_expr_to_place(args) else {
                     panic!("VaStart operand was not lvalue");
                 };
-                let transmute_fn = self.wellknown_defs.transmute;
                 let src_local = self.c_variadic_local.unwrap();
                 let src_ty = self.locals[src_local].ty;
+                let reg = Region {
+                    kind: RegionKind::ReErased,
+                };
+                let src_ref_ty = Ty::new_ref(reg.clone(), src_ty, Mutability::Not);
+                let src_ref_local = self.new_temp(src_ref_ty, Mutability::Not, expr.span);
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(
+                        place(src_ref_local),
+                        Rvalue::Ref(reg, BorrowKind::Shared, place(src_local)),
+                    ),
+                    span: expr.span,
+                });
+
+                let clone_local = self.new_temp(src_ty, Mutability::Mut, expr.span);
+                self.emit_call_block(
+                    fn_const_operand(
+                        self.wellknown_defs.clone,
+                        vec![GenericArgKind::Type(src_ty)],
+                        expr.span,
+                    ),
+                    vec![MirOperand::Copy(place(src_ref_local))],
+                    place(clone_local),
+                    expr.span,
+                );
+
+                let transmute_fn = self.wellknown_defs.transmute;
                 let generic_args = vec![
                     GenericArgKind::Type(src_ty),
                     GenericArgKind::Type(args_ty),
                 ];
                 self.emit_call_block(
                     fn_const_operand(transmute_fn, generic_args, expr.span),
-                    vec![MirOperand::Move(place(src_local))],
+                    vec![MirOperand::Move(place(clone_local))],
                     args,
                     expr.span,
                 );
@@ -274,9 +299,9 @@ impl Builder {
                     need_deref = true;
                 }
                 let arg_ref_ty = Ty::new_ref(reg.clone(), args.ty, Mutability::Mut);
-                let Some(args) = self.lower_expr_to_place(args) else {
-                    panic!("VaArg operand was not lvalue");
-                };
+                    let Some(args) = self.lower_expr_to_place(args) else {
+                        panic!("VaArg operand was not lvalue");
+                    };
                 let arg_ref = {
                     let tmp = self.new_temp(arg_ref_ty, Mutability::Mut, expr.span);
                     self.stmts.push(MirStatement {
