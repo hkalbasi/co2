@@ -7,13 +7,10 @@ use co2_ast::{
 };
 use co2_parser::parse_compound_statement;
 use rustc_public_generative::{
-    DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirGenericArg,
-    HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem, HirSelfKind, HirStructure,
-    HirStructureCtx, HirTy, HirTyConst,
-    rustc_public::{
+    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem, HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, rustc_public::{
         DefId,
         ty::{AdtDef, FnDef, IntTy},
-    },
+    }
 };
 
 use crate::{
@@ -518,6 +515,7 @@ pub fn lower_crate_sig(
                 name,
                 id: AdtDef(def),
                 kind: HirAdtKind::Struct { fields: vec![] },
+                repr: AdtRepr::C,
                 span,
             });
             continue;
@@ -532,6 +530,7 @@ pub fn lower_crate_sig(
             id: AdtDef(def),
             kind,
             span,
+            repr: AdtRepr::C,
         });
 
         let self_ty_hir = HirTy::adt(def, vec![], span);

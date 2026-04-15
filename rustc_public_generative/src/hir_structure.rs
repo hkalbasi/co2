@@ -26,6 +26,7 @@ pub enum HirModuleItem {
     Adt {
         name: String,
         id: AdtDef,
+        repr: AdtRepr,
         kind: HirAdtKind,
         span: Span,
     },
@@ -159,3 +160,10 @@ pub enum FunctionAbi {
     Rust,
     C,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdtRepr {
+    Rust,
+    C,
+}
+

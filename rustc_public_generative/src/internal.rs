@@ -15,6 +15,7 @@ use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::packed::Pu128;
 use rustc_data_structures::steal::Steal;
+use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefIdMap};
@@ -32,7 +33,7 @@ use rustc_session::config::EntryFnType;
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
 
-use crate::hir_structure::{FunctionAbi, FunctionSignature, StructField};
+use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, StructField};
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{
@@ -173,6 +174,7 @@ impl ItemSignatureInfo {
                 }),
                 crate::HirModuleItem::Adt {
                     name: _,
+                    repr: _,
                     id,
                     kind,
                     span,
@@ -1073,10 +1075,11 @@ impl DefinedCrateInfo {
                     id,
                     kind,
                     span: _,
+                    repr,
                 } => {
                     let result = match kind {
-                        crate::HirAdtKind::Struct { fields: _ } => DefinedItemKind::Struct(id),
-                        crate::HirAdtKind::Union { fields: _ } => DefinedItemKind::Union(id),
+                        crate::HirAdtKind::Struct { fields: _ } => DefinedItemKind::Struct(id, repr),
+                        crate::HirAdtKind::Union { fields: _ } => DefinedItemKind::Union(id, repr),
                     };
                     match kind {
                         crate::HirAdtKind::Struct { fields }
@@ -1409,8 +1412,8 @@ impl DefinedCrateState {
                 mutability: rustc_ast::Mutability::Mut,
                 nested: false,
             },
-            DefinedItemKind::Struct(_) => DefKind::Struct,
-            DefinedItemKind::Union(_) => DefKind::Union,
+            DefinedItemKind::Struct(_, _) => DefKind::Struct,
+            DefinedItemKind::Union(_, _) => DefKind::Union,
             DefinedItemKind::Field(_) => DefKind::Field,
             DefinedItemKind::TypeDef(_) => DefKind::TyAlias,
             DefinedItemKind::Impl { of_trait, .. } => DefKind::Impl { of_trait },
@@ -1462,7 +1465,7 @@ impl DefinedItemInfo {
             DefinedItemKind::Function { fn_def, .. } | DefinedItemKind::ForeignFunction(fn_def) => {
                 fn_def.0
             }
-            DefinedItemKind::Struct(adt_def) | DefinedItemKind::Union(adt_def) => adt_def.0,
+            DefinedItemKind::Struct(adt_def, _) | DefinedItemKind::Union(adt_def, _) => adt_def.0,
             DefinedItemKind::ForeignMod(def_id)
             | DefinedItemKind::TypeDef(def_id)
             | DefinedItemKind::Static(def_id)
@@ -1487,8 +1490,8 @@ pub enum DefinedItemKind {
     Const(DefId),
     AnonConst(DefId),
     Static(DefId),
-    Struct(AdtDef),
-    Union(AdtDef),
+    Struct(AdtDef, AdtRepr),
+    Union(AdtDef, AdtRepr),
     Field(DefId),
     TypeDef(DefId),
     Impl { def_id: DefId, of_trait: bool },
@@ -2023,12 +2026,12 @@ fn generated_resolutions<'tcx>(
             DefinedItemKind::Function { .. } => {
                 (Res::Def(DefKind::Fn, local_def_id.to_def_id()), true, false)
             }
-            DefinedItemKind::Struct(_) => (
+            DefinedItemKind::Struct(_, _) => (
                 Res::Def(DefKind::Struct, local_def_id.to_def_id()),
                 true,
                 false,
             ),
-            DefinedItemKind::Union(_) => (
+            DefinedItemKind::Union(_, _) => (
                 Res::Def(DefKind::Union, local_def_id.to_def_id()),
                 true,
                 false,
@@ -2122,30 +2125,42 @@ fn generated_hir_attr_map<'tcx>(tcx: TyCtxt<'tcx>, key: OwnerId) -> &'tcx hir::A
         let Some(info) = items.items.iter().find(|item| item.def_id() == key) else {
             return hir::AttributeMap::EMPTY;
         };
-        if matches!(
-            info.kind,
-            DefinedItemKind::Function {
-                fn_def: _,
-                abi: FunctionAbi::C,
-                no_mangle: true,
-            }
-        ) {
-            leak(hir::AttributeMap {
-                map: [(
-                    ItemLocalId::ZERO,
-                    leak([hir::Attribute::Parsed(hir::attrs::AttributeKind::NoMangle(
-                        DUMMY_SP,
-                    ))]) as &[hir::Attribute],
-                )]
-                .into_iter()
-                .collect(),
-                define_opaque: None,
-                opt_hash: Some(random_fingerprint()),
-            })
-        } else {
-            hir::AttributeMap::EMPTY
-        }
+        let Some(attrs) = generated_item_attrs(info.kind) else {
+            return hir::AttributeMap::EMPTY;
+        };
+        leak(hir::AttributeMap {
+            map: [(
+                ItemLocalId::ZERO,
+                leak(attrs.into_boxed_slice()) as &[hir::Attribute],
+            )]
+            .into_iter()
+            .collect(),
+            define_opaque: None,
+            opt_hash: Some(random_fingerprint()),
+        })
     })
+}
+
+fn generated_item_attrs(kind: DefinedItemKind) -> Option<Vec<hir::Attribute>> {
+    let attr = match kind {
+        DefinedItemKind::Function {
+            abi: FunctionAbi::C,
+            no_mangle: true,
+            ..
+        } => hir::attrs::AttributeKind::NoMangle(DUMMY_SP),
+        DefinedItemKind::Struct(_, repr) | DefinedItemKind::Union(_, repr) => {
+            let repr = match repr {
+                AdtRepr::Rust => hir::attrs::ReprAttr::ReprRust,
+                AdtRepr::C => hir::attrs::ReprAttr::ReprC,
+            };
+            hir::attrs::AttributeKind::Repr {
+                reprs: ThinVec::from_iter([(repr, DUMMY_SP)]),
+                first_span: DUMMY_SP,
+            }
+        },
+        _ => return None,
+    };
+    Some(vec![hir::Attribute::Parsed(attr)])
 }
 
 fn generated_opt_ast_lowering_delayed_lints<'tcx>(
