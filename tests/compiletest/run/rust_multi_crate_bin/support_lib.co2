@@ -36,8 +36,6 @@ typedef _Bool Co2Bool;
 
 typedef Union1* Union1MutPtr;
 typedef const Union1* Union1ConstPtr;
-typedef Union1* Union1MutPtr;
-typedef const Union1* Union1ConstPtr;
 typedef Union1 * const * ConstPtrToMutPtrToUnion1;
 typedef const Union1 ** MutPtrToConstPtrToUnion1;
 typedef struct {

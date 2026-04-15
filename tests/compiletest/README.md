@@ -23,9 +23,14 @@ Run directives:
 - `//@ run-stderr: <exact text>` (`\\n` escapes are supported)
 - `//@ run-stdout-contains: <substring>` (repeatable)
 - `//@ run-stderr-contains: <substring>` (repeatable)
-- `//@ aux-lib: <crate_name> <relative_path>` (repeatable, Rust mode only)
-  Compiles each listed `.rs` or `.co2` file as an `rlib` using `co2` and links it into the Rust test binary.
-  Helper source files can use `.aux.rs` or `.aux.co2` suffix to avoid being collected as standalone tests.
+
+Directory run tests:
+- A directory containing `main.nu` is treated as a run test.
+- Directives in `main.nu` use `#@`, for example `#@ run-status: 0`.
+- The harness copies the whole directory to a temp workspace and runs `nu main.nu` inside it.
+- `PATH` is set so `co2` and `co2c` from `target/debug` are available.
+- `CO2_WORKSPACE_ROOT`, `CO2_TEST_DIR`, and `CO2_BIN_DIR` are provided to the script.
+- The Nushell script is responsible for checking correctness and exiting nonzero on failure.
 
 Debuginfo directives:
 - `//@ debugger: gdb|lldb` (default `gdb`)

@@ -1,7 +1,3 @@
-//@ mode: rust
-//@ aux-lib: support_lib rust_multi_crate_lib.aux.co2
-//@ run-status: 0
-
 use support_lib::{Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG, ComplexStruct};
 
 const _: () = {
