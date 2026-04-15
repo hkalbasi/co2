@@ -196,6 +196,7 @@ pub fn lower_crate_sig(
                 declarator,
                 body,
             } => {
+                let is_static = declaration_specifiers.iter().any(|spec| spec.0.is_static());
                 let mut resolver = LocalResolver::new(ctx.resolver.clone());
                 let transformed_specs = declaration_specifiers.transform(&resolver);
                 let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
@@ -215,7 +216,7 @@ pub fn lower_crate_sig(
                     name,
                     id,
                     sig,
-                    no_mangle: true,
+                    no_mangle: !is_static,
                     span,
                 });
                 resolver = resolver.start_new_scope();

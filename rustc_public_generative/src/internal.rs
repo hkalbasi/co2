@@ -164,14 +164,11 @@ impl ItemSignatureInfo {
                     name: _,
                     id,
                     sig,
-                    no_mangle,
                     span,
+                    ..
                 } => result.push(ItemSignatureInfo {
                     id: id.0,
-                    kind: ItemSignatureKind::Function {
-                        sig: sig.clone(),
-                        no_mangle: *no_mangle,
-                    },
+                    kind: ItemSignatureKind::Function(sig.clone()),
                     span: *span,
                 }),
                 crate::HirModuleItem::Adt {
@@ -298,10 +295,7 @@ impl ItemSignatureInfo {
 
 #[derive(Debug, Clone)]
 pub enum ItemSignatureKind {
-    Function {
-        sig: FunctionSignature,
-        no_mangle: bool,
-    },
+    Function(FunctionSignature),
     ForeignFunction(FunctionSignature),
     Struct(Vec<StructField>),
     Union(Vec<StructField>),
@@ -345,8 +339,6 @@ impl DefinedCrateInfo {
 
         let mut owners: IndexVec<LocalDefId, hir::MaybeOwner<'static>> = IndexVec::new();
         let mut owner_parents: LocalDefIdMap<HirId> = LocalDefIdMap::default();
-        let mut foreign_function_symbols: LocalDefIdMap<Symbol> = LocalDefIdMap::default();
-        let mut function_symbols: LocalDefIdMap<Symbol> = LocalDefIdMap::default();
 
         let crate_def = CRATE_DEF_ID;
 
@@ -367,7 +359,6 @@ impl DefinedCrateInfo {
                 .name;
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
-            foreign_function_symbols.insert(def_id, Symbol::intern(name));
 
             let foreign_item_id = hir::ForeignItemId {
                 owner_id: OwnerId { def_id },
@@ -689,11 +680,13 @@ impl DefinedCrateInfo {
             items_hir.push((def_id, item_allocator));
         }
 
-        for (my_def_id, function, no_mangle) in
-            signatures.iter().filter_map(|item| match &item.kind {
-                ItemSignatureKind::Function { sig, no_mangle } => Some((item.id, sig, no_mangle)),
-                _ => None,
-            })
+        for (my_def_id, function) in
+            signatures
+                .iter()
+                .filter_map(|item| match &item.kind {
+                    ItemSignatureKind::Function(sig) => Some((item.id, sig)),
+                    _ => None,
+                })
         {
             let name = &self
                 .items
@@ -704,10 +697,6 @@ impl DefinedCrateInfo {
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
             let body_hir_id = item_allocator.new_item();
-
-            if *no_mangle {
-                function_symbols.insert(def_id, Symbol::intern(name));
-            }
 
             let fn_sig = generate_sig(tcx, def_id, &function, &mut item_allocator);
             let loop_expr = leak(hir::Block {
@@ -1057,10 +1046,16 @@ impl DefinedCrateInfo {
         let mut the_foreign_def = None;
         for hir_item in &hir_structure.root.items {
             let kind = match hir_item.clone() {
-                crate::hir_structure::HirModuleItem::Function { id, sig, .. } => {
+                crate::hir_structure::HirModuleItem::Function {
+                    id,
+                    sig,
+                    no_mangle,
+                    ..
+                } => {
                     DefinedItemKind::Function {
                         fn_def: id,
                         abi: sig.abi,
+                        no_mangle,
                     }
                 }
                 crate::HirModuleItem::TypeDef { id, .. } => DefinedItemKind::TypeDef(id),
@@ -1483,7 +1478,11 @@ impl DefinedItemInfo {
 #[derive(Debug, Clone, Copy)]
 pub enum DefinedItemKind {
     ForeignMod(DefId),
-    Function { fn_def: FnDef, abi: FunctionAbi },
+    Function {
+        fn_def: FnDef,
+        abi: FunctionAbi,
+        no_mangle: bool,
+    },
     ForeignFunction(FnDef),
     Const(DefId),
     AnonConst(DefId),
@@ -2127,7 +2126,8 @@ fn generated_hir_attr_map<'tcx>(tcx: TyCtxt<'tcx>, key: OwnerId) -> &'tcx hir::A
             info.kind,
             DefinedItemKind::Function {
                 fn_def: _,
-                abi: FunctionAbi::C
+                abi: FunctionAbi::C,
+                no_mangle: true,
             }
         ) {
             leak(hir::AttributeMap {
