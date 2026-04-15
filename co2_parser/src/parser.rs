@@ -445,6 +445,23 @@ where
             compound_literal,
             va_exp,
             generic_selection,
+            just(Token::BuiltinInf)
+                .then_ignore(just(Token::LParen))
+                .then_ignore(just(Token::RParen))
+                .to(Expression::Constant(Constant::Float(f64::INFINITY))),
+            just(Token::BuiltinNan)
+                .then_ignore(just(Token::LParen))
+                .then_ignore(
+                    select! {
+                        Token::StringLit(s) => s,
+                    }
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<_>>()
+                    .or_not(),
+                )
+                .then_ignore(just(Token::RParen))
+                .to(Expression::Constant(Constant::Float(f64::NAN))),
             just(Token::LParen)
                 .then_ignore(look_ahead(Token::LBrace))
                 .ignore_then(stmt_rec.clone())

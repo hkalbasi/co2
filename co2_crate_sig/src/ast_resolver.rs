@@ -199,7 +199,7 @@ impl co2_ast::TypeResolver for LocalResolver {
         path: &co2_ast::RustPath,
     ) -> Option<(TypeQueryResult, Self::ResolvedRustPath)> {
         let path = path.to_pretty();
-        if path == "__func__" {
+        if ["__func__", "__PRETTY_FUNCTION__", "__FUNCTION__"].contains(&&*path) {
             return Some((TypeQueryResult::Expr, DefOrLocal::FuncName));
         }
         let base = self.base.borrow();

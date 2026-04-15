@@ -522,6 +522,10 @@ pub enum Token {
     VaArg,
     VaEnd,
 
+    // GCC float constants
+    BuiltinInf,
+    BuiltinNan,
+
     // Special
     Ellipsis, // ...
     Hash,     // #
@@ -580,6 +584,8 @@ impl Display for Token {
             Token::VaStart => write!(f, "va_start"),
             Token::VaArg => write!(f, "va_arg"),
             Token::VaEnd => write!(f, "va_end"),
+            Token::BuiltinInf => write!(f, "__builtin_inf"),
+            Token::BuiltinNan => write!(f, "__builtin_nan"),
 
             Token::Ident(s) => write!(f, "{}", s),
 

@@ -1,7 +1,9 @@
 #![feature(rustc_private)]
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use co2_driver_lib::{CompileMode, compile_co2_source};
 
@@ -94,19 +96,48 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
 }
 
 fn preprocess(input: &Path, cpp_args: &[String]) -> String {
+    let rewritten_input = rewrite_main_source_for_preprocess(input);
     let mut cmd = Command::new("gcc");
     cmd.arg("-E");
-    cmd.arg(input);
+    cmd.arg(&rewritten_input);
     for arg in cpp_args {
         cmd.arg(arg);
     }
 
     let out = cmd.output().expect("failed to execute gcc -E");
+    let _ = fs::remove_file(&rewritten_input);
     if !out.status.success() {
         eprintln!("{}", String::from_utf8_lossy(&out.stderr));
         panic!("gcc -E failed with status {}", out.status);
     }
     String::from_utf8(out.stdout).expect("gcc -E produced non-utf8 output")
+}
+
+fn rewrite_main_source_for_preprocess(input: &Path) -> PathBuf {
+    let source = fs::read_to_string(input).expect("failed to read C input for preprocessing");
+    let mut rewritten = String::from("#define __CO2__ 1\n");
+    for line in source.lines() {
+        if line.trim_start().starts_with('#') {
+            rewritten.push_str(&line.replace("__GNUC__", "__CO2_HIDDEN_GNUC__").replace(
+                "__clang__",
+                "__CO2_HIDDEN_CLANG__",
+            ));
+        } else {
+            rewritten.push_str(line);
+        }
+        rewritten.push('\n');
+    }
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let rewritten_path = input.with_file_name(format!(
+        ".co2c-preprocess-{}-{unique}.c",
+        std::process::id()
+    ));
+    fs::write(&rewritten_path, rewritten).expect("failed to write rewritten C input");
+    rewritten_path
 }
 
 fn normalize_preprocessed(text: &str) -> String {
