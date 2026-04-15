@@ -78,7 +78,14 @@ struct Stats {
 
 struct TestCase {
     path: PathBuf,
+    kind: TestKind,
     directives: HashMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TestKind {
+    File,
+    NuDir,
 }
 
 struct CompileResult {
@@ -173,6 +180,17 @@ fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
         return Ok(TestOutcome::Skip(reason));
     }
 
+    if test.kind == TestKind::NuDir {
+        if suite != Suite::Run {
+            bail!(
+                "directory Nushell tests are only supported in the `run` suite: {}",
+                test.path.display()
+            );
+        }
+        run_nu_dir_test(root, test)?;
+        return Ok(TestOutcome::Pass);
+    }
+
     let mode = Mode::from_directive(
         test.directives
             .get("mode")
@@ -192,6 +210,52 @@ fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
         }
         Suite::Debuginfo => check_debuginfo(test, &compile),
     }
+}
+
+fn run_nu_dir_test(root: &Path, test: &TestCase) -> Result<()> {
+    let temp = TempDirBuilder::new()
+        .prefix("co2-ct-dir-")
+        .tempdir()
+        .context("failed to create temp dir for Nushell test")?;
+    let temp_path = temp.path().join(
+        test.path
+            .file_name()
+            .context("directory test path has no final component")?,
+    );
+    copy_dir_all(&test.path, &temp_path)?;
+
+    let main_nu = temp_path.join("main.nu");
+    let run_status = directive_i32(test, "run-status")?.unwrap_or(0);
+
+    let path_sep = if cfg!(windows) { ";" } else { ":" };
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let compiler_bin = root.join("target").join("debug");
+    let merged_path = if current_path.is_empty() {
+        compiler_bin.to_string_lossy().into_owned()
+    } else {
+        format!("{}{}{}", compiler_bin.display(), path_sep, current_path)
+    };
+
+    let output = Command::new("nu")
+        .arg(&main_nu)
+        .current_dir(&temp_path)
+        .env("PATH", merged_path)
+        .env("CO2_WORKSPACE_ROOT", root)
+        .env("CO2_TEST_DIR", &temp_path)
+        .env("CO2_BIN_DIR", &compiler_bin)
+        .output()
+        .with_context(|| format!("failed to execute Nushell test {}", main_nu.display()))?;
+
+    let got_status = output.status.code().unwrap_or(-1);
+    if got_status != run_status {
+        bail!(
+            "nushell test status mismatch: expected {run_status}, got {got_status}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    Ok(())
 }
 
 fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Result<CompileResult> {
@@ -619,6 +683,20 @@ fn collect_tests_inner(dir: &Path, filter: Option<&str>, out: &mut Vec<TestCase>
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
+            let main_nu = path.join("main.nu");
+            if main_nu.exists() {
+                if let Some(f) = filter
+                    && !path.to_string_lossy().contains(f)
+                {
+                    continue;
+                }
+                out.push(TestCase {
+                    directives: parse_directives(&main_nu)?,
+                    path,
+                    kind: TestKind::NuDir,
+                });
+                continue;
+            }
             collect_tests_inner(&path, filter, out)?;
             continue;
         }
@@ -643,6 +721,7 @@ fn collect_tests_inner(dir: &Path, filter: Option<&str>, out: &mut Vec<TestCase>
         out.push(TestCase {
             directives: parse_directives(&path)?,
             path,
+            kind: TestKind::File,
         });
     }
     Ok(())
@@ -655,10 +734,13 @@ fn parse_directives(path: &Path) -> Result<HashMap<String, Vec<String>>> {
 
     for line in src.lines() {
         let line = line.trim_start();
-        if !line.starts_with("//@") {
+        let body = if let Some(body) = line.strip_prefix("//@") {
+            body.trim()
+        } else if let Some(body) = line.strip_prefix("#@") {
+            body.trim()
+        } else {
             continue;
-        }
-        let body = line.trim_start_matches("//@").trim();
+        };
         let (key, value) = if let Some((k, v)) = body.split_once(':') {
             (k.trim().to_owned(), v.trim().to_owned())
         } else {
@@ -723,4 +805,25 @@ fn normalize(s: &str) -> String {
         .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst).with_context(|| format!("failed to create {}", dst.display()))?;
+    for entry in fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            fs::copy(entry.path(), &to).with_context(|| {
+                format!(
+                    "failed to copy {} -> {}",
+                    entry.path().display(),
+                    to.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
