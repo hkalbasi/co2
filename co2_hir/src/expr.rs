@@ -8,6 +8,7 @@ use co2_ast::{
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
+    CrateItem,
     mir::Mutability,
     ty::{FloatTy, IntTy, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
     abi::FieldsShape,
@@ -411,6 +412,62 @@ impl HirCtx<'_> {
         )))
     }
 
+    fn try_lower_assoc_method_call(
+        &self,
+        func: &Spanned<Expression<LocalResolver>>,
+        params: &[Spanned<Expression<LocalResolver>>],
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<Option<(HirExpr, rustc_public_generative::rustc_public::ty::FnSig, Vec<HirExpr>)>, String>
+    {
+        let Some(resolver) = self.decl_resolver.as_ref() else {
+            return Ok(None);
+        };
+
+        let (receiver, method_name, parser_span) = match &func.0 {
+            Expression::Identifier((co2_crate_sig::DefOrLocal::AssocMethod { receiver, method }, _)) => {
+                (*receiver, method.as_str(), func.1)
+            }
+            _ => return Ok(None),
+        };
+
+        let receiver_ty = CrateItem(receiver).ty();
+        let (method_def, class) = match resolver.resolve_method(receiver_ty, method_name) {
+            Ok(found) => found,
+            Err(_) => return Ok(None),
+        };
+        if class != co2_ast::TypeQueryResult::Expr {
+            return Ok(None);
+        }
+
+        let resolved = self.resolve_value(method_def);
+        let func_ty = resolved.ty();
+        let ResolvedValue::Fn(fn_def) = resolved else {
+            return Ok(None);
+        };
+        let Some(sig) = callable_sig(func_ty) else {
+            return Ok(None);
+        };
+        let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
+
+        let mut lowered_args = Vec::with_capacity(params.len());
+        for param in params {
+            let mut arg = self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
+            self.array_to_pointer_decay_if_array(&mut arg);
+            lowered_args.push(arg);
+        }
+
+        Ok(Some((
+            HirExpr {
+                kind: HirExprKind::Path(ResolvedValue::Fn(fn_def)),
+                ty: func_ty,
+                span: self.to_rust_span(parser_span),
+            },
+            sig,
+            lowered_args,
+        )))
+    }
+
     pub(crate) fn array_to_pointer_decay_if_array(&self, expr: &mut HirExpr) {
         if !is_array_ty(expr.ty) {
             return;
@@ -502,6 +559,9 @@ impl HirCtx<'_> {
                         .ok_or_else(|| format!("missing scalar constant value for def {def_id:?}"))?;
                     Ok(lower_dependency_const(value, span))
                 }
+                co2_crate_sig::DefOrLocal::AssocMethod { .. } => {
+                    self.terminate_with_error(parser_span, "associated method path is only valid in call position")
+                }
                 co2_crate_sig::DefOrLocal::Local(l) => {
                     let Some(&local) = local_map.get(&(l as usize)) else {
                         self.terminate_with_error(
@@ -557,6 +617,10 @@ impl HirCtx<'_> {
                 let (func_expr, sig, mut lowered_args) =
                     if let Some(lowered) =
                         self.try_lower_method_call(&func, &params, locals, local_map)?
+                    {
+                        lowered
+                    } else if let Some(lowered) =
+                        self.try_lower_assoc_method_call(&func, &params, locals, local_map)?
                     {
                         lowered
                     } else {

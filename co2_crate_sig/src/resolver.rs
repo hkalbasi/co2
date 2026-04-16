@@ -52,22 +52,23 @@ impl ModuleData {
         &self,
         path: impl Iterator<Item = &'a str>,
     ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
-        self.lookup_path(path)?
+        let parts = path.collect::<Vec<_>>();
+        self.lookup_path(&parts)?
             .id
             .ok_or_else(|| "path does not refer to a value or type".to_owned())
     }
 
-    fn lookup_path<'a>(&self, mut path: impl Iterator<Item = &'a str>) -> Result<&Self, String> {
-        let Some(seg1) = path.next() else {
+    fn lookup_path<'a>(&self, path: &[&'a str]) -> Result<&Self, String> {
+        let Some((seg1, rest)) = path.split_first() else {
             return Ok(self);
         };
-        let part = self.items.get(seg1).ok_or_else(|| {
+        let part = self.items.get(*seg1).ok_or_else(|| {
             format!(
                 "Failed to lookup {seg1}.\nAvailable items are: {:?}",
                 self.items.keys()
             )
         })?;
-        part.lookup_path(path)
+        part.lookup_path(rest)
     }
 
     fn insert_alias(&mut self, alias: &str, item: ModuleData) {
@@ -271,6 +272,14 @@ impl Resolver {
             let Ok(item) = self.resolve_module_path(use_item.path.iter().map(|(segment, _)| segment.as_str())) else {
                 continue;
             };
+            let item = if item.id.is_some() {
+                ModuleData {
+                    id: item.id,
+                    items: HashMap::new(),
+                }
+            } else {
+                item
+            };
             self.current.insert_alias(alias, item);
         }
     }
@@ -306,9 +315,9 @@ impl Resolver {
         let mut crate_name = first;
         normalize_crate_name(&mut crate_name);
         if let Some(crate_data) = self.dependencies.get(crate_name) {
-            return crate_data.lookup_path(parts[1..].iter().copied()).cloned();
+            return crate_data.lookup_path(&parts[1..]).cloned();
         }
-        self.current.lookup_path(parts.iter().copied()).cloned()
+        self.current.lookup_path(&parts).cloned()
     }
 
     pub fn resolve(&self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
@@ -362,7 +371,9 @@ impl Resolver {
 
     fn collect_method_receivers(module: &ModuleData, out: &mut HashMap<DefId, ModuleData>) {
         if let Some((def_id, TypeQueryResult::Type)) = module.id {
-            out.insert(def_id, module.clone());
+            if !(module.items.is_empty() && out.contains_key(&def_id)) {
+                out.insert(def_id, module.clone());
+            }
         }
         for child in module.items.values() {
             Self::collect_method_receivers(child, out);

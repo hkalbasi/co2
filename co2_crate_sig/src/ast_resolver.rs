@@ -203,6 +203,10 @@ impl LocalResolver {
 pub enum DefOrLocal {
     Def(DefId),
     Const(DefId),
+    AssocMethod {
+        receiver: DefId,
+        method: String,
+    },
     Local(u32),
     FuncName,
     Prim(PrimitiveTy),
@@ -221,22 +225,47 @@ impl co2_ast::TypeResolver for LocalResolver {
         &self,
         path: &co2_ast::RustPath,
     ) -> Option<(TypeQueryResult, Self::ResolvedRustPath)> {
-        let path = path.to_pretty();
-        if ["__func__", "__PRETTY_FUNCTION__", "__FUNCTION__"].contains(&&*path) {
+        let path_pretty = path.to_pretty();
+        if ["__func__", "__PRETTY_FUNCTION__", "__FUNCTION__"].contains(&&*path_pretty) {
             return Some((TypeQueryResult::Expr, DefOrLocal::FuncName));
         }
         let base = self.base.borrow();
-        if let Some(prim) = PrimitiveTy::parse(&path) {
+        if let Some(prim) = PrimitiveTy::parse(&path_pretty) {
             return Some((TypeQueryResult::Type, DefOrLocal::Prim(prim)));
         }
-        if let Some(ty) = self.base.borrow().unrepresentable_typedefs.get(&path) {
+        if let Some(ty) = self.base.borrow().unrepresentable_typedefs.get(&path_pretty) {
             return Some((
                 TypeQueryResult::Type,
                 DefOrLocal::UnrepresentableType(ty.clone()),
             ));
         }
-        let (def, class) = self.locals.borrow().get(&path).cloned().or_else(|| {
-            match base.resolver.resolve_expr_path(&path).ok()? {
+        let (def, class) = self.locals.borrow().get(&path_pretty).cloned().or_else(|| {
+            let (method_segment, _) = path.segments.last()?;
+            let co2_ast::RustPathSegment::Ident(method) = method_segment else {
+                return None;
+            };
+            if path.segments.len() < 2 {
+                return None;
+            }
+            let receiver_path = co2_ast::RustPath {
+                segments: path.segments[..path.segments.len() - 1].to_vec(),
+            };
+            let (receiver_class, receiver) = self.classify_path(&receiver_path)?;
+            if receiver_class != TypeQueryResult::Type {
+                return None;
+            }
+            let DefOrLocal::Def(receiver) = receiver else {
+                return None;
+            };
+            Some((
+                DefOrLocal::AssocMethod {
+                    receiver,
+                    method: method.clone(),
+                },
+                TypeQueryResult::Expr,
+            ))
+        }).or_else(|| {
+            match base.resolver.resolve_expr_path(&path_pretty).ok()? {
                 ResolvedExprPath::Def(def_id, class) => Some((DefOrLocal::Def(def_id), class)),
                 ResolvedExprPath::Const(def_id) => {
                     Some((DefOrLocal::Const(def_id), TypeQueryResult::Expr))

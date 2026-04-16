@@ -538,6 +538,9 @@ impl LocalResolverBase {
                         HirTy::float_ty(FloatTy::F64, rust_span)
                     }
                 }),
+                crate::DefOrLocal::AssocMethod { .. } => {
+                    Err("associated method path is invalid in sizeof".to_owned())
+                }
                 crate::DefOrLocal::FuncName => Err("__func__ is invalid in sizeof".to_owned()),
                 crate::DefOrLocal::Prim(primitive_ty) => Ok(self.hir_ty_of_prim(*primitive_ty, rust_span)),
                 _ => Err("unsupported identifier in sizeof(array size expr)".to_owned()),
@@ -794,6 +797,9 @@ impl LocalResolverBase {
             CompressedTypeSpecifier::TypedefName((path, _)) => match path {
                 crate::DefOrLocal::Def(def_id) => HirTy::adt(def_id, vec![], span),
                 crate::DefOrLocal::Const(_) => panic!("invalid const in type position"),
+                crate::DefOrLocal::AssocMethod { .. } => {
+                    panic!("invalid associated method in type position")
+                }
                 crate::DefOrLocal::Local(_) => panic!("invalid parsing"),
                 crate::DefOrLocal::FuncName => panic!("invalid __func__ in type position"),
                 crate::DefOrLocal::Prim(primitive_ty) => self.hir_ty_of_prim(primitive_ty, span),

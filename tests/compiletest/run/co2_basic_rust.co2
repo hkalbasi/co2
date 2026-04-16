@@ -4,6 +4,9 @@
 use std::f64::consts::PI;
 use std::time::Instant;
 use std::time::Duration;
+use std::thread;
+
+typedef Instant MyInstant;
 
 void main(void) {
     if (PI < 3.14 || std::f64::consts::PI > 3.15) {
@@ -11,9 +14,13 @@ void main(void) {
     }
 
     Instant instant = Instant::now();
-    std::thread::sleep(Duration::from_millis(10));
+    thread::sleep(Duration::from_millis(10));
     Duration dur = instant.elapsed();
     if (dur.as_millis() < 5 || Duration::as_millis(&dur) > 50) {
         std::process::exit(2);
     }
+
+    Instant instant2 = MyInstant::now();
+    MyInstant instant3 = instant2;
+    (void)instant3;
 }

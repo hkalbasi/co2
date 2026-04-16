@@ -291,6 +291,9 @@ impl HirCtx<'_> {
                     co2_crate_sig::DefOrLocal::Const(_) => {
                         panic!("Invalid const in type position")
                     }
+                    co2_crate_sig::DefOrLocal::AssocMethod { .. } => {
+                        panic!("Invalid associated method in type position")
+                    }
                     co2_crate_sig::DefOrLocal::Local(_) => {
                         panic!("Invalid local in type position")
                     }
