@@ -6,7 +6,13 @@ use co2_ast::{
     TypeResolver,
 };
 use co2_parser::parse_expression_tokens;
-use rustc_public_generative::{DefData, FileId, HirStructureCtx, rustc_public::DefId};
+use rustc_public_generative::{
+    DefData, FileId, HirStructureCtx,
+    rustc_public::{
+        DefId,
+        ty::Ty,
+    },
+};
 use rustc_public_generative::HirTy;
 
 use crate::{
@@ -152,6 +158,14 @@ impl LocalResolver {
         def_id: DefId,
     ) -> Option<rustc_public_generative::DependencyConstValue> {
         self.base.borrow().hir_ctx.dependency_const_value(def_id)
+    }
+
+    pub fn resolve_method(
+        &self,
+        receiver_ty: Ty,
+        method: &str,
+    ) -> Result<(DefId, TypeQueryResult), String> {
+        self.base.borrow().resolver.resolve_method(receiver_ty, method)
     }
 
     fn register_array_len_const(

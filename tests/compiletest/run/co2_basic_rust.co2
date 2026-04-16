@@ -12,8 +12,8 @@ void main(void) {
 
     Instant instant = Instant::now();
     std::thread::sleep(Duration::from_millis(10));
-    Duration dur = Instant::elapsed(&instant);
-    if (Duration::as_millis(&dur) < 5 || Duration::as_millis(&dur) > 50) {
+    Duration dur = instant.elapsed();
+    if (dur.as_millis() < 5 || Duration::as_millis(&dur) > 50) {
         std::process::exit(2);
     }
 }

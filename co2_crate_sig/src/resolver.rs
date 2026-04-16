@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use co2_ast::{Declaration, Declarator, StatelessResolver, TranslationUnit, TypeQueryResult};
 use rustc_public_generative::{
     DefData, DependencyInfo, DependencyValueKind, HirStructureCtx,
-    rustc_public::DefId,
+    rustc_public::{
+        DefId,
+        ty::{RigidTy, Ty, TyKind},
+    },
 };
 
 #[derive(Debug, Default, Clone)]
@@ -154,6 +157,7 @@ pub struct Resolver {
     const_values: HashMap<String, DefId>,
     dependencies: HashMap<String, ModuleData>,
     current: ModuleData,
+    method_receivers: HashMap<DefId, ModuleData>,
 }
 
 fn normalize_crate_name(name: &mut &str) {
@@ -242,6 +246,7 @@ impl Resolver {
             ),
         );
         this.import_use_items(p);
+        this.rebuild_method_receivers();
         this
     }
 
@@ -324,6 +329,44 @@ impl Resolver {
         }
         let (def_id, class) = self.resolve(path)?;
         Ok(ResolvedExprPath::Def(def_id, class))
+    }
+
+    pub(crate) fn resolve_method(
+        &self,
+        receiver_ty: Ty,
+        method: &str,
+    ) -> Result<(DefId, TypeQueryResult), String> {
+        match receiver_ty.kind() {
+            TyKind::RigidTy(RigidTy::Adt(adt, _)) => self
+                .method_receivers
+                .get(&adt.0)
+                .ok_or_else(|| format!("no methods known for receiver type {:?}", receiver_ty))?
+                .resolve_path([method].into_iter()),
+            TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
+                self.resolve_method(inner, method)
+            }
+            _ => Err(format!(
+                "method resolution is not supported for receiver type {:?}",
+                receiver_ty
+            )),
+        }
+    }
+
+    fn rebuild_method_receivers(&mut self) {
+        self.method_receivers.clear();
+        for module in self.dependencies.values() {
+            Self::collect_method_receivers(module, &mut self.method_receivers);
+        }
+        Self::collect_method_receivers(&self.current, &mut self.method_receivers);
+    }
+
+    fn collect_method_receivers(module: &ModuleData, out: &mut HashMap<DefId, ModuleData>) {
+        if let Some((def_id, TypeQueryResult::Type)) = module.id {
+            out.insert(def_id, module.clone());
+        }
+        for child in module.items.values() {
+            Self::collect_method_receivers(child, out);
+        }
     }
 }
 

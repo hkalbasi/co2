@@ -261,6 +261,156 @@ pub enum HirLogicalOp {
 }
 
 impl HirCtx<'_> {
+    fn method_receiver_arg(&self, receiver: HirExpr, expected_ty: Ty) -> HirExpr {
+        match expected_ty.kind() {
+            TyKind::RigidTy(RigidTy::Ref(_, _, _) | RigidTy::RawPtr(_, _))
+                if !matches!(
+                    receiver.ty.kind(),
+                    TyKind::RigidTy(RigidTy::Ref(_, _, _) | RigidTy::RawPtr(_, _))
+                ) =>
+            {
+                HirExpr {
+                    kind: HirExprKind::AddrOf(Box::new(receiver.clone())),
+                    ty: Ty::new_ptr(receiver.ty, addr_of_mutability(&receiver)),
+                    span: receiver.span,
+                }
+            }
+            _ => receiver,
+        }
+    }
+
+    fn lower_call_args(
+        &self,
+        parser_span: co2_ast::Span,
+        sig: &rustc_public_generative::rustc_public::ty::FnSig,
+        args: &mut Vec<HirExpr>,
+    ) {
+        if sig.inputs().len() != args.len() && !sig.c_variadic {
+            self.terminate_with_error(
+                parser_span,
+                &format!(
+                    "call argument count mismatch: expected {}, got {}",
+                    sig.inputs().len(),
+                    args.len()
+                ),
+            );
+        }
+
+        for (idx, actual) in args.iter_mut().enumerate() {
+            let expected = match sig.inputs().get(idx) {
+                Some(ty) => *ty,
+                None => {
+                    if actual.ty.kind().is_adt() {
+                        *actual = HirExpr {
+                            kind: HirExprKind::AddrOf(Box::new(actual.clone())),
+                            ty: Ty::new_ptr(actual.ty, Mutability::Mut),
+                            span: actual.span,
+                        };
+                        continue;
+                    }
+                    ty_passed_to_variadic(actual.ty)
+                }
+            };
+            if needs_implicit_cast(expected, actual.ty) {
+                *actual = HirExpr {
+                    kind: HirExprKind::Cast(Box::new(actual.clone())),
+                    ty: expected,
+                    span: actual.span,
+                };
+            }
+            if !ty_matches_expected(expected, actual.ty) {
+                self.terminate_with_error(
+                    parser_span,
+                    &format!(
+                        "call argument type mismatch at index {idx}: expected {expected:?}, got {:?}",
+                        actual.ty
+                    ),
+                );
+            }
+        }
+    }
+
+    fn try_lower_method_call(
+        &self,
+        func: &Spanned<Expression<LocalResolver>>,
+        params: &[Spanned<Expression<LocalResolver>>],
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<Option<(HirExpr, rustc_public_generative::rustc_public::ty::FnSig, Vec<HirExpr>)>, String>
+    {
+        let Some(resolver) = self.decl_resolver.as_ref() else {
+            return Ok(None);
+        };
+
+        let (receiver, method_name, parser_span) = match &func.0 {
+            Expression::Field(base, field) => {
+                let receiver = self.lower_expr((base.0.clone(), base.1), locals, local_map)?;
+                if resolve_field_path_in_adt(receiver.ty, &field.0).is_some() {
+                    return Ok(None);
+                }
+                (receiver, field.0.as_str(), func.1)
+            }
+            Expression::Arrow(base, field) => {
+                let mut base = self.lower_expr((base.0.clone(), base.1), locals, local_map)?;
+                self.array_to_pointer_decay_if_array(&mut base);
+                let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base.ty.kind() else {
+                    return Ok(None);
+                };
+                let receiver = HirExpr {
+                    kind: HirExprKind::Deref(Box::new(base)),
+                    ty: pointee,
+                    span: self.to_rust_span(func.1),
+                };
+                if resolve_field_path_in_adt(receiver.ty, &field.0).is_some() {
+                    return Ok(None);
+                }
+                (receiver, field.0.as_str(), func.1)
+            }
+            _ => return Ok(None),
+        };
+
+        let (method_def, class) = match resolver.resolve_method(receiver.ty, method_name) {
+            Ok(found) => found,
+            Err(_) => return Ok(None),
+        };
+        if class != co2_ast::TypeQueryResult::Expr {
+            return Ok(None);
+        }
+        let resolved = self.resolve_value(method_def);
+        let func_ty = resolved.ty();
+        let ResolvedValue::Fn(fn_def) = resolved else {
+            return Ok(None);
+        };
+        let Some(sig) = callable_sig(func_ty) else {
+            return Ok(None);
+        };
+        let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
+
+        let mut lowered_args = Vec::with_capacity(params.len() + 1);
+        let receiver = sig
+            .inputs()
+            .first()
+            .copied()
+            .map(|expected| self.method_receiver_arg(receiver.clone(), expected))
+            .unwrap_or(receiver);
+        lowered_args.push(receiver);
+        for param in params {
+            let mut arg = self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
+            self.array_to_pointer_decay_if_array(&mut arg);
+            lowered_args.push(arg);
+        }
+
+        Ok(Some((
+            HirExpr {
+                kind: HirExprKind::Path(ResolvedValue::Fn(fn_def)),
+                ty: func_ty,
+                span: self.to_rust_span(parser_span),
+            },
+            sig,
+            lowered_args,
+        )))
+    }
+
     pub(crate) fn array_to_pointer_decay_if_array(&self, expr: &mut HirExpr) {
         if !is_array_ty(expr.ty) {
             return;
@@ -404,63 +554,29 @@ impl HirCtx<'_> {
                 span,
             }),
             Expression::Call { func, params } => {
-                let func_expr = self.lower_expr((func.0, func.1), locals, local_map)?;
-                let Some(sig) = callable_sig(func_expr.ty) else {
-                    self.terminate_with_error(parser_span, "Type is not callable");
-                };
-
-                let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
-
-                let mut lowered_args = Vec::with_capacity(params.len());
-                for param in params {
-                    let mut arg = self.lower_expr((param.0, param.1), locals, local_map)?;
-                    self.array_to_pointer_decay_if_array(&mut arg);
-                    lowered_args.push(arg);
-                }
-
-                if sig.inputs().len() != lowered_args.len() && !sig.c_variadic {
-                    self.terminate_with_error(
-                        parser_span,
-                        &format!(
-                            "call argument count mismatch: expected {}, got {}",
-                            sig.inputs().len(),
-                            lowered_args.len()
-                        ),
-                    );
-                }
-
-                for (idx, actual) in lowered_args.iter_mut().enumerate() {
-                    let expected = match sig.inputs().get(idx) {
-                        Some(ty) => *ty,
-                        None => {
-                            if actual.ty.kind().is_adt() {
-                                *actual = HirExpr {
-                                    kind: HirExprKind::AddrOf(Box::new(actual.clone())),
-                                    ty: Ty::new_ptr(actual.ty, Mutability::Mut),
-                                    span: actual.span,
-                                };
-                                continue;
-                            }
-                            ty_passed_to_variadic(actual.ty)
-                        }
-                    };
-                    if needs_implicit_cast(expected, actual.ty) {
-                        *actual = HirExpr {
-                            kind: HirExprKind::Cast(Box::new(actual.clone())),
-                            ty: expected,
-                            span: actual.span,
+                let (func_expr, sig, mut lowered_args) =
+                    if let Some(lowered) =
+                        self.try_lower_method_call(&func, &params, locals, local_map)?
+                    {
+                        lowered
+                    } else {
+                        let func_expr = self.lower_expr((func.0, func.1), locals, local_map)?;
+                        let Some(sig) = callable_sig(func_expr.ty) else {
+                            self.terminate_with_error(parser_span, "Type is not callable");
                         };
-                    }
-                    if !ty_matches_expected(expected, actual.ty) {
-                        self.terminate_with_error(
-                            parser_span,
-                            &format!(
-                                "call argument type mismatch at index {idx}: expected {expected:?}, got {:?}",
-                                actual.ty
-                            ),
-                        );
-                    }
-                }
+
+                        let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
+
+                        let mut lowered_args = Vec::with_capacity(params.len());
+                        for param in params {
+                            let mut arg = self.lower_expr((param.0, param.1), locals, local_map)?;
+                            self.array_to_pointer_decay_if_array(&mut arg);
+                            lowered_args.push(arg);
+                        }
+                        (func_expr, sig, lowered_args)
+                    };
+
+                self.lower_call_args(parser_span, &sig, &mut lowered_args);
 
                 Ok(HirExpr {
                     kind: HirExprKind::Call {
