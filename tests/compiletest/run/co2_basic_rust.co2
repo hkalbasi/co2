@@ -28,13 +28,23 @@ void main(void) {
 
     MyVec v = Vec::<i32>::new();
     Vec<i32> v2 = MyVec::new();
-    (void)v;
-    (void)v2;
+    v.push(2);
+    v.push(5);
+    v.push(7);
+    float value = 3.1;
+    v.push(value); // C casts still work
+    if (v.len() != 4) {
+        std::process::exit(3);
+    }
+    if (v.pop().unwrap() != 3) {
+        std::process::exit(3);
+    }
+
 
     i32 a = 2, b = 5;
     std::ptr::swap::<i32>(&a, &b);
 
     if (a != 5 || b != 2) {
-        std::process::exit(3);
+        std::process::exit(4);
     }
 }

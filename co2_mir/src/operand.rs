@@ -866,7 +866,11 @@ impl Builder {
                 ),
                 span,
             });
-            return MirOperand::Copy(place(tmp2));
+            return if matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, Mutability::Mut))) {
+                MirOperand::Move(place(tmp2))
+            } else {
+                MirOperand::Copy(place(tmp2))
+            };
         }
         if dst_is_bool
             && (src_is_int || src_is_ptr || src_is_fn_ptr || src_is_fn_def || src_mu_fn_ptr.is_some())
@@ -1621,6 +1625,53 @@ impl Builder {
     }
 
     pub(crate) fn lower_call_arg(&mut self, arg: &HirExpr, expected_ty: Ty) -> MirOperand {
+        if let TyKind::RigidTy(RigidTy::Ref(reg, _, mutability)) = expected_ty.kind() {
+            if let TyKind::RigidTy(RigidTy::Ref(_, _, actual_mutability)) = arg.ty.kind() {
+                if let Some(place) = self.lower_expr_to_place(arg) {
+                    return if actual_mutability == Mutability::Mut {
+                        MirOperand::Move(place)
+                    } else {
+                        MirOperand::Copy(place)
+                    };
+                }
+                return self.lower_expr_to_operand(arg);
+            }
+            if matches!(arg.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(_, _))) {
+                let arg_op = self.lower_expr_to_operand(arg);
+                return self.lower_cast(arg_op, arg.ty, expected_ty, arg.span);
+            }
+
+            let borrowed_place = if let Some(place) = self.lower_expr_to_place(arg) {
+                place
+            } else {
+                let tmp = self.new_temp(arg.ty, Mutability::Mut, arg.span);
+                let value = self.lower_expr_to_operand(arg);
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
+                    span: arg.span,
+                });
+                place(tmp)
+            };
+            let ref_local = self.new_temp(expected_ty, Mutability::Not, arg.span);
+            let borrow_kind = match mutability {
+                Mutability::Not => BorrowKind::Shared,
+                Mutability::Mut => BorrowKind::Mut {
+                    kind: MutBorrowKind::Default,
+                },
+            };
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(ref_local),
+                    Rvalue::Ref(reg, borrow_kind, borrowed_place),
+                ),
+                span: arg.span,
+            });
+            return if mutability == Mutability::Mut {
+                MirOperand::Move(place(ref_local))
+            } else {
+                MirOperand::Copy(place(ref_local))
+            };
+        }
         if let TyKind::RigidTy(RigidTy::Adt(adt, _)) = expected_ty.kind() {
             if adt == self.wellknown_defs.valist {
                 let borrowed_place = if let Some(place) = self.lower_expr_to_place(arg) {

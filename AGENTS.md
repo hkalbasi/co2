@@ -1,10 +1,8 @@
 # Project Summary (for future agent calls)
 
 ## TODO:
-* Compile and run sqlite
+* Use is_copy ty for Operand::Copy and Operand::Move.
 * Find perf problems
-* Use wellknown defs in mir.
-* Remove direct deps from co2_hir and co2_mir????
 * Use rustc span in emit errors and more.
 * stick arena to hir_ctx.
 * Complete the shadow test.

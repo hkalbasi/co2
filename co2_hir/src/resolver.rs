@@ -88,15 +88,6 @@ impl<'a> HirCtx<'a> {
         self.decl_resolver = Some(resolver);
     }
 
-    pub(crate) fn resolve_value(&self, def_id: DefId) -> ResolvedValue {
-        let ty = CrateItem(def_id).ty();
-        if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnDef(..))) {
-            ResolvedValue::Fn(FnDef(def_id), vec![])
-        } else {
-            ResolvedValue::Static(def_id)
-        }
-    }
-
     pub(crate) fn resolve_value_with_generic_args(
         &self,
         def_id: DefId,

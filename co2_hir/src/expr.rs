@@ -370,6 +370,16 @@ fn normalize_stable_defaulted_ty(ty: Ty) -> Ty {
     }
 }
 
+fn receiver_generic_args(ty: Ty) -> Vec<GenericArgKind> {
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Adt(_, args)) => args.0.clone(),
+        TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
+            receiver_generic_args(inner)
+        }
+        _ => vec![],
+    }
+}
+
 impl HirCtx<'_> {
     fn method_receiver_arg(&self, receiver: HirExpr, expected_ty: Ty) -> HirExpr {
         match expected_ty.kind() {
@@ -475,9 +485,6 @@ impl HirCtx<'_> {
         let (receiver, method_name, parser_span) = match &func.0 {
             Expression::Field(base, field) => {
                 let receiver = self.lower_expr((base.0.clone(), base.1), locals, local_map)?;
-                if resolve_field_path_in_adt(receiver.ty, &field.0).is_some() {
-                    return Ok(None);
-                }
                 (receiver, field.0.as_str(), func.1)
             }
             Expression::Arrow(base, field) => {
@@ -491,9 +498,6 @@ impl HirCtx<'_> {
                     ty: pointee,
                     span: self.to_rust_span(func.1),
                 };
-                if resolve_field_path_in_adt(receiver.ty, &field.0).is_some() {
-                    return Ok(None);
-                }
                 (receiver, field.0.as_str(), func.1)
             }
             _ => return Ok(None),
@@ -506,15 +510,12 @@ impl HirCtx<'_> {
         if class != co2_ast::TypeQueryResult::Expr {
             return Ok(None);
         }
-        let resolved = self.resolve_value(method_def);
+        let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
+        let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, receiver.ty) else {
+            return Ok(None);
+        };
+        let resolved = ResolvedValue::Fn(fn_def, receiver_generic_args(receiver.ty));
         let func_ty = resolved.ty();
-        let ResolvedValue::Fn(fn_def, generic_args) = resolved else {
-            return Ok(None);
-        };
-        let Some(sig) = callable_sig(func_ty) else {
-            return Ok(None);
-        };
-        let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
 
         let mut lowered_args = Vec::with_capacity(params.len() + 1);
         let receiver = sig
@@ -532,7 +533,7 @@ impl HirCtx<'_> {
 
         Ok(Some((
             HirExpr {
-                kind: HirExprKind::Path(ResolvedValue::Fn(fn_def, generic_args)),
+                kind: HirExprKind::Path(resolved),
                 ty: func_ty,
                 span: self.to_rust_span(parser_span),
             },
