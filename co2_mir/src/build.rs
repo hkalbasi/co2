@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use co2_hir::{HirBody, LabelId, LocalId, WellknownDefs};
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
+    CrateDefType,
     mir::{Body, ConstOperand, LocalDecl as MirLocalDecl, Mutability},
     ty::{
         FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Span as RustSpan, Ty, TyKind,
@@ -92,6 +93,7 @@ pub(crate) fn fn_const_operand(
 }
 
 pub(crate) fn infer_fn_generic_args(
+    fn_def: FnDef,
     sig: &rustc_public_generative::rustc_public::ty::FnSig,
     args: &[co2_hir::HirExpr],
     ret_ty: Ty,
@@ -101,10 +103,27 @@ pub(crate) fn infer_fn_generic_args(
         collect_param_bindings(*expected, actual.ty, &mut by_index);
     }
     collect_param_bindings(sig.output(), ret_ty, &mut by_index);
-    by_index
-        .into_values()
-        .map(GenericArgKind::Type)
-        .collect::<Vec<_>>()
+    match fn_def.ty().kind() {
+        TyKind::RigidTy(RigidTy::FnDef(_, existing)) if !existing.0.is_empty() => existing
+            .0
+            .iter()
+            .map(|arg| match arg {
+                GenericArgKind::Type(ty) => match ty.kind() {
+                    TyKind::Param(param) => by_index
+                        .get(&param.index)
+                        .copied()
+                        .map(GenericArgKind::Type)
+                        .unwrap_or_else(|| arg.clone()),
+                    _ => arg.clone(),
+                },
+                _ => arg.clone(),
+            })
+            .collect::<Vec<_>>(),
+        _ => by_index
+            .into_values()
+            .map(GenericArgKind::Type)
+            .collect::<Vec<_>>(),
+    }
 }
 
 fn collect_param_bindings(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>) {
@@ -124,7 +143,7 @@ fn collect_param_bindings(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>)
         (
             TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
             TyKind::RigidTy(RigidTy::Adt(actual_adt, actual_args)),
-        ) if expected_adt == actual_adt && expected_args.0.len() == actual_args.0.len() => {
+        ) if expected_adt == actual_adt && actual_args.0.len() <= expected_args.0.len() => {
             for (e, a) in expected_args.0.iter().zip(actual_args.0.iter()) {
                 if let (GenericArgKind::Type(et), GenericArgKind::Type(at)) = (e, a) {
                     collect_param_bindings(*et, *at, out);
@@ -137,16 +156,11 @@ fn collect_param_bindings(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>)
 
 pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
     match (expected.kind(), actual.kind()) {
-        (TyKind::Param(_), _) => true,
-        (TyKind::RigidTy(RigidTy::Ref(_, expected_inner, _)), _) => {
-            ty_matches_expected(expected_inner, actual)
-        }
         (
             TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
             TyKind::RigidTy(RigidTy::Adt(actual_adt, actual_args)),
         ) => {
             expected_adt == actual_adt
-                && expected_args.0.len() == actual_args.0.len()
                 && expected_args
                     .0
                     .iter()
@@ -158,7 +172,17 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
                         (GenericArgKind::Lifetime(_), GenericArgKind::Lifetime(_)) => true,
                         _ => e == a,
                     })
+                && extra_adt_args_are_concrete(
+                    &expected_args.0[actual_args.0.len().min(expected_args.0.len())..],
+                )
+                && extra_adt_args_are_concrete(
+                    &actual_args.0[expected_args.0.len().min(actual_args.0.len())..],
+                )
         }
         _ => expected == actual,
     }
+}
+
+fn extra_adt_args_are_concrete(args: &[GenericArgKind]) -> bool {
+    args.iter().all(|arg| !matches!(arg, GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_))))
 }

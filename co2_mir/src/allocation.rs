@@ -85,7 +85,7 @@ impl Builder {
                 .fn_sig()
                 .expect("MaybeUninit::uninit has no signature")
                 .skip_binder();
-            let generic_args = infer_fn_generic_args(&sig, &[], ty);
+            let generic_args = infer_fn_generic_args(uninit_fn, &sig, &[], ty);
             self.emit_call_block(
                 fn_const_operand(uninit_fn, generic_args, span),
                 vec![],

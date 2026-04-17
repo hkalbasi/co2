@@ -291,22 +291,6 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
     if expected == actual {
         return true;
     }
-    if let (TyKind::RigidTy(RigidTy::FnPtr(expected_sig)), TyKind::RigidTy(RigidTy::FnDef(_, _))) =
-        (expected.kind(), actual.kind())
-        && let Some(actual_sig) = actual.kind().fn_sig()
-    {
-        let expected_sig = expected_sig.skip_binder();
-        let actual_sig = actual_sig.skip_binder();
-        if expected_sig.inputs().len() != actual_sig.inputs().len() {
-            return false;
-        }
-        return expected_sig
-            .inputs()
-            .iter()
-            .zip(actual_sig.inputs().iter())
-            .all(|(e, a)| ty_matches_expected(*e, *a))
-            && ty_matches_expected(expected_sig.output(), actual_sig.output());
-    }
     match (expected.kind(), actual.kind()) {
         (TyKind::RigidTy(RigidTy::Adt(_, exp_args)), TyKind::RigidTy(RigidTy::FnDef(_, _)))
             if exp_args.0.len() == 1 =>
@@ -320,13 +304,15 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
             TyKind::RigidTy(RigidTy::Adt(exp_adt, exp_args)),
             TyKind::RigidTy(RigidTy::Adt(act_adt, act_args)),
         ) => {
-            if exp_adt != act_adt || exp_args.0.len() != act_args.0.len() {
+            if exp_adt != act_adt {
                 return false;
             }
+            let shared_len = exp_args.0.len().min(act_args.0.len());
             exp_args
                 .0
                 .iter()
-                .zip(act_args.0.iter())
+                .take(shared_len)
+                .zip(act_args.0.iter().take(shared_len))
                 .all(|(e, a)| match (e, a) {
                     (
                         rustc_public_generative::rustc_public::ty::GenericArgKind::Type(et),
@@ -338,7 +324,21 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
                     ) => true,
                     _ => e == a,
                 })
+                && extra_adt_args_are_concrete(&exp_args.0[shared_len..])
+                && extra_adt_args_are_concrete(&act_args.0[shared_len..])
         }
         _ => false,
     }
+}
+
+fn extra_adt_args_are_concrete(
+    args: &[rustc_public_generative::rustc_public::ty::GenericArgKind],
+) -> bool {
+    args.iter().all(|arg| {
+        !matches!(
+            arg,
+            rustc_public_generative::rustc_public::ty::GenericArgKind::Type(ty)
+                if matches!(ty.kind(), TyKind::Param(_))
+        )
+    })
 }

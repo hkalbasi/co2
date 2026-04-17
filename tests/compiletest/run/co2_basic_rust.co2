@@ -26,8 +26,8 @@ void main(void) {
     MyInstant instant3 = instant2;
     (void)instant3;
 
-    MyVec* v = 0;
-    Vec<i32>* v2 = 0;
+    MyVec v = Vec::<i32>::new();
+    Vec<i32> v2 = MyVec::new();
     (void)v;
     (void)v2;
 

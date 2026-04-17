@@ -272,7 +272,7 @@ impl Resolver {
             let Ok(item) = self.resolve_module_path(use_item.path.iter().map(|(segment, _)| segment.as_str())) else {
                 continue;
             };
-            let item = if item.id.is_some() {
+            let item = if matches!(item.id, Some((_, TypeQueryResult::Expr))) {
                 ModuleData {
                     id: item.id,
                     items: HashMap::new(),
@@ -346,11 +346,12 @@ impl Resolver {
         method: &str,
     ) -> Result<(DefId, TypeQueryResult), String> {
         match receiver_ty.kind() {
-            TyKind::RigidTy(RigidTy::Adt(adt, _)) => self
-                .method_receivers
-                .get(&adt.0)
-                .ok_or_else(|| format!("no methods known for receiver type {:?}", receiver_ty))?
-                .resolve_path([method].into_iter()),
+            TyKind::RigidTy(RigidTy::Adt(adt, _)) => Self::resolve_method_in_module(
+                self.method_receivers
+                    .get(&adt.0)
+                    .ok_or_else(|| format!("no methods known for receiver type {:?}", receiver_ty))?,
+                method,
+            ),
             TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
                 self.resolve_method(inner, method)
             }
@@ -359,6 +360,26 @@ impl Resolver {
                 receiver_ty
             )),
         }
+    }
+
+    fn resolve_method_in_module(
+        module: &ModuleData,
+        method: &str,
+    ) -> Result<(DefId, TypeQueryResult), String> {
+        if let Ok(found) = module.resolve_path([method].into_iter()) {
+            return Ok(found);
+        }
+        let mut children = module.items.iter().collect::<Vec<_>>();
+        children.sort_by_key(|(name, _)| method_search_priority(name));
+        for (_, child) in children {
+            if let Ok(found) = Self::resolve_method_in_module(child, method) {
+                return Ok(found);
+            }
+        }
+        Err(format!(
+            "Failed to lookup {method}.\nAvailable items are: {:?}",
+            module.items.keys()
+        ))
     }
 
     fn rebuild_method_receivers(&mut self) {
@@ -393,4 +414,19 @@ fn normalized_path(path: &str) -> String {
     };
     normalize_crate_name(&mut crate_name);
     format!("{crate_name}::{rest}")
+}
+
+fn method_search_priority(name: &str) -> (usize, &str) {
+    let generic_arity = name
+        .strip_prefix('<')
+        .and_then(|it| it.strip_suffix('>'))
+        .map(|inner| {
+            inner
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .count()
+        })
+        .unwrap_or(usize::MAX);
+    (generic_arity, name)
 }

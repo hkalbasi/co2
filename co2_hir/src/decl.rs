@@ -20,7 +20,7 @@ use rustc_public_generative::{
 
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
-use crate::ty::{array_elem_ty, is_array_ty};
+use crate::ty::{array_elem_ty, is_array_ty, ty_matches_expected};
 use crate::{
     expr::coerce_expr_to_type,
     item::{HirLocal, LocalId},
@@ -201,7 +201,19 @@ impl HirCtx<'_> {
                                         span: expr.span,
                                     };
                                 }
-                                let expr = match coerce_expr_to_type(expr, ty) {
+                                // TODO: This code is very wrong. We should not touch local types beside their declared type.
+                                let local_ty = if ty_matches_expected(ty, expr.ty) {
+                                    expr.ty
+                                } else {
+                                    ty
+                                };
+                                locals[local].ty = local_ty;
+                                if let Some(resolver) = &self.decl_resolver {
+                                    let hir_ty = self.ty_to_hir_ty(local_ty, span);
+                                    resolver.set_local_ty(name.0 as u32, hir_ty);
+                                }
+                                // END TODO.
+                                let expr = match coerce_expr_to_type(expr, local_ty) {
                                     Ok(it) => it,
                                     Err(err) => self.terminate_with_error(parser_span, &err),
                                 };

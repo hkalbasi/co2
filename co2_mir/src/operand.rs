@@ -992,37 +992,35 @@ impl Builder {
                 .fn_sig()
                 .expect("fn def should have signature");
             let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig));
-            if !ty_matches_expected(fn_ptr_ty, src_fn_ptr_ty) {
-                let src_fn_ptr_local = self.new_temp(src_fn_ptr_ty, Mutability::Mut, span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(src_fn_ptr_local),
-                        Rvalue::Cast(
-                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
-                            inner_op,
-                            src_fn_ptr_ty,
-                        ),
+            let src_fn_ptr_local = self.new_temp(src_fn_ptr_ty, Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(src_fn_ptr_local),
+                    Rvalue::Cast(
+                        CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
+                        inner_op,
+                        src_fn_ptr_ty,
                     ),
-                    span,
-                });
-                let dst_fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
-                let generic_args = vec![
-                    GenericArgKind::Type(src_fn_ptr_ty),
-                    GenericArgKind::Type(fn_ptr_ty),
-                ];
-                self.emit_call_block(
-                    fn_const_operand(self.wellknown_defs.transmute, generic_args, span),
-                    vec![MirOperand::Copy(place(src_fn_ptr_local))],
-                    place(dst_fn_ptr_local),
-                    span,
-                );
-                return self.write_value_into_maybe_uninit_storage(
-                    dst_ty,
-                    MirOperand::Copy(place(dst_fn_ptr_local)),
-                    fn_ptr_ty,
-                    span,
-                );
-            }
+                ),
+                span,
+            });
+            let dst_fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
+            let generic_args = vec![
+                GenericArgKind::Type(src_fn_ptr_ty),
+                GenericArgKind::Type(fn_ptr_ty),
+            ];
+            self.emit_call_block(
+                fn_const_operand(self.wellknown_defs.transmute, generic_args, span),
+                vec![MirOperand::Copy(place(src_fn_ptr_local))],
+                place(dst_fn_ptr_local),
+                span,
+            );
+            return self.write_value_into_maybe_uninit_storage(
+                dst_ty,
+                MirOperand::Copy(place(dst_fn_ptr_local)),
+                fn_ptr_ty,
+                span,
+            );
         }
         if dst_mu_fn_ptr.is_some() && src_is_fn_def {
             let fn_ptr_ty = dst_mu_fn_ptr.expect("checked is_some");
@@ -1263,7 +1261,7 @@ impl Builder {
     ) -> MirOperand {
         let ret_local = self.new_temp(ret_ty, Mutability::Mut, span);
         self.lower_call_to_destination(func, args, span, place(ret_local), ret_ty);
-        MirOperand::Copy(place(ret_local))
+        MirOperand::Move(place(ret_local))
     }
 
     fn lower_logical_expr(
@@ -1577,7 +1575,7 @@ impl Builder {
         match &func.kind {
             HirExprKind::Path(ResolvedValue::Fn(fn_def, existing_generic_args)) => {
                 let generic_args = if existing_generic_args.is_empty() {
-                    infer_fn_generic_args(&sig, args, ret_ty)
+                    infer_fn_generic_args(*fn_def, &sig, args, ret_ty)
                 } else {
                     existing_generic_args.clone()
                 };
@@ -1613,7 +1611,7 @@ impl Builder {
             .fn_sig()
             .expect("std::mem::zeroed has no signature")
             .skip_binder();
-        let generic_args = infer_fn_generic_args(&sig, &[], ret_ty);
+        let generic_args = infer_fn_generic_args(zeroed_fn, &sig, &[], ret_ty);
         self.emit_call_block(
             fn_const_operand(zeroed_fn, generic_args, span),
             vec![],

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use co2_ast::{
     BinOp as ParsedBinOp, Constant, Expression, GenericAssociation, IntegerSuffix, Spanned,
@@ -8,9 +8,9 @@ use co2_ast::{
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
-    CrateItem,
+    CrateDefType, CrateItem,
     mir::Mutability,
-    ty::{FloatTy, IntTy, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
+    ty::{FloatTy, GenericArgKind, GenericArgs, IntTy, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
     abi::FieldsShape,
 };
 
@@ -261,6 +261,115 @@ pub enum HirLogicalOp {
     And,
 }
 
+fn collect_param_bindings_for_receiver(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>) {
+    match (expected.kind(), actual.kind()) {
+        (TyKind::Param(param), _) => {
+            out.entry(param.index).or_insert(actual);
+        }
+        (TyKind::RigidTy(RigidTy::Ref(_, expected_inner, _)), _) => {
+            collect_param_bindings_for_receiver(expected_inner, actual, out);
+        }
+        (
+            TyKind::RigidTy(RigidTy::RawPtr(expected_inner, _)),
+            TyKind::RigidTy(RigidTy::RawPtr(actual_inner, _)),
+        ) => {
+            collect_param_bindings_for_receiver(expected_inner, actual_inner, out);
+        }
+        (
+            TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
+            TyKind::RigidTy(RigidTy::Adt(actual_adt, actual_args)),
+        ) if expected_adt == actual_adt && actual_args.0.len() <= expected_args.0.len() => {
+            for (expected_arg, actual_arg) in expected_args
+                .0
+                .iter()
+                .zip(actual_args.0.iter())
+            {
+                if let (
+                    rustc_public_generative::rustc_public::ty::GenericArgKind::Type(expected_ty),
+                    rustc_public_generative::rustc_public::ty::GenericArgKind::Type(actual_ty),
+                ) = (expected_arg, actual_arg)
+                {
+                    collect_param_bindings_for_receiver(*expected_ty, *actual_ty, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn substitute_ty_params(ty: Ty, bindings: &BTreeMap<u32, Ty>) -> Ty {
+    match ty.kind() {
+        TyKind::Param(param) => bindings.get(&param.index).copied().unwrap_or(ty),
+        TyKind::RigidTy(RigidTy::Adt(def, args)) => Ty::from_rigid_kind(RigidTy::Adt(
+            def,
+            GenericArgs(
+                args.0
+                    .iter()
+                    .map(|arg| match arg {
+                        rustc_public_generative::rustc_public::ty::GenericArgKind::Type(inner) => {
+                            rustc_public_generative::rustc_public::ty::GenericArgKind::Type(
+                                substitute_ty_params(*inner, bindings),
+                            )
+                        }
+                        _ => arg.clone(),
+                    })
+                    .collect(),
+            ),
+        )),
+        TyKind::RigidTy(RigidTy::Ref(region, inner, mutability)) => {
+            Ty::from_rigid_kind(RigidTy::Ref(region, substitute_ty_params(inner, bindings), mutability))
+        }
+        TyKind::RigidTy(RigidTy::RawPtr(inner, mutability)) => Ty::from_rigid_kind(
+            RigidTy::RawPtr(substitute_ty_params(inner, bindings), mutability),
+        ),
+        TyKind::RigidTy(RigidTy::Tuple(items)) => Ty::from_rigid_kind(RigidTy::Tuple(
+            items
+                .iter()
+                .map(|item| substitute_ty_params(*item, bindings))
+                .collect(),
+        )),
+        TyKind::RigidTy(RigidTy::Array(inner, len)) => {
+            Ty::from_rigid_kind(RigidTy::Array(substitute_ty_params(inner, bindings), len))
+        }
+        _ => ty,
+    }
+}
+
+fn normalize_stable_defaulted_ty(ty: Ty) -> Ty {
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Ref(region, inner, mutability)) => {
+            Ty::new_ref(region, normalize_stable_defaulted_ty(inner), mutability)
+        }
+        TyKind::RigidTy(RigidTy::RawPtr(inner, mutability)) => {
+            Ty::new_ptr(normalize_stable_defaulted_ty(inner), mutability)
+        }
+        TyKind::RigidTy(RigidTy::Tuple(items)) => Ty::new_tuple(
+            &items
+                .iter()
+                .map(|item| normalize_stable_defaulted_ty(*item))
+                .collect::<Vec<_>>(),
+        ),
+        TyKind::RigidTy(RigidTy::Array(inner, len)) => {
+            Ty::from_rigid_kind(RigidTy::Array(normalize_stable_defaulted_ty(inner), len))
+        }
+        TyKind::RigidTy(RigidTy::Adt(adt, args)) => Ty::from_rigid_kind(RigidTy::Adt(
+            adt,
+            GenericArgs(
+                args.0
+                    .iter()
+                    .map(|arg| match arg {
+                        GenericArgKind::Type(inner) => {
+                            GenericArgKind::Type(normalize_stable_defaulted_ty(*inner))
+                        }
+                        _ => arg.clone(),
+                    })
+                    .collect(),
+            ),
+        )),
+        _ => ty,
+    }
+}
+
 impl HirCtx<'_> {
     fn method_receiver_arg(&self, receiver: HirExpr, expected_ty: Ty) -> HirExpr {
         match expected_ty.kind() {
@@ -278,6 +387,26 @@ impl HirCtx<'_> {
             }
             _ => receiver,
         }
+    }
+
+    fn specialize_fn_sig_from_receiver(
+        &self,
+        fn_def: rustc_public_generative::rustc_public::ty::FnDef,
+        receiver_ty: Ty,
+    ) -> Option<rustc_public_generative::rustc_public::ty::FnSig> {
+        let sig = callable_sig(fn_def.ty())?;
+        let mut sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
+        let mut by_index = BTreeMap::new();
+        if let Some(first_input) = sig.inputs().first() {
+            collect_param_bindings_for_receiver(*first_input, receiver_ty, &mut by_index);
+        }
+        collect_param_bindings_for_receiver(sig.output(), receiver_ty, &mut by_index);
+        sig.inputs_and_output = sig
+            .inputs_and_output
+            .into_iter()
+            .map(|ty| normalize_stable_defaulted_ty(substitute_ty_params(ty, &by_index)))
+            .collect();
+        Some(sig)
     }
 
     fn lower_call_args(
@@ -424,14 +553,31 @@ impl HirCtx<'_> {
             return Ok(None);
         };
 
-        let (receiver, method_name, parser_span) = match &func.0 {
-            Expression::Identifier((co2_crate_sig::DefOrLocal::AssocMethod { receiver, method, .. }, _)) => {
-                (*receiver, method.as_str(), func.1)
+        let (receiver, receiver_generic_args, method_name, parser_span) = match &func.0 {
+            Expression::Identifier((
+                co2_crate_sig::DefOrLocal::AssocMethod {
+                    receiver,
+                    method,
+                    receiver_generic_args,
+                },
+                _,
+            )) => {
+                (*receiver, receiver_generic_args, method.as_str(), func.1)
             }
             _ => return Ok(None),
         };
 
-        let receiver_ty = CrateItem(receiver).ty();
+        let receiver_ty = if receiver_generic_args.is_empty() {
+            CrateItem(receiver).ty()
+        } else {
+            self.ty_of_resolved_path(
+                &co2_crate_sig::DefOrLocal::Def {
+                    def_id: receiver,
+                    generic_args: receiver_generic_args.clone(),
+                },
+                self.to_rust_span(parser_span),
+            )
+        };
         let (method_def, class) = match resolver.resolve_method(receiver_ty, method_name) {
             Ok(found) => found,
             Err(_) => return Ok(None),
@@ -440,15 +586,12 @@ impl HirCtx<'_> {
             return Ok(None);
         }
 
-        let resolved = self.resolve_value(method_def);
-        let func_ty = resolved.ty();
-        let ResolvedValue::Fn(fn_def, generic_args) = resolved else {
+        let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
+        let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, receiver_ty) else {
             return Ok(None);
         };
-        let Some(sig) = callable_sig(func_ty) else {
-            return Ok(None);
-        };
-        let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
+        let resolved = ResolvedValue::Fn(fn_def, vec![]);
+        let func_ty = fn_def.ty();
 
         let mut lowered_args = Vec::with_capacity(params.len());
         for param in params {
@@ -459,7 +602,7 @@ impl HirCtx<'_> {
 
         Ok(Some((
             HirExpr {
-                kind: HirExprKind::Path(ResolvedValue::Fn(fn_def, generic_args)),
+                kind: HirExprKind::Path(resolved),
                 ty: func_ty,
                 span: self.to_rust_span(parser_span),
             },
@@ -1141,6 +1284,7 @@ impl HirCtx<'_> {
                 let mut controlling_expr =
                     self.lower_expr((controlling.0.clone(), controlling.1), locals, local_map)?;
                 self.array_to_pointer_decay_if_array(&mut controlling_expr);
+                self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut controlling_expr);
                 let controlling_ty = controlling_expr.ty;
 
                 let mut default_expr = None;
@@ -1604,7 +1748,7 @@ fn int_suffix_ty(suffix: IntegerSuffix, value: i128) -> Ty {
 }
 
 pub(crate) fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Result<HirExpr, String> {
-    if expr.ty == expected_ty {
+    if ty_matches_expected(expected_ty, expr.ty) {
         return Ok(expr);
     }
     if needs_implicit_cast(expected_ty, expr.ty) {

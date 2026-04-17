@@ -947,37 +947,26 @@ where
             .delimited_by(just(Token::Lt), just(Token::Gt))
             .map_with(|r, e| (r, e.span()));
 
-        let segment = identifier()
-            .then(generics.clone().or_not())
-            .map(|(ident, generics)| {
-                let mut segments = vec![(RustPathSegment::Ident(ident.0), ident.1)];
-                if let Some(generics) = generics {
-                    segments.push(generics);
-                }
-                segments
-            });
-
-        segment
+        choice((
+            identifier()
+                .then(generics.clone().or_not())
+                .map(|(ident, generics)| {
+                    let mut segments = vec![(RustPathSegment::Ident(ident.0), ident.1)];
+                    if let Some(generics) = generics {
+                        segments.push(generics);
+                    }
+                    segments
+                }),
+            generics.map(|generics| vec![generics]),
+        ))
             .separated_by(just(Token::ColonColon))
             .at_least(1)
             .collect::<Vec<Vec<Spanned<RustPathSegment>>>>()
-            .then(
-                just(Token::ColonColon)
-                    .ignore_then(generics.clone())
-                    .or_not(),
-            )
             .map(|parts| RustPath {
-                segments: {
-                    let (parts, turbofish) = parts;
-                    let mut segments = parts
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<Spanned<RustPathSegment>>>();
-                    if let Some(turbofish) = turbofish {
-                        segments.push(turbofish);
-                    }
-                    segments
-                },
+                segments: parts
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<Spanned<RustPathSegment>>>(),
             })
             .map_with(|r, e| (r, e.span()))
     })
