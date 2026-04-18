@@ -40,6 +40,12 @@ fn main() {
         std::process::exit(3);
     }
 
+    Vec<Vec<i32> > vv = Vec<Vec<i32> >::new();
+    vv.push(v);
+    vv.push(v2);
+    if (vv.len() != 2) {
+        std::process::exit(3);
+    }
 
     i32 a = 2, b = 5;
     std::ptr::swap::<i32>(&a, &b);

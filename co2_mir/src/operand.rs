@@ -14,7 +14,10 @@ use rustc_public_generative::rustc_public::{
 };
 
 use crate::{
-    build::{Builder, fn_const_operand, infer_fn_generic_args, ty_matches_expected, variant_idx},
+    build::{
+        Builder, complete_fn_generic_args, fn_const_operand, infer_fn_generic_args,
+        ty_matches_expected, variant_idx,
+    },
     place::place,
 };
 
@@ -365,7 +368,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             }
             HirExprKind::Local(local) => {
                 let local_index = self.local_to_index(*local);
-                MirOperand::Copy(place(local_index))
+                self.place_operand_for_ty(place(local_index), self.locals[local_index].ty)
             }
             HirExprKind::ConstInt(v) => {
                 let span = expr.span;
@@ -1572,7 +1575,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         destination: rustc_public_generative::rustc_public::mir::Place,
         ret_ty: Ty,
     ) {
-        let sig = callable_sig(func.ty).expect("call target has no fn signature");
+        let sig = callable_sig(self.ctx.normalize_ty_defaults(func.ty))
+            .expect("call target has no fn signature");
         let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
 
         let mut arg_ops = Vec::with_capacity(args.len());
@@ -1586,11 +1590,15 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         }
         match &func.kind {
             HirExprKind::Path(ResolvedValue::Fn(fn_def, existing_generic_args)) => {
-                let generic_args = if existing_generic_args.is_empty() {
-                    infer_fn_generic_args(*fn_def, &sig, args, ret_ty)
-                } else {
-                    existing_generic_args.clone()
-                };
+                let generic_args = complete_fn_generic_args(*fn_def, &sig, args, ret_ty, existing_generic_args)
+                    .into_iter()
+                    .map(|arg| match arg {
+                        GenericArgKind::Type(ty) => {
+                            GenericArgKind::Type(self.ctx.normalize_ty_defaults(ty))
+                        }
+                        _ => arg,
+                    })
+                    .collect();
                 self.emit_call_block(
                     fn_const_operand(*fn_def, generic_args, span),
                     arg_ops,

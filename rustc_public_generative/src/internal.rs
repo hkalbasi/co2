@@ -1984,6 +1984,75 @@ pub(crate) fn type_is_copy<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, ty: MirTy) -> 
     type_implements_trait(tcx, owner, ty, copy_trait)
 }
 
+pub(crate) fn normalize_ty_defaults<'tcx>(tcx: TyCtxt<'tcx>, ty: MirTy) -> MirTy {
+    rustc_public::rustc_internal::stable(normalize_ty_defaults_to_rustc(tcx, ty))
+}
+
+fn normalize_ty_defaults_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, ty: MirTy) -> ty::Ty<'tcx> {
+    use rustc_hir::Mutability as RustcMutability;
+    use rustc_public::ty::TyKind;
+
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Adt(adt, args)) => {
+            let def_id = my_def_id_to_rustc_def_id(tcx, adt.0);
+            let rustc_args = normalize_generic_args_defaults_to_rustc(tcx, adt.0, &args);
+            ty::Ty::new_adt(tcx, tcx.adt_def(def_id), rustc_args)
+        }
+        TyKind::RigidTy(RigidTy::FnDef(def, args)) => {
+            let def_id = my_def_id_to_rustc_def_id(tcx, def.0);
+            let rustc_args = normalize_generic_args_defaults_to_rustc(tcx, def.0, &args);
+            ty::Ty::new_fn_def(tcx, def_id, rustc_args)
+        }
+        TyKind::RigidTy(RigidTy::Ref(region, inner, mutability)) => ty::Ty::new_ref(
+            tcx,
+            mir_region_to_rustc(tcx, &region),
+            normalize_ty_defaults_to_rustc(tcx, inner),
+            match mutability {
+                rustc_public::mir::Mutability::Mut => RustcMutability::Mut,
+                rustc_public::mir::Mutability::Not => RustcMutability::Not,
+            },
+        ),
+        TyKind::RigidTy(RigidTy::RawPtr(inner, mutability)) => match mutability {
+            rustc_public::mir::Mutability::Mut => {
+                ty::Ty::new_mut_ptr(tcx, normalize_ty_defaults_to_rustc(tcx, inner))
+            }
+            rustc_public::mir::Mutability::Not => {
+                ty::Ty::new_imm_ptr(tcx, normalize_ty_defaults_to_rustc(tcx, inner))
+            }
+        },
+        TyKind::RigidTy(RigidTy::Tuple(items)) => {
+            let items = items
+                .iter()
+                .map(|item| normalize_ty_defaults_to_rustc(tcx, *item))
+                .collect::<Vec<_>>();
+            ty::Ty::new_tup(tcx, &items)
+        }
+        TyKind::RigidTy(RigidTy::Array(inner, len)) => {
+            let rustc_len = internal(tcx, len);
+            ty::Ty::new_array_with_const_len(tcx, normalize_ty_defaults_to_rustc(tcx, inner), rustc_len)
+        }
+        _ => internal(tcx, ty),
+    }
+}
+
+fn normalize_generic_args_defaults_to_rustc<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    args: &GenericArgs,
+) -> ty::GenericArgsRef<'tcx> {
+    let rustc_def_id = my_def_id_to_rustc_def_id(tcx, def_id);
+    let provided = tcx.mk_args_from_iter(args.0.iter().map(|arg| match arg {
+        GenericArgKind::Lifetime(region) => ty::GenericArg::from(mir_region_to_rustc(tcx, region)),
+        GenericArgKind::Type(ty) => ty::GenericArg::from(normalize_ty_defaults_to_rustc(tcx, *ty)),
+        GenericArgKind::Const(konst) => ty::GenericArg::from(internal(tcx, konst.clone())),
+    }));
+    provided.extend_to(tcx, rustc_def_id, |param, current| {
+        param.default_value(tcx)
+            .map(|default| default.instantiate(tcx, current))
+            .unwrap_or_else(|| tcx.mk_param_from_def(param))
+    })
+}
+
 fn override_queries<S: CrateGeneratorState>(
     _sess: &rustc_session::Session,
     providers: &mut UtilProviders,

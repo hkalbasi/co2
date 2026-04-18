@@ -554,7 +554,7 @@ impl HirCtx<'_> {
             return Ok(None);
         };
 
-        let (receiver, receiver_generic_args, method_name, parser_span) = match &func.0 {
+        let (receiver, parsed_receiver_generic_args, method_name, parser_span) = match &func.0 {
             Expression::Identifier((
                 co2_crate_sig::DefOrLocal::AssocMethod {
                     receiver,
@@ -562,19 +562,17 @@ impl HirCtx<'_> {
                     receiver_generic_args,
                 },
                 _,
-            )) => {
-                (*receiver, receiver_generic_args, method.as_str(), func.1)
-            }
+            )) => (*receiver, receiver_generic_args, method.as_str(), func.1),
             _ => return Ok(None),
         };
 
-        let receiver_ty = if receiver_generic_args.is_empty() {
+        let receiver_ty = if parsed_receiver_generic_args.is_empty() {
             CrateItem(receiver).ty()
         } else {
             self.ty_of_resolved_path(
                 &co2_crate_sig::DefOrLocal::Def {
                     def_id: receiver,
-                    generic_args: receiver_generic_args.clone(),
+                    generic_args: parsed_receiver_generic_args.clone(),
                 },
                 self.to_rust_span(parser_span),
             )
@@ -591,7 +589,18 @@ impl HirCtx<'_> {
         let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, receiver_ty) else {
             return Ok(None);
         };
-        let resolved = ResolvedValue::Fn(fn_def, vec![]);
+        let resolved_generic_args = {
+            let receiver_args = receiver_generic_args(receiver_ty);
+            let output_args = receiver_generic_args(sig.output());
+            if output_args.len() > receiver_args.len()
+                && output_args.iter().zip(receiver_args.iter()).all(|(o, r)| o == r)
+            {
+                output_args
+            } else {
+                receiver_args
+            }
+        };
+        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args);
         let func_ty = fn_def.ty();
 
         let mut lowered_args = Vec::with_capacity(params.len());

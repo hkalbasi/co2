@@ -24,7 +24,7 @@ pub fn build_mir_for_body(
     let mut locals = Vec::with_capacity(body.locals.len());
     let mut local_indices = HashMap::new();
     for (idx, (local_id, local)) in body.locals.iter().enumerate() {
-        let ty = local.ty;
+        let ty = ctx.normalize_ty_defaults(local.ty);
         locals.push(MirLocalDecl {
             ty,
             span: local.span,
@@ -129,6 +129,27 @@ pub(crate) fn infer_fn_generic_args(
             .into_values()
             .map(GenericArgKind::Type)
             .collect::<Vec<_>>(),
+    }
+}
+
+pub(crate) fn complete_fn_generic_args(
+    fn_def: FnDef,
+    sig: &rustc_public_generative::rustc_public::ty::FnSig,
+    args: &[co2_hir::HirExpr],
+    ret_ty: Ty,
+    provided: &[GenericArgKind],
+) -> Vec<GenericArgKind> {
+    let inferred = infer_fn_generic_args(fn_def, sig, args, ret_ty);
+    if provided.is_empty() {
+        return inferred;
+    }
+
+    if inferred.len() >= provided.len() {
+        let mut completed = inferred;
+        completed[..provided.len()].clone_from_slice(provided);
+        completed
+    } else {
+        provided.to_vec()
     }
 }
 

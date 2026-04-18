@@ -168,6 +168,10 @@ impl HirStructureCtx<'_> {
         internal::type_is_copy(self.tcx, owner, ty)
     }
 
+    pub fn normalize_ty_defaults(&self, ty: rustc_public::ty::Ty) -> rustc_public::ty::Ty {
+        internal::normalize_ty_defaults(self.tcx, ty)
+    }
+
     pub fn erase_late_bound_regions_in_fn_sig(
         &self,
         sig: rustc_public::ty::Binder<rustc_public::ty::FnSig>,

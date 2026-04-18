@@ -28,6 +28,7 @@ fn is_maybe_uninit_fn_ptr_ty(ty: Ty) -> bool {
 
 impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
     pub(crate) fn new_temp(&mut self, ty: Ty, mutability: Mutability, span: RustSpan) -> usize {
+        let ty = self.ctx.normalize_ty_defaults(ty);
         let local = self.locals.len() + self.extra_locals.len();
         self.extra_locals.push(MirLocalDecl {
             ty,
