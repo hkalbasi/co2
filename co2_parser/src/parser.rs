@@ -956,42 +956,132 @@ where
     })
 }
 
+fn rust_path_with_generic_args<'src, I>(
+    generic_ty: impl Parser<
+        'src,
+        I,
+        Spanned<RustTy<StatelessResolver>>,
+        extra::Err<Rich<'src, Token, Span>>,
+    > + Clone
+    + 'src,
+) -> impl Parser<'src, I, Spanned<RustPath>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    let generics = generic_ty
+        .separated_by(just(Token::Comma))
+        .collect()
+        .map(RustPathSegment::Generics)
+        .delimited_by(just(Token::Lt), just(Token::Gt))
+        .map_with(|r, e| (r, e.span()));
+
+    choice((
+        identifier()
+            .then(generics.clone().or_not())
+            .map(|(ident, generics)| {
+                let mut segments = vec![(RustPathSegment::Ident(ident.0), ident.1)];
+                if let Some(generics) = generics {
+                    segments.push(generics);
+                }
+                segments
+            }),
+        generics.map(|generics| vec![generics]),
+    ))
+    .separated_by(just(Token::ColonColon))
+    .at_least(1)
+    .collect::<Vec<Vec<Spanned<RustPathSegment>>>>()
+    .map(|parts| RustPath {
+        segments: parts
+            .into_iter()
+            .flatten()
+            .collect::<Vec<Spanned<RustPathSegment>>>(),
+    })
+    .map_with(|r, e| (r, e.span()))
+}
+
 fn rust_path<'src, I>()
 -> impl Parser<'src, I, Spanned<RustPath>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
+    rust_path_with_generic_args(rust_generic_arg_ty())
+}
+
+fn rust_generic_arg_ty<'src, I>()
+-> impl Parser<'src, I, Spanned<RustTy<StatelessResolver>>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
     recursive(|rec| {
-        let generics = rec
-            .separated_by(just(Token::Comma))
-            .collect()
-            .map(RustPathSegment::Generics)
-            .delimited_by(just(Token::Lt), just(Token::Gt))
+        let path = rust_path_with_generic_args(rec.clone())
+            .map(|path| (RustTy::Path((path.0, path.1)), path.1));
+
+        let ptr = just(Token::Star)
+            .ignore_then(choice((
+                just(Token::Const).to(false),
+                mut_token().to(true),
+            )))
+            .then(rec.clone())
+            .map(|(mutable, inner)| RustTy::Ptr {
+                mutable,
+                inner: Box::new(inner),
+            })
             .map_with(|r, e| (r, e.span()));
 
-        choice((
-            identifier()
-                .then(generics.clone().or_not())
-                .map(|(ident, generics)| {
-                    let mut segments = vec![(RustPathSegment::Ident(ident.0), ident.1)];
-                    if let Some(generics) = generics {
-                        segments.push(generics);
-                    }
-                    segments
-                }),
-            generics.map(|generics| vec![generics]),
-        ))
-            .separated_by(just(Token::ColonColon))
-            .at_least(1)
-            .collect::<Vec<Vec<Spanned<RustPathSegment>>>>()
-            .map(|parts| RustPath {
-                segments: parts
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<Spanned<RustPathSegment>>>(),
+        let reference = just(Token::Amp)
+            .ignore_then(mut_token().to(true).or_not().map(|m| m.is_some()))
+            .then(rec.clone())
+            .map(|(mutable, inner)| RustTy::Ref {
+                mutable,
+                inner: Box::new(inner),
             })
-            .map_with(|r, e| (r, e.span()))
+            .map_with(|r, e| (r, e.span()));
+
+        let never = just(Token::Bang)
+            .to(RustTy::Never)
+            .map_with(|r, e| (r, e.span()));
+
+        let tuple = rec
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(RustTy::Tuple)
+            .map_with(|r, e| (r, e.span()));
+
+        let slice_or_array = rec
+            .clone()
+            .then(
+                just(Token::Semicolon)
+                    .ignore_then(
+                        any()
+                            .filter(|t| !matches!(t, Token::RBracket))
+                            .map_with(|t, e| (t, e.span()))
+                            .repeated()
+                            .collect()
+                            .map(|tokens| LazyRustConstExpr { tokens }),
+                    )
+                    .map_with(|r, e| (r, e.span()))
+                    .or_not(),
+            )
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(|(inner, len)| {
+                if let Some(len) = len {
+                    RustTy::Array {
+                        inner: Box::new(inner),
+                        len,
+                    }
+                } else {
+                    RustTy::Slice(Box::new(inner))
+                }
+            })
+            .map_with(|r, e| (r, e.span()));
+
+        choice((path, ptr, reference, never, tuple, slice_or_array))
     })
 }
 
@@ -1383,7 +1473,7 @@ where
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     recursive(|rec| {
-        let path = rust_path()
+        let path = rust_path_with_generic_args(rust_generic_arg_ty())
             .map({
                 let resolver = resolver.clone();
                 move |path| (resolver.classify_path(&path.0), path.1)

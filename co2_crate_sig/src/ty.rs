@@ -457,15 +457,82 @@ fn round_up(value: usize, align: usize) -> usize {
 }
 
 impl LocalResolverBase {
+    fn hir_ty_of_rust_ty(
+        &mut self,
+        (ty, span): co2_ast::Spanned<co2_ast::RustTy<LocalResolver>>,
+    ) -> HirTy {
+        let rust_span = self.co2_span_to_rustc(span);
+        match ty {
+            co2_ast::RustTy::Path((path, _)) => self.hir_ty_of_resolved_path(&path, rust_span),
+            co2_ast::RustTy::Ptr { mutable, inner } => {
+                let inner = self.hir_ty_of_rust_ty(*inner);
+                HirTy::new_ptr(
+                    inner,
+                    if mutable {
+                        Mutability::Mut
+                    } else {
+                        Mutability::Not
+                    },
+                    rust_span,
+                )
+            }
+            co2_ast::RustTy::Ref { mutable, inner } => {
+                let inner = self.hir_ty_of_rust_ty(*inner);
+                HirTy::new_ref(
+                    inner,
+                    if mutable {
+                        Mutability::Mut
+                    } else {
+                        Mutability::Not
+                    },
+                    rustc_public_generative::HirLifetime::Static,
+                    rust_span,
+                )
+            }
+            co2_ast::RustTy::Tuple(elems) => {
+                let elems = elems.into_iter().map(|e| self.hir_ty_of_rust_ty(e)).collect();
+                HirTy::new_tuple(elems, rust_span)
+            }
+            co2_ast::RustTy::Array { inner, len } => {
+                let Some(len) = len.0.constant_len() else {
+                    panic!("unsupported non-literal Rust array generic argument")
+                };
+                let len = usize::try_from(len).expect("array generic argument length should fit usize");
+                HirTy::new_array(self.hir_ty_of_rust_ty(*inner), HirTyConst::Literal(len), rust_span)
+            }
+            co2_ast::RustTy::BareFn { params, ret_ty } => {
+                let inputs = params
+                    .into_iter()
+                    .map(|param| self.hir_ty_of_rust_ty(param))
+                    .collect();
+                let output = self.hir_ty_of_rust_ty(*ret_ty);
+                HirTy {
+                    kind: HirTyKind::FnPtr(Box::new(FunctionSignature {
+                        lifetimes: vec![],
+                        inputs,
+                        output,
+                        abi: FunctionAbi::Rust,
+                        is_unsafe: false,
+                        c_variadic: false,
+                    })),
+                    span: rust_span,
+                }
+            }
+            co2_ast::RustTy::Never => HirTy {
+                kind: HirTyKind::Never,
+                span: rust_span,
+            },
+            co2_ast::RustTy::Slice(_) => panic!("slice generic arguments are not supported here"),
+        }
+    }
+
     fn hir_generic_args_of_resolved_path(
         &mut self,
-        generic_args: &[Spanned<crate::DefOrLocal>],
+        generic_args: &[Spanned<co2_ast::RustTy<LocalResolver>>],
     ) -> Vec<HirGenericArg> {
         generic_args
             .iter()
-            .map(|(arg, span)| {
-                HirGenericArg::Ty(self.hir_ty_of_resolved_path(arg, self.co2_span_to_rustc(*span)))
-            })
+            .map(|arg| HirGenericArg::Ty(self.hir_ty_of_rust_ty(arg.clone())))
             .collect()
     }
 

@@ -91,7 +91,7 @@ impl<'a> HirCtx<'a> {
     pub(crate) fn resolve_value_with_generic_args(
         &self,
         def_id: DefId,
-        generic_args: &[co2_ast::Spanned<co2_crate_sig::DefOrLocal>],
+        generic_args: &[co2_ast::Spanned<co2_ast::RustTy<co2_crate_sig::LocalResolver>>],
     ) -> ResolvedValue {
         let ty = CrateItem(def_id).ty();
         if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnDef(..))) {

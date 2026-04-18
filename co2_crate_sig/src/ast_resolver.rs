@@ -203,13 +203,13 @@ impl LocalResolver {
 pub enum DefOrLocal {
     Def {
         def_id: DefId,
-        generic_args: Vec<Spanned<DefOrLocal>>,
+        generic_args: Vec<Spanned<co2_ast::RustTy<LocalResolver>>>,
     },
     Const(DefId),
     AssocMethod {
         receiver: DefId,
         method: String,
-        receiver_generic_args: Vec<Spanned<DefOrLocal>>,
+        receiver_generic_args: Vec<Spanned<co2_ast::RustTy<LocalResolver>>>,
     },
     Local(u32),
     FuncName,
@@ -246,8 +246,8 @@ impl co2_ast::TypeResolver for LocalResolver {
         let generic_args = match path.segments.last() {
             Some((co2_ast::RustPathSegment::Generics(args), _)) => args
                 .iter()
-                .map(|(arg, span)| self.classify_path(arg).map(|(_, resolved)| (resolved, *span)))
-                .collect::<Option<Vec<_>>>()?,
+                .map(|arg| arg.transform(self))
+                .collect::<Vec<_>>(),
             _ => vec![],
         };
         if ["__func__", "__PRETTY_FUNCTION__", "__FUNCTION__"].contains(&&*path_pretty) {

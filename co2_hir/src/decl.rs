@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
-    Initializer, Spanned, TypeName, TypeQualifier,
+    Initializer, RustTy, Spanned, TypeName, TypeQualifier,
 };
 use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver, eval_registered_array_len_const};
 use la_arena::Arena;
@@ -52,14 +52,80 @@ impl HirCtx<'_> {
 
     pub(crate) fn lower_generic_args(
         &self,
-        generic_args: &[Spanned<co2_crate_sig::DefOrLocal>],
+        generic_args: &[Spanned<RustTy<LocalResolver>>],
     ) -> Vec<GenericArgKind> {
         generic_args
             .iter()
-            .map(|(arg, arg_span)| {
-                GenericArgKind::Type(self.ty_of_resolved_path(arg, self.to_rust_span(*arg_span)))
-            })
+            .map(|arg| GenericArgKind::Type(self.lower_rust_ty(arg.clone())))
             .collect()
+    }
+
+    pub(crate) fn lower_rust_ty(&self, (ty, span): Spanned<RustTy<LocalResolver>>) -> Ty {
+        let rust_span = self.to_rust_span(span);
+        match ty {
+            RustTy::Path((path, _)) => self.ty_of_resolved_path(&path, rust_span),
+            RustTy::Ptr { mutable, inner } => Ty::new_ptr(
+                self.lower_rust_ty(*inner),
+                if mutable {
+                    Mutability::Mut
+                } else {
+                    Mutability::Not
+                },
+            ),
+            RustTy::Ref { mutable, inner } => Ty::new_ref(
+                rustc_public_generative::rustc_public::ty::Region {
+                    kind: RegionKind::ReStatic,
+                },
+                self.lower_rust_ty(*inner),
+                if mutable {
+                    Mutability::Mut
+                } else {
+                    Mutability::Not
+                },
+            ),
+            RustTy::Tuple(elems) => Ty::new_tuple(
+                &elems
+                    .into_iter()
+                    .map(|elem| self.lower_rust_ty(elem))
+                    .collect::<Vec<_>>(),
+            ),
+            RustTy::Slice(inner) => Ty::from_rigid_kind(RigidTy::Slice(self.lower_rust_ty(*inner))),
+            RustTy::Array { inner, len } => {
+                let Some(len) = len.0.constant_len() else {
+                    self.terminate_with_error(
+                        span,
+                        "Rust array generic arguments currently require a literal length",
+                    );
+                };
+                let Ok(len) = usize::try_from(len) else {
+                    self.terminate_with_error(
+                        span,
+                        "Rust array generic argument length is too large for this target",
+                    );
+                };
+                Ty::from_rigid_kind(RigidTy::Array(
+                    self.lower_rust_ty(*inner),
+                    TyConst::try_from_target_usize(
+                        len.try_into().expect("array len should fit u64"),
+                    )
+                    .expect("array len should fit target usize"),
+                ))
+            }
+            RustTy::BareFn { params, ret_ty } => {
+                let mut inputs_and_output = params
+                    .into_iter()
+                    .map(|param| self.lower_rust_ty(param))
+                    .collect::<Vec<_>>();
+                inputs_and_output.push(self.lower_rust_ty(*ret_ty));
+                Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(FnSig {
+                    inputs_and_output,
+                    c_variadic: false,
+                    safety: Safety::Safe,
+                    abi: Abi::Rust,
+                })))
+            }
+            RustTy::Never => Ty::from_rigid_kind(RigidTy::Never),
+        }
     }
 
     pub(crate) fn ty_of_resolved_path(

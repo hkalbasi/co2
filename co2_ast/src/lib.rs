@@ -220,7 +220,7 @@ pub struct RustPath {
 #[derive(Debug, Clone)]
 pub enum RustPathSegment {
     Ident(String),
-    Generics(Vec<Spanned<RustPath>>),
+    Generics(Vec<Spanned<RustTy<StatelessResolver>>>),
 }
 
 impl RustPath {
@@ -230,13 +230,13 @@ impl RustPath {
         }
     }
 
-    pub fn decompose(&self) -> (RustPath, Vec<RustPath>) {
+    pub fn decompose(&self) -> (RustPath, Vec<Spanned<RustTy<StatelessResolver>>>) {
         let mut base = self.clone();
         if let Some((RustPathSegment::Generics(_), _)) = base.segments.last() {
             let Some((RustPathSegment::Generics(last), _)) = base.segments.pop() else {
                 unreachable!();
             };
-            (base, last.into_iter().map(|x| x.0.clone()).collect())
+            (base, last)
         } else {
             (base, vec![])
         }
@@ -250,7 +250,7 @@ impl RustPath {
                 RustPathSegment::Generics(parts) => {
                     let inner = parts
                         .iter()
-                        .map(|p| p.0.to_pretty())
+                        .map(|p| rust_ty_to_pretty(&p.0))
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!("<{inner}>")
@@ -269,15 +269,49 @@ impl Display for RustPath {
                 .iter()
                 .map(|x| match &x.0 {
                     RustPathSegment::Ident(ident) => ident.clone(),
-                    RustPathSegment::Generics(rust_paths) => {
-                        format!(
-                            "<{}>",
-                            rust_paths.iter().map(|x| x.0.to_string()).join(", ")
-                        )
-                    }
+                    RustPathSegment::Generics(rust_tys) => format!(
+                        "<{}>",
+                        rust_tys
+                            .iter()
+                            .map(|x| rust_ty_to_pretty(&x.0))
+                            .join(", ")
+                    ),
                 })
                 .join("::"),
         )
+    }
+}
+
+fn rust_ty_to_pretty<R: TypeResolver>(ty: &RustTy<R>) -> String {
+    match ty {
+        RustTy::Path((path, _)) => format!("{path:?}"),
+        RustTy::Tuple(elems) => {
+            let inner = elems
+                .iter()
+                .map(|elem| rust_ty_to_pretty(&elem.0))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
+        RustTy::Ref { mutable, inner } => {
+            let mutability = if *mutable { "mut " } else { "" };
+            format!("&{mutability}{}", rust_ty_to_pretty(&inner.0))
+        }
+        RustTy::Ptr { mutable, inner } => {
+            let mutability = if *mutable { "mut " } else { "const " };
+            format!("*{mutability}{}", rust_ty_to_pretty(&inner.0))
+        }
+        RustTy::Slice(inner) => format!("[{}]", rust_ty_to_pretty(&inner.0)),
+        RustTy::Array { inner, len } => format!("[{}; {:?}]", rust_ty_to_pretty(&inner.0), len.0.tokens),
+        RustTy::BareFn { params, ret_ty } => {
+            let params = params
+                .iter()
+                .map(|param| rust_ty_to_pretty(&param.0))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("fn({params}) -> {}", rust_ty_to_pretty(&ret_ty.0))
+        }
+        RustTy::Never => "!".to_owned(),
     }
 }
 

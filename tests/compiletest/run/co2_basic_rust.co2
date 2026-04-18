@@ -53,4 +53,14 @@ fn main() {
     if (a != 5 || b != 2) {
         std::process::exit(4);
     }
+
+    Vec<*mut i32> v3 = Vec<*mut i32>::new();
+    v3.push(&a);
+    v3.push(&b);
+    if (*v3.pop().unwrap() != 2) {
+        std::process::exit(5);
+    }
+    if (*v3.pop().unwrap() != 5) {
+        std::process::exit(5);
+    }
 }
