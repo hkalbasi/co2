@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use co2_ast::{CompoundStatement, Statement, StatementOrDeclaration};
+use co2_ast::{CompoundStatement, ForInit, Statement, StatementOrDeclaration};
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{IntTy, Span as RustSpan, Ty};
@@ -270,12 +270,20 @@ impl HirCtx<'_> {
                 post,
                 body,
             } => {
+                let mut loop_map = local_map.clone();
                 if let Some(init) = init {
-                    let init = self.lower_expr(init, locals, local_map)?;
-                    out.push(HirStmt::Expr(init));
+                    match init {
+                        ForInit::Expression(init) => {
+                            let init = self.lower_expr(init, locals, &mut loop_map)?;
+                            out.push(HirStmt::Expr(init));
+                        }
+                        ForInit::Declaration((decl, _)) => {
+                            self.lower_decl(decl, out, locals, &mut loop_map)?;
+                        }
+                    }
                 }
                 let cond = if let Some(cond) = cond {
-                    let cond = self.lower_expr(cond, locals, local_map)?;
+                    let cond = self.lower_expr(cond, locals, &mut loop_map)?;
                     if !is_condition_ty(cond.ty) {
                         return Err(format!(
                             "for condition must be scalar-like, got {:?}",
@@ -306,6 +314,7 @@ impl HirCtx<'_> {
                 out.push(HirStmt::Label(body_label, span));
 
                 let mut body_map = local_map.clone();
+                body_map.extend(loop_map.clone());
                 self.enter_loop(continue_label, end_label);
                 let body_result = self.lower_stmt(body.0, body.1, out, locals, &mut body_map);
                 self.exit_loop();

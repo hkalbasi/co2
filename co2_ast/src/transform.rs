@@ -230,10 +230,12 @@ impl<A: TypeResolver> DoTransform for ParameterList<A> {
         let ParameterList {
             parameters,
             ellipsis,
+            empty_is_variadic,
         } = self;
         ParameterList {
             parameters: parameters.transform(b),
             ellipsis: *ellipsis,
+            empty_is_variadic: *empty_is_variadic,
         }
     }
 }

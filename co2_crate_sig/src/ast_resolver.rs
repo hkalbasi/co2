@@ -449,6 +449,11 @@ impl co2_ast::TypeResolver for LocalResolver {
                 .map(|registered| registered.id),
         }
     }
+
+    fn rust_style_syntax_enabled(&self) -> bool {
+        !self.locals.borrow().contains_key("fn")
+            && self.base.borrow().resolver.resolve_in_current(["fn"]).is_err()
+    }
 }
 
 impl co2_ast::Transformable<StatelessResolver> for LocalResolver {

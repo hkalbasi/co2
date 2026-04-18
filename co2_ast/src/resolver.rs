@@ -39,10 +39,29 @@ pub trait TypeResolver: Clone + 'static {
         &self,
         subscription: Spanned<LazySubscription>,
     ) -> Self::SubscriptionIdentifier;
+    fn rust_style_syntax_enabled(&self) -> bool;
 }
 
 #[derive(Debug, Clone)]
-pub struct StatelessResolver;
+pub struct StatelessResolver {
+    rust_style_enabled: bool,
+}
+
+impl StatelessResolver {
+    pub fn new() -> Self {
+        Self::with_rust_style_enabled(true)
+    }
+
+    fn with_rust_style_enabled(rust_style_enabled: bool) -> Self {
+        Self { rust_style_enabled }
+    }
+}
+
+impl Default for StatelessResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TypeResolver for StatelessResolver {
     type ResolvedRustPath = RustPath;
@@ -65,7 +84,22 @@ impl TypeResolver for StatelessResolver {
     }
 
     fn register_decl(&self, _decl: &Declaration<Self>) -> Self {
-        self.clone()
+        let mut rust_style_enabled = self.rust_style_enabled;
+        match _decl {
+            Declaration::FunctionDefinition { declarator, .. } => {
+                rust_style_enabled &= declarator
+                    .0
+                    .ident()
+                    .as_deref()
+                    != Some("fn");
+            }
+            Declaration::Declaration { declarators, .. } => {
+                rust_style_enabled &= declarators.iter().all(|decl| {
+                    decl.0.declarator.0.ident().as_deref() != Some("fn")
+                });
+            }
+        }
+        StatelessResolver::with_rust_style_enabled(rust_style_enabled)
     }
 
     fn start_new_scope(&self) -> Self {
@@ -99,5 +133,9 @@ impl TypeResolver for StatelessResolver {
         subscription: Spanned<LazySubscription>,
     ) -> Self::SubscriptionIdentifier {
         subscription.0
+    }
+
+    fn rust_style_syntax_enabled(&self) -> bool {
+        self.rust_style_enabled
     }
 }

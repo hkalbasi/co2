@@ -53,11 +53,17 @@ pub enum Statement<R: TypeResolver> {
         cond: Spanned<Expression<R>>,
     },
     For {
-        init: Option<Spanned<Expression<R>>>,
+        init: Option<ForInit<R>>,
         cond: Option<Spanned<Expression<R>>>,
         post: Option<Spanned<Expression<R>>>,
         body: Box<Spanned<Statement<R>>>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum ForInit<R: TypeResolver> {
+    Expression(Spanned<Expression<R>>),
+    Declaration(Spanned<Declaration<R>>),
 }
 
 #[derive(Debug, Clone)]
@@ -681,6 +687,7 @@ pub enum StatementOrDeclaration<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub enum Declaration<R: TypeResolver> {
     FunctionDefinition {
+        syntax: FunctionSyntax,
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<R>>>,
         declarator: Spanned<Declarator<R>>,
         body: Spanned<LazyCompoundStatement>,
@@ -689,6 +696,12 @@ pub enum Declaration<R: TypeResolver> {
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<R>>>,
         declarators: Vec<Spanned<InitDeclarator<R>>>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionSyntax {
+    C,
+    Rust,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -751,6 +764,7 @@ pub struct ParameterList<R: TypeResolver> {
         Spanned<Declarator<R>>,
     )>,
     pub ellipsis: bool,
+    pub empty_is_variadic: bool,
 }
 
 impl<R: TypeResolver> ParameterList<R> {
@@ -772,7 +786,7 @@ impl<R: TypeResolver> ParameterList<R> {
     }
 
     pub fn effective_ellipsis(&self) -> bool {
-        self.ellipsis || self.parameters.is_empty()
+        self.ellipsis || (self.empty_is_variadic && self.parameters.is_empty())
     }
 }
 

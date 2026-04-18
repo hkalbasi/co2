@@ -61,7 +61,7 @@ pub fn parse_items(
     filename: String,
     src: &'static str,
 ) -> Option<Spanned<TranslationUnit<StatelessResolver>>> {
-    parse_translation_unit(filename, src, StatelessResolver)
+    parse_translation_unit(filename, src, StatelessResolver::new())
 }
 
 pub fn parse_compound_statement<R: TypeResolver>(

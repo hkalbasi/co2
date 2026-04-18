@@ -1,9 +1,9 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use co2_ast::{
-    Declaration, DeclarationSpecifier, Designator, DoTransform as _, InitDeclarator,
-    StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit, TypeQualifier,
-    TypeResolver,
+    Declaration, DeclarationSpecifier, Designator, DoTransform as _, FunctionSyntax,
+    InitDeclarator, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit,
+    TypeQualifier, TypeResolver,
 };
 use co2_parser::parse_compound_statement;
 use rustc_public_generative::{
@@ -127,7 +127,8 @@ pub fn lower_crate_sig(
     let span = ctx.span_in_file(file_id, 0, 0);
     let deps = ctx.dependencies();
 
-    let tu = co2_parser::parse_translation_unit(source_name.clone(), src_static, StatelessResolver)
+    let tu =
+        co2_parser::parse_translation_unit(source_name.clone(), src_static, StatelessResolver::new())
         .expect("failed to parse co2 source")
         .0;
 
@@ -189,6 +190,7 @@ pub fn lower_crate_sig(
         let span = ctx.co2_span_to_rustc(parser_span);
         match item {
             Declaration::FunctionDefinition {
+                syntax,
                 declaration_specifiers,
                 declarator,
                 body,
@@ -203,7 +205,7 @@ pub fn lower_crate_sig(
                     .expect("failed to lower function signature");
 
                 let id = ctx.resolve_in_current([&*name]).unwrap().0;
-                if name == "main" && !no_main {
+                if matches!(syntax, FunctionSyntax::Rust) || (name == "main" && !no_main) {
                     sig.abi = FunctionAbi::Rust;
                 }
                 let function_name = name.clone();

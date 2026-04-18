@@ -4,6 +4,17 @@
 
 int write(int fd, char* buf, int len);
 
-void main(void) {
-    write(1, "co2\n", 4);
+fn fibo(n: i32) -> i32 {
+    i32 a = 0, b = 1;
+    for (i32 i = 0; i < n; i += 1) {
+        b = a + b;
+        a = b - a;
+    }
+    return b;
+}
+
+fn main() {
+    if (fibo(6) == 13) {
+        write(1, "co2\n", 4);
+    }
 }

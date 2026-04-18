@@ -190,7 +190,8 @@ where
             .then_ignore(just(Token::Semicolon));
         let empty_statement = just(Token::Semicolon).to(Statement::Empty);
 
-        let compound = compound_statement(resolver, stmt_rec.clone()).map(Statement::Compound);
+        let compound =
+            compound_statement(resolver.clone(), stmt_rec.clone()).map(Statement::Compound);
 
         let if_statement = just(Token::If)
             .ignore_then(
@@ -238,28 +239,50 @@ where
                 statement: Box::new(statement),
             });
 
-        let for_statement = just(Token::For)
-            .ignore_then(
-                expression_rec
-                    .clone()
-                    .or_not()
-                    .then_ignore(just(Token::Semicolon))
-                    .then(
-                        expression_rec
-                            .clone()
-                            .or_not()
-                            .then_ignore(just(Token::Semicolon)),
-                    )
-                    .then(expression_rec.clone().or_not())
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .then(stmt_rec.clone())
-            .map(|(((init, cond), post), body)| Statement::For {
-                init,
-                cond,
-                post,
-                body: Box::new(body),
-            });
+        let for_statement = just(Token::For).ignore_then(custom({
+            let resolver = resolver.clone();
+            let stmt_rec = stmt_rec.clone();
+            move |inp| {
+                inp.parse(just(Token::LParen))?;
+
+                let init_resolver = resolver.clone();
+                let (init, loop_resolver) = {
+                    let checkpoint = inp.save();
+                    if let Ok((decl, next_resolver)) =
+                        inp.parse(declaration(init_resolver.clone(), stmt_rec.clone()))
+                    {
+                        (Some(ForInit::Declaration(decl)), next_resolver)
+                    } else {
+                        inp.rewind(checkpoint);
+                        let expr = inp.parse(
+                            expression_rec
+                                .clone()
+                                .or_not()
+                                .then_ignore(just(Token::Semicolon)),
+                        )?;
+                        (
+                            expr.map(ForInit::Expression),
+                            init_resolver,
+                        )
+                    }
+                };
+
+                let loop_expr = expression(
+                    assignment_expression(loop_resolver.clone(), stmt_rec.clone()),
+                );
+                let cond = inp.parse(loop_expr.clone().or_not().then_ignore(just(Token::Semicolon)))?;
+                let post = inp.parse(loop_expr.or_not())?;
+                inp.parse(just(Token::RParen))?;
+                let body = inp.parse(statement(loop_resolver))?;
+
+                Ok(Statement::For {
+                    init,
+                    cond,
+                    post,
+                    body: Box::new(body),
+                })
+            }
+        }));
 
         choice((
             if_statement,
@@ -1331,8 +1354,116 @@ where
         .map(|(parameters, ellipsis)| ParameterList {
             parameters,
             ellipsis: ellipsis.is_some(),
+            empty_is_variadic: true,
         })
         .delimited_by(just(Token::LParen), just(Token::RParen))
+}
+
+fn rust_style_type_specifiers<'src, I, R: TypeResolver>(
+    resolver: R,
+) -> impl Parser<
+    'src,
+    I,
+    Vec<Spanned<DeclarationSpecifier<R>>>,
+    extra::Err<Rich<'src, Token, Span>>,
+> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    rust_path()
+        .map({
+            let resolver = resolver.clone();
+            move |path| (resolver.classify_path(&path.0), path.1)
+        })
+        .filter(|r| {
+            let Some(r) = &r.0 else { return false };
+            match r.0 {
+                TypeQueryResult::Expr => false,
+                TypeQueryResult::Unsure | TypeQueryResult::Type => true,
+            }
+        })
+        .map(|(resolved, span)| {
+            vec![(
+                DeclarationSpecifier::TypeSpecifier((
+                    TypeSpecifier::TypedefName((resolved.unwrap().1, span)),
+                    span,
+                )),
+                span,
+            )]
+        })
+}
+
+fn rust_style_function_definition<'src, I, R: TypeResolver>(
+    resolver: R,
+) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    let rust_param = identifier()
+        .then_ignore(just(Token::Colon))
+        .then(rust_style_type_specifiers(resolver.clone()))
+        .map({
+            let resolver = resolver.clone();
+            move |((name, name_span), declaration_specifiers)| {
+                let declarator = (
+                    Declarator::Identifier((resolver.register_ident(name), name_span)),
+                    name_span,
+                );
+                (declaration_specifiers, declarator)
+            }
+        });
+
+    let params = rust_param
+        .separated_by(just(Token::Comma))
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .map(|parameters| ParameterList {
+            parameters,
+            ellipsis: false,
+            empty_is_variadic: false,
+        });
+
+    let ret = just(Token::Arrow)
+        .ignore_then(rust_style_type_specifiers(resolver.clone()))
+        .or_not()
+        .map_with(|ret, e| {
+            ret.unwrap_or_else(|| {
+                vec![(
+                    DeclarationSpecifier::TypeSpecifier((TypeSpecifier::Void, e.span())),
+                    e.span(),
+                )]
+            })
+        });
+
+    just(Token::Ident("fn".to_owned()))
+        .ignore_then(identifier())
+        .then(params)
+        .then(ret)
+        .then(lazy_compound_statement())
+        .map({
+            let resolver = resolver.clone();
+            move |(((name, params), declaration_specifiers), body)| {
+                let name_span = name.1;
+                let declarator = (
+                    Declarator::FunctionDeclarator {
+                        declarator: Box::new((
+                            Declarator::Identifier((resolver.register_ident(name.0), name_span)),
+                            name_span,
+                        )),
+                        param_list: params,
+                    },
+                    name_span,
+                );
+                Declaration::FunctionDefinition {
+                    syntax: FunctionSyntax::Rust,
+                    declaration_specifiers,
+                    declarator,
+                    body,
+                }
+            }
+        })
 }
 
 fn declarator<'src, I, R: TypeResolver>(
@@ -1585,6 +1716,7 @@ where
     )
     .map(
         |(declaration_specifiers, (declarator, body))| Declaration::FunctionDefinition {
+            syntax: FunctionSyntax::C,
             declaration_specifiers,
             declarator,
             body,
@@ -1602,7 +1734,18 @@ where
         },
     );
 
-    choice((function, simple)).map_with(move |v, e| {
+    let parser = if resolver.rust_style_syntax_enabled() {
+        choice((
+            rust_style_function_definition(resolver.clone()),
+            function,
+            simple,
+        ))
+        .boxed()
+    } else {
+        choice((function, simple)).boxed()
+    };
+
+    parser.map_with(move |v, e| {
         let nr = resolver.register_decl(&v);
         ((v, e.span()), nr)
     })
@@ -1639,14 +1782,34 @@ where
         Empty,
     }
 
-    choice((
-        use_item().map(TranslationUnitItem::Use),
-        declaration(resolver.clone(), statement(resolver.clone()))
-            .map(|x| TranslationUnitItem::Declaration(x.0)),
-        just(Token::Semicolon).map(|_| TranslationUnitItem::Empty),
-    ))
-        .repeated()
-        .collect::<Vec<_>>()
+    custom(move |inp| {
+        let mut current_resolver = resolver.clone();
+        let mut items = Vec::new();
+
+        loop {
+            let checkpoint = inp.save();
+            if inp.next().is_none() {
+                inp.rewind(checkpoint);
+                break;
+            }
+            inp.rewind(checkpoint);
+
+            let item = if let Ok(item) = inp.parse(use_item()) {
+                TranslationUnitItem::Use(item)
+            } else if let Ok((decl, next_resolver)) =
+                inp.parse(declaration(current_resolver.clone(), statement(current_resolver.clone())))
+            {
+                current_resolver = next_resolver;
+                TranslationUnitItem::Declaration(decl)
+            } else {
+                inp.parse(just(Token::Semicolon))?;
+                TranslationUnitItem::Empty
+            };
+            items.push(item);
+        }
+
+        Ok(items)
+    })
         .map_with(|items, e| {
             let mut rust_use_items = Vec::new();
             let mut declarations = Vec::new();
@@ -1670,7 +1833,7 @@ where
 #[test]
 fn parser_is_constructible() {
     use chumsky::input::Input;
-    let parser = translation_unit(crate::StatelessResolver);
+    let parser = translation_unit(crate::StatelessResolver::new());
     parser.parse((&[]).map(
         SimpleSpan {
             start: 1,

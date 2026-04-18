@@ -90,9 +90,7 @@ impl ModuleData {
         for (item, _) in &ast.items {
             match item {
                 Declaration::FunctionDefinition {
-                    declaration_specifiers: _,
-                    declarator,
-                    body: _,
+                    declarator, ..
                 } => {
                     let Some(decl) = extract_decl_name(&declarator.0) else {
                         continue;
