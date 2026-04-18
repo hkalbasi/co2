@@ -28,6 +28,7 @@ extern crate rustc_public_bridge;
 extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_target;
+extern crate rustc_trait_selection;
 
 mod hir_structure;
 mod hir_ty;
@@ -152,6 +153,19 @@ impl HirStructureCtx<'_> {
 
     pub fn dependency_const_value(&self, def_id: DefId) -> Option<DependencyConstValue> {
         internal::dependency_const_value_for_def_id(self.tcx, def_id)
+    }
+
+    pub fn type_implements_trait(
+        &self,
+        owner: DefId,
+        ty: rustc_public::ty::Ty,
+        trait_def_id: DefId,
+    ) -> bool {
+        internal::type_implements_trait(self.tcx, owner, ty, trait_def_id)
+    }
+
+    pub fn type_is_copy(&self, owner: DefId, ty: rustc_public::ty::Ty) -> bool {
+        internal::type_is_copy(self.tcx, owner, ty)
     }
 
     pub fn erase_late_bound_regions_in_fn_sig(

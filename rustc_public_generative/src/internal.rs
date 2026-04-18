@@ -20,6 +20,7 @@ use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefIdMap};
 use rustc_hir::definitions::{DefPathData, Definitions, DisambiguatorState};
+use rustc_hir::lang_items::LangItem;
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
 use rustc_index::{Idx, IndexVec};
 use rustc_lint::Level;
@@ -32,6 +33,7 @@ use rustc_public::rustc_internal::internal;
 use rustc_session::config::EntryFnType;
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
+use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
 
 use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, StructField};
 use crate::hir_ty::HirTyConst;
@@ -1960,6 +1962,26 @@ pub(crate) fn dependency_const_value_for_def_id<'tcx>(
     def_id: DefId,
 ) -> Option<DependencyConstValue> {
     dependency_const_value(tcx, my_def_id_to_rustc_def_id(tcx, def_id))
+}
+
+pub(crate) fn type_implements_trait<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: DefId,
+    ty: MirTy,
+    trait_def_id: DefId,
+) -> bool {
+    let owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let trait_def_id = my_def_id_to_rustc_def_id(tcx, trait_def_id);
+    let ty = mir_ty_to_rustc(tcx, &ty);
+    let infcx = tcx.infer_ctxt().build(ty::TypingMode::non_body_analysis());
+    infcx
+        .type_implements_trait(trait_def_id, [ty], tcx.param_env(owner))
+        .must_apply_modulo_regions()
+}
+
+pub(crate) fn type_is_copy<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, ty: MirTy) -> bool {
+    let copy_trait = rustc_def_to_my_def(tcx, tcx.require_lang_item(LangItem::Copy, DUMMY_SP));
+    type_implements_trait(tcx, owner, ty, copy_trait)
 }
 
 fn override_queries<S: CrateGeneratorState>(

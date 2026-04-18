@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use co2_hir::{HirBody, LabelId, LocalId, WellknownDefs};
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
+    DefId,
     CrateDefType,
     mir::{Body, ConstOperand, LocalDecl as MirLocalDecl, Mutability},
     ty::{
@@ -14,6 +15,7 @@ use rustc_public_generative::rustc_public::{
 pub fn build_mir_for_body(
     body: &HirBody,
     ctx: &rustc_gen::HirStructureCtx,
+    owner: DefId,
     file_id: rustc_gen::FileId,
     wellknown_defs: WellknownDefs,
 ) -> Body {
@@ -32,6 +34,8 @@ pub fn build_mir_for_body(
     }
 
     let mut builder = Builder {
+        ctx,
+        owner,
         c_variadic_local: body.c_variadic_local.map(|l| local_indices[&l]),
         local_indices,
         locals,
@@ -61,7 +65,9 @@ pub fn build_mir_for_body(
     )
 }
 
-pub(crate) struct Builder {
+pub(crate) struct Builder<'ctx, 'tcx> {
+    pub(crate) ctx: &'ctx rustc_gen::HirStructureCtx<'tcx>,
+    pub(crate) owner: DefId,
     pub(crate) wellknown_defs: WellknownDefs,
     pub(crate) local_indices: HashMap<LocalId, usize>,
     pub(crate) locals: Vec<MirLocalDecl>,

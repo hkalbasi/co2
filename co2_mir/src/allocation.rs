@@ -26,7 +26,7 @@ fn is_maybe_uninit_fn_ptr_ty(ty: Ty) -> bool {
     matches!(inner.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
 }
 
-impl Builder {
+impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
     pub(crate) fn new_temp(&mut self, ty: Ty, mutability: Mutability, span: RustSpan) -> usize {
         let local = self.locals.len() + self.extra_locals.len();
         self.extra_locals.push(MirLocalDecl {

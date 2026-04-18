@@ -55,7 +55,7 @@ pub(crate) fn int_literal_bits(value: i128, target_ty: Ty) -> (UintTy, u128) {
     }
 }
 
-impl Builder {
+impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
     pub(crate) fn lower_bin_op(&self, op: HirBinOp) -> MirBinOp {
         match op {
             HirBinOp::Add => MirBinOp::Add,

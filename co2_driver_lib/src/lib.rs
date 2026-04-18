@@ -140,6 +140,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 co2_mir::build_mir_for_body(
                     &hir,
                     &ctx,
+                    def.0,
                     self.file_id,
                     self.wellknown_defs,
                 )
@@ -182,7 +183,7 @@ impl Co2GeneratorState {
 
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
 
-        co2_mir::build_mir_for_body(&hir, ctx, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(&hir, ctx, def, self.file_id, self.wellknown_defs)
     }
 
     fn lower_explicit_static_mir_with_array_len(
@@ -227,7 +228,7 @@ impl Co2GeneratorState {
             target_ty,
         );
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
-        co2_mir::build_mir_for_body(&hir, ctx, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(&hir, ctx, def, self.file_id, self.wellknown_defs)
     }
 
     fn build_enum_prev_plus_body(
@@ -259,7 +260,7 @@ impl Co2GeneratorState {
             span,
         )];
 
-        co2_mir::build_mir_for_body(&hir, ctx, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(&hir, ctx, prev, self.file_id, self.wellknown_defs)
     }
 }
 
