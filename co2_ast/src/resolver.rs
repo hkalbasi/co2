@@ -86,9 +86,8 @@ impl TypeResolver for StatelessResolver {
     fn register_decl(&self, _decl: &Declaration<Self>) -> Self {
         let mut rust_style_enabled = self.rust_style_enabled;
         match _decl {
-            Declaration::FunctionDefinition { declarator, .. } => {
-                rust_style_enabled &= declarator
-                    .0
+            Declaration::FunctionDefinition { signature, .. } => {
+                rust_style_enabled &= signature
                     .ident()
                     .as_deref()
                     != Some("fn");

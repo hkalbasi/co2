@@ -13,8 +13,17 @@ fn fibo(n: i32) -> i32 {
     return b;
 }
 
+fn fill_buf(buf: *mut u8) {
+    buf[0] = 'c';
+    buf[1] = 'o';
+    buf[2] = '2';
+    buf[3] = '\n';
+}
+
 fn main() {
     if (fibo(6) == 13) {
-        write(1, "co2\n", 4);
+        u8 ar[10] = {};
+        fill_buf(ar);
+        write(1, ar, 4);
     }
 }

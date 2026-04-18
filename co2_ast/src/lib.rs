@@ -687,9 +687,7 @@ pub enum StatementOrDeclaration<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub enum Declaration<R: TypeResolver> {
     FunctionDefinition {
-        syntax: FunctionSyntax,
-        declaration_specifiers: Vec<Spanned<DeclarationSpecifier<R>>>,
-        declarator: Spanned<Declarator<R>>,
+        signature: FunctionDefinitionSignature<R>,
         body: Spanned<LazyCompoundStatement>,
     },
     Declaration {
@@ -698,10 +696,79 @@ pub enum Declaration<R: TypeResolver> {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FunctionSyntax {
-    C,
-    Rust,
+#[derive(Debug, Clone)]
+pub enum FunctionDefinitionSignature<R: TypeResolver> {
+    C {
+        declaration_specifiers: Vec<Spanned<DeclarationSpecifier<R>>>,
+        declarator: Spanned<Declarator<R>>,
+    },
+    Rust(RustFunctionSignature<R>),
+}
+
+impl<R: TypeResolver> FunctionDefinitionSignature<R> {
+    pub fn ident(&self) -> Option<R::DeclarationIdent> {
+        match self {
+            FunctionDefinitionSignature::C { declarator, .. } => declarator.0.ident(),
+            FunctionDefinitionSignature::Rust(sig) => Some(sig.name.0.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RustFunctionSignature<R: TypeResolver> {
+    pub name: Spanned<R::DeclarationIdent>,
+    pub params: Vec<RustFunctionParam<R>>,
+    pub ret_ty: Spanned<RustTy<R>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RustFunctionParam<R: TypeResolver> {
+    pub name: Spanned<R::DeclarationIdent>,
+    pub ty: Spanned<RustTy<R>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RustTy<R: TypeResolver> {
+    Path(Spanned<R::ResolvedRustPath>),
+    Tuple(Vec<Spanned<RustTy<R>>>),
+    Ref {
+        mutable: bool,
+        inner: Box<Spanned<RustTy<R>>>,
+    },
+    Ptr {
+        mutable: bool,
+        inner: Box<Spanned<RustTy<R>>>,
+    },
+    Slice(Box<Spanned<RustTy<R>>>),
+    Array {
+        inner: Box<Spanned<RustTy<R>>>,
+        len: Spanned<LazyRustConstExpr>,
+    },
+    BareFn {
+        params: Vec<Spanned<RustTy<R>>>,
+        ret_ty: Box<Spanned<RustTy<R>>>,
+    },
+    Never,
+}
+
+#[derive(Debug, Clone)]
+pub struct LazyRustConstExpr {
+    pub tokens: Vec<Spanned<Token>>,
+}
+
+impl LazyRustConstExpr {
+    pub fn constant_len(&self) -> Option<u128> {
+        if let [(token, _)] = &self.tokens[..] {
+            match token {
+                Token::Integer(text, suffix) if matches!(suffix, IntegerSuffix::None) => {
+                    parse_unsigned_integer_constant(text).ok()
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

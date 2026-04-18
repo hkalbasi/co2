@@ -19,6 +19,7 @@ pub enum HirTyKind {
     Array(HirTyConst, Box<HirTy>),
     Ref(Mutability, HirLifetime, Box<HirTy>),
     FnPtr(Box<FunctionSignature>),
+    Never,
 }
 
 #[derive(Debug, Clone, Copy)]

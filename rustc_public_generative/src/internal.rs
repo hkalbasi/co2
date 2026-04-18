@@ -3328,6 +3328,16 @@ fn hir_ty_to_rustc<'tcx>(
             item_allocator.set_node(hir_id.local_id, hir::Node::Ty(ty), ItemLocalId::ZERO);
             *ty
         }
+        HirTyKind::Never => {
+            let hir_id = item_allocator.new_item();
+            let ty = leak(hir::Ty {
+                kind: hir::TyKind::Never,
+                span: DUMMY_SP,
+                hir_id,
+            });
+            item_allocator.set_node(hir_id.local_id, hir::Node::Ty(ty), ItemLocalId::ZERO);
+            *ty
+        }
     }
 }
 

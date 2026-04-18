@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use co2_ast::{
-    Declaration, DeclarationSpecifier, Designator, DoTransform as _, FunctionSyntax,
+    Declaration, DeclarationSpecifier, Designator, DoTransform as _, FunctionDefinitionSignature,
     InitDeclarator, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit,
     TypeQualifier, TypeResolver,
 };
@@ -56,8 +56,8 @@ fn deduplicate_tu_items(
 
     for (item, _) in &tu.items {
         match item {
-            Declaration::FunctionDefinition { declarator, .. } => {
-                let name = declarator.0.ident().unwrap();
+            Declaration::FunctionDefinition { signature, .. } => {
+                let name = signature.ident().unwrap();
                 name_to_important_def.insert(name, (tu_item_id, 3));
                 tu_item_id += 1;
             }
@@ -94,8 +94,8 @@ fn deduplicate_tu_items(
     tu_item_id = 0;
 
     tu.items.retain_mut(|item| match &mut item.0 {
-        Declaration::FunctionDefinition { declarator, .. } => {
-            let name = declarator.0.ident().unwrap();
+        Declaration::FunctionDefinition { signature, .. } => {
+            let name = signature.ident().unwrap();
             let is_needed = name_to_important_def[&name].0 == tu_item_id;
             tu_item_id += 1;
             is_needed
@@ -188,24 +188,35 @@ pub fn lower_crate_sig(
 
     for (item, parser_span) in tu.items {
         let span = ctx.co2_span_to_rustc(parser_span);
+        let mut resolver = LocalResolver::new(ctx.resolver.clone());
+        let item = item.transform(&resolver);
         match item {
             Declaration::FunctionDefinition {
-                syntax,
-                declaration_specifiers,
-                declarator,
+                signature,
                 body,
             } => {
-                let is_static = declaration_specifiers.iter().any(|spec| spec.0.is_static());
-                let mut resolver = LocalResolver::new(ctx.resolver.clone());
-                let transformed_specs = declaration_specifiers.transform(&resolver);
-                let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
-                let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
-                let (name, mut sig, param_names) = ctx
-                    .lower_function_signature(base, base_const, declarator.transform(&resolver))
-                    .expect("failed to lower function signature");
+                let (name, mut sig, param_names, is_static, syntax_is_rust) = match signature {
+                    FunctionDefinitionSignature::C {
+                        declaration_specifiers,
+                        declarator,
+                    } => {
+                        let is_static = declaration_specifiers.iter().any(|spec| spec.0.is_static());
+                        let transformed_specs = declaration_specifiers;
+                        let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
+                        let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
+                        let (name, sig, param_names) = ctx
+                            .lower_function_signature(base, base_const, declarator)
+                            .expect("failed to lower function signature");
+                        (name, sig, param_names, is_static, false)
+                    }
+                    FunctionDefinitionSignature::Rust(sig) => {
+                        let (name, lower_sig, param_names) = ctx.lower_rust_function_signature(sig);
+                        (name, lower_sig, param_names, false, true)
+                    }
+                };
 
                 let id = ctx.resolve_in_current([&*name]).unwrap().0;
-                if matches!(syntax, FunctionSyntax::Rust) || (name == "main" && !no_main) {
+                if syntax_is_rust || (name == "main" && !no_main) {
                     sig.abi = FunctionAbi::Rust;
                 }
                 let function_name = name.clone();
@@ -271,8 +282,7 @@ pub fn lower_crate_sig(
                     }
                 }
 
-                let resolver = LocalResolver::new(ctx.resolver.clone());
-                let transformed_specs = cleaned_specs.transform(&resolver);
+                let transformed_specs = cleaned_specs;
                 let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
                 let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
 
@@ -281,7 +291,6 @@ pub fn lower_crate_sig(
                         declarator,
                         initializer,
                     } = init.0;
-                    let declarator = declarator.transform(&resolver);
 
                     let (name, ty, array_len) =
                         ctx.lower_value_decl_ctype(base.clone(), base_const, declarator, &resolver);
@@ -328,9 +337,7 @@ pub fn lower_crate_sig(
                     match ty {
                         CTy::Ty(ty) => {
                             let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
-                            if let Some((initializer, span)) = initializer {
-                                let initializer = initializer.transform(&resolver);
-                                let initializer = (initializer, span);
+                            if let Some(initializer) = initializer {
                                 ctx.mir_owners.insert(
                                     id,
                                     match array_len {
@@ -364,8 +371,7 @@ pub fn lower_crate_sig(
                         }
                         CTy::UnsizedArray(elem_ty) => {
                             let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
-                            if let Some((initializer, init_span)) = initializer {
-                                let initializer = (initializer.transform(&resolver), init_span);
+                            if let Some(initializer) = initializer {
                                 ctx.mir_owners.insert(
                                     id,
                                     MirOwnerInfo::Static {

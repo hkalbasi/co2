@@ -89,10 +89,8 @@ impl ModuleData {
         }
         for (item, _) in &ast.items {
             match item {
-                Declaration::FunctionDefinition {
-                    declarator, ..
-                } => {
-                    let Some(decl) = extract_decl_name(&declarator.0) else {
+                Declaration::FunctionDefinition { signature, .. } => {
+                    let Some(decl) = signature.ident() else {
                         continue;
                     };
                     let def_id = ctx.allocate_def_id(parent, DefData::ValueNs(decl.clone()));

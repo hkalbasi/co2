@@ -356,6 +356,81 @@ impl CrateSigCtx<'_> {
         }
     }
 
+    pub(crate) fn lower_rust_function_signature(
+        &mut self,
+        sig: co2_ast::RustFunctionSignature<LocalResolver>,
+    ) -> (String, FunctionSignature, Vec<String>) {
+        let name = sig.name.0.1;
+        let output = self.lower_rust_ty(sig.ret_ty);
+        let mut inputs = Vec::new();
+        let mut param_names = Vec::new();
+        for param in sig.params {
+            inputs.push(self.lower_rust_ty(param.ty));
+            param_names.push(param.name.0.1);
+        }
+        (
+            name,
+            FunctionSignature {
+                lifetimes: vec![],
+                inputs,
+                output,
+                abi: FunctionAbi::Rust,
+                is_unsafe: false,
+                c_variadic: false,
+            },
+            param_names,
+        )
+    }
+
+    pub(crate) fn lower_rust_ty(
+        &mut self,
+        (ty, span): co2_ast::Spanned<co2_ast::RustTy<LocalResolver>>,
+    ) -> HirTy {
+        let rust_span = self.co2_span_to_rustc(span);
+        match ty {
+            co2_ast::RustTy::Path((path, _)) => {
+                self.resolver
+                    .borrow_mut()
+                    .hir_ty_of_resolved_path(&path, rust_span)
+            }
+            co2_ast::RustTy::Ptr { mutable, inner } => {
+                let inner = self.lower_rust_ty(*inner);
+                HirTy::new_ptr(
+                    inner,
+                    if mutable {
+                        Mutability::Mut
+                    } else {
+                        Mutability::Not
+                    },
+                    rust_span,
+                )
+            }
+            co2_ast::RustTy::Ref { mutable, inner } => {
+                let inner = self.lower_rust_ty(*inner);
+                // FIXME: lifetime
+                HirTy::new_ref(
+                    inner,
+                    if mutable {
+                        Mutability::Mut
+                    } else {
+                        Mutability::Not
+                    },
+                    rustc_public_generative::HirLifetime::Static,
+                    rust_span,
+                )
+            }
+            co2_ast::RustTy::Tuple(elems) => {
+                let elems = elems.into_iter().map(|e| self.lower_rust_ty(e)).collect();
+                HirTy::new_tuple(elems, rust_span)
+            }
+            co2_ast::RustTy::Never => HirTy {
+                kind: HirTyKind::Never,
+                span: rust_span,
+            },
+            _ => todo!("lower other rust types"),
+        }
+    }
+
     pub(crate) fn eval_array_len_expr(
         &mut self,
         expr: &Spanned<Expression<LocalResolver>>,

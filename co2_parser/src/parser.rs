@@ -1298,6 +1298,22 @@ where
     .map_with(|r, e| (r, e.span()))
 }
 
+fn fn_token<'src, I>() -> impl Parser<'src, I, (), extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    select! { Token::Ident(s) if s == "fn" => () }.labelled("fn")
+}
+
+fn mut_token<'src, I>() -> impl Parser<'src, I, (), extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    select! { Token::Ident(s) if s == "mut" => () }.labelled("mut")
+}
+
 fn identifier<'src, I>()
 -> impl Parser<'src, I, Spanned<String>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -1394,6 +1410,94 @@ where
         })
 }
 
+fn rust_ty<'src, I, R: TypeResolver>(
+    resolver: R,
+) -> impl Parser<'src, I, Spanned<RustTy<R>>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    recursive(|rec| {
+        let path = rust_path()
+            .map({
+                let resolver = resolver.clone();
+                move |path| (resolver.classify_path(&path.0), path.1)
+            })
+            .filter(|r| {
+                let Some(r) = &r.0 else { return false };
+                match r.0 {
+                    TypeQueryResult::Expr => false,
+                    TypeQueryResult::Unsure | TypeQueryResult::Type => true,
+                }
+            })
+            .map(|(resolved, span)| (RustTy::Path((resolved.unwrap().1, span)), span));
+
+        let ptr = just(Token::Star)
+            .ignore_then(choice((
+                just(Token::Const).to(false),
+                mut_token().to(true),
+            )))
+            .then(rec.clone())
+            .map(|(mutable, inner)| RustTy::Ptr {
+                mutable: mutable,
+                inner: Box::new(inner),
+            })
+            .map_with(|r, e| (r, e.span()));
+
+        let reference = just(Token::Amp)
+            .ignore_then(mut_token().to(true).or_not().map(|m| m.is_some()))
+            .then(rec.clone())
+            .map(|(mutable, inner)| RustTy::Ref {
+                mutable,
+                inner: Box::new(inner),
+            })
+            .map_with(|r, e| (r, e.span()));
+
+        let never = just(Token::Bang)
+            .to(RustTy::Never)
+            .map_with(|r, e| (r, e.span()));
+
+        let tuple = rec
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(RustTy::Tuple)
+            .map_with(|r, e| (r, e.span()));
+
+        let slice_or_array = rec
+            .clone()
+            .then(
+                just(Token::Semicolon)
+                    .ignore_then(
+                        any()
+                            .filter(|t| !matches!(t, Token::RBracket))
+                            .map_with(|t, e| (t, e.span()))
+                            .repeated()
+                            .collect()
+                            .map(|tokens| LazyRustConstExpr { tokens }),
+                    )
+                    .map_with(|r, e| (r, e.span()))
+                    .or_not(),
+            )
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(|(inner, len)| {
+                if let Some(len) = len {
+                    RustTy::Array {
+                        inner: Box::new(inner),
+                        len,
+                    }
+                } else {
+                    RustTy::Slice(Box::new(inner))
+                }
+            })
+            .map_with(|r, e| (r, e.span()));
+
+        choice((path, ptr, reference, never, tuple, slice_or_array))
+    })
+}
+
 fn rust_style_function_definition<'src, I, R: TypeResolver>(
     resolver: R,
 ) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
@@ -1403,63 +1507,41 @@ where
 {
     let rust_param = identifier()
         .then_ignore(just(Token::Colon))
-        .then(rust_style_type_specifiers(resolver.clone()))
+        .then(rust_ty(resolver.clone()))
         .map({
             let resolver = resolver.clone();
-            move |((name, name_span), declaration_specifiers)| {
-                let declarator = (
-                    Declarator::Identifier((resolver.register_ident(name), name_span)),
-                    name_span,
-                );
-                (declaration_specifiers, declarator)
+            move |(name, ty)| RustFunctionParam {
+                name: (resolver.register_ident(name.0), name.1),
+                ty,
             }
         });
 
     let params = rust_param
         .separated_by(just(Token::Comma))
+        .allow_trailing()
         .collect::<Vec<_>>()
-        .delimited_by(just(Token::LParen), just(Token::RParen))
-        .map(|parameters| ParameterList {
-            parameters,
-            ellipsis: false,
-            empty_is_variadic: false,
-        });
+        .delimited_by(just(Token::LParen), just(Token::RParen));
 
     let ret = just(Token::Arrow)
-        .ignore_then(rust_style_type_specifiers(resolver.clone()))
+        .ignore_then(rust_ty(resolver.clone()))
         .or_not()
-        .map_with(|ret, e| {
-            ret.unwrap_or_else(|| {
-                vec![(
-                    DeclarationSpecifier::TypeSpecifier((TypeSpecifier::Void, e.span())),
-                    e.span(),
-                )]
-            })
-        });
+        .map_with(|ret, e| ret.unwrap_or_else(|| (RustTy::Tuple(vec![]), e.span())));
 
-    just(Token::Ident("fn".to_owned()))
+    fn_token()
         .ignore_then(identifier())
         .then(params)
         .then(ret)
         .then(lazy_compound_statement())
         .map({
             let resolver = resolver.clone();
-            move |(((name, params), declaration_specifiers), body)| {
+            move |(((name, params), ret_ty), body)| {
                 let name_span = name.1;
-                let declarator = (
-                    Declarator::FunctionDeclarator {
-                        declarator: Box::new((
-                            Declarator::Identifier((resolver.register_ident(name.0), name_span)),
-                            name_span,
-                        )),
-                        param_list: params,
-                    },
-                    name_span,
-                );
                 Declaration::FunctionDefinition {
-                    syntax: FunctionSyntax::Rust,
-                    declaration_specifiers,
-                    declarator,
+                    signature: FunctionDefinitionSignature::Rust(RustFunctionSignature {
+                        name: (resolver.register_ident(name.0), name_span),
+                        params,
+                        ret_ty,
+                    }),
                     body,
                 }
             }
@@ -1716,9 +1798,10 @@ where
     )
     .map(
         |(declaration_specifiers, (declarator, body))| Declaration::FunctionDefinition {
-            syntax: FunctionSyntax::C,
-            declaration_specifiers,
-            declarator,
+            signature: FunctionDefinitionSignature::C {
+                declaration_specifiers,
+                declarator,
+            },
             body,
         },
     );

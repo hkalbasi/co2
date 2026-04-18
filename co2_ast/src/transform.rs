@@ -1,6 +1,8 @@
 use crate::{
-    DeclarationSpecifier, Declarator, Designator, EnumSpecifier, Enumerator, Expression,
-    GenericAssociation, Initializer, InitializerItem, ParameterList, Spanned, SpecifierQualifier,
+    Declaration, DeclarationSpecifier, Declarator, Designator, EnumSpecifier, Enumerator,
+    Expression, FunctionDefinitionSignature, GenericAssociation, InitDeclarator, Initializer,
+    InitializerItem, ParameterList, RustFunctionParam, RustFunctionSignature, RustTy, Spanned,
+ SpecifierQualifier,
     StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeName,
     TypeResolver, TypeSpecifier,
 };
@@ -456,6 +458,120 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
             | Expression::VaStart { .. }
             | Expression::VaEnd { .. }
             | Expression::GnuStatementExpr { .. } => todo!(),
+        }
+    }
+}
+
+impl<A: TypeResolver> DoTransform for RustFunctionSignature<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = RustFunctionSignature<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> RustFunctionSignature<B> {
+        RustFunctionSignature {
+            name: (B::transform_decl_ident(&self.name.0), self.name.1),
+            params: self.params.transform(b),
+            ret_ty: self.ret_ty.transform(b),
+        }
+    }
+}
+
+impl<A: TypeResolver> DoTransform for RustFunctionParam<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = RustFunctionParam<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> RustFunctionParam<B> {
+        RustFunctionParam {
+            name: (B::transform_decl_ident(&self.name.0), self.name.1),
+            ty: self.ty.transform(b),
+        }
+    }
+}
+
+impl<A: TypeResolver> DoTransform for RustTy<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = RustTy<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> RustTy<B> {
+        match self {
+            RustTy::Path(path) => RustTy::Path(b.transform_path(path)),
+            RustTy::Tuple(elems) => RustTy::Tuple(elems.transform(b)),
+            RustTy::Ref { mutable, inner } => RustTy::Ref {
+                mutable: *mutable,
+                inner: inner.transform(b),
+            },
+            RustTy::Ptr { mutable, inner } => RustTy::Ptr {
+                mutable: *mutable,
+                inner: inner.transform(b),
+            },
+            RustTy::Slice(inner) => RustTy::Slice(inner.transform(b)),
+            RustTy::Array { inner, len } => RustTy::Array {
+                inner: inner.transform(b),
+                len: len.clone(),
+            },
+            RustTy::BareFn { params, ret_ty } => RustTy::BareFn {
+                params: params.transform(b),
+                ret_ty: ret_ty.transform(b),
+            },
+            RustTy::Never => RustTy::Never,
+        }
+    }
+}
+
+impl<A: TypeResolver> DoTransform for FunctionDefinitionSignature<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = FunctionDefinitionSignature<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> FunctionDefinitionSignature<B> {
+        match self {
+            FunctionDefinitionSignature::C {
+                declaration_specifiers,
+                declarator,
+            } => FunctionDefinitionSignature::C {
+                declaration_specifiers: declaration_specifiers.transform(b),
+                declarator: declarator.transform(b),
+            },
+            FunctionDefinitionSignature::Rust(sig) => {
+                FunctionDefinitionSignature::Rust(sig.transform(b))
+            }
+        }
+    }
+}
+
+impl<A: TypeResolver> DoTransform for Declaration<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = Declaration<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> Declaration<B> {
+        match self {
+            Declaration::FunctionDefinition { signature, body } => {
+                Declaration::FunctionDefinition {
+                    signature: signature.transform(b),
+                    body: body.clone(),
+                }
+            }
+            Declaration::Declaration {
+                declaration_specifiers,
+                declarators,
+            } => Declaration::Declaration {
+                declaration_specifiers: declaration_specifiers.transform(b),
+                declarators: declarators.transform(b),
+            },
+        }
+    }
+}
+
+impl<A: TypeResolver> DoTransform for InitDeclarator<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = InitDeclarator<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> InitDeclarator<B> {
+        let InitDeclarator {
+            declarator,
+            initializer,
+        } = self;
+        InitDeclarator {
+            declarator: declarator.transform(b),
+            initializer: initializer.transform(b),
         }
     }
 }
