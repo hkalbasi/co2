@@ -189,11 +189,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
-name = "co2"
+name = "co2-multicall"
 version = "0.1.0"
 dependencies = [
- "co2_driver_lib",
- "itertools",
+ "co2cc",
+ "co2rustc",
 ]
 
 [[package]]
@@ -266,10 +266,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "co2c"
+name = "co2cc"
 version = "0.1.0"
 dependencies = [
  "co2_driver_lib",
+]
+
+[[package]]
+name = "co2rustc"
+version = "0.1.0"
+dependencies = [
+ "co2_driver_lib",
+ "itertools",
 ]
 
 [[package]]

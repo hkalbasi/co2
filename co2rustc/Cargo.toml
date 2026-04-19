@@ -1,11 +1,7 @@
 [package]
-name = "co2"
+name = "co2rustc"
 version = "0.1.0"
 edition = "2024"
-
-[[bin]]
-name = "co2"
-path = "src/main.rs"
 
 [dependencies]
 co2_driver_lib = { path = "../co2_driver_lib" }

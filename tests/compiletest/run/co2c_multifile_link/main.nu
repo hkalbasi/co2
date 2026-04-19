@@ -1,8 +1,8 @@
 #@ run-status: 0
 
-let compile = (do { ^co2c -lm sqlite3.c shell.c -o app } | complete)
+let compile = (do { ^co2cc -lm sqlite3.c shell.c -o app } | complete)
 if $compile.exit_code != 0 {
-    print $"co2c failed: ($compile.stderr)"
+    print $"co2cc failed: ($compile.stderr)"
     exit 1
 }
 

@@ -1,0 +1,12 @@
+[package]
+name = "co2-multicall"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "co2-multicall"
+path = "src/main.rs"
+
+[dependencies]
+co2rustc = { path = "../co2rustc" }
+co2cc = { path = "../co2cc" }

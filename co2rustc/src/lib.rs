@@ -10,9 +10,11 @@ mod detect;
 use co2_driver_lib::{CompileMode, compile_co2_file};
 use detect::{DetectResult, detect_co2};
 
-fn main() -> std::process::ExitCode {
-    let args: Vec<String> = std::env::args().collect();
+pub fn main() -> std::process::ExitCode {
+    main_with_args(std::env::args().collect())
+}
 
+pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     let co2_file = match detect_co2(&args) {
         DetectResult::Continue(exit_code) => {
             return exit_code;
@@ -24,11 +26,11 @@ fn main() -> std::process::ExitCode {
         std::panic::catch_unwind(|| compile_co2_file(CompileMode::RUST, &co2_file))
     {
         if let Some(msg) = payload.downcast_ref::<String>() {
-            eprintln!("co2 panic: {msg}");
+            eprintln!("co2rustc panic: {msg}");
         } else if let Some(msg) = payload.downcast_ref::<&str>() {
-            eprintln!("co2 panic: {msg}");
+            eprintln!("co2rustc panic: {msg}");
         } else {
-            eprintln!("co2 panic: non-string payload");
+            eprintln!("co2rustc panic: non-string payload");
         }
         return std::process::ExitCode::from(101);
     }

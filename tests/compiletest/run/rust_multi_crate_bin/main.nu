@@ -12,7 +12,7 @@ let lib_shim = ($test_dir | path join "support_lib.rs")
 ' | save -f $lib_shim
 
 let compile_lib = (do {
-    ^co2 $lib_shim --crate-type=lib --crate-name support_lib --edition=2024 -o $lib_rlib
+    ^co2rustc $lib_shim --crate-type=lib --crate-name support_lib --edition=2024 -o $lib_rlib
 } | complete)
 if $compile_lib.exit_code != 0 {
     print $"support_lib compile failed: ($compile_lib.stderr)"
@@ -20,7 +20,7 @@ if $compile_lib.exit_code != 0 {
 }
 
 let compile_bin = (do {
-    ^co2 --edition=2024 ($test_dir | path join "main.rs") -o $app --extern $"support_lib=($lib_rlib)"
+    ^co2rustc --edition=2024 ($test_dir | path join "main.rs") -o $app --extern $"support_lib=($lib_rlib)"
 } | complete)
 if $compile_bin.exit_code != 0 {
     print $"main compile failed: ($compile_bin.stderr)"

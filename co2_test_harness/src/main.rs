@@ -137,13 +137,64 @@ fn workspace_root() -> Result<PathBuf> {
 fn build_compilers(root: &Path) -> Result<()> {
     let status = Command::new("cargo")
         .current_dir(root)
-        .args(["build", "-q", "--locked", "-p", "co2", "-p", "co2c"])
+        .args(["build", "-q", "--locked", "-p", "co2-multicall"])
         .status()
-        .context("failed to run cargo build for co2/co2c")?;
+        .context("failed to run cargo build for co2-multicall")?;
     if !status.success() {
-        bail!("building co2/co2c failed with status {status}");
+        bail!("building co2-multicall failed with status {status}");
+    }
+    ensure_compiler_links(&root.join("target").join("debug"))?;
+    Ok(())
+}
+
+fn ensure_compiler_links(bin_dir: &Path) -> Result<()> {
+    let multicall = bin_dir.join(exe_name("co2-multicall"));
+    for applet in ["co2rustc", "co2cc"] {
+        ensure_link(&multicall, &bin_dir.join(exe_name(applet)))?;
     }
     Ok(())
+}
+
+fn exe_name(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
+fn ensure_link(source: &Path, target: &Path) -> Result<()> {
+    if let Ok(existing) = fs::read_link(target) {
+        if existing == source || existing == Path::new(source.file_name().unwrap_or_default()) {
+            return Ok(());
+        }
+    }
+
+    if target.exists() || fs::symlink_metadata(target).is_ok() {
+        let metadata = fs::symlink_metadata(target)
+            .with_context(|| format!("failed to stat existing {}", target.display()))?;
+        if metadata.file_type().is_dir() {
+            bail!("refusing to replace directory {}", target.display());
+        }
+        fs::remove_file(target)
+            .with_context(|| format!("failed to remove existing {}", target.display()))?;
+    }
+
+    create_symlink_or_copy(source, target)
+}
+
+#[cfg(unix)]
+fn create_symlink_or_copy(source: &Path, target: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(source, target).or_else(|_| {
+        fs::copy(source, target)
+            .with_context(|| format!("failed to copy {} to {}", source.display(), target.display()))
+            .map(|_| ())
+    })
+}
+
+#[cfg(windows)]
+fn create_symlink_or_copy(source: &Path, target: &Path) -> Result<()> {
+    std::os::windows::fs::symlink_file(source, target).or_else(|_| {
+        fs::copy(source, target)
+            .with_context(|| format!("failed to copy {} to {}", source.display(), target.display()))
+            .map(|_| ())
+    })
 }
 
 fn run_suite(root: &Path, suite: Suite, filter: Option<&str>, stats: &mut Stats) -> Result<()> {
@@ -285,9 +336,9 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
             let c_src = temp_path.join(test.path.file_name().context("missing C test filename")?);
             fs::copy(&test.path, &c_src).context("failed to copy C test source")?;
 
-            let mut cmd = Command::new(root.join("target").join("debug").join("co2c"));
+            let mut cmd = Command::new(root.join("target").join("debug").join("co2cc"));
             cmd.arg(&c_src).arg("-o").arg(&exe_path).args(compile_flags);
-            cmd.output().context("failed to execute co2c")?
+            cmd.output().context("failed to execute co2cc")?
         }
         Mode::Co2 => {
             let co2_src = temp_path.join(format!("{name}.co2"));
@@ -300,14 +351,14 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
             )
             .context("failed to write co2 shim rust file")?;
 
-            let mut cmd = Command::new(root.join("target").join("debug").join("co2"));
+            let mut cmd = Command::new(root.join("target").join("debug").join("co2rustc"));
             cmd.arg(&shim)
                 .arg("--crate-type=bin")
                 .arg("--edition=2024")
                 .arg("-o")
                 .arg(&exe_path)
                 .args(compile_flags);
-            cmd.output().context("failed to execute co2")?
+            cmd.output().context("failed to execute co2rustc")?
         }
         Mode::Rust => {
             let rust_src = temp_path.join(
@@ -317,14 +368,14 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
             );
             fs::copy(&test.path, &rust_src).context("failed to copy Rust test source")?;
 
-            let mut cmd = Command::new(root.join("target").join("debug").join("co2"));
+            let mut cmd = Command::new(root.join("target").join("debug").join("co2rustc"));
             cmd.arg("--edition=2024")
                 .arg(&rust_src)
                 .arg("-o")
                 .arg(&exe_path)
                 .args(compile_flags);
             cmd.output()
-                .context("failed to execute co2 for Rust test")?
+                .context("failed to execute co2rustc for Rust test")?
         }
     };
 

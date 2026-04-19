@@ -15,23 +15,31 @@ struct CcArgs {
     linker_args: Vec<String>,
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let cc_args = parse_args(&args).unwrap_or_else(|msg| {
-        eprintln!("co2c: {msg}");
-        std::process::exit(2);
-    });
+pub fn main() -> std::process::ExitCode {
+    main_with_args(std::env::args().collect())
+}
+
+pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
+    let cc_args = match parse_args(&args) {
+        Ok(args) => args,
+        Err(msg) => {
+            eprintln!("co2cc: {msg}");
+            return std::process::ExitCode::from(2);
+        }
+    };
 
     if let Err(payload) = std::panic::catch_unwind(|| run_co2c(cc_args)) {
         if let Some(msg) = payload.downcast_ref::<String>() {
-            eprintln!("co2c panic: {msg}");
+            eprintln!("co2cc panic: {msg}");
         } else if let Some(msg) = payload.downcast_ref::<&str>() {
-            eprintln!("co2c panic: {msg}");
+            eprintln!("co2cc panic: {msg}");
         } else {
-            eprintln!("co2c panic: non-string payload");
+            eprintln!("co2cc panic: non-string payload");
         }
-        std::process::exit(101);
+        return std::process::ExitCode::from(101);
     }
+
+    std::process::ExitCode::SUCCESS
 }
 
 fn run_co2c(args: CcArgs) {
@@ -473,7 +481,9 @@ fn shared_rust_flags() -> Vec<String> {
 }
 
 fn compile_c_to_object(input: &Path, output: &Path, cpp_args: &[String]) {
-    let exe = std::env::current_exe().expect("failed to locate co2c executable");
+    let exe = current_invocation_path()
+        .or_else(|| std::env::current_exe().ok())
+        .expect("failed to locate co2c executable");
     let mut cmd = Command::new(exe);
     cmd.arg("--co2c-emit-obj")
         .arg(input)
@@ -487,6 +497,10 @@ fn compile_c_to_object(input: &Path, output: &Path, cpp_args: &[String]) {
     if !status.success() {
         panic!("co2c object compile failed with status {status}");
     }
+}
+
+fn current_invocation_path() -> Option<PathBuf> {
+    std::env::args_os().next().map(PathBuf::from)
 }
 
 fn link_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Path>) {
