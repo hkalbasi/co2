@@ -5,7 +5,7 @@ use co2_ast::{
     Statement, StatementOrDeclaration,
     UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
-use co2_crate_sig::LocalResolver;
+use co2_crate_sig::{LocalResolver, MethodResolutionKind};
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem,
@@ -380,6 +380,15 @@ fn receiver_generic_args(ty: Ty) -> Vec<GenericArgKind> {
     }
 }
 
+fn trait_method_self_ty(ty: Ty) -> Ty {
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
+            trait_method_self_ty(inner)
+        }
+        _ => ty,
+    }
+}
+
 impl HirCtx<'_> {
     fn method_receiver_arg(&self, receiver: HirExpr, expected_ty: Ty) -> HirExpr {
         match expected_ty.kind() {
@@ -402,9 +411,15 @@ impl HirCtx<'_> {
     fn specialize_fn_sig_from_receiver(
         &self,
         fn_def: rustc_public_generative::rustc_public::ty::FnDef,
+        fn_generic_args: &[GenericArgKind],
         receiver_ty: Ty,
     ) -> Option<rustc_public_generative::rustc_public::ty::FnSig> {
-        let sig = callable_sig(fn_def.ty())?;
+        let fn_ty = if fn_generic_args.is_empty() {
+            fn_def.ty()
+        } else {
+            Ty::from_rigid_kind(RigidTy::FnDef(fn_def, GenericArgs(fn_generic_args.to_vec())))
+        };
+        let sig = callable_sig(fn_ty)?;
         let mut sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
         let mut by_index = BTreeMap::new();
         if let Some(first_input) = sig.inputs().first() {
@@ -503,18 +518,26 @@ impl HirCtx<'_> {
             _ => return Ok(None),
         };
 
-        let (method_def, class) = match resolver.resolve_method(receiver.ty, method_name) {
-            Ok(found) => found,
-            Err(_) => return Ok(None),
+        let (method_def, class, resolution_kind) = match resolver.resolve_method(receiver.ty, method_name) {
+            Ok(Some(found)) => found,
+            Ok(None) => return Ok(None),
+            Err(err) => return Err(err),
         };
         if class != co2_ast::TypeQueryResult::Expr {
             return Ok(None);
         }
         let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
-        let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, receiver.ty) else {
+        let resolved_generic_args = match resolution_kind {
+            MethodResolutionKind::Inherent => receiver_generic_args(receiver.ty),
+            MethodResolutionKind::Trait => vec![GenericArgKind::Type(trait_method_self_ty(receiver.ty))],
+        };
+        let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver.ty) else {
             return Ok(None);
         };
-        let resolved = ResolvedValue::Fn(fn_def, receiver_generic_args(receiver.ty));
+        let resolved = match resolution_kind {
+            MethodResolutionKind::Inherent => ResolvedValue::Fn(fn_def, resolved_generic_args),
+            MethodResolutionKind::Trait => ResolvedValue::Fn(fn_def, resolved_generic_args),
+        };
         let func_ty = resolved.ty();
 
         let mut lowered_args = Vec::with_capacity(params.len() + 1);
@@ -577,31 +600,62 @@ impl HirCtx<'_> {
                 self.to_rust_span(parser_span),
             )
         };
-        let (method_def, class) = match resolver.resolve_method(receiver_ty, method_name) {
-            Ok(found) => found,
-            Err(_) => return Ok(None),
+        let (method_def, class, resolution_kind) = match resolver.resolve_method(receiver_ty, method_name) {
+            Ok(Some(found)) => found,
+            Ok(None) => return Ok(None),
+            Err(err) => return Err(err),
         };
         if class != co2_ast::TypeQueryResult::Expr {
             return Ok(None);
         }
 
         let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
-        let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, receiver_ty) else {
+        let resolved_generic_args = match resolution_kind {
+            MethodResolutionKind::Inherent => {
+                let receiver_args = receiver_generic_args(receiver_ty);
+                let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, &receiver_args, receiver_ty) else {
+                    return Ok(None);
+                };
+                let output_args = receiver_generic_args(sig.output());
+                let resolved_generic_args = if output_args.len() > receiver_args.len()
+                    && output_args.iter().zip(receiver_args.iter()).all(|(o, r)| o == r)
+                {
+                    output_args
+                } else {
+                    receiver_args
+                };
+                let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver_ty) else {
+                    return Ok(None);
+                };
+                return Ok(Some((
+                    HirExpr {
+                        kind: HirExprKind::Path(ResolvedValue::Fn(fn_def, resolved_generic_args.clone())),
+                        ty: ResolvedValue::Fn(fn_def, resolved_generic_args).ty(),
+                        span: self.to_rust_span(parser_span),
+                    },
+                    sig,
+                    {
+                        let mut lowered_args = Vec::with_capacity(params.len());
+                        for param in params {
+                            let mut arg =
+                                self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
+                            self.array_to_pointer_decay_if_array(&mut arg);
+                            lowered_args.push(arg);
+                        }
+                        lowered_args
+                    },
+                )));
+            }
+            MethodResolutionKind::Trait => vec![GenericArgKind::Type(trait_method_self_ty(receiver_ty))],
+        };
+        let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver_ty) else {
             return Ok(None);
         };
-        let resolved_generic_args = {
-            let receiver_args = receiver_generic_args(receiver_ty);
-            let output_args = receiver_generic_args(sig.output());
-            if output_args.len() > receiver_args.len()
-                && output_args.iter().zip(receiver_args.iter()).all(|(o, r)| o == r)
-            {
-                output_args
-            } else {
-                receiver_args
-            }
+        let resolved = match resolution_kind {
+            MethodResolutionKind::Inherent => ResolvedValue::Fn(fn_def, resolved_generic_args),
+            MethodResolutionKind::Trait => ResolvedValue::Fn(fn_def, resolved_generic_args),
         };
-        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args);
-        let func_ty = fn_def.ty();
+        let func_ty = resolved.ty();
 
         let mut lowered_args = Vec::with_capacity(params.len());
         for param in params {

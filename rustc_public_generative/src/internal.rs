@@ -1984,6 +1984,44 @@ pub(crate) fn type_is_copy<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, ty: MirTy) -> 
     type_implements_trait(tcx, owner, ty, copy_trait)
 }
 
+pub(crate) fn normalize_ty_for_owner<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, ty: MirTy) -> MirTy {
+    let owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let ty = mir_ty_to_rustc(tcx, &ty);
+    let typing_env = ty::TypingEnv::non_body_analysis(tcx, owner).with_post_analysis_normalized(tcx);
+    tcx.try_normalize_erasing_regions(typing_env, ty)
+        .map(rustc_public::rustc_internal::stable)
+        .unwrap_or_else(|_| rustc_public::rustc_internal::stable(ty))
+}
+
+pub(crate) fn normalize_ty_for_owner_with_self<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: DefId,
+    ty: MirTy,
+    self_ty: MirTy,
+) -> MirTy {
+    let owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let ty = mir_ty_to_rustc(tcx, &ty);
+    let self_ty = mir_ty_to_rustc(tcx, &self_ty);
+    let ty = rustc_middle::ty::TypeFoldable::fold_with(
+        ty,
+        &mut rustc_middle::ty::BottomUpFolder {
+            tcx,
+            ty_op: |inner| match inner.kind() {
+                ty::TyKind::Param(param) if param.index == 0 && param.name.as_str() == "Self" => {
+                    self_ty
+                }
+                _ => inner,
+            },
+            lt_op: |lt| lt,
+            ct_op: |ct| ct,
+        },
+    );
+    let typing_env = ty::TypingEnv::non_body_analysis(tcx, owner).with_post_analysis_normalized(tcx);
+    tcx.try_normalize_erasing_regions(typing_env, ty)
+        .map(rustc_public::rustc_internal::stable)
+        .unwrap_or_else(|_| rustc_public::rustc_internal::stable(ty))
+}
+
 pub(crate) fn normalize_ty_defaults<'tcx>(tcx: TyCtxt<'tcx>, ty: MirTy) -> MirTy {
     rustc_public::rustc_internal::stable(normalize_ty_defaults_to_rustc(tcx, ty))
 }

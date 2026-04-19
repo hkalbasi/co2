@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use co2_ast::{Declaration, Declarator, StatelessResolver, TranslationUnit, TypeQueryResult};
 use rustc_public_generative::{
@@ -13,6 +13,20 @@ use rustc_public_generative::{
 struct ModuleData {
     id: Option<(DefId, TypeQueryResult)>,
     items: HashMap<String, ModuleData>,
+}
+
+#[derive(Debug, Clone)]
+struct ScopedTrait {
+    name: String,
+    def_id: DefId,
+    path: String,
+}
+
+#[derive(Debug, Clone)]
+struct TraitMethod {
+    trait_path: String,
+    method: String,
+    def_id: DefId,
 }
 
 fn extract_decl_name(decl: &Declarator<StatelessResolver>) -> Option<String> {
@@ -155,6 +169,9 @@ pub struct Resolver {
     dependencies: HashMap<String, ModuleData>,
     current: ModuleData,
     method_receivers: HashMap<DefId, ModuleData>,
+    traits: HashSet<DefId>,
+    scoped_traits: Vec<ScopedTrait>,
+    trait_methods: HashMap<String, Vec<TraitMethod>>,
 }
 
 fn normalize_crate_name(name: &mut &str) {
@@ -177,7 +194,29 @@ impl Resolver {
         }
         this.dependencies
             .insert("std_core".to_owned(), ModuleData::default());
+        for t in &deps.traits {
+            this.traits.insert(t.def_id);
+            let (mut crate_name, rest) = t.path.split_once("::").unwrap();
+            normalize_crate_name(&mut crate_name);
+            let Some(i) = this.dependencies.get_mut(crate_name) else {
+                continue;
+            };
+            i.insert_path(rest.split("::"), Some((t.def_id, TypeQueryResult::Type)));
+        }
         for t in deps.functions {
+            if let Some(fn_def) = t.fn_def
+                && let Some((trait_path, method)) = parse_trait_method_path(&t.path)
+                && self::Resolver::is_known_trait_path(&this, &trait_path)
+            {
+                this.trait_methods
+                    .entry(method.clone())
+                    .or_default()
+                    .push(TraitMethod {
+                        trait_path,
+                        method,
+                        def_id: fn_def.0,
+                    });
+            }
             let (mut crate_name, rest) = t.path.split_once("::").unwrap();
             normalize_crate_name(&mut crate_name);
             let Some(i) = this.dependencies.get_mut(crate_name) else {
@@ -202,14 +241,6 @@ impl Resolver {
                     this.const_values.insert(normalized_path(&t.path), def_id);
                 }
             }
-        }
-        for t in deps.traits {
-            let (mut crate_name, rest) = t.path.split_once("::").unwrap();
-            normalize_crate_name(&mut crate_name);
-            let Some(i) = this.dependencies.get_mut(crate_name) else {
-                continue;
-            };
-            i.insert_path(rest.split("::"), Some((t.def_id, TypeQueryResult::Type)));
         }
         for t in deps.types {
             let (mut crate_name, rest) = t.path.split_once("::").unwrap();
@@ -261,6 +292,7 @@ impl Resolver {
                 .map(|(segment, _)| segment.as_str())
                 .collect::<Vec<_>>()
                 .join("::");
+            let normalized_full_path = normalized_path(&full_path);
             if let Some(def_id) = self.const_values.get(&normalized_path(&full_path)).copied() {
                 self.const_values.insert(alias.to_owned(), def_id);
                 continue;
@@ -268,6 +300,15 @@ impl Resolver {
             let Ok(item) = self.resolve_module_path(use_item.path.iter().map(|(segment, _)| segment.as_str())) else {
                 continue;
             };
+            if let Some((def_id, TypeQueryResult::Type)) = item.id {
+                if self.traits.contains(&def_id) {
+                    self.scoped_traits.push(ScopedTrait {
+                        name: alias.to_owned(),
+                        def_id,
+                        path: normalized_full_path.clone(),
+                    });
+                }
+            }
             let item = if matches!(item.id, Some((_, TypeQueryResult::Expr))) {
                 ModuleData {
                     id: item.id,
@@ -336,26 +377,59 @@ impl Resolver {
         Ok(ResolvedExprPath::Def(def_id, class))
     }
 
-    pub(crate) fn resolve_method(
+    pub(crate) fn resolve_inherent_method(
         &self,
         receiver_ty: Ty,
         method: &str,
-    ) -> Result<(DefId, TypeQueryResult), String> {
+    ) -> Result<Option<(DefId, TypeQueryResult)>, String> {
         match receiver_ty.kind() {
-            TyKind::RigidTy(RigidTy::Adt(adt, _)) => Self::resolve_method_in_module(
-                self.method_receivers
-                    .get(&adt.0)
-                    .ok_or_else(|| format!("no methods known for receiver type {:?}", receiver_ty))?,
-                method,
-            ),
+            TyKind::RigidTy(RigidTy::Adt(adt, _)) => Ok(self
+                .method_receivers
+                .get(&adt.0)
+                .and_then(|module| Self::resolve_method_in_module(module, method).ok())),
             TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
-                self.resolve_method(inner, method)
+                self.resolve_inherent_method(inner, method)
             }
-            _ => Err(format!(
-                "method resolution is not supported for receiver type {:?}",
-                receiver_ty
-            )),
+            _ => Ok(None),
         }
+    }
+
+    pub(crate) fn traits_in_scope_with_method(
+        &self,
+        method: &str,
+    ) -> Vec<(String, DefId, String)> {
+        let mut out = Vec::new();
+        for scoped_trait in &self.scoped_traits {
+            if !self
+                .trait_methods
+                .get(method)
+                .is_some_and(|candidates| candidates.iter().any(|candidate| candidate.trait_path == scoped_trait.path))
+            {
+                continue;
+            }
+            out.push((
+                scoped_trait.name.clone(),
+                scoped_trait.def_id,
+                scoped_trait.path.clone(),
+            ));
+        }
+        out
+    }
+
+    pub(crate) fn resolve_trait_method(
+        &self,
+        trait_path: &str,
+        method: &str,
+    ) -> Option<(DefId, TypeQueryResult)> {
+        self.trait_methods.get(method)?.iter().find_map(|candidate| {
+            (candidate.trait_path == trait_path && candidate.method == method)
+                .then_some((candidate.def_id, TypeQueryResult::Expr))
+        })
+    }
+
+    fn is_known_trait_path(&self, path: &str) -> bool {
+        self.resolve(path)
+            .is_ok_and(|(_, class)| class == TypeQueryResult::Type)
     }
 
     fn resolve_method_in_module(
@@ -425,4 +499,12 @@ fn method_search_priority(name: &str) -> (usize, &str) {
         })
         .unwrap_or(usize::MAX);
     (generic_arity, name)
+}
+
+fn parse_trait_method_path(path: &str) -> Option<(String, String)> {
+    if path.starts_with('<') {
+        return None;
+    }
+    let (trait_path, method) = path.rsplit_once("::")?;
+    Some((normalized_path(trait_path), method.to_owned()))
 }

@@ -279,9 +279,20 @@ impl HirCtx<'_> {
                                     resolver.set_local_ty(name.0 as u32, hir_ty);
                                 }
                                 // END TODO.
-                                let expr = match coerce_expr_to_type(expr, local_ty) {
-                                    Ok(it) => it,
-                                    Err(err) => self.terminate_with_error(parser_span, &err),
+                                let expr = if self
+                                    .decl_resolver
+                                    .as_ref()
+                                    .is_some_and(|resolver| {
+                                        resolver.normalize_ty_for_current_owner(expr.ty)
+                                            == resolver.normalize_ty_for_current_owner(local_ty)
+                                    })
+                                {
+                                    expr
+                                } else {
+                                    match coerce_expr_to_type(expr, local_ty) {
+                                        Ok(it) => it,
+                                        Err(err) => self.terminate_with_error(parser_span, &err),
+                                    }
                                 };
                                 Some(expr)
                             }

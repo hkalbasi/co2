@@ -12,7 +12,7 @@ mod ty;
 pub(crate) use ctx::CrateSigCtx;
 
 pub use ast_resolver::{
-    DefOrLocal, LocalResolver, LocalResolverBase, RegisteredArrayLenConst,
+    DefOrLocal, LocalResolver, LocalResolverBase, MethodResolutionKind, RegisteredArrayLenConst,
     eval_registered_array_len_const,
 };
 pub use lowering::{WellknownDefs, lower_crate_sig};

@@ -226,7 +226,7 @@ pub fn lower_crate_sig(
                     no_mangle,
                     span,
                 });
-                resolver = resolver.start_new_scope();
+                resolver = resolver.start_new_scope().with_owner(id.0);
                 let param_names = param_names
                     .into_iter()
                     .zip(param_tys.into_iter())

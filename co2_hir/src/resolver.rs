@@ -21,6 +21,7 @@ pub(crate) struct SwitchScope {
 #[derive(Clone, Debug)]
 pub enum ResolvedValue {
     Fn(FnDef, Vec<GenericArgKind>),
+    FnPtr(FnDef, Vec<GenericArgKind>),
     ConstInt(i128),
     Static(DefId),
 }
@@ -31,6 +32,15 @@ impl ResolvedValue {
             ResolvedValue::Fn(fn_def, generic_args) if generic_args.is_empty() => fn_def.ty(),
             ResolvedValue::Fn(fn_def, generic_args) => {
                 Ty::from_rigid_kind(RigidTy::FnDef(*fn_def, GenericArgs(generic_args.clone())))
+            }
+            ResolvedValue::FnPtr(fn_def, generic_args) => {
+                let fn_ty = if generic_args.is_empty() {
+                    fn_def.ty()
+                } else {
+                    Ty::from_rigid_kind(RigidTy::FnDef(*fn_def, GenericArgs(generic_args.clone())))
+                };
+                let sig = fn_ty.kind().fn_sig().expect("fn ptr must come from fn item");
+                Ty::from_rigid_kind(RigidTy::FnPtr(sig))
             }
             ResolvedValue::ConstInt(_) => {
                 Ty::signed_ty(rustc_public_generative::rustc_public::ty::IntTy::I32)

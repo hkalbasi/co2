@@ -121,17 +121,35 @@ pub struct LocalResolver {
     pub(crate) base: Rc<RefCell<LocalResolverBase>>,
     pub(crate) locals: Rc<RefCell<im::HashMap<String, (DefOrLocal, TypeQueryResult)>>>,
     pub(crate) struct_tags: Rc<RefCell<StructAndEnumData>>,
+    pub(crate) current_owner: DefId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodResolutionKind {
+    Inherent,
+    Trait,
 }
 
 impl LocalResolver {
     pub fn new(base: Rc<RefCell<LocalResolverBase>>) -> Self {
         let struct_tags = base.borrow().global_struct_tags.clone();
         let locals = base.borrow().global_locals.clone();
+        let current_owner = base.borrow().hir_ctx.root_crate_def_id();
         LocalResolver {
             struct_tags,
             base,
             locals,
+            current_owner,
         }
+    }
+
+    pub fn with_owner(mut self, owner: DefId) -> Self {
+        self.current_owner = owner;
+        self
+    }
+
+    pub fn current_owner(&self) -> DefId {
+        self.current_owner
     }
 
     fn localize(&mut self) {
@@ -160,12 +178,67 @@ impl LocalResolver {
         self.base.borrow().hir_ctx.dependency_const_value(def_id)
     }
 
+    pub fn normalize_ty_for_current_owner(&self, ty: Ty) -> Ty {
+        self.base
+            .borrow()
+            .hir_ctx
+            .normalize_ty_for_owner(self.current_owner, ty)
+    }
+
+    pub fn normalize_ty_for_current_owner_with_self(&self, ty: Ty, self_ty: Ty) -> Ty {
+        self.base
+            .borrow()
+            .hir_ctx
+            .normalize_ty_for_owner_with_self(self.current_owner, ty, self_ty)
+    }
+
     pub fn resolve_method(
         &self,
         receiver_ty: Ty,
         method: &str,
-    ) -> Result<(DefId, TypeQueryResult), String> {
-        self.base.borrow().resolver.resolve_method(receiver_ty, method)
+    ) -> Result<Option<(DefId, TypeQueryResult, MethodResolutionKind)>, String> {
+        if let Some(found) = self.base.borrow().resolver.resolve_inherent_method(receiver_ty, method)? {
+            let (method_def, class) = found;
+            return Ok(Some((method_def, class, MethodResolutionKind::Inherent)));
+        }
+
+        let trait_candidates = self.base.borrow().resolver.traits_in_scope_with_method(method);
+        let hir_ctx = self.base.borrow().hir_ctx;
+        let mut applicable = Vec::new();
+        for (trait_name, trait_def, trait_path) in trait_candidates {
+            if hir_ctx.type_implements_trait(self.current_owner, receiver_ty, trait_def) {
+                if let Some((method_def, class)) = self
+                    .base
+                    .borrow()
+                    .resolver
+                    .resolve_trait_method(&trait_path, method)
+                {
+                    applicable.push((trait_name, method_def, class));
+                }
+            }
+        }
+
+        match applicable.len() {
+            0 => match receiver_ty.kind() {
+                rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
+                    rustc_public_generative::rustc_public::ty::RigidTy::Ref(_, inner, _)
+                    | rustc_public_generative::rustc_public::ty::RigidTy::RawPtr(inner, _),
+                ) => self.resolve_method(inner, method),
+                _ => Ok(None),
+            },
+            1 => {
+                let (_, method_def, class) = applicable.pop().unwrap();
+                Ok(Some((method_def, class, MethodResolutionKind::Trait)))
+            }
+            _ => Err(format!(
+                "multiple traits in scope provide method `{method}` for receiver type {receiver_ty:?}: {}",
+                applicable
+                    .into_iter()
+                    .map(|(trait_name, _, _)| trait_name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
     }
 
     fn register_array_len_const(

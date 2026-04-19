@@ -636,6 +636,36 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                         const_: c,
                     })
                 }
+                ResolvedValue::FnPtr(fn_def, generic_args) => {
+                    let fn_ty = Ty::from_rigid_kind(RigidTy::FnDef(
+                        *fn_def,
+                        GenericArgs(generic_args.clone()),
+                    ));
+                    let fn_sig = fn_ty.kind().fn_sig().expect("failed to get fn ptr signature");
+                    let fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(fn_sig));
+                    let fn_const =
+                        MirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
+                    let fn_operand = MirOperand::Constant(ConstOperand {
+                        span: expr.span,
+                        user_ty: None,
+                        const_: fn_const,
+                    });
+                    let tmp = self.new_temp(fn_ptr_ty, Mutability::Mut, expr.span);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(
+                            place(tmp),
+                            Rvalue::Cast(
+                                CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
+                                    Safety::Safe,
+                                )),
+                                fn_operand,
+                                fn_ptr_ty,
+                            ),
+                        ),
+                        span: expr.span,
+                    });
+                    MirOperand::Copy(place(tmp))
+                }
                 ResolvedValue::ConstInt(v) => {
                     let (uint_ty, bits) = crate::rvalue::int_literal_bits(*v, expr.ty);
                     let c =
