@@ -59,6 +59,7 @@ jobs:
 
           [install]
           prefix = "/tmp/rust-install"
+          sysconfdir = "etc"
 
           [rust]
           channel = "dev"
