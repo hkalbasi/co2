@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 fn main() -> std::process::ExitCode {
     let mut args = std::env::args();
-    let arg0 = args.next().unwrap_or_else(|| "co2-multicall".to_owned());
+    let arg0_real = args.next().unwrap_or_else(|| "co2-multicall".to_owned());
+    let arg0 = std::env::var("CO2_APPLET_OVERRIDE").unwrap_or(arg0_real);
     dispatch(&arg0, args)
 }
 

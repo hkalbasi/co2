@@ -414,13 +414,13 @@ fn build_clone_method_body(
     Body::new(vec![return_block], locals, 1, vec![], None, span)
 }
 
-pub fn compile_co2_file(mode: CompileMode, co2_file: &Path) {
+pub fn compile_co2_file(mode: CompileMode, co2_file: &Path, rustc_args: Vec<String>) {
     let src = std::fs::read_to_string(co2_file).expect("failed to read co2 file");
     compile_co2_source(
         mode,
         co2_file.to_path_buf(),
         src,
-        std::env::args().collect(),
+        rustc_args,
     );
 }
 

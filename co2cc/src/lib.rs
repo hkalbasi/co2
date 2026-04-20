@@ -509,10 +509,18 @@ fn link_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Pat
     fs::write(&link_stub, "#![no_main]\n").expect("failed to write linker stub");
 
     let rustc_args = build_link_rustc_args(&link_stub, objects, linker_args, output);
-    let status = Command::new("rustc")
-        .args(&rustc_args)
-        .status()
-        .expect("failed to execute rustc link step");
+    let exe = std::env::var_os("CO2_RUN_SCRIPT")
+        .map(PathBuf::from)
+        .or_else(|| current_invocation_path())
+        .or_else(|| std::env::current_exe().ok())
+        .expect("failed to locate co2c executable");
+    
+    let mut cmd = Command::new(exe);
+    cmd.args(&rustc_args);
+    // Force the applet name to co2rustc
+    cmd.env("CO2_APPLET_OVERRIDE", "co2rustc");
+
+    let status = cmd.status().expect("failed to execute co2rustc link step");
     let _ = fs::remove_file(&link_stub);
     let _ = fs::remove_dir_all(&temp_dir);
     if !status.success() {
