@@ -149,7 +149,7 @@ fn build_compilers(root: &Path) -> Result<()> {
 
 fn ensure_compiler_links(bin_dir: &Path) -> Result<()> {
     let multicall = bin_dir.join(exe_name("co2-multicall"));
-    for applet in ["co2rustc", "co2cc"] {
+    for applet in ["co2rustc", "co2cc", "co2cargo"] {
         ensure_link(&multicall, &bin_dir.join(exe_name(applet)))?;
     }
     Ok(())

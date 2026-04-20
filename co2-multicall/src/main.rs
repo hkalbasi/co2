@@ -22,6 +22,10 @@ fn dispatch(
         Some("co2cc") => {
             co2cc::main_with_args(std::iter::once("co2cc".to_owned()).chain(args).collect())
         }
+        Some("co2cargo") => {
+            let code = co2cargo::main_with_args(std::iter::once("co2cargo".to_owned()).chain(args).collect());
+            std::process::ExitCode::from(code as u8)
+        }
         Some("co2-multicall") => match args.next().as_deref() {
             Some("install") => install(args),
             _ => {
@@ -35,7 +39,7 @@ fn dispatch(
             } else {
                 eprintln!("unknown applet `{}`", Path::new(arg0).display());
                 eprintln!(
-                    "set up a symlink named `co2rustc` or `co2cc` pointing to `co2-multicall`"
+                    "set up a symlink named `co2rustc`, `co2cc`, or `co2cargo` pointing to `co2-multicall`"
                 );
                 std::process::ExitCode::from(2)
             }
@@ -47,6 +51,7 @@ fn applet_name(arg0: &str) -> Option<&str> {
     Path::new(arg0).file_name().and_then(OsStr::to_str).and_then(|name| match name {
         "co2rustc" => Some("co2rustc"),
         "co2cc" => Some("co2cc"),
+        "co2cargo" => Some("co2cargo"),
         "co2-multicall" => Some("co2-multicall"),
         _ => None,
     })
@@ -82,7 +87,7 @@ fn try_install(bin_dir: &Path) -> Result<(), String> {
     fs::copy(&current, &installed)
         .map_err(|err| format!("copy {} -> {}: {err}", current.display(), installed.display()))?;
 
-    for applet in ["co2rustc", "co2cc"] {
+    for applet in ["co2rustc", "co2cc", "co2cargo"] {
         let target = bin_dir.join(exe_name(applet));
         replace_symlink(Path::new("co2-multicall"), &target)?;
     }

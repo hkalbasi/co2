@@ -7,6 +7,7 @@ members = [
   "co2_driver_lib",
   "co2rustc",
   "co2cc",
+  "co2cargo",
   "co2-multicall",
   "co2_test_harness",
   "co2_crate_sig",
