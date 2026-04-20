@@ -73,7 +73,7 @@ jobs:
       - name: Build and install custom rustc toolchain
         if: steps.cache-rustc.outputs.cache-hit != 'true'
         working-directory: /tmp/rust-fork
-        run: python3 x.py install --stage 1 compiler library rustc-dev
+        run: python3 x.py install --stage 2 compiler library rustc-dev
 
       - name: Copy toolchain to cache location
         if: steps.cache-rustc.outputs.cache-hit != 'true'
