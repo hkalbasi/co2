@@ -2,6 +2,9 @@ name: Build Self-Extracting Binary
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/build-bundle.yml'
 
 jobs:
   build:
@@ -59,6 +62,7 @@ jobs:
 
           [install]
           prefix = "/tmp/rust-install"
+          sysconfdir = "etc"
 
           [rust]
           channel = "dev"
@@ -69,7 +73,7 @@ jobs:
       - name: Build and install custom rustc toolchain
         if: steps.cache-rustc.outputs.cache-hit != 'true'
         working-directory: /tmp/rust-fork
-        run: python3 x.py install --stage 1 compiler library rustc-dev
+        run: python3 x.py install --stage 2 compiler library rustc-dev
 
       - name: Copy toolchain to cache location
         if: steps.cache-rustc.outputs.cache-hit != 'true'
@@ -81,6 +85,9 @@ jobs:
           source "$HOME/.cargo/env"
           rustup toolchain link co2 ~/co2-toolchain
           rustup override set co2
+          # libLLVM-*.so lives in <toolchain>/lib, not in the rustlib subdir the linker
+          # searches by default, so we add it to RUSTFLAGS for all subsequent steps.
+          echo "RUSTFLAGS=-L $HOME/co2-toolchain/lib" >> "$GITHUB_ENV"
 
       - name: Build co2-multicall
         run: |
