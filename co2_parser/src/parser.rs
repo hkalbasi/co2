@@ -497,19 +497,18 @@ where
                         body
                     }),
                 }),
-            rust_path()
-                .map({
-                    let resolver = resolver.clone();
-                    move |path| (resolver.classify_path(&path.0), path.1)
-                })
-                .filter(|r| {
-                    let Some(r) = &r.0 else { return false };
-                    match r.0 {
-                        TypeQueryResult::Type => false,
-                        TypeQueryResult::Unsure | TypeQueryResult::Expr => true,
+            rust_path().try_map({
+                let resolver = resolver.clone();
+                move |path, _| match resolver.classify_path(&path.0) {
+                    Some((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
+                        Ok(Expression::Identifier((resolved, path.1)))
                     }
-                })
-                .map(|r| Expression::Identifier((r.0.unwrap().1, r.1))),
+                    Some((TypeQueryResult::Type, _)) => {
+                        Err(Rich::custom(path.1, "expected expression, found type name"))
+                    }
+                    None => Err(Rich::custom(path.1, "Unresolved name")),
+                }
+            }),
             select! {
                 Token::StringLit(s) => s,
             }

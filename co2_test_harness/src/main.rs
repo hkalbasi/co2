@@ -398,7 +398,7 @@ fn compile_test(
                 .args(compile_flags);
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
-                cmd.env("CO2_JSON_BYTE_OFFSET", "20");
+                cmd.env("CO2_JSON_BYTE_OFFSET", "22");
             }
             cmd.output().context("failed to execute co2rustc")?
         }

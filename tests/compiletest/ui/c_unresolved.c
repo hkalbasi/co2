@@ -1,6 +1,11 @@
 //@ mode: c
 //@ compile-fail
-//@ skip: Error quality of unresolved names is broken
+
+int foo() {
+    missing;
+  //^^^^^^^ error: Unresolved name
+}
+
 
 int main() {
     return missing;

@@ -1,6 +1,5 @@
 //@ mode: co2
 //@ compile-fail
-//@ skip: Error quality of unresolved names is broken
 
 int main() {
     return missing;
