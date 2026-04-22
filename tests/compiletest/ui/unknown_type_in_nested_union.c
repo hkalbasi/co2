@@ -1,5 +1,5 @@
 //@ mode: c
-//@ ui-error: Unresolved name
+//@ compile-fail
 
 typedef struct {
   union {
@@ -10,6 +10,7 @@ typedef struct {
     } _addr_bnd;
 
     unknown_type _pkey;
+  //^^^^^^^^^^^^ error: Unresolved name
   } _bounds;
 } _sigfault;
 

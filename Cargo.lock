@@ -204,6 +204,7 @@ dependencies = [
  "ariadne",
  "chumsky",
  "itertools",
+ "serde_json",
 ]
 
 [[package]]
@@ -262,6 +263,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde_json",
  "shlex",
  "tempfile",
 ]

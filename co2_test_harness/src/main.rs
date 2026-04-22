@@ -99,6 +99,29 @@ enum TestOutcome {
     Skip(String),
 }
 
+#[derive(Debug)]
+struct UiSpanExpectation {
+    byte_start: usize,
+    byte_end: usize,
+    line: usize,
+    column_start: usize,
+    column_end: usize,
+    message: Option<String>,
+}
+
+#[derive(Debug)]
+struct UiDiagnostic {
+    message: String,
+    spans: Vec<UiDiagnosticSpan>,
+}
+
+#[derive(Debug)]
+struct UiDiagnosticSpan {
+    byte_start: usize,
+    byte_end: usize,
+    is_primary: bool,
+}
+
 fn main() {
     if let Err(e) = run_main() {
         eprintln!("co2_test_harness: {e:#}");
@@ -249,10 +272,15 @@ fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
             .context("missing `//@ mode: c|co2|rust` directive")?,
     )?;
 
-    let compile = compile_test(root, suite, mode, test)?;
+    let ui_spans = if suite == Suite::Ui {
+        parse_ui_span_expectations(&test.path)?
+    } else {
+        Vec::new()
+    };
+    let compile = compile_test(root, suite, mode, test, !ui_spans.is_empty())?;
     match suite {
         Suite::Ui => {
-            check_ui(test, &compile.output)?;
+            check_ui(test, &compile.output, &ui_spans)?;
             Ok(TestOutcome::Pass)
         }
         Suite::Run => {
@@ -309,7 +337,13 @@ fn run_nu_dir_test(root: &Path, test: &TestCase) -> Result<()> {
     Ok(())
 }
 
-fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Result<CompileResult> {
+fn compile_test(
+    root: &Path,
+    suite: Suite,
+    mode: Mode,
+    test: &TestCase,
+    json_diagnostics: bool,
+) -> Result<CompileResult> {
     let temp = TempDirBuilder::new()
         .prefix("co2-ct-")
         .tempdir()
@@ -338,6 +372,10 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
 
             let mut cmd = Command::new(root.join("target").join("debug").join("co2cc"));
             cmd.arg(&c_src).arg("-o").arg(&exe_path).args(compile_flags);
+            if json_diagnostics {
+                cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
+                cmd.env("CO2_JSON_BYTE_OFFSET", "20");
+            }
             cmd.output().context("failed to execute co2cc")?
         }
         Mode::Co2 => {
@@ -358,6 +396,10 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
                 .arg("-o")
                 .arg(&exe_path)
                 .args(compile_flags);
+            if json_diagnostics {
+                cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
+                cmd.env("CO2_JSON_BYTE_OFFSET", "20");
+            }
             cmd.output().context("failed to execute co2rustc")?
         }
         Mode::Rust => {
@@ -374,6 +416,9 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
                 .arg("-o")
                 .arg(&exe_path)
                 .args(compile_flags);
+            if json_diagnostics {
+                cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
+            }
             cmd.output()
                 .context("failed to execute co2rustc for Rust test")?
         }
@@ -386,46 +431,71 @@ fn compile_test(root: &Path, suite: Suite, mode: Mode, test: &TestCase) -> Resul
     })
 }
 
-fn check_ui(test: &TestCase, output: &Output) -> Result<()> {
+fn check_ui(test: &TestCase, output: &Output, span_expectations: &[UiSpanExpectation]) -> Result<()> {
     if output.status.success() {
         bail!("UI test unexpectedly succeeded");
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut patterns = test.directives.get("ui-error").cloned().unwrap_or_default();
-    if let Some(extra) = test.directives.get("ui-stderr-contains") {
-        patterns.extend(extra.clone());
+    if test.directives.contains_key("ui-error") || test.directives.contains_key("ui-stderr-contains")
+    {
+        bail!(
+            "legacy UI directives are no longer supported in {}; use `//@ compile-fail` with inline `//^^^^ error: ...` annotations",
+            test.path.display()
+        );
+    }
+    if !test.directives.contains_key("compile-fail") {
+        bail!(
+            "UI test is missing `//@ compile-fail`: {}",
+            test.path.display()
+        );
     }
 
-    let sidecar = test.path.with_extension(format!(
-        "{}.stderr",
-        test.path
-            .extension()
-            .and_then(OsStr::to_str)
-            .unwrap_or_default()
-    ));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if span_expectations.is_empty() {
+        bail!(
+            "UI test has no inline span expectations; add a `//^^^^ error: ...` annotation near the failing source: {}",
+            test.path.display()
+        );
+    }
 
-    if sidecar.exists() {
-        let expected = fs::read_to_string(&sidecar)
-            .with_context(|| format!("failed reading {}", sidecar.display()))?;
-        if normalize(&expected) != normalize(&stderr) {
+    if !span_expectations.iter().any(|expected| expected.message.is_some()) {
+        bail!(
+            "UI test must include diagnostic text in at least one inline span annotation: {}",
+            test.path.display()
+        );
+    }
+
+    let diagnostics = parse_ui_diagnostics(&stderr)?;
+    for expected in span_expectations {
+        let matched = diagnostics.iter().any(|diagnostic| {
+            if let Some(message) = &expected.message
+                && !diagnostic.message.contains(message)
+            {
+                return false;
+            }
+
+            diagnostic.spans.iter().any(|span| {
+                span.is_primary
+                    && span.byte_start == expected.byte_start
+                    && span.byte_end == expected.byte_end
+            })
+        });
+
+        if !matched {
             bail!(
-                "stderr mismatch for {}\n--- expected ---\n{}\n--- actual ---\n{}",
-                test.path.display(),
-                expected,
+                "missing UI span annotation at {}:{}-{} (bytes {}..{}){}\nstderr:\n{}",
+                expected.line,
+                expected.column_start,
+                expected.column_end,
+                expected.byte_start,
+                expected.byte_end,
+                expected
+                    .message
+                    .as_ref()
+                    .map(|message| format!(" ({message})"))
+                    .unwrap_or_default(),
                 stderr
             );
-        }
-        return Ok(());
-    }
-
-    if patterns.is_empty() {
-        bail!("UI test has no expectations; add `//@ ui-error: ...` or a sidecar `.stderr` file");
-    }
-
-    for pat in patterns {
-        if !stderr.contains(&pat) {
-            bail!("missing UI pattern `{pat}` in stderr\n{stderr}");
         }
     }
 
@@ -700,6 +770,130 @@ fn parse_directives(path: &Path) -> Result<HashMap<String, Vec<String>>> {
     }
 
     Ok(map)
+}
+
+fn parse_ui_span_expectations(path: &Path) -> Result<Vec<UiSpanExpectation>> {
+    let src = fs::read_to_string(path)
+        .with_context(|| format!("failed to read test source {}", path.display()))?;
+    let line_starts = line_start_offsets(&src);
+    let mut out = Vec::new();
+
+    for (idx, line) in src.lines().enumerate() {
+        let Some((column_start, column_end, message)) = parse_ui_span_annotation(line) else {
+            continue;
+        };
+        let line_no = idx + 1;
+        if line_no == 1 {
+            bail!(
+                "span annotation on the first line has no source line to point at: {}",
+                path.display()
+            );
+        }
+        let source_line_idx = line_no - 2;
+        let line_start = line_starts[source_line_idx];
+        out.push(UiSpanExpectation {
+            byte_start: line_start + (column_start - 1),
+            byte_end: line_start + (column_end - 1),
+            line: line_no - 1,
+            column_start,
+            column_end,
+            message,
+        });
+    }
+
+    Ok(out)
+}
+
+fn parse_ui_span_annotation(line: &str) -> Option<(usize, usize, Option<String>)> {
+    let comment_start = line.find("//")?;
+    if !line[..comment_start].chars().all(char::is_whitespace) {
+        return None;
+    }
+
+    let body = &line[comment_start + 2..];
+    let caret_offset = body.find('^')?;
+    if !body[..caret_offset].chars().all(char::is_whitespace) {
+        return None;
+    }
+
+    let caret_count = body[caret_offset..]
+        .chars()
+        .take_while(|ch| *ch == '^')
+        .count();
+    if caret_count == 0 {
+        return None;
+    }
+
+    let column_start = line[..comment_start + 2 + caret_offset].chars().count() + 1;
+    let column_end = column_start + caret_count;
+    let trailing = body[caret_offset + caret_count..].trim();
+    let message = (!trailing.is_empty()).then(|| {
+        trailing
+            .strip_prefix("error:")
+            .or_else(|| trailing.strip_prefix("warning:"))
+            .or_else(|| trailing.strip_prefix("help:"))
+            .map(str::trim)
+            .unwrap_or(trailing)
+            .to_owned()
+    });
+    Some((column_start, column_end, message))
+}
+
+fn parse_ui_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
+    parse_json_diagnostics(stderr)
+}
+
+fn parse_json_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
+    let mut diagnostics = Vec::new();
+
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.starts_with('{') {
+            continue;
+        }
+
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let Some(spans) = value.get("spans").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let Some(message) = value.get("message").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+
+        let spans = spans
+            .iter()
+            .filter_map(|span| {
+                Some(UiDiagnosticSpan {
+                    byte_start: span.get("byte_start")?.as_u64()? as usize,
+                    byte_end: span.get("byte_end")?.as_u64()? as usize,
+                    is_primary: span.get("is_primary")?.as_bool()?,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        diagnostics.push(UiDiagnostic {
+            message: message.to_owned(),
+            spans,
+        });
+    }
+
+    if diagnostics.is_empty() {
+        bail!("failed to find JSON diagnostics in stderr");
+    }
+
+    Ok(diagnostics)
+}
+
+fn line_start_offsets(src: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (idx, ch) in src.char_indices() {
+        if ch == '\n' {
+            starts.push(idx + 1);
+        }
+    }
+    starts
 }
 
 fn directive_text(test: &TestCase, key: &str) -> Option<String> {

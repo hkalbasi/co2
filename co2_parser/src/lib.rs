@@ -1,4 +1,3 @@
-use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::{Parser as _, input::Input as _};
 
 use crate::{lexer::lexer, parser::translation_unit};
@@ -30,27 +29,14 @@ pub fn parse_translation_unit<R: TypeResolver>(
                 return Some(ast.0);
             }
         } else {
-            for err in parse_errs {
-                let e = err.map_token(|tok| tok.to_string());
-                let range = co2_ast::safe_range(*e.span(), src.len());
-                Report::build(ReportKind::Error, (filename.clone(), range.clone()))
-                    .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-                    .with_message(e.to_string())
-                    .with_label(
-                        Label::new((filename.clone(), range))
-                            .with_message(e.reason().to_string())
-                            .with_color(Color::Red),
-                    )
-                    .with_labels(e.contexts().map(|(label, span)| {
-                        Label::new((filename.clone(), co2_ast::safe_range(*span, src.len())))
-                            .with_message(format!("while parsing this {label}"))
-                            .with_color(Color::Yellow)
-                    }))
-                    .finish()
-                    .print(sources([(filename.clone(), src.to_owned())]))
-                    .unwrap();
-            }
-            std::process::exit(5);
+            co2_ast::emit_mapped_errors_and_terminate(
+                filename,
+                src,
+                parse_errs
+                    .into_iter()
+                    .map(|err| err.map_token(|tok| tok.to_string()))
+                    .collect(),
+            );
         }
     }
 
@@ -80,27 +66,14 @@ pub fn parse_compound_statement<R: TypeResolver>(
             return ast;
         }
     } else {
-        for err in parse_errs {
-            let e = err.map_token(|tok| tok.to_string());
-            let range = co2_ast::safe_range(*e.span(), src.len());
-            Report::build(ReportKind::Error, (filename.clone(), range.clone()))
-                .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-                .with_message(e.to_string())
-                .with_label(
-                    Label::new((filename.clone(), range))
-                        .with_message(e.reason().to_string())
-                        .with_color(Color::Red),
-                )
-                .with_labels(e.contexts().map(|(label, span)| {
-                    Label::new((filename.clone(), co2_ast::safe_range(*span, src.len())))
-                        .with_message(format!("while parsing this {label}"))
-                        .with_color(Color::Yellow)
-                }))
-                .finish()
-                .print(sources([(filename.clone(), src.to_owned())]))
-                .unwrap();
-        }
-        std::process::exit(5);
+        co2_ast::emit_mapped_errors_and_terminate(
+            filename,
+            src,
+            parse_errs
+                .into_iter()
+                .map(|err| err.map_token(|tok| tok.to_string()))
+                .collect(),
+        );
     }
 
     print_errors_and_terminate(filename, src, Vec::new());
@@ -124,27 +97,14 @@ pub fn parse_expression_tokens<R: TypeResolver>(
             return ast;
         }
     } else {
-        for err in parse_errs {
-            let e = err.map_token(|tok| tok.to_string());
-            let range = co2_ast::safe_range(*e.span(), src.len());
-            Report::build(ReportKind::Error, (filename.clone(), range.clone()))
-                .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-                .with_message(e.to_string())
-                .with_label(
-                    Label::new((filename.clone(), range))
-                        .with_message(e.reason().to_string())
-                        .with_color(Color::Red),
-                )
-                .with_labels(e.contexts().map(|(label, span)| {
-                    Label::new((filename.clone(), co2_ast::safe_range(*span, src.len())))
-                        .with_message(format!("while parsing this {label}"))
-                        .with_color(Color::Yellow)
-                }))
-                .finish()
-                .print(sources([(filename.clone(), src.to_owned())]))
-                .unwrap();
-        }
-        std::process::exit(5);
+        co2_ast::emit_mapped_errors_and_terminate(
+            filename,
+            src,
+            parse_errs
+                .into_iter()
+                .map(|err| err.map_token(|tok| tok.to_string()))
+                .collect(),
+        );
     }
 
     print_errors_and_terminate(filename, src, Vec::new());

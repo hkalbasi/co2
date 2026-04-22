@@ -228,7 +228,7 @@ fn build_link_rustc_args(
 }
 
 fn shared_rust_flags() -> Vec<String> {
-    std::env::var("RUSTFLAGS")
+    let mut flags = std::env::var("RUSTFLAGS")
         .ok()
         .map(|flags| {
             flags
@@ -236,7 +236,15 @@ fn shared_rust_flags() -> Vec<String> {
                 .map(|x| x.to_owned())
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    if std::env::var_os("CO2_FORCE_JSON_DIAGNOSTICS").is_some()
+        && !flags.iter().any(|arg| arg == "--error-format=json")
+    {
+        flags.push("--error-format=json".to_owned());
+    }
+
+    flags
 }
 
 fn compile_c_to_object(input: &Path, output: &Path, cpp_args: &[String]) {

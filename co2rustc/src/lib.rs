@@ -15,6 +15,7 @@ pub fn main() -> std::process::ExitCode {
 }
 
 pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
+    let args = maybe_force_json_diagnostics(args);
     let co2_file = match detect_co2(&args) {
         DetectResult::Continue(exit_code) => {
             return exit_code;
@@ -36,4 +37,13 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     }
 
     std::process::ExitCode::SUCCESS
+}
+
+fn maybe_force_json_diagnostics(mut args: Vec<String>) -> Vec<String> {
+    if std::env::var_os("CO2_FORCE_JSON_DIAGNOSTICS").is_some()
+        && !args.iter().any(|arg| arg == "--error-format=json")
+    {
+        args.push("--error-format=json".to_owned());
+    }
+    args
 }

@@ -13,8 +13,10 @@ Common directives:
 - `//@ skip: <reason>` (skip test unconditionally)
 
 UI directives:
-- `//@ ui-error: <substring>` (repeatable)
-- `//@ ui-stderr-contains: <substring>` (repeatable)
+- `//@ compile-fail`
+- Inline span annotations on the following line, for example `//^^^^ error: message`.
+- UI checks use rustc JSON diagnostics and match inline annotations by byte span.
+- UI diagnostic text is checked only from inline span annotations.
 
 Run directives:
 - `//@ run-status: <int>` (default `0`)

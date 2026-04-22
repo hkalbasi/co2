@@ -1,7 +1,8 @@
 //@ mode: co2
-//@ ui-error: Unresolved name
+//@ compile-fail
 //@ skip: Error quality of unresolved names is broken
 
 int main() {
     return missing;
+        // ^^^^^^^ error: Unresolved name
 }
