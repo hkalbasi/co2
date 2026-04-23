@@ -4,5 +4,5 @@
 int main() {
     int x = 2;
     return x(3);
-         //^ Type not callable
+         //^^^^ Type is not callable
 }
