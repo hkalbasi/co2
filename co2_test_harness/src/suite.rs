@@ -105,11 +105,27 @@ fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
             .context("missing `//@ mode: c|co2|rust` directive")?,
     )?;
 
-    let ui_spans = if suite == Suite::Ui {
-        parse_ui_span_expectations(&test.path, mode)?
-    } else {
-        Vec::new()
-    };
+    let mut ui_spans = Vec::new();
+    if suite == Suite::Ui {
+        ui_spans.extend(parse_ui_span_expectations(&test.path, mode)?);
+        let test_dir = test.path.parent().context("test path has no parent")?;
+        let test_stem = test.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        for entry in std::fs::read_dir(test_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() && path != test.path {
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if stem.starts_with(test_stem) {
+                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                        if matches!(ext, "c" | "h" | "co2" | "rs") {
+                            ui_spans.extend(parse_ui_span_expectations(&path, mode)?);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let compile = compile_test(root, suite, mode, test, !ui_spans.is_empty())?;
     match suite {
         Suite::Ui => {

@@ -10,6 +10,7 @@ use crate::util::{line_start_offsets};
 
 #[derive(Debug, Clone)]
 pub struct UiSpanExpectation {
+    pub file_name: String,
     pub byte_start: usize,
     pub byte_end: usize,
     pub message: Option<String>,
@@ -23,6 +24,7 @@ pub struct UiDiagnostic {
 
 #[derive(Debug, Clone)]
 pub struct UiDiagnosticSpan {
+    pub file_name: String,
     pub byte_start: usize,
     pub byte_end: usize,
     pub is_primary: bool,
@@ -91,6 +93,7 @@ pub fn check_ui(
 
             diagnostic.spans.iter().any(|span| {
                 span.is_primary
+                    && span.file_name.ends_with(&expected.file_name)
                     && span.byte_start == expected.byte_start
                     && span.byte_end == expected.byte_end
             })
@@ -100,12 +103,12 @@ pub fn check_ui(
             let reason = if let Some(msg) = &expected.message {
                 let found = diagnostics.iter().any(|d| d.message.contains(msg));
                 if found {
-                    format!("Missing diagnostic span for: {}", msg)
+                    format!("Missing diagnostic span in {} for: {}", expected.file_name, msg)
                 } else {
                     format!("Missing diagnostic: {}", msg)
                 }
             } else {
-                "missing UI span annotation".to_string()
+                format!("missing UI span annotation in {}", expected.file_name)
             };
             issues.push(UiTestIssue {
                 span: Some(expected.clone()),
@@ -124,6 +127,7 @@ pub fn check_ui(
 
             diagnostic.spans.iter().any(|span| {
                 span.is_primary
+                    && span.file_name.ends_with(&expected.file_name)
                     && span.byte_start == expected.byte_start
                     && span.byte_end == expected.byte_end
             })
@@ -133,11 +137,12 @@ pub fn check_ui(
             if let Some(primary_span) = diagnostic.spans.iter().find(|s| s.is_primary) {
                 issues.push(UiTestIssue {
                     span: Some(UiSpanExpectation {
+                        file_name: primary_span.file_name.clone(),
                         message: Some(diagnostic.message.clone()),
                         byte_start: primary_span.byte_start,
                         byte_end: primary_span.byte_end,
                     }),
-                    reason: format!("Unexpected diagnostic: {}", diagnostic.message),
+                    reason: format!("Unexpected diagnostic in {}: {}", primary_span.file_name, diagnostic.message),
                 });
             } else {
                 issues.push(UiTestIssue {
@@ -166,6 +171,8 @@ pub fn parse_ui_span_expectations(path: &Path, _mode: Mode) -> Result<Vec<UiSpan
     let line_starts = line_start_offsets(&src);
     let mut out = Vec::new();
 
+    let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+
     for (idx, line) in src.lines().enumerate() {
         let Some((column_start, column_end, message)) = parse_ui_span_annotation(line) else {
             continue;
@@ -180,6 +187,7 @@ pub fn parse_ui_span_expectations(path: &Path, _mode: Mode) -> Result<Vec<UiSpan
         let source_line_idx = line_no - 2;
         let line_start = line_starts[source_line_idx];
         out.push(UiSpanExpectation {
+            file_name: file_name.clone(),
             byte_start: line_start + (column_start - 1),
             byte_end: line_start + (column_end - 1),
             message,
@@ -251,6 +259,7 @@ fn parse_json_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
             .iter()
             .filter_map(|span| {
                 Some(UiDiagnosticSpan {
+                    file_name: span.get("file_name")?.as_str()?.to_owned(),
                     byte_start: span.get("byte_start")?.as_u64()? as usize,
                     byte_end: span.get("byte_end")?.as_u64()? as usize,
                     is_primary: span.get("is_primary")?.as_bool()?,

@@ -98,6 +98,7 @@ pub fn compile_test(
     let exe_path = temp_path.join(format!("{name}.bin"));
 
     let mut compile_flags = directive_args(test, "compile-flags")?;
+
     if suite == crate::suite::Suite::Debuginfo
         && !compile_flags.windows(2).any(|w| w == ["-C", "debuginfo=2"])
         && !compile_flags.iter().any(|s| s.contains("debuginfo="))
@@ -107,11 +108,20 @@ pub fn compile_test(
 
     let output = match mode {
         Mode::C => {
+            let test_dir = test.path.parent().context("test path has no parent")?;
+            for entry in fs::read_dir(test_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() {
+                    let dest = temp_path.join(path.file_name().unwrap());
+                    fs::copy(&path, &dest)?;
+                }
+            }
             let c_src = temp_path.join(test.path.file_name().context("missing C test filename")?);
-            fs::copy(&test.path, &c_src).context("failed to copy C test source")?;
 
             let mut cmd = Command::new(root.join("target").join("debug").join("co2cc"));
             cmd.arg(&c_src).arg("-o").arg(&exe_path).args(compile_flags);
+            cmd.arg("-I").arg(test_dir);
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
             }

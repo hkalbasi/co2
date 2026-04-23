@@ -340,9 +340,8 @@ fn ensure_source_file(
         return idx;
     }
 
-    let path = absolute_path(path);
     let source = common::encoding::bytes_to_string(
-        fs::read(&path).unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display())),
+        fs::read(path).unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display())),
     );
     let idx = files.len();
     files.push(SourceFile {
@@ -350,7 +349,7 @@ fn ensure_source_file(
         line_offsets: Arc::new(compute_line_offsets(&source)),
         source: Arc::<str>::from(source),
     });
-    file_index.insert(path.clone(), idx);
+    file_index.insert(path.to_path_buf(), idx);
     idx
 }
 
@@ -368,6 +367,7 @@ fn absolutize_marker_path(main_input: &Path, path: &str) -> PathBuf {
     if marker.is_absolute() {
         return marker;
     }
+    let main_input = absolute_path(main_input);
     main_input
         .parent()
         .unwrap_or_else(|| Path::new("."))
