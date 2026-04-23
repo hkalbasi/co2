@@ -199,15 +199,12 @@ fn json_span(
     is_primary: bool,
     label: Option<String>,
 ) -> serde_json::Value {
-    let byte_offset = diagnostic_byte_offset();
-    let adjusted_start = range.start.saturating_add_signed(byte_offset);
-    let adjusted_end = range.end.saturating_add_signed(byte_offset);
-    let (line_start, column_start) = byte_to_line_col(src, adjusted_start);
-    let (line_end, column_end) = byte_to_line_col(src, adjusted_end);
+    let (line_start, column_start) = byte_to_line_col(src, range.start);
+    let (line_end, column_end) = byte_to_line_col(src, range.end);
     json!({
         "file_name": filename,
-        "byte_start": adjusted_start,
-        "byte_end": adjusted_end,
+        "byte_start": range.start,
+        "byte_end": range.end,
         "line_start": line_start,
         "line_end": line_end,
         "column_start": column_start,
@@ -228,75 +225,7 @@ fn json_span_unadjusted(
     is_primary: bool,
     label: Option<String>,
 ) -> serde_json::Value {
-    let (line_start, column_start) = byte_to_line_col(src, range.start);
-    let (line_end, column_end) = byte_to_line_col(src, range.end);
-    let byte_start = ui_effective_byte_offset(src, range.start);
-    let byte_end = ui_effective_byte_offset(src, range.end);
-    json!({
-        "file_name": filename,
-        "byte_start": byte_start,
-        "byte_end": byte_end,
-        "line_start": line_start,
-        "line_end": line_end,
-        "column_start": column_start,
-        "column_end": column_end,
-        "is_primary": is_primary,
-        "text": [],
-        "label": label,
-        "suggested_replacement": null,
-        "suggestion_applicability": null,
-        "expansion": null,
-    })
-}
-
-fn ui_effective_byte_offset(src: &str, byte_idx: usize) -> usize {
-    let line_starts = line_start_offsets(src);
-    let line_idx = match line_starts.binary_search(&byte_idx) {
-        Ok(i) => i,
-        Err(i) => i.saturating_sub(1),
-    };
-    let line_start = line_starts[line_idx];
-    let col = byte_idx.saturating_sub(line_start);
-
-    let mut effective = 0usize;
-    for (idx, line) in src.lines().enumerate() {
-        if idx == line_idx {
-            return effective + col.min(line.len());
-        }
-        effective += if is_ui_span_annotation(line) { 1 } else { line.len() + 1 };
-    }
-    effective
-}
-
-fn line_start_offsets(src: &str) -> Vec<usize> {
-    let mut starts = vec![0];
-    for (idx, b) in src.bytes().enumerate() {
-        if b == b'\n' {
-            starts.push(idx + 1);
-        }
-    }
-    starts
-}
-
-fn is_ui_span_annotation(line: &str) -> bool {
-    let Some(comment_start) = line.find("//") else {
-        return false;
-    };
-    if !line[..comment_start].chars().all(char::is_whitespace) {
-        return false;
-    }
-    let body = &line[comment_start + 2..];
-    let Some(caret_offset) = body.find('^') else {
-        return false;
-    };
-    body[..caret_offset].chars().all(char::is_whitespace)
-}
-
-fn diagnostic_byte_offset() -> isize {
-    std::env::var("CO2_JSON_BYTE_OFFSET")
-        .ok()
-        .and_then(|raw| raw.parse::<isize>().ok())
-        .unwrap_or(0)
+    json_span(filename, src, range, is_primary, label)
 }
 
 fn map_diagnostic_span(span: SimpleSpan) -> Option<DiagnosticSpan> {

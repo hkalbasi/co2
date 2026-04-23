@@ -107,8 +107,6 @@ struct UiSpanExpectation {
     byte_start: usize,
     byte_end: usize,
     message: Option<String>,
-    src_byte_start: usize,
-    src_byte_end: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -165,21 +163,21 @@ fn render_ui_error(err: &UiTestError) {
     let name = path.display().to_string();
     let source = &err.source;
 
-    for issue in &err.issues {
+for issue in &err.issues {
         if let Some(span) = &issue.span {
-            if span.src_byte_start < source.len() && span.src_byte_end <= source.len() {
+            if span.byte_start < source.len() && span.byte_end <= source.len() {
                 let mut r = Report::build(
                     ReportKind::Error,
-                    (&*name, span.src_byte_start..span.src_byte_end),
+                    (&*name, span.byte_start..span.byte_end),
                 );
                 r.add_label(
-                    Label::new((&*name, span.src_byte_start..span.src_byte_end))
+                    Label::new((&*name, span.byte_start..span.byte_end))
                         .with_color(Color::Red)
                         .with_message(&issue.reason),
                 );
                 r.finish()
                     .eprint((&*name, Source::from(source)))
-                    .unwrap_or_else(|_| eprintln!("Error: {}\n  at {}", issue.reason, name));
+.unwrap_or_else(|_| eprintln!("Error: {}\n  at {}", issue.reason, name));
             } else {
                 eprintln!("Error: {}\n  at {}", issue.reason, name);
             }
@@ -471,7 +469,6 @@ fn compile_test(
             cmd.arg(&c_src).arg("-o").arg(&exe_path).args(compile_flags);
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
-                cmd.env("CO2_JSON_BYTE_OFFSET", "20");
             }
             cmd.output().context("failed to execute co2cc")?
         }
@@ -495,7 +492,6 @@ fn compile_test(
                 .args(compile_flags);
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
-                cmd.env("CO2_JSON_BYTE_OFFSET", "22");
             }
             cmd.output().context("failed to execute co2rustc")?
         }
@@ -636,8 +632,6 @@ fn check_ui(
                         message: Some(diagnostic.message.clone()),
                         byte_start: primary_span.byte_start,
                         byte_end: primary_span.byte_end,
-                        src_byte_start: primary_span.byte_start,
-                        src_byte_end: primary_span.byte_end,
                     }),
                     reason: format!("Unexpected diagnostic: {}", diagnostic.message),
                 });
@@ -677,11 +671,11 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
         .output()
         .with_context(|| format!("failed to execute {}", compile.exe_path.display()))?;
 
-    let got_status = output.status.code().unwrap_or(-1);
+let got_status = output.status.code().unwrap_or(-1);
     let expected_status = directive_i32(test, "run-status")?.unwrap_or(0);
     if got_status != expected_status {
-return Err(TestError {
-                source: test.source.clone(),
+        return Err(TestError {
+            source: test.source.clone(),
                 span: None,
                 message: format!(
                     "exit code mismatch: expected `{}`, got `{}`",
@@ -976,12 +970,10 @@ fn parse_directives(path: &Path) -> Result<HashMap<String, Vec<String>>> {
     Ok(map)
 }
 
-fn parse_ui_span_expectations(path: &Path, mode: Mode) -> Result<Vec<UiSpanExpectation>> {
+fn parse_ui_span_expectations(path: &Path, _mode: Mode) -> Result<Vec<UiSpanExpectation>> {
     let src = fs::read_to_string(path)
         .with_context(|| format!("failed to read test source {}", path.display()))?;
-    let effective_src = source_for_ui_byte_offsets(&src, mode);
-    let line_starts_eff = line_start_offsets(&effective_src);
-    let line_starts_orig = line_start_offsets(&src);
+    let line_starts = line_start_offsets(&src);
     let mut out = Vec::new();
 
     for (idx, line) in src.lines().enumerate() {
@@ -996,36 +988,15 @@ fn parse_ui_span_expectations(path: &Path, mode: Mode) -> Result<Vec<UiSpanExpec
             );
         }
         let source_line_idx = line_no - 2;
-        let line_start_eff = line_starts_eff[source_line_idx];
-        let line_start_orig = line_starts_orig[source_line_idx];
+        let line_start = line_starts[source_line_idx];
         out.push(UiSpanExpectation {
-            byte_start: line_start_eff + (column_start - 1),
-            byte_end: line_start_eff + (column_end - 1),
+            byte_start: line_start + (column_start - 1),
+            byte_end: line_start + (column_end - 1),
             message,
-            src_byte_start: line_start_orig + (column_start - 1),
-            src_byte_end: line_start_orig + (column_end - 1),
         });
     }
 
     Ok(out)
-}
-
-fn source_for_ui_byte_offsets(src: &str, mode: Mode) -> String {
-    match mode {
-        Mode::Rust => src.to_owned(),
-        Mode::C | Mode::Co2 => {
-            let mut out = String::with_capacity(src.len());
-            for line in src.lines() {
-                if parse_ui_span_annotation(line).is_some() {
-                    out.push('\n');
-                } else {
-                    out.push_str(line);
-                    out.push('\n');
-                }
-            }
-            out
-        }
-    }
 }
 
 fn parse_ui_span_annotation(line: &str) -> Option<(usize, usize, Option<String>)> {
