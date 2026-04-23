@@ -52,7 +52,7 @@ pub struct LocalResolverBase {
     pub hir_ctx: &'static HirStructureCtx<'static>,
     pub file_id: FileId,
     pub preprocessed: Arc<PreprocessedSource>,
-    pub file_ids: Arc<Vec<FileId>>,
+    pub file_ids: Arc<HashMap<co2_ast::FileId, FileId>>,
     pub source_name: String,
     pub source: &'static str,
     pub(crate) struct_manager: StructManager,
@@ -273,7 +273,7 @@ impl LocalResolver {
         // tries to borrow_mut (e.g. to register an anonymous struct in sizeof).
         let source_name = self.base.borrow().source_name.clone();
         let source = self.base.borrow().source;
-        let expr = parse_expression_tokens(tokens, source_name, source, self.clone());
+        let expr = parse_expression_tokens(tokens, source_name, source, subscription.1, self.clone());
         let mut base = self.base.borrow_mut();
         let id = base.array_len_consts.len();
         let registered = RegisteredArrayLenConst { id, expr: expr.clone() };

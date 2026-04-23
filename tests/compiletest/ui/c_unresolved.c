@@ -28,3 +28,11 @@ int f4() {
     return SOME_MACRO + missing;
                       //^^^^^^^ error: Unresolved name
 }
+
+#define BAD_MACRO 5 + missing
+
+int f5() {
+    return BAD_MACRO + 3;
+         //^^^^^^^^^ error: Unresolved name
+}
+

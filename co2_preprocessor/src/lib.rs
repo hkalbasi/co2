@@ -38,6 +38,7 @@ pub mod frontend {
 }
 
 use ccc_preprocessor::pipeline::Preprocessor;
+use co2_ast::FileId;
 
 #[derive(Clone, Debug)]
 pub struct SourceFile {
@@ -48,14 +49,14 @@ pub struct SourceFile {
 
 #[derive(Clone, Debug)]
 struct OutputLineMap {
-    file_idx: usize,
+    file_idx: FileId,
     source_line: usize,
     normalized_line: Arc<str>,
 }
 
 #[derive(Clone, Debug)]
 pub struct MappedSpan {
-    pub file_idx: usize,
+    pub file_idx: FileId,
     pub start: usize,
     pub end: usize,
 }
@@ -71,44 +72,72 @@ pub struct DiagnosticSpan {
 #[derive(Clone, Debug)]
 pub struct PreprocessedSource {
     pub normalized: Arc<str>,
-    pub main_file_idx: usize,
-    files: Arc<Vec<SourceFile>>,
+    pub main_file_idx: FileId,
+    files: Arc<HashMap<FileId, SourceFile>>,
     output_lines: Arc<Vec<OutputLineMap>>,
     normalized_line_offsets: Arc<Vec<usize>>,
 }
 
 impl PreprocessedSource {
-    pub fn files(&self) -> &[SourceFile] {
+    pub fn files(&self) -> &HashMap<FileId, SourceFile> {
         &self.files
     }
 
-    pub fn map_span(&self, span: co2_ast::Span) -> Option<MappedSpan> {
-        if self.output_lines.is_empty() {
-            return None;
+    pub fn real_span(&self, start: usize, end: usize) -> co2_ast::Span {
+        let end_lookup = if end > start { end - 1 } else { end };
+        let start_line_idx = line_index_for_offset(&self.normalized_line_offsets, start);
+        let end_line_idx = line_index_for_offset(&self.normalized_line_offsets, end_lookup);
+        if let Some(start_line_idx) = start_line_idx
+            && let Some(end_line_idx) = end_line_idx
+            && start_line_idx == end_line_idx
+            && let Some(line) = self.output_lines.get(start_line_idx)
+        {
+            let output_line_start = self.normalized_line_offsets[start_line_idx];
+            let file = &self.files[&line.file_idx];
+            if let Some(source_range) = line_range(file, line.source_line) {
+                let source_line = &file.source[source_range.clone()];
+                let normalized_line = line.normalized_line.as_ref();
+                let mapped = map_range(
+                    source_line,
+                    normalized_line,
+                    start.saturating_sub(output_line_start),
+                    end.saturating_sub(output_line_start),
+                );
+                return co2_ast::Span {
+                    start: source_range.start + mapped.start,
+                    end: source_range.start + mapped.end,
+                    context: line.file_idx,
+                };
+            }
         }
 
-        let start = self.map_offset(span.start)?;
-        let end = self.map_offset(span.end)?;
-        if start.file_idx == end.file_idx {
-            return Some(MappedSpan {
-                file_idx: start.file_idx,
-                start: start.start.min(end.end),
-                end: start.end.max(end.end),
-            });
+        let start_mapped = self.map_offset(start);
+        let end_mapped = self.map_offset(end);
+
+        if let Some(start) = start_mapped.as_ref()
+            && let Some(end) = end_mapped.as_ref()
+            && start.file_idx == end.file_idx
+        {
+            return co2_ast::Span {
+                start: start.start,
+                end: end.end.max(start.start),
+                context: start.file_idx,
+            };
         }
 
-        Some(start)
-    }
+        if let Some(start) = start_mapped.as_ref() {
+            return co2_ast::Span {
+                start: start.start,
+                end: start.end,
+                context: start.file_idx,
+            };
+        }
 
-    pub fn diagnostic_span(&self, span: co2_ast::Span) -> Option<DiagnosticSpan> {
-        let mapped = self.map_span(span)?;
-        let file = self.files.get(mapped.file_idx)?;
-        Some(DiagnosticSpan {
-            file_name: file.path.display().to_string(),
-            source: file.source.clone(),
-            start: mapped.start,
-            end: mapped.end.min(file.source.len()),
-        })
+        co2_ast::Span {
+            start,
+            end,
+            context: self.main_file_idx,
+        }
     }
 
     fn map_offset(&self, output_offset: usize) -> Option<MappedSpan> {
@@ -116,7 +145,7 @@ impl PreprocessedSource {
         let line = self.output_lines.get(line_idx)?;
         let output_line_start = *self.normalized_line_offsets.get(line_idx)?;
         let output_col = output_offset.saturating_sub(output_line_start);
-        let file = self.files.get(line.file_idx)?;
+        let file = self.files.get(&line.file_idx)?;
         let source_range = line_range(file, line.source_line)?;
         let source_line = &file.source[source_range.clone()];
 
@@ -282,8 +311,8 @@ fn resolve_force_include(input: &Path, include: &str) -> PathBuf {
 }
 
 fn build_preprocessed_source(input: &Path, preprocessed: String) -> PreprocessedSource {
-    let mut files = Vec::<SourceFile>::new();
-    let mut file_index = HashMap::<PathBuf, usize>::new();
+    let mut files = HashMap::<FileId, SourceFile>::new();
+    let mut file_index = HashMap::<PathBuf, FileId>::new();
     let main_file_idx = ensure_source_file(input, &mut files, &mut file_index);
 
     let mut normalized = String::new();
@@ -333,9 +362,9 @@ fn build_preprocessed_source(input: &Path, preprocessed: String) -> Preprocessed
 
 fn ensure_source_file(
     path: &Path,
-    files: &mut Vec<SourceFile>,
-    file_index: &mut HashMap<PathBuf, usize>,
-) -> usize {
+    files: &mut HashMap<FileId, SourceFile>,
+    file_index: &mut HashMap<PathBuf, FileId>,
+) -> FileId {
     if let Some(idx) = file_index.get(path).copied() {
         return idx;
     }
@@ -343,8 +372,8 @@ fn ensure_source_file(
     let source = common::encoding::bytes_to_string(
         fs::read(path).unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display())),
     );
-    let idx = files.len();
-    files.push(SourceFile {
+    let idx = FileId::from(files.len());
+    files.insert(idx, SourceFile {
         path: path.to_path_buf(),
         line_offsets: Arc::new(compute_line_offsets(&source)),
         source: Arc::<str>::from(source),
@@ -366,6 +395,10 @@ fn absolutize_marker_path(main_input: &Path, path: &str) -> PathBuf {
     let marker = PathBuf::from(path);
     if marker.is_absolute() {
         return marker;
+    }
+    let cwd_resolved = absolute_path(&marker);
+    if cwd_resolved.exists() {
+        return cwd_resolved;
     }
     let main_input = absolute_path(main_input);
     main_input
@@ -465,6 +498,53 @@ fn map_column(source_line: &str, normalized_line: &str, output_col: usize) -> us
     }
 
     output_col.min(source_line.len())
+}
+
+fn map_range(source_line: &str, normalized_line: &str, output_start: usize, output_end: usize) -> Range<usize> {
+    let output_start = output_start.min(normalized_line.len());
+    let output_end = output_end.min(normalized_line.len()).max(output_start);
+    if output_start == output_end {
+        let point = map_column(source_line, normalized_line, output_start);
+        return point..point;
+    }
+
+    let needle = normalized_line.get(output_start..output_end).unwrap_or("").trim();
+    if !needle.is_empty() {
+        let mut matches = source_line.match_indices(needle);
+        if let Some((idx, _)) = matches.next() {
+            if matches.next().is_none() {
+                return idx..(idx + needle.len());
+            }
+        }
+    }
+
+    source_token_range(source_line, output_start, output_end)
+}
+
+fn source_token_range(source_line: &str, output_start: usize, output_end: usize) -> Range<usize> {
+    let bytes = source_line.as_bytes();
+    if bytes.is_empty() {
+        return 0..0;
+    }
+
+    let mut anchor = output_start.min(bytes.len().saturating_sub(1));
+    if !is_ident_continue(bytes[anchor]) && anchor > 0 && is_ident_continue(bytes[anchor - 1]) {
+        anchor -= 1;
+    }
+    if !is_ident_continue(bytes[anchor]) {
+        return output_start.min(bytes.len())..output_end.min(bytes.len());
+    }
+
+    let mut start = anchor;
+    while start > 0 && is_ident_continue(bytes[start - 1]) {
+        start -= 1;
+    }
+
+    let mut end = anchor + 1;
+    while end < bytes.len() && is_ident_continue(bytes[end]) {
+        end += 1;
+    }
+    start..end
 }
 
 fn shrink_token_start(line: &str, col: usize, end: usize) -> usize {

@@ -124,14 +124,14 @@ pub fn lower_crate_sig(
     src_static: &'static str,
     file_id: FileId,
     preprocessed: Arc<PreprocessedSource>,
-    file_ids: Arc<Vec<FileId>>,
+    file_ids: Arc<HashMap<co2_ast::FileId, FileId>>,
     no_main: bool,
 ) -> (HirStructure, HashMap<DefId, MirOwnerInfo>, WellknownDefs) {
     let span = ctx.span_in_file(file_id, 0, 0);
     let deps = ctx.dependencies();
 
     let tu =
-        co2_parser::parse_translation_unit(source_name.clone(), src_static, StatelessResolver::new())
+        co2_parser::parse_translation_unit(source_name.clone(), src_static, Some(&preprocessed), StatelessResolver::new())
         .expect("failed to parse co2 source")
         .0;
 
@@ -142,9 +142,9 @@ pub fn lower_crate_sig(
 
     let ctx = &*Box::leak(Box::new(ctx));
 
-    let mut ctx = CrateSigCtx {
-        resolver: Rc::new(RefCell::new(LocalResolverBase {
-            resolver: Resolver::new(&ctx, deps, &tu, foreign_mod),
+        let mut ctx = CrateSigCtx {
+            resolver: Rc::new(RefCell::new(LocalResolverBase {
+                resolver: Resolver::new(&ctx, deps, &tu, foreign_mod),
             local_counter: 0,
             fake_defs_counter: 0,
             local_tys: HashMap::new(),
@@ -168,8 +168,6 @@ pub fn lower_crate_sig(
         hir_ctx: ctx,
         source_name,
         source: src_static,
-        file_id,
-        preprocessed,
         file_ids,
         mir_owners: HashMap::new(),
         hir_items: vec![],
@@ -251,6 +249,7 @@ pub fn lower_crate_sig(
                         &body.0.tokens.0,
                         ctx.source_name.clone(),
                         ctx.source,
+                        body.0.tokens.1,
                         resolver.clone(),
                     )
                 }));

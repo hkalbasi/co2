@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, u32};
 
 use itertools::Itertools;
 
@@ -7,16 +7,29 @@ mod resolver;
 mod transform;
 
 // Type definitions
-pub type Span = chumsky::span::SimpleSpan<usize>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId(u32);
+
+impl FileId {
+    pub const INVALID: Self = Self(u32::MAX);
+}
+
+impl From<usize> for FileId {
+    fn from(value: usize) -> Self {
+        FileId(value as u32)
+    }
+}
+
+pub type Span = chumsky::span::SimpleSpan<usize, FileId>;
 pub type Spanned<T> = (T, Span);
 
 pub use chumsky::prelude::Rich;
 pub use diagnostic::{
-    DiagnosticAbort, DiagnosticSpan, clear_diagnostic_mapper, diagnostics_were_emitted,
+    DiagnosticAbort, DiagnosticSpan, diagnostics_were_emitted,
     emit_mapped_errors_and_terminate, is_diagnostic_abort, panic_with_diagnostic_abort,
     print_errors_and_terminate,
     reset_diagnostic_state, safe_range, take_errors,
-    set_diagnostic_mapper,
+    set_source_map, SourceMap,
 };
 pub use resolver::{StatelessResolver, TypeResolver};
 pub use transform::{DoTransform, Transformable};

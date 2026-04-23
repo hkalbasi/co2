@@ -39,6 +39,10 @@ struct PendingCompile {
     preprocessed: Arc<PreprocessedSource>,
 }
 
+struct Co2SourceMap {
+    preprocessed: Arc<PreprocessedSource>,
+}
+
 fn pending_compile_cell() -> &'static Mutex<Option<PendingCompile>> {
     static CELL: OnceLock<Mutex<Option<PendingCompile>>> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(None))
@@ -47,14 +51,20 @@ struct Co2GeneratorState {
     file_id: rustc_gen::FileId,
     source_name: String,
     src_static: &'static str,
-    preprocessed: Arc<PreprocessedSource>,
-    file_ids: Arc<Vec<rustc_gen::FileId>>,
+    file_ids: Arc<HashMap<co2_ast::FileId, rustc_gen::FileId>>,
     pending_mirs: HashMap<DefId, MirOwnerInfo>,
     wellknown_defs: WellknownDefs,
 }
 
 unsafe impl Send for Co2GeneratorState {}
 unsafe impl Sync for Co2GeneratorState {}
+
+impl co2_ast::SourceMap for Co2SourceMap {
+    fn get_file_info(&self, id: co2_ast::FileId) -> Option<(String, Arc<str>)> {
+        let file = self.preprocessed.files().get(&id)?;
+        Some((file.path.display().to_string(), file.source.clone()))
+    }
+}
 
 impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
     fn hir_structure(ctx: rustc_gen::HirStructureCtx) -> (Self, rustc_gen::HirStructure) {
@@ -64,29 +74,19 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             .take()
             .expect("missing pending compile input");
 
-        let mut file_ids = Vec::with_capacity(pending.preprocessed.files().len());
-        for file in pending.preprocessed.files() {
-            file_ids.push(ctx.add_custom_file(&file.path, file.source.as_ref()));
+        let mut file_ids = HashMap::with_capacity(pending.preprocessed.files().len());
+        for (co2_file_id, file) in pending.preprocessed.files() {
+            file_ids.insert(*co2_file_id, ctx.add_custom_file(&file.path, file.source.as_ref()));
         }
-        let file_id = file_ids[pending.preprocessed.main_file_idx];
+        let file_id = file_ids[&pending.preprocessed.main_file_idx];
         let source_name = pending.source_path.to_string_lossy().into_owned();
         let src_static: &'static str =
             Box::leak(pending.preprocessed.normalized.to_string().into_boxed_str());
 
-        let diagnostic_mapper = {
-            let preprocessed = pending.preprocessed.clone();
-            Arc::new(move |span: co2_ast::Span| {
-                preprocessed.diagnostic_span(span).map(|mapped| co2_ast::DiagnosticSpan {
-                    file_name: mapped.file_name,
-                    source: mapped.source,
-                    start: mapped.start,
-                    end: mapped.end,
-                })
-            })
-        };
-        co2_ast::set_diagnostic_mapper(diagnostic_mapper);
-
         let file_ids = Arc::new(file_ids);
+        co2_ast::set_source_map(Arc::new(Co2SourceMap {
+            preprocessed: pending.preprocessed.clone(),
+        }));
 
         let (result, pending_mirs, wellknown_defs) = co2_crate_sig::lower_crate_sig(
             ctx,
@@ -98,20 +98,16 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             pending.mode.no_main,
         );
 
-        (
-            Co2GeneratorState {
-                wellknown_defs,
-                file_id,
-                preprocessed: pending.preprocessed,
-                file_ids,
-                pending_mirs,
-                source_name,
-                src_static,
-                // resolver,
-                // resolver: Rc::new(RefCell::new(LocalResolverBase { resolver, local_counter: 0 })),
-            },
-            result,
-        )
+        let state = Co2GeneratorState {
+            wellknown_defs,
+            file_id,
+            file_ids,
+            pending_mirs,
+            source_name,
+            src_static,
+        };
+
+        (state, result)
     }
 
     fn emit_mir(&mut self, ctx: rustc_gen::HirStructureCtx, def: DefId) -> Body {
@@ -219,11 +215,8 @@ impl Co2GeneratorState {
         ctx: &HirStructureCtx<'_>,
         span: co2_ast::Span,
     ) -> rustc_public_generative::rustc_public::ty::Span {
-        if let Some(mapped) = self.preprocessed.map_span(span) {
-            let file_id = self.file_ids[mapped.file_idx];
-            return ctx.span_in_file(file_id, mapped.start as u32, mapped.end as u32);
-        }
-        ctx.span_in_file(self.file_id, span.start as u32, span.end as u32)
+        let file_id = self.file_ids[&span.context];
+        ctx.span_in_file(file_id, span.start as u32, span.end as u32)
     }
 
     fn lower_explicit_static_mir(
@@ -563,7 +556,6 @@ pub fn compile_co2_source(
     rustc_args: Vec<String>,
 ) {
     co2_ast::reset_diagnostic_state();
-    co2_ast::clear_diagnostic_mapper();
     *pending_compile_cell().try_lock().unwrap() = Some(PendingCompile {
         mode,
         source_path,
@@ -571,7 +563,6 @@ pub fn compile_co2_source(
     });
 
     rustc_gen::generate_with_args::<Co2GeneratorState>(rustc_args);
-    co2_ast::clear_diagnostic_mapper();
     if co2_ast::diagnostics_were_emitted() {
         co2_ast::panic_with_diagnostic_abort();
     }

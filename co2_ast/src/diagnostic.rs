@@ -7,15 +7,19 @@ use std::sync::{
 };
 
 use ariadne::{Color, Label, Report, ReportKind, sources};
-use chumsky::{error::Rich, span::SimpleSpan};
+use chumsky::error::Rich;
 use serde_json::json;
 
-use crate::Token;
+use crate::{Token, Span, FileId};
 
-static ERRORS: Mutex<Vec<Rich<'static, Token, SimpleSpan>>> = Mutex::new(Vec::new());
+static ERRORS: Mutex<Vec<Rich<'static, Token, Span>>> = Mutex::new(Vec::new());
 static DIAGNOSTICS_EMITTED: AtomicBool = AtomicBool::new(false);
 static INSTALL_HOOK: Once = Once::new();
-static DIAGNOSTIC_MAPPER: Mutex<Option<DiagnosticMapper>> = Mutex::new(None);
+static SOURCE_MAP: Mutex<Option<Arc<dyn SourceMap>>> = Mutex::new(None);
+
+pub trait SourceMap: Send + Sync {
+    fn get_file_info(&self, id: FileId) -> Option<(String, Arc<str>)>;
+}
 
 #[derive(Clone)]
 pub struct DiagnosticSpan {
@@ -25,17 +29,15 @@ pub struct DiagnosticSpan {
     pub end: usize,
 }
 
-type DiagnosticMapper = Arc<dyn Fn(SimpleSpan) -> Option<DiagnosticSpan> + Send + Sync>;
-
 #[derive(Debug)]
 pub struct DiagnosticAbort;
 
-pub fn take_errors() -> Vec<Rich<'static, Token, SimpleSpan>> {
+pub fn take_errors() -> Vec<Rich<'static, Token, Span>> {
     let mut guard = ERRORS.try_lock().unwrap();
     std::mem::take(&mut *guard)
 }
 
-pub fn safe_range(span: SimpleSpan, src_len: usize) -> std::ops::Range<usize> {
+pub fn safe_range(span: Span, src_len: usize) -> std::ops::Range<usize> {
     let mut start = span.start.min(src_len);
     let mut end = span.end.min(src_len);
     if end < start {
@@ -49,12 +51,8 @@ pub fn reset_diagnostic_state() {
     DIAGNOSTICS_EMITTED.store(false, Ordering::SeqCst);
 }
 
-pub fn set_diagnostic_mapper(mapper: DiagnosticMapper) {
-    *DIAGNOSTIC_MAPPER.try_lock().unwrap() = Some(mapper);
-}
-
-pub fn clear_diagnostic_mapper() {
-    *DIAGNOSTIC_MAPPER.try_lock().unwrap() = None;
+pub fn set_source_map(source_map: Arc<dyn SourceMap>) {
+    *SOURCE_MAP.try_lock().unwrap() = Some(source_map);
 }
 
 pub fn diagnostics_were_emitted() -> bool {
@@ -85,7 +83,7 @@ fn install_diagnostic_panic_hook() {
 pub fn print_errors_and_terminate(
     filename: String,
     src: &'static str,
-    errs: Vec<Rich<'_, char>>,
+    errs: Vec<Rich<'_, char, Span>>,
 ) -> ! {
     let errs = errs
         .into_iter()
@@ -102,7 +100,7 @@ pub fn print_errors_and_terminate(
 pub fn emit_mapped_errors_and_terminate(
     filename: String,
     src: &'static str,
-    errs: Vec<Rich<'_, String, SimpleSpan>>,
+    errs: Vec<Rich<'_, String, Span>>,
 ) -> ! {
     DIAGNOSTICS_EMITTED.store(true, Ordering::SeqCst);
     if std::env::var_os("CO2_FORCE_JSON_DIAGNOSTICS").is_some() {
@@ -117,8 +115,8 @@ pub fn emit_mapped_errors_and_terminate(
     panic_with_diagnostic_abort();
 }
 
-fn emit_human_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, SimpleSpan>) {
-    if let Some(mapped) = map_diagnostic_span(*e.span()) {
+fn emit_human_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, Span>) {
+    if let Some(mapped) = get_diagnostic_info(*e.span()) {
         Report::build(ReportKind::Error, (mapped.file_name.clone(), mapped.start..mapped.end))
             .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
             .with_message(e.to_string())
@@ -152,8 +150,8 @@ fn emit_human_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, SimpleS
         .unwrap();
 }
 
-fn emit_json_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, SimpleSpan>) {
-    if let Some(mapped) = map_diagnostic_span(*e.span()) {
+fn emit_json_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, Span>) {
+    if let Some(mapped) = get_diagnostic_info(*e.span()) {
         let range = mapped.start..mapped.end;
         let diagnostic = json!({
             "$message_type": "diagnostic",
@@ -228,10 +226,16 @@ fn json_span_unadjusted(
     json_span(filename, src, range, is_primary, label)
 }
 
-fn map_diagnostic_span(span: SimpleSpan) -> Option<DiagnosticSpan> {
-    let guard = DIAGNOSTIC_MAPPER.try_lock().unwrap();
-    let mapper = guard.as_ref()?;
-    mapper(span)
+fn get_diagnostic_info(span: Span) -> Option<DiagnosticSpan> {
+    let guard = SOURCE_MAP.try_lock().unwrap();
+    let sm = guard.as_ref()?;
+    let (file_name, source) = sm.get_file_info(span.context)?;
+    Some(DiagnosticSpan {
+        file_name,
+        source,
+        start: span.start,
+        end: span.end,
+    })
 }
 
 fn byte_to_line_col(src: &str, byte_idx: usize) -> (usize, usize) {

@@ -5,6 +5,29 @@ use chumsky::{
 use co2_ast::TypeResolver;
 use co2_ast::*;
 
+fn join_spans(start: Span, end: Span) -> Span {
+    if start.context == end.context {
+        Span {
+            start: start.start,
+            end: end.end,
+            context: start.context,
+        }
+    } else {
+        start
+    }
+}
+
+fn single_token_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
+    slice.first().map(|(_, span)| *span).unwrap_or(fallback)
+}
+
+fn slice_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
+    slice.first()
+        .zip(slice.last())
+        .map(|(first, last)| join_spans(first.1, last.1))
+        .unwrap_or(fallback)
+}
+
 fn look_ahead<'src, I>(
     token: Token,
 ) -> impl Parser<'src, I, (), extra::Err<Rich<'src, Token, Span>>> + Clone
@@ -53,11 +76,13 @@ where
         content.delimited_by(just(Token::LBrace), just(Token::RBrace))
     })
     .map_with(|_, e| {
+        let slice = e.slice();
+        let span = slice_span(slice, e.span());
         (
             LazyCompoundStatement {
-                tokens: (<[_]>::to_vec(e.slice()), e.span()),
+                tokens: (<[_]>::to_vec(slice), span),
             },
-            e.span(),
+            span,
         )
     })
 }
@@ -71,7 +96,12 @@ where
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     fn is_finished<'src, I>(
-        inp: &mut chumsky::input::InputRef<'src, '_, I, extra::Full<Rich<'src, Token>, (), ()>>,
+        inp: &mut chumsky::input::InputRef<
+            'src,
+            '_,
+            I,
+            extra::Full<Rich<'src, Token, Span>, (), ()>,
+        >,
     ) -> bool
     where
         I: ValueInput<'src, Token = Token, Span = Span>
@@ -541,7 +571,7 @@ where
             },
             expression(rec.clone())
                 .delimited_by(just(Token::LParen), just(Token::RParen))
-                .map(|x: (Expression<R>, SimpleSpan)| x.0),
+                .map(|x: Spanned<Expression<R>>| x.0),
         ))
         .map_with(|r, e| (r, e.span()));
 
@@ -961,11 +991,13 @@ where
         content.delimited_by(just(Token::LBracket), just(Token::RBracket))
     })
     .map_with(|_, e| {
+        let slice = e.slice();
+        let span = slice_span(slice, e.span());
         (
             LazySubscription {
-                tokens: <[_]>::to_vec(e.slice()),
+                tokens: <[_]>::to_vec(slice),
             },
-            e.span(),
+            span,
         )
     })
 }
@@ -1005,13 +1037,22 @@ where
     .separated_by(just(Token::ColonColon))
     .at_least(1)
     .collect::<Vec<Vec<Spanned<RustPathSegment>>>>()
-    .map(|parts| RustPath {
-        segments: parts
+    .map(|parts| {
+        let segments = parts
             .into_iter()
             .flatten()
-            .collect::<Vec<Spanned<RustPathSegment>>>(),
+            .collect::<Vec<Spanned<RustPathSegment>>>();
+        let span = segments
+            .first()
+            .zip(segments.last())
+            .map(|(first, last)| join_spans(first.1, last.1))
+            .unwrap_or(Span {
+                start: 0,
+                end: 0,
+                context: FileId::INVALID,
+            });
+        (RustPath { segments }, span)
     })
-    .map_with(|r, e| (r, e.span()))
 }
 
 fn rust_path<'src, I>()
@@ -1428,7 +1469,7 @@ where
         Token::Ident(s) => s,
     }
     .labelled("Identifier")
-    .map_with(|r, e| (r, e.span()))
+    .map_with(|r, e| (r, single_token_span(e.slice(), e.span())))
 }
 
 fn number<'src, I>()
@@ -1441,7 +1482,7 @@ where
         Token::Integer(s, _) | Token::FloatLit(s, _) => s,
     }
     .labelled("Number")
-    .map_with(|r, e| (r, e.span()))
+    .map_with(|r, e| (r, single_token_span(e.slice(), e.span())))
 }
 
 fn parameter_type_list<'src, I, R: TypeResolver>(
@@ -1987,11 +2028,7 @@ fn parser_is_constructible() {
     use chumsky::input::Input;
     let parser = translation_unit(crate::StatelessResolver::new());
     parser.parse((&[]).map(
-        SimpleSpan {
-            start: 1,
-            end: 2,
-            context: (),
-        },
+        Span::new(0, 1..2),
         |_| unreachable!(),
     ));
 }

@@ -1,11 +1,9 @@
-use chumsky::{input::MapExtra, prelude::*};
+use chumsky::{input::MapExtra, prelude::*, span::SimpleSpan};
 use co2_ast::{FloatSuffix, IntegerSuffix, Token};
-
-use crate::{Span, Spanned};
 
 // Helper function to parse integer suffixes
 fn integer_suffix_parser<'src>()
--> impl Parser<'src, &'src str, IntegerSuffix, extra::Err<Rich<'src, char, Span>>> {
+-> impl Parser<'src, &'src str, IntegerSuffix, extra::Err<Rich<'src, char, SimpleSpan<usize>>>> {
     // First try to parse combinations
     let unsigned_long_long = just("ull")
         .or(just("ULL"))
@@ -30,7 +28,7 @@ fn integer_suffix_parser<'src>()
 
 // Helper function to parse float suffixes
 fn float_suffix_parser<'src>()
--> impl Parser<'src, &'src str, FloatSuffix, extra::Err<Rich<'src, char, Span>>> {
+-> impl Parser<'src, &'src str, FloatSuffix, extra::Err<Rich<'src, char, SimpleSpan<usize>>>> {
     just('f')
         .or(just('F'))
         .to(FloatSuffix::Float)
@@ -39,8 +37,8 @@ fn float_suffix_parser<'src>()
         .map(|opt| opt.unwrap_or(FloatSuffix::None))
 }
 
-pub fn lexer<'src: 'static>()
--> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err<Rich<'src, char, Span>>> {
+pub fn lexer<'src>()
+-> impl Parser<'src, &'src str, Vec<(Token, SimpleSpan<usize>)>, extra::Err<Rich<'src, char, SimpleSpan<usize>>>> {
     // ----- Comments -----
     let line_comment = just("//")
         .then(any().and_is(just('\n').not()).repeated())
