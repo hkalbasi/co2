@@ -12,8 +12,9 @@ int f2() {
 }
 
 int f3() {
-    const missing x = 5;
-        //^^^^^^^ error: Unresolved name
+    int x = 2;
+    x* y = &x;
+     //^ error: Unresolved name
 }
 
 int main() {

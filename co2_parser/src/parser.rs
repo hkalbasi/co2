@@ -1256,18 +1256,18 @@ where
         .or(struct_or_union_specifier)
         .or(enum_specifier)
         .or(rust_path()
-            .map({
+            .try_map({
                 let resolver = resolver.clone();
-                move |path| (resolver.classify_path(&path.0), path.1)
-            })
-            .filter(|r| {
-                let Some(r) = &r.0 else { return false };
-                match r.0 {
-                    TypeQueryResult::Expr => false,
-                    TypeQueryResult::Unsure | TypeQueryResult::Type => true,
+                move |path, _| match resolver.classify_path(&path.0) {
+                    Some((TypeQueryResult::Unsure | TypeQueryResult::Type, resolved)) => {
+                        Ok(TypeSpecifier::TypedefName((resolved, path.1)))
+                    }
+                    Some((TypeQueryResult::Expr, _)) => {
+                        Err(Rich::custom(path.1, "expected type name, found expression"))
+                    }
+                    None => Err(Rich::custom(path.1, "Unresolved name")),
                 }
-            })
-            .map(|r| TypeSpecifier::TypedefName((r.0.unwrap().1, r.1))))
+            }))
         .map_with(|r, e| (r, e.span()))
         .labelled("Type specifier")
     })
