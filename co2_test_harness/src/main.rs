@@ -143,13 +143,18 @@ impl std::error::Error for TestError {}
 struct UiTestError {
     path: PathBuf,
     source: String,
-    expected_span: UiSpanExpectation,
+    issues: Vec<UiTestIssue>,
+}
+
+#[derive(Debug, Clone)]
+struct UiTestIssue {
+    span: Option<UiSpanExpectation>,
     reason: String,
 }
 
 impl std::fmt::Display for UiTestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.reason)
+        write!(f, "{} issue(s)", self.issues.len())
     }
 }
 
@@ -160,36 +165,27 @@ fn render_ui_error(err: &UiTestError) {
     let name = path.display().to_string();
     let source = &err.source;
 
-    if err.expected_span.src_byte_start < source.len() && err.expected_span.src_byte_end <= source.len() {
-        let mut r = Report::build(
-            ReportKind::Error,
-            (&*name, err.expected_span.src_byte_start..err.expected_span.src_byte_end),
-        );
-        r.add_label(
-            Label::new((&*name, err.expected_span.src_byte_start..err.expected_span.src_byte_end))
-                .with_color(Color::Red)
-                .with_message(&err.reason),
-        );
-        r.finish()
-            .eprint((&*name, Source::from(source)))
-            .unwrap_or_else(|e| eprintln!("{e:#}"));
-    } else {
-        let line_starts: Vec<usize> = {
-            let mut starts = vec![0];
-            for (idx, ch) in source.char_indices() {
-                if ch == '\n' {
-                    starts.push(idx + 1);
-                }
+    for issue in &err.issues {
+        if let Some(span) = &issue.span {
+            if span.src_byte_start < source.len() && span.src_byte_end <= source.len() {
+                let mut r = Report::build(
+                    ReportKind::Error,
+                    (&*name, span.src_byte_start..span.src_byte_end),
+                );
+                r.add_label(
+                    Label::new((&*name, span.src_byte_start..span.src_byte_end))
+                        .with_color(Color::Red)
+                        .with_message(&issue.reason),
+                );
+                r.finish()
+                    .eprint((&*name, Source::from(source)))
+                    .unwrap_or_else(|_| eprintln!("Error: {}\n  at {}", issue.reason, name));
+            } else {
+                eprintln!("Error: {}\n  at {}", issue.reason, name);
             }
-            starts
-        };
-        let line_idx = err.expected_span.byte_start;
-        let line_start = line_starts.get(line_idx).copied().unwrap_or(0);
-        let mut r = Report::build(ReportKind::Error, (&*name, line_start..line_start));
-        r.set_note(&err.reason);
-        r.finish()
-            .eprint((&*name, Source::from(source)))
-            .unwrap_or_else(|e| eprintln!("{e:#}"));
+        } else {
+            eprintln!("Error: {}\n  at {}", issue.reason, name);
+        }
     }
 }
 
@@ -583,6 +579,8 @@ fn check_ui(
     }
 
     let diagnostics = parse_ui_diagnostics(&stderr)?;
+    let mut issues = Vec::new();
+
     for expected in span_expectations {
         let message_matches = diagnostics.iter().any(|diagnostic| {
             if let Some(message) = &expected.message
@@ -609,14 +607,56 @@ fn check_ui(
             } else {
                 "missing UI span annotation".to_string()
             };
-            return Err(UiTestError {
-                path: test.path.clone(),
-                source: test.source.clone(),
-                expected_span: expected.clone(),
+            issues.push(UiTestIssue {
+                span: Some(expected.clone()),
                 reason,
-            }
-            .into());
+            });
         }
+    }
+
+    for diagnostic in &diagnostics {
+        let matched = span_expectations.iter().any(|expected| {
+            if let Some(message) = &expected.message
+                && !diagnostic.message.contains(message)
+            {
+                return false;
+            }
+
+            diagnostic.spans.iter().any(|span| {
+                span.is_primary
+                    && span.byte_start == expected.byte_start
+                    && span.byte_end == expected.byte_end
+            })
+        });
+
+        if !matched {
+            if let Some(primary_span) = diagnostic.spans.iter().find(|s| s.is_primary) {
+                issues.push(UiTestIssue {
+                    span: Some(UiSpanExpectation {
+                        message: Some(diagnostic.message.clone()),
+                        byte_start: primary_span.byte_start,
+                        byte_end: primary_span.byte_end,
+                        src_byte_start: primary_span.byte_start,
+                        src_byte_end: primary_span.byte_end,
+                    }),
+                    reason: format!("Unexpected diagnostic: {}", diagnostic.message),
+                });
+            } else {
+                issues.push(UiTestIssue {
+                    span: None,
+                    reason: format!("Unexpected diagnostic: {}", diagnostic.message),
+                });
+            }
+        }
+    }
+
+    if !issues.is_empty() {
+        return Err(UiTestError {
+            path: test.path.clone(),
+            source: test.source.clone(),
+            issues,
+        }
+        .into());
     }
 
     Ok(())
