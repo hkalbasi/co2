@@ -1,11 +1,18 @@
-use std::{cell::RefCell, collections::HashMap, panic::AssertUnwindSafe, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    panic::AssertUnwindSafe,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+};
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Designator, DoTransform as _, FunctionDefinitionSignature,
     InitDeclarator, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit,
     TypeQualifier, TypeResolver,
 };
-use co2_parser::parse_compound_statement;
+use co2_parser::{parse_compound_statement, parse_translation_unit};
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem, HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, rustc_public::{
@@ -17,7 +24,7 @@ use rustc_public_generative::{
 use crate::{
     CrateSigCtx, LocalResolver, LocalResolverBase, MirOwnerInfo,
     ast_resolver::StructAndEnumData,
-    resolver::Resolver,
+    resolver::{ModuleData, Resolver},
     struct_manager::{PendingEnum, StructData, StructManager},
     ty::CTy,
 };
@@ -118,85 +125,177 @@ fn deduplicate_tu_items(
     tu
 }
 
-pub fn lower_crate_sig(
-    ctx: HirStructureCtx<'_>,
+#[derive(Clone)]
+struct LoadedModule {
+    name: String,
     source_name: String,
-    src_static: &'static str,
-    file_id: FileId,
-    preprocessed: Arc<PreprocessedSource>,
-    file_ids: Arc<HashMap<co2_ast::FileId, FileId>>,
-    no_main: bool,
-) -> (HirStructure, HashMap<DefId, MirOwnerInfo>, WellknownDefs) {
-    let span = ctx.span_in_file(file_id, 0, 0);
-    let deps = ctx.dependencies();
+    source: &'static str,
+    tu: TranslationUnit<StatelessResolver>,
+    children: Vec<LoadedModule>,
+}
 
-    let tu =
-        co2_parser::parse_translation_unit(source_name.clone(), src_static, Some(&preprocessed), StatelessResolver::new())
-        .expect("failed to parse co2 source")
-        .0;
+struct SourceMapSnapshot {
+    files: Arc<HashMap<co2_ast::FileId, (String, Arc<str>)>>,
+}
 
-    let tu = deduplicate_tu_items(tu);
+impl co2_ast::SourceMap for SourceMapSnapshot {
+    fn get_file_info(&self, id: co2_ast::FileId) -> Option<(String, Arc<str>)> {
+        self.files.get(&id).cloned()
+    }
+}
 
-    let foreign_mod = ctx.allocate_def_id(ctx.root_crate_def_id(), DefData::ForeignMod);
-    let mut foreign_items = Vec::new();
+fn root_module_dir(source_path: &Path) -> PathBuf {
+    source_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
 
-    let ctx = &*Box::leak(Box::new(ctx));
+fn child_module_dir(source_path: &Path) -> PathBuf {
+    if source_path.file_stem().and_then(|stem| stem.to_str()) == Some("mod") {
+        source_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    } else {
+        source_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(source_path.file_stem().unwrap_or_default())
+    }
+}
 
-        let mut ctx = CrateSigCtx {
-            resolver: Rc::new(RefCell::new(LocalResolverBase {
-                resolver: Resolver::new(&ctx, deps, &tu, foreign_mod),
-            local_counter: 0,
-            fake_defs_counter: 0,
-            local_tys: HashMap::new(),
-            pending_typedefs: vec![],
-            pending_static: vec![],
-            array_len_consts: HashMap::new(),
-            array_len_const_exprs: HashMap::new(),
-            hir_ctx: unsafe { std::mem::transmute(ctx) },
-            file_id,
-            preprocessed: preprocessed.clone(),
-            file_ids: file_ids.clone(),
-            source_name: source_name.clone(),
-            source: src_static,
-            struct_manager: StructManager::default(),
-            unrepresentable_typedefs: HashMap::new(),
-            typedef_tys: HashMap::new(),
-            global_value_tys: HashMap::new(),
-            global_struct_tags: Rc::new(RefCell::new(StructAndEnumData::default())),
-            global_locals: Rc::new(RefCell::new(im::HashMap::new())),
-        })),
-        hir_ctx: ctx,
-        source_name,
-        source: src_static,
-        file_ids,
-        mir_owners: HashMap::new(),
-        hir_items: vec![],
-    };
-
-    {
-        let adt = ctx.resolve("core::ffi::VaList").unwrap().0;
-        let ty = HirTy::adt(
-            adt,
-            vec![HirGenericArg::Lifetime(HirLifetime::Static)],
-            span,
-        );
-        for name in ["__builtin_va_list", "__gnuc_va_list"] {
-            let Ok((id, _)) = ctx.resolve(name) else {
-                continue;
-            };
-            ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
-            ctx.hir_items.push(HirModuleItem::TypeDef {
-                name: name.to_owned(),
-                id,
-                span,
-                ty: ty.clone(),
-            });
-        }
+fn resolve_module_source(module_dir: &Path, module_name: &str) -> PathBuf {
+    let direct = module_dir.join(format!("{module_name}.co2"));
+    if direct.is_file() {
+        return direct;
     }
 
-    for (item, parser_span) in tu.items {
+    let nested = module_dir.join(module_name).join("mod.co2");
+    if nested.is_file() {
+        return nested;
+    }
+
+    panic!(
+        "failed to resolve module `{module_name}` in {}",
+        module_dir.display()
+    );
+}
+
+fn register_preprocessed_files(
+    ctx: &HirStructureCtx<'_>,
+    preprocessed: &PreprocessedSource,
+    rustc_file_ids: &mut HashMap<co2_ast::FileId, FileId>,
+    source_files: &mut HashMap<co2_ast::FileId, (String, Arc<str>)>,
+)
+{
+    for (file_id, file) in preprocessed.files() {
+        source_files
+            .entry(*file_id)
+            .or_insert_with(|| (file.path.display().to_string(), file.source.clone()));
+        rustc_file_ids
+            .entry(*file_id)
+            .or_insert_with(|| ctx.add_custom_file(&file.path, file.source.as_ref()));
+    }
+}
+
+fn load_modules(
+    ctx: &HirStructureCtx<'_>,
+    module_dir: &Path,
+    rust_mod_items: &[co2_ast::Spanned<co2_ast::ModItem>],
+    rustc_file_ids: &mut HashMap<co2_ast::FileId, FileId>,
+    source_files: &mut HashMap<co2_ast::FileId, (String, Arc<str>)>,
+    loaded_paths: &mut HashSet<PathBuf>,
+) -> Vec<LoadedModule> {
+    let mut modules = Vec::with_capacity(rust_mod_items.len());
+
+    for (mod_item, _) in rust_mod_items {
+        let module_path = resolve_module_source(module_dir, &mod_item.name.0);
+        if !loaded_paths.insert(module_path.clone()) {
+            panic!("module loaded multiple times: {}", module_path.display());
+        }
+
+        let preprocessed = co2_preprocessor::preprocess(&module_path, &Vec::new());
+        register_preprocessed_files(ctx, &preprocessed, rustc_file_ids, source_files);
+
+        let source_name = module_path.to_string_lossy().into_owned();
+        let source: &'static str = Box::leak(preprocessed.normalized.to_string().into_boxed_str());
+        let tu = parse_translation_unit(
+            source_name.clone(),
+            source,
+            Some(&preprocessed),
+            StatelessResolver::new(),
+        )
+        .expect("failed to parse co2 module")
+        .0;
+        let tu = deduplicate_tu_items(tu);
+        let children = load_modules(
+            ctx,
+            &child_module_dir(&module_path),
+            &tu.rust_mod_items,
+            rustc_file_ids,
+            source_files,
+            loaded_paths,
+        );
+
+        modules.push(LoadedModule {
+            name: mod_item.name.0.clone(),
+            source_name,
+            source,
+            tu,
+            children,
+        });
+    }
+
+    modules
+}
+
+fn build_module_data_tree(
+    ctx: &HirStructureCtx<'_>,
+    module: &LoadedModule,
+    foreign_mod: DefId,
+) -> ModuleData {
+    let mut data =
+        ModuleData::forward_pass_parsed_module(
+            ctx,
+            &module.tu,
+            ctx.root_crate_def_id(),
+            foreign_mod,
+            false,
+        );
+    for child in &module.children {
+        data.insert_alias(&child.name, build_module_data_tree(ctx, child, foreign_mod));
+    }
+    data
+}
+
+fn resolve_in_module<'a>(
+    ctx: &CrateSigCtx<'_>,
+    module_path: &'a [String],
+    name: &'a str,
+) -> (DefId, co2_ast::TypeQueryResult) {
+    ctx.resolve_in_current(
+        module_path
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once(name)),
+    )
+    .unwrap()
+}
+
+fn lower_translation_unit_items(
+    ctx: &mut CrateSigCtx<'_>,
+    tu: &TranslationUnit<StatelessResolver>,
+    modules: &[LoadedModule],
+    module_path: &[String],
+    source_name: &str,
+    source: &'static str,
+    foreign_mod: DefId,
+    foreign_items: &mut Vec<ForeignModItem>,
+) {
+    for (item, parser_span) in tu.items.clone() {
         let span = ctx.co2_span_to_rustc(parser_span);
-        let mut resolver = LocalResolver::new(ctx.resolver.clone());
+        let mut resolver = LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
         let item = item.transform(&resolver);
         match item {
             Declaration::FunctionDefinition {
@@ -223,7 +322,7 @@ pub fn lower_crate_sig(
                     }
                 };
 
-                let id = ctx.resolve_in_current([&*name]).unwrap().0;
+                let id = resolve_in_module(ctx, module_path, &name).0;
                 let function_name = name.clone();
                 let param_tys = sig.inputs.clone();
                 let id = FnDef(id);
@@ -247,8 +346,8 @@ pub fn lower_crate_sig(
                 let parsed_body = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     parse_compound_statement(
                         &body.0.tokens.0,
-                        ctx.source_name.clone(),
-                        ctx.source,
+                        source_name.to_owned(),
+                        source,
                         body.0.tokens.1,
                         resolver.clone(),
                     )
@@ -331,7 +430,7 @@ pub fn lower_crate_sig(
                                 continue;
                             }
                         };
-                        let type_def = ctx.resolve_in_current([&*name]).unwrap().0;
+                        let type_def = resolve_in_module(ctx, module_path, &name).0;
                         ctx.resolver
                             .borrow_mut()
                             .typedef_tys
@@ -346,7 +445,7 @@ pub fn lower_crate_sig(
                     }
 
                     if let CTy::Ty(ty) = &ty {
-                        let id = ctx.resolve_in_current([&*name]).unwrap().0;
+                        let id = resolve_in_module(ctx, module_path, &name).0;
                         ctx.resolver
                             .borrow_mut()
                             .global_value_tys
@@ -355,7 +454,7 @@ pub fn lower_crate_sig(
 
                     match ty {
                         CTy::Ty(ty) => {
-                            let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
+                            let (id, _) = resolve_in_module(ctx, module_path, &name);
                             if let Some(initializer) = initializer {
                                 ctx.mir_owners.insert(
                                     id,
@@ -389,7 +488,7 @@ pub fn lower_crate_sig(
                             }
                         }
                         CTy::UnsizedArray(elem_ty) => {
-                            let (id, _) = ctx.resolve_in_current([&*name]).unwrap();
+                            let (id, _) = resolve_in_module(ctx, module_path, &name);
                             if let Some(initializer) = initializer {
                                 ctx.mir_owners.insert(
                                     id,
@@ -428,7 +527,7 @@ pub fn lower_crate_sig(
                             }
                         }
                         CTy::Function(sig) => {
-                            let def_id = ctx.resolve_in_current([&*name]).unwrap().0;
+                            let def_id = resolve_in_module(ctx, module_path, &name).0;
                             let span = ctx.co2_span_to_rustc(init.1);
                             foreign_items.push(ForeignModItem::ForeignFunction {
                                 name,
@@ -442,6 +541,126 @@ pub fn lower_crate_sig(
             }
         }
     }
+
+    for module in modules {
+        let mut child_path = module_path.to_vec();
+        child_path.push(module.name.clone());
+        lower_translation_unit_items(
+            ctx,
+            &module.tu,
+            &module.children,
+            &child_path,
+            &module.source_name,
+            module.source,
+            foreign_mod,
+            foreign_items,
+        );
+    }
+}
+
+pub fn lower_crate_sig(
+    ctx: HirStructureCtx<'_>,
+    source_path: PathBuf,
+    source_name: String,
+    src_static: &'static str,
+    file_id: FileId,
+    preprocessed: Arc<PreprocessedSource>,
+    file_ids: &mut HashMap<co2_ast::FileId, FileId>,
+    source_files: &mut HashMap<co2_ast::FileId, (String, Arc<str>)>,
+    no_main: bool,
+) -> (HirStructure, HashMap<DefId, MirOwnerInfo>, WellknownDefs) {
+    let span = ctx.span_in_file(file_id, 0, 0);
+    let deps = ctx.dependencies();
+
+    let tu =
+        co2_parser::parse_translation_unit(source_name.clone(), src_static, Some(&preprocessed), StatelessResolver::new())
+        .expect("failed to parse co2 source")
+        .0;
+
+    let tu = deduplicate_tu_items(tu);
+    let mut loaded_paths = HashSet::new();
+    let loaded_modules = load_modules(
+        &ctx,
+        &root_module_dir(&source_path),
+        &tu.rust_mod_items,
+        file_ids,
+        source_files,
+        &mut loaded_paths,
+    );
+    co2_ast::set_source_map(Arc::new(SourceMapSnapshot {
+        files: Arc::new(source_files.clone()),
+    }));
+
+    let foreign_mod = ctx.allocate_def_id(ctx.root_crate_def_id(), DefData::ForeignMod);
+    let mut foreign_items = Vec::new();
+
+    let ctx = &*Box::leak(Box::new(ctx));
+    let mut resolver = Resolver::new(&ctx, deps, &tu, foreign_mod);
+    for module in &loaded_modules {
+        resolver.insert_module_data(&[], &module.name, build_module_data_tree(ctx, module, foreign_mod));
+    }
+    resolver.import_use_items(&tu);
+    resolver.rebuild_method_receivers();
+    let file_ids = Arc::new(file_ids.clone());
+
+    let mut ctx = CrateSigCtx {
+        resolver: Rc::new(RefCell::new(LocalResolverBase {
+            resolver,
+            local_counter: 0,
+            fake_defs_counter: 0,
+            local_tys: HashMap::new(),
+            pending_typedefs: vec![],
+            pending_static: vec![],
+            array_len_consts: HashMap::new(),
+            array_len_const_exprs: HashMap::new(),
+            hir_ctx: unsafe { std::mem::transmute(ctx) },
+            file_id,
+            preprocessed: preprocessed.clone(),
+            file_ids: file_ids.clone(),
+            struct_manager: StructManager::default(),
+            unrepresentable_typedefs: HashMap::new(),
+            typedef_tys: HashMap::new(),
+            global_value_tys: HashMap::new(),
+            global_struct_tags: Rc::new(RefCell::new(StructAndEnumData::default())),
+            global_locals: Rc::new(RefCell::new(im::HashMap::new())),
+        })),
+        hir_ctx: ctx,
+        file_ids,
+        mir_owners: HashMap::new(),
+        hir_items: vec![],
+    };
+
+    {
+        let adt = ctx.resolve("core::ffi::VaList").unwrap().0;
+        let ty = HirTy::adt(
+            adt,
+            vec![HirGenericArg::Lifetime(HirLifetime::Static)],
+            span,
+        );
+        for name in ["__builtin_va_list", "__gnuc_va_list"] {
+            let Ok((id, _)) = ctx.resolve(name) else {
+                continue;
+            };
+            ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
+            ctx.hir_items.push(HirModuleItem::TypeDef {
+                name: name.to_owned(),
+                id,
+                span,
+                ty: ty.clone(),
+            });
+        }
+    }
+
+    lower_translation_unit_items(
+        &mut ctx,
+        &tu,
+        &loaded_modules,
+        &[],
+        &source_name,
+        src_static,
+        foreign_mod,
+        &mut foreign_items,
+    );
 
     ctx.hir_items.push(HirModuleItem::ForeignMod {
         id: foreign_mod,

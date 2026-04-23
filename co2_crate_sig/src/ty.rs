@@ -391,7 +391,7 @@ impl CrateSigCtx<'_> {
             co2_ast::RustTy::Path((path, _)) => {
                 self.resolver
                     .borrow_mut()
-                    .hir_ty_of_resolved_path(&path, rust_span)
+                    .hir_ty_of_resolved_path(&path, span)
             }
             co2_ast::RustTy::Ptr { mutable, inner } => {
                 let inner = self.lower_rust_ty(*inner);
@@ -463,7 +463,9 @@ impl LocalResolverBase {
     ) -> HirTy {
         let rust_span = self.co2_span_to_rustc(span);
         match ty {
-            co2_ast::RustTy::Path((path, _)) => self.hir_ty_of_resolved_path(&path, rust_span),
+            co2_ast::RustTy::Path((path, path_span)) => {
+                self.hir_ty_of_resolved_path(&path, path_span)
+            }
             co2_ast::RustTy::Ptr { mutable, inner } => {
                 let inner = self.hir_ty_of_rust_ty(*inner);
                 HirTy::new_ptr(
@@ -539,8 +541,9 @@ impl LocalResolverBase {
     fn hir_ty_of_resolved_path(
         &mut self,
         path: &crate::DefOrLocal,
-        span: rustc_public_generative::rustc_public::ty::Span,
+        parser_span: co2_ast::Span,
     ) -> HirTy {
+        let span = self.co2_span_to_rustc(parser_span);
         match path {
             crate::DefOrLocal::Def {
                 def_id,
@@ -973,11 +976,11 @@ impl LocalResolverBase {
             CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
                 HirTy::adt(specifier.0, vec![], span)
             }
-            CompressedTypeSpecifier::TypedefName((path, _)) => match path {
+            CompressedTypeSpecifier::TypedefName((path, path_span)) => match path {
                 crate::DefOrLocal::UnrepresentableType(ty) => {
                     return ty;
                 }
-                _ => self.hir_ty_of_resolved_path(&path, span),
+                _ => self.hir_ty_of_resolved_path(&path, path_span),
             },
         };
         CTy::Ty(ty)
@@ -1121,9 +1124,7 @@ impl LocalResolverBase {
     }
 
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
-        co2_ast::print_errors_and_terminate(
-            self.source_name.clone(),
-            self.source,
+        co2_ast::emit_errors_and_terminate(
             vec![co2_ast::Rich::custom(span, msg)],
         );
     }

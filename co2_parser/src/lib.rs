@@ -38,7 +38,22 @@ fn map_lexer_tokens(
         .collect()
 }
 
+fn eoi_span_for_tokens(tokens: &[Spanned<Token>], fallback: Span) -> Span {
+    tokens.last().map_or(fallback, |(_, span)| {
+        Span::new(span.context, span.end..span.end)
+    })
+}
+
 pub fn parse_translation_unit<R: TypeResolver>(
+    filename: String,
+    src: &'static str,
+    pp: Option<&co2_preprocessor::PreprocessedSource>,
+    resolver: R,
+) -> Option<Spanned<TranslationUnit<R>>> {
+    parse_translation_unit_internal(filename, src, pp, resolver)
+}
+
+fn parse_translation_unit_internal<R: TypeResolver>(
     filename: String,
     src: &'static str,
     pp: Option<&co2_preprocessor::PreprocessedSource>,
@@ -48,12 +63,13 @@ pub fn parse_translation_unit<R: TypeResolver>(
 
     if let Some(tokens) = tokens {
         let tokens = map_lexer_tokens(tokens, pp);
-        let tokens = tokens.leak();
-        let end_span = if let Some(pp) = pp {
-            pp.real_span(src.len(), src.len())
+        let fallback_end_span = if let Some(pp) = pp {
+            map_lexer_span(SimpleSpan::new((), src.len()..src.len()), Some(pp))
         } else {
             Span::new(FileId::INVALID, src.len()..src.len())
         };
+        let end_span = eoi_span_for_tokens(&tokens, fallback_end_span);
+        let tokens = tokens.leak();
         let (ast, parse_errs) = translation_unit(resolver)
             .map_with(|ast, e| (ast, e.span()))
             .parse(tokens.map(end_span, |(t, s)| (t, s)))
@@ -64,9 +80,7 @@ pub fn parse_translation_unit<R: TypeResolver>(
                 return Some(ast.0);
             }
         } else {
-            co2_ast::emit_mapped_errors_and_terminate(
-                filename,
-                src,
+            co2_ast::emit_errors_and_terminate(
                 parse_errs
                     .into_iter()
                     .map(|err| err.map_token(|tok| tok.to_string()))
@@ -78,7 +92,9 @@ pub fn parse_translation_unit<R: TypeResolver>(
     print_errors_and_terminate(
         filename,
         src,
-        errs.into_iter().map(|err| map_lexer_error(err, pp)).collect(),
+        errs.into_iter()
+            .map(|err| map_lexer_error(err, pp))
+            .collect(),
     );
 }
 
@@ -97,6 +113,7 @@ pub fn parse_compound_statement<R: TypeResolver>(
     end_span: Span,
     resolver: R,
 ) -> Spanned<CompoundStatement<R>> {
+    let end_span = eoi_span_for_tokens(tokens, end_span);
     let (ast, parse_errs) =
         parser::compound_statement(resolver.clone(), parser::statement(resolver))
             .parse(tokens.map(end_span, |(t, s)| (t, s)))
@@ -107,9 +124,7 @@ pub fn parse_compound_statement<R: TypeResolver>(
             return ast;
         }
     } else {
-        co2_ast::emit_mapped_errors_and_terminate(
-            filename,
-            src,
+        co2_ast::emit_errors_and_terminate(
             parse_errs
                 .into_iter()
                 .map(|err| err.map_token(|tok| tok.to_string()))
@@ -156,11 +171,10 @@ fn include_body_lazy_span_uses_header_context() {
 
 pub fn parse_expression_tokens<R: TypeResolver>(
     tokens: &[Spanned<Token>],
-    filename: String,
-    src: &'static str,
     end_span: Span,
     resolver: R,
 ) -> Spanned<Expression<R>> {
+    let end_span = eoi_span_for_tokens(tokens, end_span);
     let stmt_parser = parser::statement(resolver.clone());
     let expr_parser = parser::expression(parser::assignment_expression(resolver, stmt_parser));
     let (ast, parse_errs) = expr_parser
@@ -172,16 +186,13 @@ pub fn parse_expression_tokens<R: TypeResolver>(
         if let Some(ast) = ast {
             return ast;
         }
+        panic!("No ast emitted but there was no error.");
     } else {
-        co2_ast::emit_mapped_errors_and_terminate(
-            filename,
-            src,
+        co2_ast::emit_errors_and_terminate(
             parse_errs
                 .into_iter()
                 .map(|err| err.map_token(|tok| tok.to_string()))
                 .collect(),
         );
     }
-
-    print_errors_and_terminate(filename, src, Vec::new());
 }

@@ -53,8 +53,6 @@ pub struct LocalResolverBase {
     pub file_id: FileId,
     pub preprocessed: Arc<PreprocessedSource>,
     pub file_ids: Arc<HashMap<co2_ast::FileId, FileId>>,
-    pub source_name: String,
-    pub source: &'static str,
     pub(crate) struct_manager: StructManager,
     pub(crate) unrepresentable_typedefs: HashMap<String, CTy>,
     pub(crate) typedef_tys: HashMap<DefId, HirTy>,
@@ -132,6 +130,7 @@ pub struct LocalResolver {
     pub(crate) base: Rc<RefCell<LocalResolverBase>>,
     pub(crate) locals: Rc<RefCell<im::HashMap<String, (DefOrLocal, TypeQueryResult)>>>,
     pub(crate) struct_tags: Rc<RefCell<StructAndEnumData>>,
+    pub(crate) module_path: Rc<Vec<String>>,
     pub(crate) current_owner: DefId,
 }
 
@@ -150,8 +149,14 @@ impl LocalResolver {
             struct_tags,
             base,
             locals,
+            module_path: Rc::new(Vec::new()),
             current_owner,
         }
+    }
+
+    pub fn with_module_path(mut self, module_path: Vec<String>) -> Self {
+        self.module_path = Rc::new(module_path);
+        self
     }
 
     pub fn with_owner(mut self, owner: DefId) -> Self {
@@ -271,9 +276,7 @@ impl LocalResolver {
         // parse_expression_tokens runs. If the arguments were inline borrows, they would
         // live until the end of the statement, causing a RefCell panic when the parser
         // tries to borrow_mut (e.g. to register an anonymous struct in sizeof).
-        let source_name = self.base.borrow().source_name.clone();
-        let source = self.base.borrow().source;
-        let expr = parse_expression_tokens(tokens, source_name, source, subscription.1, self.clone());
+        let expr = parse_expression_tokens(tokens, subscription.1, self.clone());
         let mut base = self.base.borrow_mut();
         let id = base.array_len_consts.len();
         let registered = RegisteredArrayLenConst { id, expr: expr.clone() };
@@ -382,7 +385,11 @@ impl co2_ast::TypeResolver for LocalResolver {
                 TypeQueryResult::Expr,
             ))
         }).or_else(|| {
-            match base.resolver.resolve_expr_path(&path_pretty).ok()? {
+            match base
+                .resolver
+                .resolve_relative_expr_path(&self.module_path, &path_pretty)
+                .ok()?
+            {
                 ResolvedExprPath::Def(def_id, class) => Some((
                     DefOrLocal::Def {
                         def_id,

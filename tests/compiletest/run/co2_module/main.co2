@@ -1,0 +1,9 @@
+mod foo;
+mod bar;
+
+use foo::foo_child::f_foo;
+
+fn main() {
+    f_foo();
+    bar::f_bar();
+}

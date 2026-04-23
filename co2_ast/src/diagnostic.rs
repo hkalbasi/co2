@@ -97,7 +97,13 @@ pub fn print_errors_and_terminate(
     emit_mapped_errors_and_terminate(filename, src, errs);
 }
 
-pub fn emit_mapped_errors_and_terminate(
+pub fn emit_errors_and_terminate(
+    errs: Vec<Rich<'_, String, Span>>,
+) -> ! {
+    emit_mapped_errors_and_terminate("<unknown>".to_owned(), "", errs);
+}
+
+fn emit_mapped_errors_and_terminate(
     filename: String,
     src: &'static str,
     errs: Vec<Rich<'_, String, Span>>,

@@ -177,6 +177,14 @@ impl HirCtx<'_> {
                 declaration_specifiers,
                 declarators,
             } => {
+                if declarators.is_empty() {
+                    let parser_span = declaration_specifiers
+                        .first()
+                        .map(|specifier| specifier.1)
+                        .expect("declaration should have at least one specifier");
+                    let _ = self.base_ty_of_decl(declaration_specifiers, parser_span);
+                    return Ok(());
+                }
                 for init in declarators {
                     let InitDeclarator {
                         declarator,

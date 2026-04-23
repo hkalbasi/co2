@@ -26,7 +26,8 @@ pub type Spanned<T> = (T, Span);
 pub use chumsky::prelude::Rich;
 pub use diagnostic::{
     DiagnosticAbort, DiagnosticSpan, diagnostics_were_emitted,
-    emit_mapped_errors_and_terminate, is_diagnostic_abort, panic_with_diagnostic_abort,
+    emit_errors_and_terminate, is_diagnostic_abort,
+    panic_with_diagnostic_abort,
     print_errors_and_terminate,
     reset_diagnostic_state, safe_range, take_errors,
     set_source_map, SourceMap,
@@ -1002,15 +1003,21 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TranslationUnit<R: TypeResolver> {
     pub rust_use_items: Vec<Spanned<UseItem>>,
+    pub rust_mod_items: Vec<Spanned<ModItem>>,
     pub items: Vec<Spanned<Declaration<R>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct UseItem {
     pub path: Vec<Spanned<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModItem {
+    pub name: Spanned<String>,
 }
 
 pub fn parse_unsigned_integer_constant(text: &str) -> Result<u128, String> {

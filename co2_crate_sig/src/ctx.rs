@@ -8,8 +8,6 @@ use crate::{LocalResolverBase, MirOwnerInfo};
 
 pub(crate) struct CrateSigCtx<'a> {
     pub(crate) hir_ctx: &'a HirStructureCtx<'a>,
-    pub(crate) source_name: String,
-    pub(crate) source: &'static str,
     pub(crate) file_ids: Arc<HashMap<co2_ast::FileId, FileId>>,
     pub(crate) resolver: Rc<RefCell<LocalResolverBase>>,
     pub(crate) mir_owners: HashMap<DefId, MirOwnerInfo>,
@@ -18,9 +16,7 @@ pub(crate) struct CrateSigCtx<'a> {
 
 impl CrateSigCtx<'_> {
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
-        co2_ast::print_errors_and_terminate(
-            self.source_name.clone(),
-            self.source,
+        co2_ast::emit_errors_and_terminate(
             vec![co2_ast::Rich::custom(span, msg)],
         );
     }

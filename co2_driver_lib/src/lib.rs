@@ -40,7 +40,7 @@ struct PendingCompile {
 }
 
 struct Co2SourceMap {
-    preprocessed: Arc<PreprocessedSource>,
+    files: Arc<HashMap<co2_ast::FileId, (String, Arc<str>)>>,
 }
 
 fn pending_compile_cell() -> &'static Mutex<Option<PendingCompile>> {
@@ -49,8 +49,6 @@ fn pending_compile_cell() -> &'static Mutex<Option<PendingCompile>> {
 }
 struct Co2GeneratorState {
     file_id: rustc_gen::FileId,
-    source_name: String,
-    src_static: &'static str,
     file_ids: Arc<HashMap<co2_ast::FileId, rustc_gen::FileId>>,
     pending_mirs: HashMap<DefId, MirOwnerInfo>,
     wellknown_defs: WellknownDefs,
@@ -61,8 +59,7 @@ unsafe impl Sync for Co2GeneratorState {}
 
 impl co2_ast::SourceMap for Co2SourceMap {
     fn get_file_info(&self, id: co2_ast::FileId) -> Option<(String, Arc<str>)> {
-        let file = self.preprocessed.files().get(&id)?;
-        Some((file.path.display().to_string(), file.source.clone()))
+        self.files.get(&id).cloned()
     }
 }
 
@@ -75,36 +72,43 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             .expect("missing pending compile input");
 
         let mut file_ids = HashMap::with_capacity(pending.preprocessed.files().len());
+        let mut source_files = HashMap::with_capacity(pending.preprocessed.files().len());
         for (co2_file_id, file) in pending.preprocessed.files() {
             file_ids.insert(*co2_file_id, ctx.add_custom_file(&file.path, file.source.as_ref()));
+            source_files.insert(
+                *co2_file_id,
+                (file.path.display().to_string(), file.source.clone()),
+            );
         }
         let file_id = file_ids[&pending.preprocessed.main_file_idx];
         let source_name = pending.source_path.to_string_lossy().into_owned();
         let src_static: &'static str =
             Box::leak(pending.preprocessed.normalized.to_string().into_boxed_str());
-
-        let file_ids = Arc::new(file_ids);
         co2_ast::set_source_map(Arc::new(Co2SourceMap {
-            preprocessed: pending.preprocessed.clone(),
+            files: Arc::new(source_files.clone()),
         }));
 
         let (result, pending_mirs, wellknown_defs) = co2_crate_sig::lower_crate_sig(
             ctx,
+            pending.source_path.clone(),
             source_name.clone(),
             src_static,
             file_id,
             pending.preprocessed.clone(),
-            file_ids.clone(),
+            &mut file_ids,
+            &mut source_files,
             pending.mode.no_main,
         );
+        let file_ids = Arc::new(file_ids);
+        co2_ast::set_source_map(Arc::new(Co2SourceMap {
+            files: Arc::new(source_files),
+        }));
 
         let state = Co2GeneratorState {
             wellknown_defs,
             file_id,
             file_ids,
             pending_mirs,
-            source_name,
-            src_static,
         };
 
         (state, result)
@@ -153,8 +157,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 let mut hir_ctx = HirCtx::new(
                     self.wellknown_defs,
                     &span_converter,
-                    self.src_static,
-                    self.source_name.clone(),
                     Some(function_name),
                     def.fn_sig().skip_binder().output(),
                 );
@@ -191,7 +193,10 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     self.wellknown_defs,
                 )
             }
-            MirOwnerInfo::FnBodyError { def, body_span } => {
+            MirOwnerInfo::FnBodyError {
+                def,
+                body_span,
+            } => {
                 let hir = build_error_fn_body(
                 &self.wellknown_defs,
                 &def.fn_sig().skip_binder(),
@@ -231,8 +236,6 @@ impl Co2GeneratorState {
         let hir_ctx = HirCtx::new(
             self.wellknown_defs,
             &span_converter,
-            self.src_static,
-            self.source_name.clone(),
             None,
             CrateItem(def).ty(),
         );
@@ -271,8 +274,6 @@ impl Co2GeneratorState {
                 let len_hir_ctx = HirCtx::new(
                     self.wellknown_defs,
                     &len_span_converter,
-                    self.src_static,
-                    self.source_name.clone(),
                     None,
                     Ty::usize_ty(),
                 );
@@ -291,8 +292,6 @@ impl Co2GeneratorState {
         let hir_ctx = HirCtx::new(
             self.wellknown_defs,
             &span_converter,
-            self.src_static,
-            self.source_name.clone(),
             None,
             target_ty,
         );

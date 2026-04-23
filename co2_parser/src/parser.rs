@@ -28,6 +28,14 @@ fn slice_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
         .unwrap_or(fallback)
 }
 
+fn rust_path_span(path: &RustPath, fallback: Span) -> Span {
+    path.segments
+        .first()
+        .zip(path.segments.last())
+        .map(|(first, last)| join_spans(first.1, last.1))
+        .unwrap_or(fallback)
+}
+
 fn look_ahead<'src, I>(
     token: Token,
 ) -> impl Parser<'src, I, (), extra::Err<Rich<'src, Token, Span>>> + Clone
@@ -159,10 +167,67 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    declaration(resolver.clone(), stmt_rec.clone())
-        .map(|(v, r)| (StatementOrDeclaration::Declaration(v), r))
-        .or(stmt_rec.map(move |v| (StatementOrDeclaration::Statement(v), resolver.clone())))
-        .map_with(|(v, r), e| ((v, e.span()), r))
+    custom(move |inp| {
+        let before = inp.cursor();
+        let checkpoint = inp.save();
+        let prefer_declaration = match inp.next() {
+            Some(
+                Token::Typedef
+                | Token::Extern
+                | Token::Static
+                | Token::Atomic
+                | Token::Auto
+                | Token::Register
+                | Token::Inline
+                | Token::Const
+                | Token::Restrict
+                | Token::Volatile
+                | Token::Struct
+                | Token::Union
+                | Token::Enum
+                | Token::Int
+                | Token::Bool
+                | Token::Void
+                | Token::Char
+                | Token::Short
+                | Token::Long
+                | Token::Float
+                | Token::Double
+                | Token::Signed
+                | Token::Unsigned,
+            ) => true,
+            Some(Token::Ident(_)) => {
+                inp.rewind(checkpoint.clone());
+                let prefer = inp
+                    .parse(rust_path())
+                    .ok()
+                    .as_ref()
+                    .and_then(|path| resolver.classify_path(&path.0))
+                    .is_some_and(|(result, _)| {
+                        matches!(result, TypeQueryResult::Unsure | TypeQueryResult::Type)
+                    });
+                inp.rewind(checkpoint.clone());
+                prefer
+            }
+            _ => false,
+        };
+        inp.rewind(checkpoint);
+
+        let (value, next_resolver) = if prefer_declaration {
+            inp.parse(
+                declaration(resolver.clone(), stmt_rec.clone())
+                    .map(|(v, r)| (StatementOrDeclaration::Declaration(v), r)),
+            )?
+        } else {
+            inp.parse(
+                stmt_rec
+                    .clone()
+                    .map(|v| (StatementOrDeclaration::Statement(v), resolver.clone())),
+            )?
+        };
+
+        Ok(((value, inp.span_since(&before)), next_resolver))
+    })
 }
 
 pub(crate) fn statement<'src, I, R: TypeResolver>(
@@ -544,14 +609,17 @@ where
                 }),
             rust_path().try_map({
                 let resolver = resolver.clone();
-                move |path, _| match resolver.classify_path(&path.0) {
+                move |path, _| {
+                    let path_span = rust_path_span(&path.0, path.1);
+                    match resolver.classify_path(&path.0) {
                     Some((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
-                        Ok(Expression::Identifier((resolved, path.1)))
+                        Ok(Expression::Identifier((resolved, path_span)))
                     }
                     Some((TypeQueryResult::Type, _)) => {
-                        Err(Rich::custom(path.1, "expected expression, found type name"))
+                        Err(Rich::custom(path_span, "expected expression, found type name"))
                     }
-                    None => Err(Rich::custom(path.1, "Unresolved name")),
+                    None => Err(Rich::custom(path_span, "Unresolved name")),
+                    }
                 }
             }),
             select! {
@@ -1148,16 +1216,17 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    recursive(
-        |rec: Recursive<dyn Parser<'src, I, (Vec<E>, B), extra::Err<Rich<'src, Token, Span>>>>| {
-            let base = left_elem.clone().then(base).map(|(e, b)| (vec![e], b));
-            let rec_case = left_elem.then(rec).map(|(first_elem, mut result)| {
-                result.0.insert(0, first_elem);
-                result
-            });
-            choice((base, rec_case))
-        },
-    )
+    custom(move |inp| {
+        let mut elems = vec![inp.parse(left_elem.clone())?];
+        loop {
+            let checkpoint = inp.save();
+            if let Ok(base_value) = inp.parse(base.clone()) {
+                return Ok((elems, base_value));
+            }
+            inp.rewind(checkpoint);
+            elems.push(inp.parse(left_elem.clone())?);
+        }
+    })
 }
 
 fn struct_or_union_fields<'src, I, R: TypeResolver>(
@@ -1299,14 +1368,17 @@ where
         .or(rust_path()
             .try_map({
                 let resolver = resolver.clone();
-                move |path, _| match resolver.classify_path(&path.0) {
+                move |path, _| {
+                    let path_span = rust_path_span(&path.0, path.1);
+                    match resolver.classify_path(&path.0) {
                     Some((TypeQueryResult::Unsure | TypeQueryResult::Type, resolved)) => {
-                        Ok(TypeSpecifier::TypedefName((resolved, path.1)))
+                        Ok(TypeSpecifier::TypedefName((resolved, path_span)))
                     }
                     Some((TypeQueryResult::Expr, _)) => {
-                        Err(Rich::custom(path.1, "expected type name, found expression"))
+                        Err(Rich::custom(path_span, "expected type name, found expression"))
                     }
-                    None => Err(Rich::custom(path.1, "Unresolved name")),
+                    None => Err(Rich::custom(path_span, "Unresolved name")),
+                    }
                 }
             }))
         .map_with(|r, e| (r, e.span()))
@@ -1531,7 +1603,10 @@ where
         let path = rust_path_with_generic_args(rust_generic_arg_ty())
             .map({
                 let resolver = resolver.clone();
-                move |path| (resolver.classify_path(&path.0), path.1)
+                move |path| {
+                    let span = rust_path_span(&path.0, path.1);
+                    (resolver.classify_path(&path.0), span)
+                }
             })
             .filter(|r| {
                 let Some(r) = &r.0 else { return false };
@@ -1930,12 +2005,12 @@ where
     let parser = if resolver.rust_style_syntax_enabled() {
         choice((
             rust_style_function_definition(resolver.clone()),
-            function,
             simple,
+            function,
         ))
         .boxed()
     } else {
-        choice((function, simple)).boxed()
+        choice((simple, function)).boxed()
     };
 
     parser.map_with(move |v, e| {
@@ -1961,6 +2036,19 @@ where
         .map_with(|r, e| (r, e.span()))
 }
 
+fn mod_item<'src, I>()
+-> impl Parser<'src, I, Spanned<ModItem>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    just(Token::Ident("mod".to_owned()))
+        .ignore_then(identifier())
+        .then_ignore(just(Token::Semicolon))
+        .map(|name| ModItem { name })
+        .map_with(|r, e| (r, e.span()))
+}
+
 pub fn translation_unit<'src, I, R: TypeResolver>(
     resolver: R,
 ) -> impl Parser<'src, I, Spanned<TranslationUnit<R>>, extra::Err<Rich<'src, Token, Span>>> + Clone
@@ -1971,6 +2059,7 @@ where
     #[derive(Clone)]
     enum TranslationUnitItem<R: TypeResolver> {
         Use(Spanned<UseItem>),
+        Mod(Spanned<ModItem>),
         Declaration(Spanned<Declaration<R>>),
         Empty,
     }
@@ -1989,6 +2078,8 @@ where
 
             let item = if let Ok(item) = inp.parse(use_item()) {
                 TranslationUnitItem::Use(item)
+            } else if let Ok(item) = inp.parse(mod_item()) {
+                TranslationUnitItem::Mod(item)
             } else if let Ok((decl, next_resolver)) =
                 inp.parse(declaration(current_resolver.clone(), statement(current_resolver.clone())))
             {
@@ -2005,10 +2096,12 @@ where
     })
         .map_with(|items, e| {
             let mut rust_use_items = Vec::new();
+            let mut rust_mod_items = Vec::new();
             let mut declarations = Vec::new();
             for item in items {
                 match item {
                     TranslationUnitItem::Use(item) => rust_use_items.push(item),
+                    TranslationUnitItem::Mod(item) => rust_mod_items.push(item),
                     TranslationUnitItem::Declaration(item) => declarations.push(item),
                     TranslationUnitItem::Empty => {}
                 }
@@ -2016,6 +2109,7 @@ where
             (
                 TranslationUnit {
                     rust_use_items,
+                    rust_mod_items,
                     items: declarations,
                 },
                 e.span(),

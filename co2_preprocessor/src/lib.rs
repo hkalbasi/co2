@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicU32, Ordering},
+};
 
 #[allow(unused)]
 #[path = "../../temp_ai/claudes-c-compiler/src/common/encoding.rs"]
@@ -372,7 +375,7 @@ fn ensure_source_file(
     let source = common::encoding::bytes_to_string(
         fs::read(path).unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display())),
     );
-    let idx = FileId::from(files.len());
+    let idx = global_file_id(path);
     files.insert(idx, SourceFile {
         path: path.to_path_buf(),
         line_offsets: Arc::new(compute_line_offsets(&source)),
@@ -380,6 +383,23 @@ fn ensure_source_file(
     });
     file_index.insert(path.to_path_buf(), idx);
     idx
+}
+
+fn global_file_id(path: &Path) -> FileId {
+    static FILE_IDS: OnceLock<Mutex<HashMap<PathBuf, FileId>>> = OnceLock::new();
+    static NEXT_FILE_ID: AtomicU32 = AtomicU32::new(0);
+
+    let mut guard = FILE_IDS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    if let Some(file_id) = guard.get(path).copied() {
+        return file_id;
+    }
+
+    let file_id = FileId::from(NEXT_FILE_ID.fetch_add(1, Ordering::Relaxed) as usize);
+    guard.insert(path.to_path_buf(), file_id);
+    file_id
 }
 
 fn absolute_path(path: &Path) -> PathBuf {

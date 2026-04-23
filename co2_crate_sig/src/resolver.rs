@@ -10,7 +10,7 @@ use rustc_public_generative::{
 };
 
 #[derive(Debug, Default, Clone)]
-struct ModuleData {
+pub(crate) struct ModuleData {
     id: Option<(DefId, TypeQueryResult)>,
     items: HashMap<String, ModuleData>,
 }
@@ -85,18 +85,19 @@ impl ModuleData {
         part.lookup_path(rest)
     }
 
-    fn insert_alias(&mut self, alias: &str, item: ModuleData) {
+    pub(crate) fn insert_alias(&mut self, alias: &str, item: ModuleData) {
         self.items.insert(alias.to_owned(), item);
     }
 
-    fn forward_pass_parsed_module(
+    pub(crate) fn forward_pass_parsed_module(
         ctx: &HirStructureCtx<'_>,
         ast: &TranslationUnit<StatelessResolver>,
         parent: DefId,
         foreign_mod: DefId,
+        include_builtin_va_list: bool,
     ) -> Self {
         let mut this = Self::default();
-        {
+        if include_builtin_va_list {
             for name in ["__builtin_va_list", "__gnuc_va_list"] {
                 let def_id = ctx.allocate_def_id(parent, DefData::TypeNs(name.to_owned()));
                 this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));
@@ -251,8 +252,13 @@ impl Resolver {
             };
             i.insert_path(rest.split("::"), Some((t.adt.0, TypeQueryResult::Type)));
         }
-        this.current =
-            ModuleData::forward_pass_parsed_module(ctx, p, ctx.root_crate_def_id(), foreign_mod);
+        this.current = ModuleData::forward_pass_parsed_module(
+            ctx,
+            p,
+            ctx.root_crate_def_id(),
+            foreign_mod,
+            true,
+        );
         this.current.insert_path(
             ["__builtin_bswap16"].into_iter(),
             Some(
@@ -279,7 +285,7 @@ impl Resolver {
         this
     }
 
-    fn import_use_items(&mut self, p: &TranslationUnit<StatelessResolver>) {
+    pub(crate) fn import_use_items(&mut self, p: &TranslationUnit<StatelessResolver>) {
         for (use_item, _) in &p.rust_use_items {
             let Some(alias) = use_item.path.last().map(|(segment, _)| segment.as_str()) else {
                 continue;
@@ -320,6 +326,30 @@ impl Resolver {
             };
             self.current.insert_alias(alias, item);
         }
+    }
+
+    pub(crate) fn insert_module_data(&mut self, path: &[String], alias: &str, item: ModuleData) {
+        fn seed_builtin_aliases(root: &ModuleData, module: &mut ModuleData) {
+            if module.id.is_some() {
+                return;
+            }
+            for name in ["__builtin_va_list", "__gnuc_va_list"] {
+                if let Some(item) = root.items.get(name).cloned() {
+                    module.items.entry(name.to_owned()).or_insert(item);
+                }
+            }
+            for child in module.items.values_mut() {
+                seed_builtin_aliases(root, child);
+            }
+        }
+
+        let mut item = item;
+        seed_builtin_aliases(&self.current, &mut item);
+        let mut module = &mut self.current;
+        for segment in path {
+            module = module.items.entry(segment.clone()).or_default();
+        }
+        module.insert_alias(alias, item);
     }
 
     pub(crate) fn resolve_in_deps<'a>(
@@ -370,12 +400,42 @@ impl Resolver {
         }
     }
 
-    pub(crate) fn resolve_expr_path(&self, path: &str) -> Result<ResolvedExprPath, String> {
+    pub(crate) fn resolve_relative_expr_path(
+        &self,
+        module_path: &[String],
+        path: &str,
+    ) -> Result<ResolvedExprPath, String> {
         if let Some(def_id) = self.const_values.get(&normalized_path(path)) {
             return Ok(ResolvedExprPath::Const(*def_id));
         }
-        let (def_id, class) = self.resolve(path)?;
+        let (def_id, class) = self.resolve_relative(module_path, path)?;
         Ok(ResolvedExprPath::Def(def_id, class))
+    }
+
+    pub(crate) fn resolve_relative(
+        &self,
+        module_path: &[String],
+        path: &str,
+    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+        let parts = path.split("::").collect::<Vec<_>>();
+        let Some(first) = parts.first().copied() else {
+            return Err("empty path".to_owned());
+        };
+
+        let mut crate_name = first;
+        normalize_crate_name(&mut crate_name);
+        if self.dependencies.contains_key(crate_name) {
+            return self.resolve(path);
+        }
+
+        for prefix_len in (0..=module_path.len()).rev() {
+            let prefix = module_path[..prefix_len].iter().map(String::as_str);
+            if let Ok(found) = self.current.resolve_path(prefix.chain(parts.iter().copied())) {
+                return Ok(found);
+            }
+        }
+
+        self.resolve(path)
     }
 
     pub(crate) fn resolve_inherent_method(
@@ -453,7 +513,7 @@ impl Resolver {
         ))
     }
 
-    fn rebuild_method_receivers(&mut self) {
+    pub(crate) fn rebuild_method_receivers(&mut self) {
         self.method_receivers.clear();
         for module in self.dependencies.values() {
             Self::collect_method_receivers(module, &mut self.method_receivers);

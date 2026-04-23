@@ -63,8 +63,6 @@ pub struct HirCtx<'a> {
     pub(crate) c_variadic_local: Option<LocalId>,
     pub(crate) decl_resolver: Option<LocalResolver>,
     pub(crate) function_name: Option<String>,
-    pub(crate) source_name: String,
-    pub(crate) source: &'static str,
     pub(crate) ret_ty: Ty,
 }
 
@@ -72,8 +70,6 @@ impl<'a> HirCtx<'a> {
     pub fn new(
         wellknown_defs: WellknownDefs,
         span_converter: &'a dyn Fn(ParserSpan) -> RustSpan,
-        source: &'static str,
-        source_name: String,
         function_name: Option<String>,
         ret_ty: Ty,
     ) -> Self {
@@ -88,8 +84,6 @@ impl<'a> HirCtx<'a> {
             c_variadic_local: None,
             decl_resolver: None,
             function_name,
-            source,
-            source_name,
             ret_ty,
         }
     }
@@ -116,9 +110,7 @@ impl<'a> HirCtx<'a> {
     }
 
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
-        co2_ast::print_errors_and_terminate(
-            self.source_name.clone(),
-            self.source,
+        co2_ast::emit_errors_and_terminate(
             vec![co2_ast::Rich::custom(span, msg)],
         );
     }
