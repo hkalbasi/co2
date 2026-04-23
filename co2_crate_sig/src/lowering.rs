@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, panic::AssertUnwindSafe, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, panic::AssertUnwindSafe, rc::Rc, sync::Arc};
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Designator, DoTransform as _, FunctionDefinitionSignature,
@@ -6,6 +6,7 @@ use co2_ast::{
     TypeQualifier, TypeResolver,
 };
 use co2_parser::parse_compound_statement;
+use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem, HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, rustc_public::{
         DefId,
@@ -122,6 +123,8 @@ pub fn lower_crate_sig(
     source_name: String,
     src_static: &'static str,
     file_id: FileId,
+    preprocessed: Arc<PreprocessedSource>,
+    file_ids: Arc<Vec<FileId>>,
     no_main: bool,
 ) -> (HirStructure, HashMap<DefId, MirOwnerInfo>, WellknownDefs) {
     let span = ctx.span_in_file(file_id, 0, 0);
@@ -151,6 +154,8 @@ pub fn lower_crate_sig(
             array_len_const_exprs: HashMap::new(),
             hir_ctx: unsafe { std::mem::transmute(ctx) },
             file_id,
+            preprocessed: preprocessed.clone(),
+            file_ids: file_ids.clone(),
             source_name: source_name.clone(),
             source: src_static,
             struct_manager: StructManager::default(),
@@ -164,26 +169,31 @@ pub fn lower_crate_sig(
         source_name,
         source: src_static,
         file_id,
+        preprocessed,
+        file_ids,
         mir_owners: HashMap::new(),
         hir_items: vec![],
     };
 
     {
-        let name = "__builtin_va_list";
-        let id = ctx.resolve(name).unwrap().0;
         let adt = ctx.resolve("core::ffi::VaList").unwrap().0;
         let ty = HirTy::adt(
             adt,
             vec![HirGenericArg::Lifetime(HirLifetime::Static)],
             span,
         );
-        ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
-        ctx.hir_items.push(HirModuleItem::TypeDef {
-            name: name.to_owned(),
-            id,
-            span,
-            ty,
-        });
+        for name in ["__builtin_va_list", "__gnuc_va_list"] {
+            let Ok((id, _)) = ctx.resolve(name) else {
+                continue;
+            };
+            ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
+            ctx.hir_items.push(HirModuleItem::TypeDef {
+                name: name.to_owned(),
+                id,
+                span,
+                ty: ty.clone(),
+            });
+        }
     }
 
     for (item, parser_span) in tu.items {

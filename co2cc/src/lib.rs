@@ -3,9 +3,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use co2_driver_lib::{preprocess, CompileMode, compile_co2_source};
+use co2_driver_lib::{CompileMode, compile_co2_source};
 
 struct CcArgs {
     emit_obj_only: bool,
@@ -52,10 +53,9 @@ fn run_co2c(args: CcArgs) {
             .first()
             .cloned()
             .expect("missing C input file for object emission");
-        let preprocessed = preprocess::preprocess(&input, &args.cpp_args);
-        let normalized = preprocess::normalize_preprocessed(&preprocessed);
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(&input, &args.cpp_args));
         let rustc_args = build_rustc_object_args(&input, args.output.as_deref());
-        compile_co2_source(CompileMode::C, input, normalized, rustc_args);
+        compile_co2_source(CompileMode::C, input, preprocessed, rustc_args);
         return;
     }
 

@@ -13,6 +13,7 @@ co2_hir = { path = "../co2_hir" }
 co2_mir = { path = "../co2_mir" }
 co2_ast = { path = "../co2_ast" }
 co2_crate_sig = { version = "0.1.0", path = "../co2_crate_sig" }
+co2_preprocessor = { path = "../co2_preprocessor" }
 la-arena = "0.3.1"
 
 [package.metadata.rust-analyzer]

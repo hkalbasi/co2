@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 co2_ast = { path = "../co2_ast" }
 co2_driver_lib = { path = "../co2_driver_lib" }
+co2_preprocessor = { path = "../co2_preprocessor" }
 
 [package.metadata.rust-analyzer]
 rustc_private = true

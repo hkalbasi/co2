@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 co2_ast = { path = "../co2_ast" }
 co2_parser = { path = "../co2_parser" }
+co2_preprocessor = { path = "../co2_preprocessor" }
 im = "15.1.0"
 rustc_public_generative = { path = "../rustc_public_generative" }

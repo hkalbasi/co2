@@ -1,0 +1,10 @@
+[package]
+name = "co2_preprocessor"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+co2_ast = { path = "../co2_ast" }

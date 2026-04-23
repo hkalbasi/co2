@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, Expression,
@@ -6,6 +6,7 @@ use co2_ast::{
     TypeResolver,
 };
 use co2_parser::parse_expression_tokens;
+use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     DefData, FileId, HirStructureCtx,
     rustc_public::{
@@ -27,7 +28,6 @@ pub struct StructAndEnumData {
     pub struct_tags: im::HashMap<String, DefId>,
 }
 
-#[derive(Debug)]
 pub struct LocalResolverBase {
     pub resolver: Resolver,
     pub local_counter: usize,
@@ -51,6 +51,8 @@ pub struct LocalResolverBase {
     pub array_len_const_exprs: HashMap<usize, co2_ast::Spanned<Expression<LocalResolver>>>,
     pub hir_ctx: &'static HirStructureCtx<'static>,
     pub file_id: FileId,
+    pub preprocessed: Arc<PreprocessedSource>,
+    pub file_ids: Arc<Vec<FileId>>,
     pub source_name: String,
     pub source: &'static str,
     pub(crate) struct_manager: StructManager,
@@ -59,6 +61,15 @@ pub struct LocalResolverBase {
     pub(crate) global_value_tys: HashMap<DefId, HirTy>,
     pub(crate) global_struct_tags: Rc<RefCell<StructAndEnumData>>,
     pub(crate) global_locals: Rc<RefCell<im::HashMap<String, (DefOrLocal, TypeQueryResult)>>>,
+}
+
+impl std::fmt::Debug for LocalResolverBase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalResolverBase")
+            .field("local_counter", &self.local_counter)
+            .field("fake_defs_counter", &self.fake_defs_counter)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]

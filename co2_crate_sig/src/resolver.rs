@@ -97,9 +97,10 @@ impl ModuleData {
     ) -> Self {
         let mut this = Self::default();
         {
-            let name = "__builtin_va_list";
-            let def_id = ctx.allocate_def_id(parent, DefData::TypeNs(name.to_owned()));
-            this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));
+            for name in ["__builtin_va_list", "__gnuc_va_list"] {
+                let def_id = ctx.allocate_def_id(parent, DefData::TypeNs(name.to_owned()));
+                this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));
+            }
         }
         for (item, _) in &ast.items {
             match item {

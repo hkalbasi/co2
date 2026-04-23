@@ -1,5 +1,6 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
+use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     DefData, FileId, HirModuleItem, HirStructureCtx, rustc_public::DefId,
 };
@@ -11,6 +12,8 @@ pub(crate) struct CrateSigCtx<'a> {
     pub(crate) source_name: String,
     pub(crate) source: &'static str,
     pub(crate) file_id: FileId,
+    pub(crate) preprocessed: Arc<PreprocessedSource>,
+    pub(crate) file_ids: Arc<Vec<FileId>>,
     pub(crate) resolver: Rc<RefCell<LocalResolverBase>>,
     pub(crate) mir_owners: HashMap<DefId, MirOwnerInfo>,
     pub(crate) hir_items: Vec<HirModuleItem>,

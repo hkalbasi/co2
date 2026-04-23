@@ -223,6 +223,7 @@ version = "0.1.0"
 dependencies = [
  "co2_ast",
  "co2_parser",
+ "co2_preprocessor",
  "im",
  "rustc_public_generative",
 ]
@@ -235,6 +236,7 @@ dependencies = [
  "co2_crate_sig",
  "co2_hir",
  "co2_mir",
+ "co2_preprocessor",
  "la-arena",
  "rustc_public_generative",
 ]
@@ -269,6 +271,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "co2_preprocessor"
+version = "0.1.0"
+dependencies = [
+ "co2_ast",
+]
+
+[[package]]
 name = "co2_test_harness"
 version = "0.1.0"
 dependencies = [
@@ -293,6 +302,7 @@ version = "0.1.0"
 dependencies = [
  "co2_ast",
  "co2_driver_lib",
+ "co2_preprocessor",
 ]
 
 [[package]]
