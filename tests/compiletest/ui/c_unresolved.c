@@ -21,3 +21,10 @@ int main() {
     return missing;
     //     ^^^^^^^ error: Unresolved name
 }
+
+#define SOME_MACRO 5
+
+int f4() {
+    return SOME_MACRO + missing;
+                      //^^^^^^^ error: Unresolved name
+}
