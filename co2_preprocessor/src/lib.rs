@@ -7,40 +7,10 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
-#[allow(unused)]
-#[path = "../../temp_ai/claudes-c-compiler/src/common/encoding.rs"]
-pub mod common_encoding;
-#[allow(unused)]
-#[path = "../../temp_ai/claudes-c-compiler/src/common/fx_hash.rs"]
-pub mod common_fx_hash;
-#[allow(unused)]
-#[path = "../../temp_ai/claudes-c-compiler/src/common/source.rs"]
-pub mod common_source;
-#[allow(unused)]
-#[path = "../../temp_ai/claudes-c-compiler/src/frontend/preprocessor/mod.rs"]
-mod ccc_preprocessor;
+pub mod common;
+pub mod frontend;
 
-pub mod common {
-    pub use crate::common_encoding as encoding;
-    pub use crate::common_fx_hash as fx_hash;
-    pub use crate::common_source as source;
-}
-
-pub mod frontend {
-    pub mod sema {
-        pub mod builtins {
-            pub fn is_builtin(_name: &str) -> bool {
-                false
-            }
-        }
-    }
-
-    pub mod preprocessor {
-        pub(crate) use crate::ccc_preprocessor::*;
-    }
-}
-
-use ccc_preprocessor::pipeline::Preprocessor;
+use frontend::preprocessor::pipeline::Preprocessor;
 use co2_ast::FileId;
 
 #[derive(Clone, Debug)]
