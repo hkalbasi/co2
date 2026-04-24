@@ -26,7 +26,7 @@ pub type Spanned<T> = (T, Span);
 pub use chumsky::prelude::Rich;
 pub use diagnostic::{
     DiagnosticAbort, DiagnosticSpan, diagnostics_were_emitted,
-    emit_errors_and_terminate, is_diagnostic_abort,
+    emit_errors_and_terminate, emit_warnings, is_diagnostic_abort,
     panic_with_diagnostic_abort,
     print_errors_and_terminate,
     reset_diagnostic_state, safe_range, take_errors,

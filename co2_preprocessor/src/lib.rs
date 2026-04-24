@@ -7,11 +7,13 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+use chumsky::span::Span as _;
 pub mod common;
 pub mod frontend;
 
 use frontend::preprocessor::pipeline::Preprocessor;
 use co2_ast::FileId;
+use co2_ast::{Rich, Span, SourceMap};
 
 #[derive(Clone, Debug)]
 pub struct SourceFile {
@@ -141,6 +143,16 @@ impl PreprocessedSource {
     }
 }
 
+struct PreprocessorSourceMap {
+    files: Arc<HashMap<FileId, (String, Arc<str>)>>,
+}
+
+impl SourceMap for PreprocessorSourceMap {
+    fn get_file_info(&self, id: FileId) -> Option<(String, Arc<str>)> {
+        self.files.get(&id).cloned()
+    }
+}
+
 pub fn preprocess(input: &Path, cpp_args: &[String]) -> PreprocessedSource {
     let input = absolute_path(input);
     let mut preprocessor = Preprocessor::new();
@@ -149,14 +161,140 @@ pub fn preprocess(input: &Path, cpp_args: &[String]) -> PreprocessedSource {
     let input_bytes = fs::read(&input).expect("failed to read C input for preprocessing");
     let input_source = rewrite_main_source_for_preprocess(&common::encoding::bytes_to_string(input_bytes));
     let preprocessed = preprocessor.preprocess(&input_source);
-    if let Some(err) = preprocessor.errors().first() {
-        panic!(
-            "preprocessor error at {}:{}:{}: {}",
-            err.file, err.line, err.col, err.message
-        );
+    let source = build_preprocessed_source(&input, preprocessed);
+    emit_preprocessor_diagnostics(&source, preprocessor.warnings(), preprocessor.errors());
+    source
+}
+
+fn emit_preprocessor_diagnostics(
+    preprocessed: &PreprocessedSource,
+    warnings: &[frontend::preprocessor::pipeline::PreprocessorDiagnostic],
+    errors: &[frontend::preprocessor::pipeline::PreprocessorDiagnostic],
+) {
+    if warnings.is_empty() && errors.is_empty() {
+        return;
     }
 
-    build_preprocessed_source(&input, preprocessed)
+    let files = preprocessed
+        .files()
+        .iter()
+        .map(|(id, file)| {
+            (
+                *id,
+                (file.path.display().to_string(), file.source.clone()),
+            )
+        })
+        .collect();
+    co2_ast::set_source_map(Arc::new(PreprocessorSourceMap {
+        files: Arc::new(files),
+    }));
+
+    let warnings = map_preprocessor_diagnostics(preprocessed, warnings);
+    if !warnings.is_empty() {
+        co2_ast::emit_warnings(warnings);
+    }
+
+    let errors = map_preprocessor_diagnostics(preprocessed, errors);
+    if !errors.is_empty() {
+        co2_ast::emit_errors_and_terminate(errors);
+    }
+}
+
+fn map_preprocessor_diagnostics(
+    preprocessed: &PreprocessedSource,
+    diagnostics: &[frontend::preprocessor::pipeline::PreprocessorDiagnostic],
+) -> Vec<Rich<'static, String, Span>> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| Rich::custom(preprocessor_diagnostic_span(preprocessed, diagnostic), diagnostic.message.clone()))
+        .collect()
+}
+
+fn preprocessor_diagnostic_span(
+    preprocessed: &PreprocessedSource,
+    diagnostic: &frontend::preprocessor::pipeline::PreprocessorDiagnostic,
+) -> Span {
+    let wanted_path = absolute_path(Path::new(&diagnostic.file));
+    let Some((file_id, file)) = preprocessed
+        .files()
+        .iter()
+        .find(|(_, file)| file.path == wanted_path)
+    else {
+        return Span::new(preprocessed.main_file_idx, 0..0);
+    };
+
+    let source_line = if *file_id == preprocessed.main_file_idx {
+        diagnostic.line.saturating_sub(2)
+    } else {
+        diagnostic.line.saturating_sub(1)
+    };
+    let Some(line_range) = line_range(file, source_line) else {
+        return Span::new(*file_id, 0..0);
+    };
+
+    let line = &file.source[line_range.clone()];
+    let start_in_line = diagnostic.col.saturating_sub(1).min(line.len());
+    let start = line_range.start + start_in_line;
+    let end = line
+        .get(start_in_line..)
+        .and_then(first_preprocessor_token_len)
+        .map(|len| start + len)
+        .unwrap_or(start);
+    let end = if end == start && start < line_range.end {
+        start + 1
+    } else {
+        end
+    };
+
+    Span::new(*file_id, start..end.min(line_range.end))
+}
+
+fn first_preprocessor_token_len(src: &str) -> Option<usize> {
+    let len = src
+        .char_indices()
+        .take_while(|(_, ch)| !ch.is_whitespace())
+        .last()
+        .map(|(idx, ch)| idx + ch.len_utf8())?;
+    Some(len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn warning_diagnostic_maps_to_warning_token() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "co2-preprocessor-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let input = temp_dir.join("warning.c");
+        fs::write(&input, "#warning keep going\nint main(void) { return 0; }\n").unwrap();
+
+        let mut preprocessor = Preprocessor::new();
+        configure_preprocessor(&mut preprocessor, &input, &[]);
+        let input_bytes = fs::read(&input).unwrap();
+        let input_source =
+            rewrite_main_source_for_preprocess(&common::encoding::bytes_to_string(input_bytes));
+        let preprocessed = preprocessor.preprocess(&input_source);
+        let source = build_preprocessed_source(&input, preprocessed);
+        let diagnostics = map_preprocessor_diagnostics(&source, preprocessor.warnings());
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].to_string(), "#warning keep going");
+
+        let span = *diagnostics[0].span();
+        let file = source.files().get(&span.context).unwrap();
+        assert_eq!(&file.source[span.start..span.end], "warning");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
 }
 
 fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_args: &[String]) {

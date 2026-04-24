@@ -100,7 +100,14 @@ pub fn print_errors_and_terminate(
 pub fn emit_errors_and_terminate(
     errs: Vec<Rich<'_, String, Span>>,
 ) -> ! {
-    emit_mapped_errors_and_terminate("<unknown>".to_owned(), "", errs);
+    emit_mapped_diagnostics("<unknown>".to_owned(), "", errs, DiagnosticLevel::Error, true);
+    unreachable!("fatal diagnostics should abort");
+}
+
+pub fn emit_warnings(
+    warnings: Vec<Rich<'_, String, Span>>,
+) {
+    emit_mapped_diagnostics("<unknown>".to_owned(), "", warnings, DiagnosticLevel::Warning, false);
 }
 
 fn emit_mapped_errors_and_terminate(
@@ -108,28 +115,77 @@ fn emit_mapped_errors_and_terminate(
     src: &'static str,
     errs: Vec<Rich<'_, String, Span>>,
 ) -> ! {
-    DIAGNOSTICS_EMITTED.store(true, Ordering::SeqCst);
-    if std::env::var_os("CO2_FORCE_JSON_DIAGNOSTICS").is_some() {
-        for e in errs {
-            emit_json_diagnostic(&filename, src, &e);
-        }
-    } else {
-        for e in errs {
-            emit_human_diagnostic(&filename, src, &e);
-        }
-    }
-    panic_with_diagnostic_abort();
+    emit_mapped_diagnostics(filename, src, errs, DiagnosticLevel::Error, true);
+    unreachable!("fatal diagnostics should abort");
 }
 
-fn emit_human_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, Span>) {
+#[derive(Clone, Copy)]
+enum DiagnosticLevel {
+    Error,
+    Warning,
+}
+
+impl DiagnosticLevel {
+    fn report_kind(self) -> ReportKind<'static> {
+        match self {
+            DiagnosticLevel::Error => ReportKind::Error,
+            DiagnosticLevel::Warning => ReportKind::Warning,
+        }
+    }
+
+    fn label_color(self) -> Color {
+        match self {
+            DiagnosticLevel::Error => Color::Red,
+            DiagnosticLevel::Warning => Color::Yellow,
+        }
+    }
+
+    fn json_level(self) -> &'static str {
+        match self {
+            DiagnosticLevel::Error => "error",
+            DiagnosticLevel::Warning => "warning",
+        }
+    }
+}
+
+fn emit_mapped_diagnostics(
+    filename: String,
+    src: &'static str,
+    diagnostics: Vec<Rich<'_, String, Span>>,
+    level: DiagnosticLevel,
+    terminate: bool,
+) {
+    DIAGNOSTICS_EMITTED.store(true, Ordering::SeqCst);
+    if std::env::var_os("CO2_FORCE_JSON_DIAGNOSTICS").is_some() {
+        for e in diagnostics {
+            emit_json_diagnostic(&filename, src, &e, level);
+        }
+    } else {
+        for e in diagnostics {
+            emit_human_diagnostic(&filename, src, &e, level);
+        }
+    }
+    if terminate {
+        panic_with_diagnostic_abort();
+    } else {
+        DIAGNOSTICS_EMITTED.store(false, Ordering::SeqCst);
+    }
+}
+
+fn emit_human_diagnostic(
+    filename: &str,
+    src: &str,
+    e: &Rich<'_, String, Span>,
+    level: DiagnosticLevel,
+) {
     if let Some(mapped) = get_diagnostic_info(*e.span()) {
-        Report::build(ReportKind::Error, (mapped.file_name.clone(), mapped.start..mapped.end))
+        Report::build(level.report_kind(), (mapped.file_name.clone(), mapped.start..mapped.end))
             .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
             .with_message(e.to_string())
             .with_label(
                 Label::new((mapped.file_name.clone(), mapped.start..mapped.end))
                     .with_message(e.reason().to_string())
-                    .with_color(Color::Red),
+                    .with_color(level.label_color()),
             )
             .finish()
             .eprint(sources([(mapped.file_name, mapped.source.to_string())]))
@@ -138,13 +194,13 @@ fn emit_human_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, Span>) 
     }
 
     let range = safe_range(*e.span(), src.len());
-    Report::build(ReportKind::Error, (filename.to_owned(), range.clone()))
+    Report::build(level.report_kind(), (filename.to_owned(), range.clone()))
         .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
         .with_message(e.to_string())
         .with_label(
             Label::new((filename.to_owned(), range))
                 .with_message(e.reason().to_string())
-                .with_color(Color::Red),
+                .with_color(level.label_color()),
         )
         .with_labels(e.contexts().map(|(label, span)| {
             Label::new((filename.to_owned(), safe_range(*span, src.len())))
@@ -156,14 +212,19 @@ fn emit_human_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, Span>) 
         .unwrap();
 }
 
-fn emit_json_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, Span>) {
+fn emit_json_diagnostic(
+    filename: &str,
+    src: &str,
+    e: &Rich<'_, String, Span>,
+    level: DiagnosticLevel,
+) {
     if let Some(mapped) = get_diagnostic_info(*e.span()) {
         let range = mapped.start..mapped.end;
         let diagnostic = json!({
             "$message_type": "diagnostic",
             "message": e.to_string(),
             "code": null,
-            "level": "error",
+            "level": level.json_level(),
             "spans": [json_span_unadjusted(&mapped.file_name, &mapped.source, range, true, Some(e.reason().to_string()))],
             "children": [],
             "rendered": null,
@@ -188,7 +249,7 @@ fn emit_json_diagnostic(filename: &str, src: &str, e: &Rich<'_, String, Span>) {
         "$message_type": "diagnostic",
         "message": e.to_string(),
         "code": null,
-        "level": "error",
+        "level": level.json_level(),
         "spans": spans,
         "children": [],
         "rendered": null,
