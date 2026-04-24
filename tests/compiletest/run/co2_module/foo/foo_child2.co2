@@ -1,0 +1,7 @@
+use super::foo_child::f_foo;
+use crate::bar::f_bar;
+
+fn f_foo2() {
+    f_foo();
+    f_bar();
+}

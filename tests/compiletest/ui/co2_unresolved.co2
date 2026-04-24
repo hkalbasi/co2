@@ -1,6 +1,11 @@
 //@ mode: co2
 //@ compile-fail
 
+use missing::foo;
+  //^^^^^^^ error: Unresolved item
+use std::missing::thing;
+       //^^^^^^^ error: Unresolved item
+
 int main() {
     return missing;
         // ^^^^^^^ error: Unresolved name

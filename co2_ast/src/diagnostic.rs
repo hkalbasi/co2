@@ -106,6 +106,16 @@ pub fn emit_errors_and_terminate(errs: Vec<Rich<'_, String, Span>>) -> ! {
     unreachable!("fatal diagnostics should abort");
 }
 
+pub fn emit_errors(errs: Vec<Rich<'_, String, Span>>) {
+    emit_mapped_diagnostics(
+        "<unknown>".to_owned(),
+        "",
+        errs,
+        DiagnosticLevel::Error,
+        false,
+    );
+}
+
 pub fn emit_warnings(warnings: Vec<Rich<'_, String, Span>>) {
     emit_mapped_diagnostics(
         "<unknown>".to_owned(),

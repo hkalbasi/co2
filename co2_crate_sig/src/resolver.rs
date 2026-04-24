@@ -165,6 +165,35 @@ impl ModuleData {
     }
 }
 
+fn anchored_module_prefix<'a>(
+    module_path: &'a [String],
+    parts: &'a [&'a str],
+) -> Option<(Vec<&'a str>, &'a [&'a str])> {
+    let Some(first) = parts.first().copied() else {
+        return None;
+    };
+    match first {
+        "crate" => Some((Vec::new(), &parts[1..])),
+        "super" => {
+            let mut supers = 0usize;
+            while supers < parts.len() && parts[supers] == "super" {
+                supers += 1;
+            }
+            if supers > module_path.len() {
+                return None;
+            }
+            Some((
+                module_path[..module_path.len() - supers]
+                    .iter()
+                    .map(String::as_str)
+                    .collect(),
+                &parts[supers..],
+            ))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Resolver {
     const_values: HashMap<String, DefId>,
@@ -280,17 +309,60 @@ impl Resolver {
                     .unwrap(),
             ),
         );
-        this.import_use_items(p);
         this.rebuild_method_receivers();
         this
     }
 
-    pub(crate) fn import_use_items(&mut self, p: &TranslationUnit<StatelessResolver>) {
+    fn module_mut<'a>(&'a mut self, path: &[String]) -> &'a mut ModuleData {
+        let mut module = &mut self.current;
+        for segment in path {
+            module = module.items.entry(segment.clone()).or_default();
+        }
+        module
+    }
+
+    fn resolve_module_path_relative<'a>(
+        &self,
+        module_path: &[String],
+        path: impl IntoIterator<Item = &'a str>,
+    ) -> Result<ModuleData, String> {
+        let parts = path.into_iter().collect::<Vec<_>>();
+        let Some(first) = parts.first().copied() else {
+            return Err("empty path".to_owned());
+        };
+        if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
+            return self
+                .current
+                .lookup_path(
+                    &prefix
+                        .into_iter()
+                        .chain(rest.iter().copied())
+                        .collect::<Vec<_>>(),
+                )
+                .cloned();
+        }
+        let mut crate_name = first;
+        normalize_crate_name(&mut crate_name);
+        if let Some(crate_data) = self.dependencies.get(crate_name) {
+            return crate_data.lookup_path(&parts[1..]).cloned();
+        }
+        self.current.lookup_path(&parts).cloned()
+    }
+
+    pub(crate) fn import_use_items(
+        &mut self,
+        module_path: &[String],
+        p: &TranslationUnit<StatelessResolver>,
+    ) {
+        let mut errors: Vec<co2_ast::Rich<'static, String, co2_ast::Span>> = Vec::new();
         for (use_item, _) in &p.rust_use_items {
             let Some(alias) = use_item.path.last().map(|(segment, _)| segment.as_str()) else {
                 continue;
             };
-            if self.resolve_in_current([alias]).is_ok() || self.const_values.contains_key(alias) {
+            let module = self.module_mut(module_path);
+            if module.resolve_path([alias].into_iter()).is_ok()
+                || self.const_values.contains_key(alias)
+            {
                 continue;
             }
             let full_path = use_item
@@ -304,9 +376,13 @@ impl Resolver {
                 self.const_values.insert(alias.to_owned(), def_id);
                 continue;
             }
-            let Ok(item) =
-                self.resolve_module_path(use_item.path.iter().map(|(segment, _)| segment.as_str()))
-            else {
+            let Ok(item) = self.resolve_module_path_relative(
+                module_path,
+                use_item.path.iter().map(|(segment, _)| segment.as_str()),
+            ) else {
+                if let Some((_, span)) = self.first_unresolved_use_segment(module_path, use_item) {
+                    errors.push(co2_ast::Rich::custom(*span, "Unresolved item".to_owned()));
+                }
                 continue;
             };
             if let Some((def_id, TypeQueryResult::Type)) = item.id {
@@ -326,8 +402,66 @@ impl Resolver {
             } else {
                 item
             };
-            self.current.insert_alias(alias, item);
+            self.module_mut(module_path).insert_alias(alias, item);
         }
+        if !errors.is_empty() {
+            co2_ast::emit_errors(errors);
+        }
+    }
+
+    fn first_unresolved_use_segment<'a>(
+        &self,
+        module_path: &[String],
+        use_item: &'a co2_ast::UseItem,
+    ) -> Option<&'a co2_ast::Spanned<String>> {
+        let parts = use_item
+            .path
+            .iter()
+            .map(|(segment, _)| segment.as_str())
+            .collect::<Vec<_>>();
+        if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
+            let mut current = &self.current;
+            for segment in prefix {
+                let Some(next) = current.items.get(segment) else {
+                    return use_item
+                        .path
+                        .iter()
+                        .find(|(name, _)| name.as_str() == segment);
+                };
+                current = next;
+            }
+            for segment in rest {
+                let Some(next) = current.items.get(*segment) else {
+                    return use_item
+                        .path
+                        .iter()
+                        .find(|(name, _)| name.as_str() == *segment);
+                };
+                current = next;
+            }
+            return None;
+        }
+        let (first, rest) = use_item.path.split_first()?;
+        let mut crate_name = first.0.as_str();
+        normalize_crate_name(&mut crate_name);
+        if let Some(module) = self.dependencies.get(crate_name) {
+            let mut current = module;
+            for segment in rest {
+                let Some(next) = current.items.get(&segment.0) else {
+                    return Some(segment);
+                };
+                current = next;
+            }
+            return None;
+        }
+        let mut current = &self.current;
+        for segment in &use_item.path {
+            let Some(next) = current.items.get(&segment.0) else {
+                return Some(segment);
+            };
+            current = next;
+        }
+        None
     }
 
     pub(crate) fn insert_module_data(&mut self, path: &[String], alias: &str, item: ModuleData) {
@@ -374,22 +508,6 @@ impl Resolver {
         self.current.resolve_path(path.into_iter())
     }
 
-    fn resolve_module_path<'a>(
-        &self,
-        path: impl IntoIterator<Item = &'a str>,
-    ) -> Result<ModuleData, String> {
-        let parts = path.into_iter().collect::<Vec<_>>();
-        let Some(first) = parts.first().copied() else {
-            return Err("empty path".to_owned());
-        };
-        let mut crate_name = first;
-        normalize_crate_name(&mut crate_name);
-        if let Some(crate_data) = self.dependencies.get(crate_name) {
-            return crate_data.lookup_path(&parts[1..]).cloned();
-        }
-        self.current.lookup_path(&parts).cloned()
-    }
-
     pub fn resolve(&self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
         let Some((mut crate_name, rest)) = path.split_once("::") else {
             return self.resolve_in_current([path]);
@@ -423,6 +541,12 @@ impl Resolver {
         let Some(first) = parts.first().copied() else {
             return Err("empty path".to_owned());
         };
+
+        if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
+            return self
+                .current
+                .resolve_path(prefix.into_iter().chain(rest.iter().copied()));
+        }
 
         let mut crate_name = first;
         normalize_crate_name(&mut crate_name);

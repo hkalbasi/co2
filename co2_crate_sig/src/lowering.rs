@@ -272,6 +272,19 @@ fn build_module_data_tree(
     data
 }
 
+fn import_module_use_items(
+    resolver: &mut Resolver,
+    module_path: &[String],
+    modules: &[LoadedModule],
+) {
+    for module in modules {
+        let mut child_path = module_path.to_vec();
+        child_path.push(module.name.clone());
+        resolver.import_use_items(&child_path, &module.tu);
+        import_module_use_items(resolver, &child_path, &module.children);
+    }
+}
+
 fn resolve_in_module<'a>(
     ctx: &CrateSigCtx<'_>,
     module_path: &'a [String],
@@ -626,7 +639,8 @@ pub fn lower_crate_sig(
             build_module_data_tree(ctx, module, foreign_mod),
         );
     }
-    resolver.import_use_items(&tu);
+    resolver.import_use_items(&[], &tu);
+    import_module_use_items(&mut resolver, &[], &loaded_modules);
     resolver.rebuild_method_receivers();
     let file_ids = Arc::new(file_ids.clone());
 
