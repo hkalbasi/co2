@@ -23,7 +23,7 @@ Core pipeline:
 - `co2_mir`: lowers `co2_hir::HirBody` into `rustc_public::mir::Body`.
 - `co2_driver_lib`: orchestration, item collection, HIR structure emission, MIR emission wiring.
 - `co2`: Rust mode CLI.
-- `co2c`: C mode CLI (uses `gcc -E`, filters includes, then compiles).
+- `co2c`: C mode CLI.
 
 ## Current architecture contracts
 - Keep parser concerns in `co2_parser` only.
