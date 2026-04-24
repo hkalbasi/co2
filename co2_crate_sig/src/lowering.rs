@@ -128,6 +128,8 @@ fn deduplicate_tu_items(
 #[derive(Clone)]
 struct LoadedModule {
     name: String,
+    def_id: DefId,
+    decl_span: co2_ast::Span,
     source_name: String,
     source: &'static str,
     tu: TranslationUnit<StatelessResolver>,
@@ -201,6 +203,7 @@ fn register_preprocessed_files(
 
 fn load_modules(
     ctx: &HirStructureCtx<'_>,
+    parent_def: DefId,
     module_dir: &Path,
     rust_mod_items: &[co2_ast::Spanned<co2_ast::ModItem>],
     rustc_file_ids: &mut HashMap<co2_ast::FileId, FileId>,
@@ -209,11 +212,12 @@ fn load_modules(
 ) -> Vec<LoadedModule> {
     let mut modules = Vec::with_capacity(rust_mod_items.len());
 
-    for (mod_item, _) in rust_mod_items {
+    for (mod_item, mod_span) in rust_mod_items {
         let module_path = resolve_module_source(module_dir, &mod_item.name.0);
         if !loaded_paths.insert(module_path.clone()) {
             panic!("module loaded multiple times: {}", module_path.display());
         }
+        let def_id = ctx.allocate_def_id(parent_def, DefData::Module(mod_item.name.0.clone()));
 
         let preprocessed = co2_preprocessor::preprocess(&module_path, &Vec::new());
         register_preprocessed_files(ctx, &preprocessed, rustc_file_ids, source_files);
@@ -231,6 +235,7 @@ fn load_modules(
         let tu = deduplicate_tu_items(tu);
         let children = load_modules(
             ctx,
+            def_id,
             &child_module_dir(&module_path),
             &tu.rust_mod_items,
             rustc_file_ids,
@@ -240,6 +245,8 @@ fn load_modules(
 
         modules.push(LoadedModule {
             name: mod_item.name.0.clone(),
+            def_id,
+            decl_span: *mod_span,
             source_name,
             source,
             tu,
@@ -259,7 +266,7 @@ fn build_module_data_tree(
         ModuleData::forward_pass_parsed_module(
             ctx,
             &module.tu,
-            ctx.root_crate_def_id(),
+            module.def_id,
             foreign_mod,
             false,
         );
@@ -292,7 +299,8 @@ fn lower_translation_unit_items(
     source: &'static str,
     foreign_mod: DefId,
     foreign_items: &mut Vec<ForeignModItem>,
-) {
+) -> Vec<HirModuleItem> {
+    let mut hir_items = Vec::new();
     for (item, parser_span) in tu.items.clone() {
         let span = ctx.co2_span_to_rustc(parser_span);
         let mut resolver = LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
@@ -326,7 +334,7 @@ fn lower_translation_unit_items(
                 let function_name = name.clone();
                 let param_tys = sig.inputs.clone();
                 let id = FnDef(id);
-                ctx.hir_items.push(HirModuleItem::Function {
+                hir_items.push(HirModuleItem::Function {
                     name,
                     id,
                     sig,
@@ -435,7 +443,7 @@ fn lower_translation_unit_items(
                             .borrow_mut()
                             .typedef_tys
                             .insert(type_def, ty.clone());
-                        ctx.hir_items.push(HirModuleItem::TypeDef {
+                        hir_items.push(HirModuleItem::TypeDef {
                             name,
                             id: type_def,
                             span,
@@ -478,7 +486,7 @@ fn lower_translation_unit_items(
                                     span,
                                 });
                             } else {
-                                ctx.hir_items.push(HirModuleItem::Static {
+                                hir_items.push(HirModuleItem::Static {
                                     name,
                                     id,
                                     ty,
@@ -502,7 +510,7 @@ fn lower_translation_unit_items(
                                     });
                                 let ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
                                 ctx.resolver.borrow_mut().global_value_tys.insert(id, ty.clone());
-                                ctx.hir_items.push(HirModuleItem::Static {
+                                hir_items.push(HirModuleItem::Static {
                                     name,
                                     id,
                                     ty,
@@ -545,7 +553,7 @@ fn lower_translation_unit_items(
     for module in modules {
         let mut child_path = module_path.to_vec();
         child_path.push(module.name.clone());
-        lower_translation_unit_items(
+        let items = lower_translation_unit_items(
             ctx,
             &module.tu,
             &module.children,
@@ -555,7 +563,18 @@ fn lower_translation_unit_items(
             foreign_mod,
             foreign_items,
         );
+        let span = ctx.co2_span_to_rustc(module.decl_span);
+        hir_items.push(HirModuleItem::Module {
+            name: module.name.clone(),
+            id: module.def_id,
+            module: HirModule {
+                span,
+                items,
+            },
+            span,
+        });
     }
+    hir_items
 }
 
 pub fn lower_crate_sig(
@@ -581,6 +600,7 @@ pub fn lower_crate_sig(
     let mut loaded_paths = HashSet::new();
     let loaded_modules = load_modules(
         &ctx,
+        ctx.root_crate_def_id(),
         &root_module_dir(&source_path),
         &tu.rust_mod_items,
         file_ids,
@@ -651,7 +671,7 @@ pub fn lower_crate_sig(
         }
     }
 
-    lower_translation_unit_items(
+    let root_items = lower_translation_unit_items(
         &mut ctx,
         &tu,
         &loaded_modules,
@@ -661,6 +681,7 @@ pub fn lower_crate_sig(
         foreign_mod,
         &mut foreign_items,
     );
+    ctx.hir_items.extend(root_items);
 
     ctx.hir_items.push(HirModuleItem::ForeignMod {
         id: foreign_mod,

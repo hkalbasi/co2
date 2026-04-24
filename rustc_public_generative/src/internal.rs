@@ -160,145 +160,162 @@ pub struct ItemSignatureInfo {
 
 impl ItemSignatureInfo {
     fn from_hir_structure(hir_structure: &crate::HirStructure) -> Vec<ItemSignatureInfo> {
-        let mut result = vec![];
-        for item in &hir_structure.root.items {
-            match item {
-                crate::HirModuleItem::Function {
-                    name: _,
-                    id,
-                    sig,
-                    span,
-                    ..
-                } => result.push(ItemSignatureInfo {
-                    id: id.0,
-                    kind: ItemSignatureKind::Function(sig.clone()),
-                    span: *span,
-                }),
-                crate::HirModuleItem::Adt {
-                    name: _,
-                    repr: _,
-                    id,
-                    kind,
-                    span,
-                } => match kind {
-                    crate::hir_structure::HirAdtKind::Struct { fields } => {
+        fn collect(module: &crate::HirModule, result: &mut Vec<ItemSignatureInfo>) {
+            for item in &module.items {
+                match item {
+                    crate::HirModuleItem::Function {
+                        name: _,
+                        id,
+                        sig,
+                        span,
+                        ..
+                    } => result.push(ItemSignatureInfo {
+                        id: id.0,
+                        kind: ItemSignatureKind::Function(sig.clone()),
+                        span: *span,
+                    }),
+                    crate::HirModuleItem::Adt {
+                        name: _,
+                        repr: _,
+                        id,
+                        kind,
+                        span,
+                    } => match kind {
+                        crate::hir_structure::HirAdtKind::Struct { fields } => {
+                            result.push(ItemSignatureInfo {
+                                id: id.0,
+                                kind: ItemSignatureKind::Struct(fields.clone()),
+                                span: *span,
+                            })
+                        }
+                        crate::hir_structure::HirAdtKind::Union { fields } => {
+                            result.push(ItemSignatureInfo {
+                                id: id.0,
+                                kind: ItemSignatureKind::Union(fields.clone()),
+                                span: *span,
+                            })
+                        }
+                    },
+                    crate::HirModuleItem::TypeDef {
+                        id,
+                        span,
+                        ty,
+                        name: _,
+                    } => {
                         result.push(ItemSignatureInfo {
-                            id: id.0,
-                            kind: ItemSignatureKind::Struct(fields.clone()),
+                            id: *id,
+                            kind: ItemSignatureKind::TypeDef(ty.clone()),
                             span: *span,
-                        })
+                        });
                     }
-                    crate::hir_structure::HirAdtKind::Union { fields } => {
+                    crate::HirModuleItem::Const {
+                        id,
+                        span,
+                        ty,
+                        rhs,
+                        name: _,
+                    } => {
                         result.push(ItemSignatureInfo {
-                            id: id.0,
-                            kind: ItemSignatureKind::Union(fields.clone()),
+                            id: *id,
+                            kind: ItemSignatureKind::Const {
+                                ty: ty.clone(),
+                                rhs: *rhs,
+                            },
                             span: *span,
-                        })
+                        });
                     }
-                },
-                crate::HirModuleItem::TypeDef {
-                    id,
-                    span,
-                    ty,
-                    name: _,
-                } => {
-                    result.push(ItemSignatureInfo {
-                        id: *id,
-                        kind: ItemSignatureKind::TypeDef(ty.clone()),
-                        span: *span,
-                    });
-                }
-                crate::HirModuleItem::Const {
-                    id,
-                    span,
-                    ty,
-                    rhs,
-                    name: _,
-                } => {
-                    result.push(ItemSignatureInfo {
-                        id: *id,
-                        kind: ItemSignatureKind::Const {
-                            ty: ty.clone(),
-                            rhs: *rhs,
-                        },
-                        span: *span,
-                    });
-                }
-                crate::HirModuleItem::Static {
-                    id,
-                    span,
-                    ty,
-                    mutable,
-                    name: _,
-                } => {
-                    result.push(ItemSignatureInfo {
-                        id: *id,
-                        kind: ItemSignatureKind::Static {
-                            ty: ty.clone(),
-                            mutable: *mutable,
-                        },
-                        span: *span,
-                    });
-                }
-                crate::HirModuleItem::Impl {
-                    id,
-                    self_ty,
-                    trait_def,
-                    items,
-                    span,
-                } => {
-                    result.push(ItemSignatureInfo {
-                        id: *id,
-                        kind: ItemSignatureKind::Impl {
-                            self_ty: self_ty.clone(),
-                            trait_def: *trait_def,
-                            items: items.clone(),
-                        },
-                        span: *span,
-                    });
-                }
-                crate::HirModuleItem::ForeignMod { id: _, items } => {
-                    for item in items {
-                        match item {
-                            crate::ForeignModItem::ForeignFunction {
-                                name: _,
-                                id,
-                                sig,
-                                span,
-                            } => {
-                                result.push(ItemSignatureInfo {
-                                    id: id.0,
-                                    kind: ItemSignatureKind::ForeignFunction(sig.clone()),
-                                    span: *span,
-                                });
-                            }
-                            crate::ForeignModItem::ForeignStatic {
-                                name: _,
-                                id,
-                                ty,
-                                mutable,
-                                span,
-                            } => {
-                                result.push(ItemSignatureInfo {
-                                    id: *id,
-                                    kind: ItemSignatureKind::ForeignStatic {
-                                        ty: ty.clone(),
-                                        mutable: *mutable,
-                                    },
-                                    span: *span,
-                                });
+                    crate::HirModuleItem::Static {
+                        id,
+                        span,
+                        ty,
+                        mutable,
+                        name: _,
+                    } => {
+                        result.push(ItemSignatureInfo {
+                            id: *id,
+                            kind: ItemSignatureKind::Static {
+                                ty: ty.clone(),
+                                mutable: *mutable,
+                            },
+                            span: *span,
+                        });
+                    }
+                    crate::HirModuleItem::Impl {
+                        id,
+                        self_ty,
+                        trait_def,
+                        items,
+                        span,
+                    } => {
+                        result.push(ItemSignatureInfo {
+                            id: *id,
+                            kind: ItemSignatureKind::Impl {
+                                self_ty: self_ty.clone(),
+                                trait_def: *trait_def,
+                                items: items.clone(),
+                            },
+                            span: *span,
+                        });
+                    }
+                    crate::HirModuleItem::Module {
+                        id,
+                        module,
+                        span,
+                        ..
+                    } => {
+                        result.push(ItemSignatureInfo {
+                            id: *id,
+                            kind: ItemSignatureKind::Module,
+                            span: *span,
+                        });
+                        collect(module, result);
+                    }
+                    crate::HirModuleItem::ForeignMod { id: _, items } => {
+                        for item in items {
+                            match item {
+                                crate::ForeignModItem::ForeignFunction {
+                                    name: _,
+                                    id,
+                                    sig,
+                                    span,
+                                } => {
+                                    result.push(ItemSignatureInfo {
+                                        id: id.0,
+                                        kind: ItemSignatureKind::ForeignFunction(sig.clone()),
+                                        span: *span,
+                                    });
+                                }
+                                crate::ForeignModItem::ForeignStatic {
+                                    name: _,
+                                    id,
+                                    ty,
+                                    mutable,
+                                    span,
+                                } => {
+                                    result.push(ItemSignatureInfo {
+                                        id: *id,
+                                        kind: ItemSignatureKind::ForeignStatic {
+                                            ty: ty.clone(),
+                                            mutable: *mutable,
+                                        },
+                                        span: *span,
+                                    });
+                                }
                             }
                         }
                     }
                 }
-            };
+            }
         }
+        let mut result = vec![];
+        collect(&hir_structure.root, &mut result);
         result
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum ItemSignatureKind {
+    Module,
     Function(FunctionSignature),
     ForeignFunction(FunctionSignature),
     Struct(Vec<StructField>),
@@ -345,6 +362,28 @@ impl DefinedCrateInfo {
         let mut owner_parents: LocalDefIdMap<HirId> = LocalDefIdMap::default();
 
         let crate_def = CRATE_DEF_ID;
+        let parent_local = |my_def_id: rustc_public::DefId| {
+            self.items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .and_then(|item| item.parent)
+                .and_then(|parent| my_def_id_to_rustc_def_id(tcx, parent).as_local())
+                .unwrap_or(crate_def)
+        };
+        let is_mod_item = |kind: DefinedItemKind| {
+            matches!(
+                kind,
+                DefinedItemKind::Function { .. }
+                    | DefinedItemKind::Struct(_, _)
+                    | DefinedItemKind::Union(_, _)
+                    | DefinedItemKind::TypeDef(_)
+                    | DefinedItemKind::Static(_)
+                    | DefinedItemKind::Const(_)
+                    | DefinedItemKind::Impl { .. }
+                    | DefinedItemKind::Module(_)
+                    | DefinedItemKind::ForeignMod(_)
+            )
+        };
 
         let mut foreign_item_ids = Vec::new();
         let mut foreign_items_hir = Vec::new();
@@ -494,6 +533,50 @@ impl DefinedCrateInfo {
                 );
             }
             adt_items_hir.push((def_id, item_allocator));
+        }
+
+        let mut module_items_hir = Vec::new();
+        for my_def_id in signatures.iter().filter_map(|item| match item.kind {
+            ItemSignatureKind::Module => Some(item.id),
+            _ => None,
+        }) {
+            let name = &self
+                .items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .unwrap()
+                .name;
+            let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+            let child_item_ids = self
+                .items
+                .iter()
+                .filter(|item| item.parent == Some(my_def_id) && is_mod_item(item.kind))
+                .filter_map(|item| {
+                    my_def_id_to_rustc_def_id(tcx, item.def_id())
+                        .as_local()
+                        .map(|def_id| hir::ItemId {
+                            owner_id: OwnerId { def_id },
+                        })
+                })
+                .collect::<Vec<_>>();
+            let item = hir::Item {
+                owner_id: OwnerId { def_id },
+                kind: hir::ItemKind::Mod(
+                    Ident::from_str(name),
+                    leak(hir::Mod {
+                        spans: hir::ModSpans {
+                            inner_span: DUMMY_SP,
+                            inject_use_span: DUMMY_SP,
+                        },
+                        item_ids: leak(child_item_ids.into_boxed_slice()),
+                    }),
+                ),
+                span: DUMMY_SP,
+                vis_span: DUMMY_SP,
+                has_delayed_lints: false,
+                eii: false,
+            };
+            module_items_hir.push((def_id, leak(item)));
         }
 
         let mut impl_items_hir = Vec::new();
@@ -954,28 +1037,18 @@ impl DefinedCrateInfo {
             items_hir.push((def_id, item_allocator));
         }
 
-        let mut root_item_ids =
-            Vec::with_capacity(1 + adt_items_hir.len() + items_hir.len() + impl_items_hir.len());
-        root_item_ids.push(hir::ItemId {
-            owner_id: OwnerId {
-                def_id: foreign_mod_def,
-            },
-        });
-        for (def_id, _) in &adt_items_hir {
-            root_item_ids.push(hir::ItemId {
-                owner_id: OwnerId { def_id: *def_id },
-            });
-        }
-        for (def_id, _) in &impl_items_hir {
-            root_item_ids.push(hir::ItemId {
-                owner_id: OwnerId { def_id: *def_id },
-            });
-        }
-        for (def_id, _) in &items_hir {
-            root_item_ids.push(hir::ItemId {
-                owner_id: OwnerId { def_id: *def_id },
-            });
-        }
+        let root_item_ids = self
+            .items
+            .iter()
+            .filter(|item| item.parent.is_none() && is_mod_item(item.kind))
+            .filter_map(|item| {
+                my_def_id_to_rustc_def_id(tcx, item.def_id())
+                    .as_local()
+                    .map(|def_id| hir::ItemId {
+                        owner_id: OwnerId { def_id },
+                    })
+            })
+            .collect::<Vec<_>>();
         let root_mod = leak(hir::Mod {
             spans: hir::ModSpans {
                 inner_span: DUMMY_SP,
@@ -1001,7 +1074,10 @@ impl DefinedCrateInfo {
             foreign_mod_def,
             leak(make_owner_info(foreign_mod_nodes)),
         );
-        owner_parents.insert(foreign_mod_def, HirId::make_owner(crate_def));
+        owner_parents.insert(
+            foreign_mod_def,
+            HirId::make_owner(parent_local(rustc_def_to_my_def(tcx, foreign_mod_def.to_def_id()))),
+        );
 
         for (def_id, item_allocator) in foreign_items_hir {
             let foreign_nodes = item_allocator.into_owner_nodes();
@@ -1012,19 +1088,37 @@ impl DefinedCrateInfo {
         for (def_id, item_allocator) in adt_items_hir {
             let nodes = item_allocator.into_owner_nodes();
             insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
-            owner_parents.insert(def_id, HirId::make_owner(crate_def));
+            owner_parents.insert(
+                def_id,
+                HirId::make_owner(parent_local(rustc_def_to_my_def(tcx, def_id.to_def_id()))),
+            );
+        }
+
+        for (def_id, item) in module_items_hir {
+            let nodes = build_owner_nodes_for_item(item);
+            insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
+            owner_parents.insert(
+                def_id,
+                HirId::make_owner(parent_local(rustc_def_to_my_def(tcx, def_id.to_def_id()))),
+            );
         }
 
         for (def_id, item) in impl_items_hir {
             let nodes = build_owner_nodes_for_item(item);
             insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
-            owner_parents.insert(def_id, HirId::make_owner(crate_def));
+            owner_parents.insert(
+                def_id,
+                HirId::make_owner(parent_local(rustc_def_to_my_def(tcx, def_id.to_def_id()))),
+            );
         }
 
         for (def_id, item_allocator) in items_hir {
             let nodes = item_allocator.into_owner_nodes();
             insert_owner(&mut owners, def_id, leak(make_owner_info(nodes)));
-            owner_parents.insert(def_id, HirId::make_owner(crate_def));
+            owner_parents.insert(
+                def_id,
+                HirId::make_owner(parent_local(rustc_def_to_my_def(tcx, def_id.to_def_id()))),
+            );
         }
 
         for (def_id, item_allocator, impl_def_id) in impl_item_fns_hir {
@@ -1046,133 +1140,165 @@ impl DefinedCrateInfo {
         tcx: TyCtxt<'tcx>,
         hir_structure: &crate::HirStructure,
     ) -> (Self, LocalDefId) {
+        fn collect_module<'tcx>(
+            tcx: TyCtxt<'tcx>,
+            module: &crate::HirModule,
+            parent: Option<DefId>,
+            items: &mut Vec<DefinedItemInfo>,
+            the_foreign_def: &mut Option<LocalDefId>,
+        ) {
+            for hir_item in &module.items {
+                let kind = match hir_item.clone() {
+                    crate::hir_structure::HirModuleItem::Function {
+                        id,
+                        sig,
+                        no_mangle,
+                        ..
+                    } => {
+                        DefinedItemKind::Function {
+                            fn_def: id,
+                            abi: sig.abi,
+                            no_mangle,
+                        }
+                    }
+                    crate::HirModuleItem::TypeDef { id, .. } => DefinedItemKind::TypeDef(id),
+                    crate::HirModuleItem::Const { id, rhs, .. } => {
+                        items.push(DefinedItemInfo {
+                            name: "".to_owned(),
+                            kind: DefinedItemKind::AnonConst(rhs),
+                            span: DUMMY_SP,
+                            parent: Some(id),
+                        });
+                        DefinedItemKind::Const(id)
+                    }
+                    crate::HirModuleItem::Static { id, .. } => DefinedItemKind::Static(id),
+                    crate::HirModuleItem::Adt {
+                        name: _,
+                        id,
+                        kind,
+                        span: _,
+                        repr,
+                    } => {
+                        let result = match kind {
+                            crate::HirAdtKind::Struct { fields: _ } => DefinedItemKind::Struct(id, repr),
+                            crate::HirAdtKind::Union { fields: _ } => DefinedItemKind::Union(id, repr),
+                        };
+                        match kind {
+                            crate::HirAdtKind::Struct { fields }
+                            | crate::HirAdtKind::Union { fields } => {
+                                for field in fields {
+                                    items.push(DefinedItemInfo {
+                                        name: field.name,
+                                        kind: DefinedItemKind::Field(field.id),
+                                        span: internal(tcx, field.span),
+                                        parent: Some(id.0),
+                                    });
+                                }
+                            }
+                        }
+                        result
+                    }
+                    crate::HirModuleItem::Impl {
+                        id,
+                        items: impl_items,
+                        trait_def,
+                        ..
+                    } => {
+                        items.push(DefinedItemInfo {
+                            name: String::new(),
+                            kind: DefinedItemKind::Impl {
+                                def_id: id,
+                                of_trait: trait_def.is_some(),
+                            },
+                            span: DUMMY_SP,
+                            parent,
+                        });
+                        for item in impl_items {
+                            match &item.kind {
+                                crate::hir_structure::HirImplItemKind::Fn { .. } => {
+                                    items.push(DefinedItemInfo {
+                                        name: item.name.clone(),
+                                        kind: DefinedItemKind::ImplItemFn(item.id),
+                                        span: DUMMY_SP,
+                                        parent: Some(id),
+                                    });
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    crate::HirModuleItem::Module {
+                        name,
+                        id,
+                        module,
+                        span,
+                    } => {
+                        items.push(DefinedItemInfo {
+                            name,
+                            kind: DefinedItemKind::Module(id),
+                            span: internal(tcx, span),
+                            parent,
+                        });
+                        collect_module(tcx, &module, Some(id), items, the_foreign_def);
+                        continue;
+                    }
+                    crate::HirModuleItem::ForeignMod {
+                        id: foreign_mod_id,
+                        items: foreign_items,
+                    } => {
+                        *the_foreign_def =
+                            Some(my_def_id_to_rustc_def_id(tcx, foreign_mod_id).expect_local());
+                        items.push(DefinedItemInfo {
+                            name: "".to_owned(),
+                            kind: DefinedItemKind::ForeignMod(foreign_mod_id),
+                            span: DUMMY_SP,
+                            parent,
+                        });
+                        for item in foreign_items {
+                            match item {
+                                crate::hir_structure::ForeignModItem::ForeignFunction {
+                                    name,
+                                    id,
+                                    sig: _,
+                                    span: _,
+                                } => items.push(DefinedItemInfo {
+                                    name,
+                                    kind: DefinedItemKind::ForeignFunction(id),
+                                    span: DUMMY_SP,
+                                    parent: Some(foreign_mod_id),
+                                }),
+                                crate::hir_structure::ForeignModItem::ForeignStatic {
+                                    name,
+                                    id,
+                                    mutable: _,
+                                    ty: _,
+                                    span: _,
+                                } => items.push(DefinedItemInfo {
+                                    name,
+                                    kind: DefinedItemKind::Static(id),
+                                    span: DUMMY_SP,
+                                    parent: Some(foreign_mod_id),
+                                }),
+                            }
+                        }
+                        continue;
+                    }
+                };
+                items.push(DefinedItemInfo {
+                    name: hir_item.name().unwrap().to_owned(),
+                    kind,
+                    span: hir_item
+                        .span()
+                        .map(|s| internal(tcx, s))
+                        .unwrap_or(DUMMY_SP),
+                    parent,
+                });
+            }
+        }
         let mut items = vec![];
         let mut the_foreign_def = None;
-        for hir_item in &hir_structure.root.items {
-            let kind = match hir_item.clone() {
-                crate::hir_structure::HirModuleItem::Function {
-                    id,
-                    sig,
-                    no_mangle,
-                    ..
-                } => {
-                    DefinedItemKind::Function {
-                        fn_def: id,
-                        abi: sig.abi,
-                        no_mangle,
-                    }
-                }
-                crate::HirModuleItem::TypeDef { id, .. } => DefinedItemKind::TypeDef(id),
-                crate::HirModuleItem::Const { id, rhs, .. } => {
-                    items.push(DefinedItemInfo {
-                        name: "".to_owned(),
-                        kind: DefinedItemKind::AnonConst(rhs),
-                        span: DUMMY_SP,
-                    });
-                    DefinedItemKind::Const(id)
-                }
-                crate::HirModuleItem::Static { id, .. } => DefinedItemKind::Static(id),
-                crate::HirModuleItem::Adt {
-                    name: _,
-                    id,
-                    kind,
-                    span: _,
-                    repr,
-                } => {
-                    let result = match kind {
-                        crate::HirAdtKind::Struct { fields: _ } => DefinedItemKind::Struct(id, repr),
-                        crate::HirAdtKind::Union { fields: _ } => DefinedItemKind::Union(id, repr),
-                    };
-                    match kind {
-                        crate::HirAdtKind::Struct { fields }
-                        | crate::HirAdtKind::Union { fields } => {
-                            for field in fields {
-                                items.push(DefinedItemInfo {
-                                    name: field.name,
-                                    kind: DefinedItemKind::Field(field.id),
-                                    span: internal(tcx, field.span),
-                                });
-                            }
-                        }
-                    }
-                    result
-                }
-                crate::HirModuleItem::Impl {
-                    id,
-                    items: impl_items,
-                    trait_def,
-                    ..
-                } => {
-                    items.push(DefinedItemInfo {
-                        name: String::new(),
-                        kind: DefinedItemKind::Impl {
-                            def_id: id,
-                            of_trait: trait_def.is_some(),
-                        },
-                        span: DUMMY_SP,
-                    });
-                    for item in impl_items {
-                        match &item.kind {
-                            crate::hir_structure::HirImplItemKind::Fn { .. } => {
-                                items.push(DefinedItemInfo {
-                                    name: item.name.clone(),
-                                    kind: DefinedItemKind::ImplItemFn(item.id),
-                                    span: DUMMY_SP,
-                                });
-                            }
-                        }
-                    }
-                    continue;
-                }
-                crate::HirModuleItem::ForeignMod {
-                    id,
-                    items: foreign_items,
-                } => {
-                    the_foreign_def = Some(my_def_id_to_rustc_def_id(tcx, id));
-
-                    items.push(DefinedItemInfo {
-                        name: "".to_owned(),
-                        kind: DefinedItemKind::ForeignMod(id),
-                        span: DUMMY_SP,
-                    });
-                    for item in foreign_items {
-                        match item {
-                            crate::hir_structure::ForeignModItem::ForeignFunction {
-                                name,
-                                id,
-                                sig: _,
-                                span: _,
-                            } => items.push(DefinedItemInfo {
-                                name,
-                                kind: DefinedItemKind::ForeignFunction(id),
-                                span: DUMMY_SP,
-                            }),
-                            crate::hir_structure::ForeignModItem::ForeignStatic {
-                                name,
-                                id,
-                                mutable: _,
-                                ty: _,
-                                span: _,
-                            } => items.push(DefinedItemInfo {
-                                name,
-                                kind: DefinedItemKind::Static(id),
-                                span: DUMMY_SP,
-                            }),
-                        }
-                    }
-                    continue;
-                }
-            };
-            items.push(DefinedItemInfo {
-                name: hir_item.name().unwrap().to_owned(),
-                kind,
-                span: hir_item
-                    .span()
-                    .map(|s| internal(tcx, s))
-                    .unwrap_or(DUMMY_SP),
-            });
-        }
-        (Self { items }, the_foreign_def.unwrap().expect_local())
+        collect_module(tcx, &hir_structure.root, None, &mut items, &mut the_foreign_def);
+        (Self { items }, the_foreign_def.expect("missing foreign mod"))
     }
 }
 
@@ -1405,6 +1531,7 @@ impl DefinedCrateState {
         let kind = items.items.iter().find(|item| item.def_id() == key)?.kind;
         Some(match kind {
             DefinedItemKind::ForeignMod(_) => DefKind::ForeignMod,
+            DefinedItemKind::Module(_) => DefKind::Mod,
             DefinedItemKind::Function { .. } => DefKind::Fn,
             DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
             DefinedItemKind::Const(_) => DefKind::Const,
@@ -1459,6 +1586,7 @@ pub struct DefinedItemInfo {
     pub name: String,
     pub kind: DefinedItemKind,
     pub span: RustcSpan,
+    pub parent: Option<DefId>,
 }
 
 impl DefinedItemInfo {
@@ -1469,6 +1597,7 @@ impl DefinedItemInfo {
             }
             DefinedItemKind::Struct(adt_def, _) | DefinedItemKind::Union(adt_def, _) => adt_def.0,
             DefinedItemKind::ForeignMod(def_id)
+            | DefinedItemKind::Module(def_id)
             | DefinedItemKind::TypeDef(def_id)
             | DefinedItemKind::Static(def_id)
             | DefinedItemKind::Const(def_id)
@@ -1483,6 +1612,7 @@ impl DefinedItemInfo {
 #[derive(Debug, Clone, Copy)]
 pub enum DefinedItemKind {
     ForeignMod(DefId),
+    Module(DefId),
     Function {
         fn_def: FnDef,
         abi: FunctionAbi,
@@ -1605,6 +1735,7 @@ pub fn allocate_def_id<'tcx>(
     let parent = my_def_id_to_rustc_def_id(tcx, parent).expect_local();
     let data = match &kind {
         crate::DefData::ForeignMod => DefPathData::ForeignMod,
+        crate::DefData::Module(name) => DefPathData::TypeNs(Symbol::intern(name)),
         crate::DefData::ValueNs(name) => DefPathData::ValueNs(Symbol::intern(name)),
         crate::DefData::TypeNs(name) => DefPathData::TypeNs(Symbol::intern(name)),
         crate::DefData::LifetimeNs(name) => DefPathData::LifetimeNs(Symbol::intern(name)),
@@ -2211,54 +2342,27 @@ fn generated_resolutions<'tcx>(
         return r;
     }
 
-    let mut foreign_mod_local = None;
-    for item in &items {
-        if let DefinedItemKind::ForeignMod(def_id) = item.kind {
-            foreign_mod_local = my_def_id_to_rustc_def_id(tcx, def_id).as_local();
-            break;
-        }
-    }
-
-    let mut root_children = Vec::new();
-    let mut foreign_children = Vec::new();
+    let mut module_children: HashMap<LocalDefId, Vec<rustc_middle::metadata::ModChild>> =
+        HashMap::new();
     for item in &items {
         let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() else {
             continue;
         };
-        let (res, is_root_child, is_foreign_child) = match item.kind {
-            DefinedItemKind::Function { .. } => {
-                (Res::Def(DefKind::Fn, local_def_id.to_def_id()), true, false)
-            }
-            DefinedItemKind::Struct(_, _) => (
-                Res::Def(DefKind::Struct, local_def_id.to_def_id()),
-                true,
-                false,
+        let res = match item.kind {
+            DefinedItemKind::Function { .. } => Res::Def(DefKind::Fn, local_def_id.to_def_id()),
+            DefinedItemKind::Struct(_, _) => Res::Def(DefKind::Struct, local_def_id.to_def_id()),
+            DefinedItemKind::Union(_, _) => Res::Def(DefKind::Union, local_def_id.to_def_id()),
+            DefinedItemKind::TypeDef(_) => Res::Def(DefKind::TyAlias, local_def_id.to_def_id()),
+            DefinedItemKind::Module(_) => Res::Def(DefKind::Mod, local_def_id.to_def_id()),
+            DefinedItemKind::Static(_) => Res::Def(
+                DefKind::Static {
+                    safety: rustc_hir::Safety::Safe,
+                    mutability: ty::Mutability::Mut,
+                    nested: false,
+                },
+                local_def_id.to_def_id(),
             ),
-            DefinedItemKind::Union(_, _) => (
-                Res::Def(DefKind::Union, local_def_id.to_def_id()),
-                true,
-                false,
-            ),
-            DefinedItemKind::TypeDef(_) => (
-                Res::Def(DefKind::TyAlias, local_def_id.to_def_id()),
-                true,
-                false,
-            ),
-            DefinedItemKind::Static(_) => (
-                Res::Def(
-                    DefKind::Static {
-                        safety: rustc_hir::Safety::Safe,
-                        mutability: ty::Mutability::Mut,
-                        nested: false,
-                    },
-                    local_def_id.to_def_id(),
-                ),
-                true,
-                false,
-            ),
-            DefinedItemKind::ForeignFunction(_) => {
-                (Res::Def(DefKind::Fn, local_def_id.to_def_id()), false, true)
-            }
+            DefinedItemKind::ForeignFunction(_) => Res::Def(DefKind::Fn, local_def_id.to_def_id()),
             DefinedItemKind::Impl { .. } | DefinedItemKind::ImplItemFn(_) => continue,
             _ => continue,
         };
@@ -2268,21 +2372,18 @@ fn generated_resolutions<'tcx>(
             vis: ty::Visibility::Public,
             reexport_chain: Default::default(),
         };
-        if is_root_child {
-            root_children.push(child);
-        } else if is_foreign_child {
-            foreign_children.push(child);
-        }
+        let parent = item
+            .parent
+            .and_then(|parent| my_def_id_to_rustc_def_id(tcx, parent).as_local())
+            .unwrap_or(CRATE_DEF_ID);
+        module_children.entry(parent).or_default().push(child);
     }
 
     unsafe {
         let r_ptr = r as *const rustc_middle::ty::ResolverGlobalCtxt
             as *mut rustc_middle::ty::ResolverGlobalCtxt;
-        (*r_ptr).module_children.insert(CRATE_DEF_ID, root_children);
-        if let Some(foreign_mod_local) = foreign_mod_local {
-            (*r_ptr)
-                .module_children
-                .insert(foreign_mod_local, foreign_children);
+        for (module, children) in module_children {
+            (*r_ptr).module_children.insert(module, children);
         }
         (*r_ptr)
             .effective_visibilities

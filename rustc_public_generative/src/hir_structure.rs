@@ -57,6 +57,12 @@ pub enum HirModuleItem {
         items: Vec<HirImplItem>,
         span: Span,
     },
+    Module {
+        name: String,
+        id: DefId,
+        module: HirModule,
+        span: Span,
+    },
     ForeignMod {
         id: DefId,
         items: Vec<ForeignModItem>,
@@ -70,7 +76,8 @@ impl HirModuleItem {
             | HirModuleItem::Adt { name, .. }
             | HirModuleItem::TypeDef { name, .. }
             | HirModuleItem::Const { name, .. }
-            | HirModuleItem::Static { name, .. } => Some(name),
+            | HirModuleItem::Static { name, .. }
+            | HirModuleItem::Module { name, .. } => Some(name),
             HirModuleItem::Impl { .. } | HirModuleItem::ForeignMod { .. } => None,
         }
     }
@@ -82,7 +89,8 @@ impl HirModuleItem {
             | HirModuleItem::TypeDef { span, .. }
             | HirModuleItem::Const { span, .. }
             | HirModuleItem::Static { span, .. }
-            | HirModuleItem::Impl { span, .. } => Some(*span),
+            | HirModuleItem::Impl { span, .. }
+            | HirModuleItem::Module { span, .. } => Some(*span),
             HirModuleItem::ForeignMod { .. } => None,
         }
     }
@@ -166,4 +174,3 @@ pub enum AdtRepr {
     Rust,
     C,
 }
-

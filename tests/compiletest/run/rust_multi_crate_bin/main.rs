@@ -1,4 +1,4 @@
-use support_lib::{Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG, ComplexStruct};
+use support_lib::{Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG, ComplexStruct, inner_mod::inner_mod_fn};
 
 const _: () = {
     use std::ptr::null;
@@ -50,4 +50,6 @@ fn main() {
     let s7_copy: S7Type = unsafe { S7 };
     assert_eq!(s7_copy.x[2], b'n' as i8);
     assert_eq!(unsafe { HUGE_LONG }, 0xabcd00000000);
+
+    assert_eq!(inner_mod_fn(), 5);
 }

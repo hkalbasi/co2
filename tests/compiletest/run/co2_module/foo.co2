@@ -1,1 +1,5 @@
 mod foo_child;
+
+fn f_foo() {
+    foo_child::f_foo();
+}

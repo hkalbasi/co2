@@ -355,6 +355,7 @@ pub fn generate_with_args<S: CrateGeneratorState>(args: Vec<String>) {
 #[derive(Debug)]
 pub enum DefData {
     ForeignMod,
+    Module(String),
     ValueNs(String),
     TypeNs(String),
     LifetimeNs(String),
