@@ -39,7 +39,10 @@ impl ResolvedValue {
                 } else {
                     Ty::from_rigid_kind(RigidTy::FnDef(*fn_def, GenericArgs(generic_args.clone())))
                 };
-                let sig = fn_ty.kind().fn_sig().expect("fn ptr must come from fn item");
+                let sig = fn_ty
+                    .kind()
+                    .fn_sig()
+                    .expect("fn ptr must come from fn item");
                 Ty::from_rigid_kind(RigidTy::FnPtr(sig))
             }
             ResolvedValue::ConstInt(_) => {
@@ -110,9 +113,7 @@ impl<'a> HirCtx<'a> {
     }
 
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
-        co2_ast::emit_errors_and_terminate(
-            vec![co2_ast::Rich::custom(span, msg)],
-        );
+        co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(span, msg)]);
     }
 
     pub(crate) fn reset_labels(&self) {

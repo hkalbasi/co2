@@ -3,8 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use co2_hir::{HirBody, LabelId, LocalId, WellknownDefs};
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
-    DefId,
-    CrateDefType,
+    CrateDefType, DefId,
     mir::{Body, ConstOperand, LocalDecl as MirLocalDecl, Mutability},
     ty::{
         FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Span as RustSpan, Ty, TyKind,
@@ -211,5 +210,7 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
 }
 
 fn extra_adt_args_are_concrete(args: &[GenericArgKind]) -> bool {
-    args.iter().all(|arg| !matches!(arg, GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_))))
+    args.iter().all(
+        |arg| !matches!(arg, GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_))),
+    )
 }

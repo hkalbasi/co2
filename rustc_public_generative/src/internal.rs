@@ -39,8 +39,8 @@ use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, StructField}
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{
-    CrateGeneratorState, DependencyConstValue, DependencyCrate, DependencyFunction,
-    DependencyInfo, DependencyTrait, DependencyType, DependencyValue, DependencyValueKind, FileId,
+    CrateGeneratorState, DependencyConstValue, DependencyCrate, DependencyFunction, DependencyInfo,
+    DependencyTrait, DependencyType, DependencyValue, DependencyValueKind, FileId,
 };
 use rustc_public::DefId;
 use rustc_public::mir::{
@@ -258,10 +258,7 @@ impl ItemSignatureInfo {
                         });
                     }
                     crate::HirModuleItem::Module {
-                        id,
-                        module,
-                        span,
-                        ..
+                        id, module, span, ..
                     } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
@@ -767,14 +764,10 @@ impl DefinedCrateInfo {
             items_hir.push((def_id, item_allocator));
         }
 
-        for (my_def_id, function) in
-            signatures
-                .iter()
-                .filter_map(|item| match &item.kind {
-                    ItemSignatureKind::Function(sig) => Some((item.id, sig)),
-                    _ => None,
-                })
-        {
+        for (my_def_id, function) in signatures.iter().filter_map(|item| match &item.kind {
+            ItemSignatureKind::Function(sig) => Some((item.id, sig)),
+            _ => None,
+        }) {
             let name = &self
                 .items
                 .iter()
@@ -1076,7 +1069,10 @@ impl DefinedCrateInfo {
         );
         owner_parents.insert(
             foreign_mod_def,
-            HirId::make_owner(parent_local(rustc_def_to_my_def(tcx, foreign_mod_def.to_def_id()))),
+            HirId::make_owner(parent_local(rustc_def_to_my_def(
+                tcx,
+                foreign_mod_def.to_def_id(),
+            ))),
         );
 
         for (def_id, item_allocator) in foreign_items_hir {
@@ -1150,17 +1146,12 @@ impl DefinedCrateInfo {
             for hir_item in &module.items {
                 let kind = match hir_item.clone() {
                     crate::hir_structure::HirModuleItem::Function {
-                        id,
-                        sig,
+                        id, sig, no_mangle, ..
+                    } => DefinedItemKind::Function {
+                        fn_def: id,
+                        abi: sig.abi,
                         no_mangle,
-                        ..
-                    } => {
-                        DefinedItemKind::Function {
-                            fn_def: id,
-                            abi: sig.abi,
-                            no_mangle,
-                        }
-                    }
+                    },
                     crate::HirModuleItem::TypeDef { id, .. } => DefinedItemKind::TypeDef(id),
                     crate::HirModuleItem::Const { id, rhs, .. } => {
                         items.push(DefinedItemInfo {
@@ -1180,8 +1171,12 @@ impl DefinedCrateInfo {
                         repr,
                     } => {
                         let result = match kind {
-                            crate::HirAdtKind::Struct { fields: _ } => DefinedItemKind::Struct(id, repr),
-                            crate::HirAdtKind::Union { fields: _ } => DefinedItemKind::Union(id, repr),
+                            crate::HirAdtKind::Struct { fields: _ } => {
+                                DefinedItemKind::Struct(id, repr)
+                            }
+                            crate::HirAdtKind::Union { fields: _ } => {
+                                DefinedItemKind::Union(id, repr)
+                            }
                         };
                         match kind {
                             crate::HirAdtKind::Struct { fields }
@@ -1297,8 +1292,17 @@ impl DefinedCrateInfo {
         }
         let mut items = vec![];
         let mut the_foreign_def = None;
-        collect_module(tcx, &hir_structure.root, None, &mut items, &mut the_foreign_def);
-        (Self { items }, the_foreign_def.expect("missing foreign mod"))
+        collect_module(
+            tcx,
+            &hir_structure.root,
+            None,
+            &mut items,
+            &mut the_foreign_def,
+        );
+        (
+            Self { items },
+            the_foreign_def.expect("missing foreign mod"),
+        )
     }
 }
 
@@ -1626,7 +1630,10 @@ pub enum DefinedItemKind {
     Union(AdtDef, AdtRepr),
     Field(DefId),
     TypeDef(DefId),
-    Impl { def_id: DefId, of_trait: bool },
+    Impl {
+        def_id: DefId,
+        of_trait: bool,
+    },
     ImplItemFn(DefId),
 }
 
@@ -1973,7 +1980,9 @@ fn collect_dependency_def<'tcx>(tcx: TyCtxt<'tcx>, def_id: RustcDefId, info: &mu
         info.values.push(DependencyValue {
             kind: match kind {
                 DefKind::Const => DependencyValueKind::ConstDef(rustc_def_to_my_def(tcx, def_id)),
-                DefKind::Static { .. } => DependencyValueKind::Def(rustc_def_to_my_def(tcx, def_id)),
+                DefKind::Static { .. } => {
+                    DependencyValueKind::Def(rustc_def_to_my_def(tcx, def_id))
+                }
                 _ => unreachable!(),
             },
             path: tcx.def_path_str(def_id),
@@ -2046,9 +2055,10 @@ fn dependency_const_value<'tcx>(
         return None;
     }
 
-    let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tcx.const_eval_poly(def_id)))
-        .ok()?
-        .ok()?;
+    let value =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tcx.const_eval_poly(def_id)))
+            .ok()?
+            .ok()?;
     let scalar = value.try_to_scalar()?;
     let ty = tcx.type_of(def_id).instantiate_identity();
 
@@ -2118,7 +2128,8 @@ pub(crate) fn type_is_copy<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, ty: MirTy) -> 
 pub(crate) fn normalize_ty_for_owner<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, ty: MirTy) -> MirTy {
     let owner = my_def_id_to_rustc_def_id(tcx, owner);
     let ty = mir_ty_to_rustc(tcx, &ty);
-    let typing_env = ty::TypingEnv::non_body_analysis(tcx, owner).with_post_analysis_normalized(tcx);
+    let typing_env =
+        ty::TypingEnv::non_body_analysis(tcx, owner).with_post_analysis_normalized(tcx);
     tcx.try_normalize_erasing_regions(typing_env, ty)
         .map(rustc_public::rustc_internal::stable)
         .unwrap_or_else(|_| rustc_public::rustc_internal::stable(ty))
@@ -2147,7 +2158,8 @@ pub(crate) fn normalize_ty_for_owner_with_self<'tcx>(
             ct_op: |ct| ct,
         },
     );
-    let typing_env = ty::TypingEnv::non_body_analysis(tcx, owner).with_post_analysis_normalized(tcx);
+    let typing_env =
+        ty::TypingEnv::non_body_analysis(tcx, owner).with_post_analysis_normalized(tcx);
     tcx.try_normalize_erasing_regions(typing_env, ty)
         .map(rustc_public::rustc_internal::stable)
         .unwrap_or_else(|_| rustc_public::rustc_internal::stable(ty))
@@ -2198,7 +2210,11 @@ fn normalize_ty_defaults_to_rustc<'tcx>(tcx: TyCtxt<'tcx>, ty: MirTy) -> ty::Ty<
         }
         TyKind::RigidTy(RigidTy::Array(inner, len)) => {
             let rustc_len = internal(tcx, len);
-            ty::Ty::new_array_with_const_len(tcx, normalize_ty_defaults_to_rustc(tcx, inner), rustc_len)
+            ty::Ty::new_array_with_const_len(
+                tcx,
+                normalize_ty_defaults_to_rustc(tcx, inner),
+                rustc_len,
+            )
         }
         _ => internal(tcx, ty),
     }
@@ -2216,7 +2232,8 @@ fn normalize_generic_args_defaults_to_rustc<'tcx>(
         GenericArgKind::Const(konst) => ty::GenericArg::from(internal(tcx, konst.clone())),
     }));
     provided.extend_to(tcx, rustc_def_id, |param, current| {
-        param.default_value(tcx)
+        param
+            .default_value(tcx)
             .map(|default| default.instantiate(tcx, current))
             .unwrap_or_else(|| tcx.mk_param_from_def(param))
     })
@@ -2461,7 +2478,7 @@ fn generated_item_attrs(kind: DefinedItemKind) -> Option<Vec<hir::Attribute>> {
                 reprs: ThinVec::from_iter([(repr, DUMMY_SP)]),
                 first_span: DUMMY_SP,
             }
-        },
+        }
         _ => return None,
     };
     Some(vec![hir::Attribute::Parsed(attr)])

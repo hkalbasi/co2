@@ -2,16 +2,17 @@ use std::collections::{BTreeMap, HashMap};
 
 use co2_ast::{
     BinOp as ParsedBinOp, Constant, Expression, GenericAssociation, IntegerSuffix, Spanned,
-    Statement, StatementOrDeclaration,
-    UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
+    Statement, StatementOrDeclaration, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
 use co2_crate_sig::{LocalResolver, MethodResolutionKind};
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem,
-    mir::Mutability,
-    ty::{FloatTy, GenericArgKind, GenericArgs, IntTy, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
     abi::FieldsShape,
+    mir::Mutability,
+    ty::{
+        FloatTy, GenericArgKind, GenericArgs, IntTy, RigidTy, Span as RustSpan, Ty, TyKind, UintTy,
+    },
 };
 
 use crate::item::{HirLocal, LocalId};
@@ -279,11 +280,7 @@ fn collect_param_bindings_for_receiver(expected: Ty, actual: Ty, out: &mut BTree
             TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
             TyKind::RigidTy(RigidTy::Adt(actual_adt, actual_args)),
         ) if expected_adt == actual_adt && actual_args.0.len() <= expected_args.0.len() => {
-            for (expected_arg, actual_arg) in expected_args
-                .0
-                .iter()
-                .zip(actual_args.0.iter())
-            {
+            for (expected_arg, actual_arg) in expected_args.0.iter().zip(actual_args.0.iter()) {
                 if let (
                     rustc_public_generative::rustc_public::ty::GenericArgKind::Type(expected_ty),
                     rustc_public_generative::rustc_public::ty::GenericArgKind::Type(actual_ty),
@@ -316,9 +313,9 @@ fn substitute_ty_params(ty: Ty, bindings: &BTreeMap<u32, Ty>) -> Ty {
                     .collect(),
             ),
         )),
-        TyKind::RigidTy(RigidTy::Ref(region, inner, mutability)) => {
-            Ty::from_rigid_kind(RigidTy::Ref(region, substitute_ty_params(inner, bindings), mutability))
-        }
+        TyKind::RigidTy(RigidTy::Ref(region, inner, mutability)) => Ty::from_rigid_kind(
+            RigidTy::Ref(region, substitute_ty_params(inner, bindings), mutability),
+        ),
         TyKind::RigidTy(RigidTy::RawPtr(inner, mutability)) => Ty::from_rigid_kind(
             RigidTy::RawPtr(substitute_ty_params(inner, bindings), mutability),
         ),
@@ -417,7 +414,10 @@ impl HirCtx<'_> {
         let fn_ty = if fn_generic_args.is_empty() {
             fn_def.ty()
         } else {
-            Ty::from_rigid_kind(RigidTy::FnDef(fn_def, GenericArgs(fn_generic_args.to_vec())))
+            Ty::from_rigid_kind(RigidTy::FnDef(
+                fn_def,
+                GenericArgs(fn_generic_args.to_vec()),
+            ))
         };
         let sig = callable_sig(fn_ty)?;
         let mut sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
@@ -491,8 +491,14 @@ impl HirCtx<'_> {
         params: &[Spanned<Expression<LocalResolver>>],
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
-    ) -> Result<Option<(HirExpr, rustc_public_generative::rustc_public::ty::FnSig, Vec<HirExpr>)>, String>
-    {
+    ) -> Result<
+        Option<(
+            HirExpr,
+            rustc_public_generative::rustc_public::ty::FnSig,
+            Vec<HirExpr>,
+        )>,
+        String,
+    > {
         let Some(resolver) = self.decl_resolver.as_ref() else {
             return Ok(None);
         };
@@ -518,20 +524,25 @@ impl HirCtx<'_> {
             _ => return Ok(None),
         };
 
-        let (method_def, class, resolution_kind) = match resolver.resolve_method(receiver.ty, method_name) {
-            Ok(Some(found)) => found,
-            Ok(None) => return Ok(None),
-            Err(err) => return Err(err),
-        };
+        let (method_def, class, resolution_kind) =
+            match resolver.resolve_method(receiver.ty, method_name) {
+                Ok(Some(found)) => found,
+                Ok(None) => return Ok(None),
+                Err(err) => return Err(err),
+            };
         if class != co2_ast::TypeQueryResult::Expr {
             return Ok(None);
         }
         let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
         let resolved_generic_args = match resolution_kind {
             MethodResolutionKind::Inherent => receiver_generic_args(receiver.ty),
-            MethodResolutionKind::Trait => vec![GenericArgKind::Type(trait_method_self_ty(receiver.ty))],
+            MethodResolutionKind::Trait => {
+                vec![GenericArgKind::Type(trait_method_self_ty(receiver.ty))]
+            }
         };
-        let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver.ty) else {
+        let Some(sig) =
+            self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver.ty)
+        else {
             return Ok(None);
         };
         let resolved = match resolution_kind {
@@ -571,8 +582,14 @@ impl HirCtx<'_> {
         params: &[Spanned<Expression<LocalResolver>>],
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
-    ) -> Result<Option<(HirExpr, rustc_public_generative::rustc_public::ty::FnSig, Vec<HirExpr>)>, String>
-    {
+    ) -> Result<
+        Option<(
+            HirExpr,
+            rustc_public_generative::rustc_public::ty::FnSig,
+            Vec<HirExpr>,
+        )>,
+        String,
+    > {
         let Some(resolver) = self.decl_resolver.as_ref() else {
             return Ok(None);
         };
@@ -600,11 +617,12 @@ impl HirCtx<'_> {
                 self.to_rust_span(parser_span),
             )
         };
-        let (method_def, class, resolution_kind) = match resolver.resolve_method(receiver_ty, method_name) {
-            Ok(Some(found)) => found,
-            Ok(None) => return Ok(None),
-            Err(err) => return Err(err),
-        };
+        let (method_def, class, resolution_kind) =
+            match resolver.resolve_method(receiver_ty, method_name) {
+                Ok(Some(found)) => found,
+                Ok(None) => return Ok(None),
+                Err(err) => return Err(err),
+            };
         if class != co2_ast::TypeQueryResult::Expr {
             return Ok(None);
         }
@@ -613,23 +631,35 @@ impl HirCtx<'_> {
         let resolved_generic_args = match resolution_kind {
             MethodResolutionKind::Inherent => {
                 let receiver_args = receiver_generic_args(receiver_ty);
-                let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, &receiver_args, receiver_ty) else {
+                let Some(sig) =
+                    self.specialize_fn_sig_from_receiver(fn_def, &receiver_args, receiver_ty)
+                else {
                     return Ok(None);
                 };
                 let output_args = receiver_generic_args(sig.output());
                 let resolved_generic_args = if output_args.len() > receiver_args.len()
-                    && output_args.iter().zip(receiver_args.iter()).all(|(o, r)| o == r)
+                    && output_args
+                        .iter()
+                        .zip(receiver_args.iter())
+                        .all(|(o, r)| o == r)
                 {
                     output_args
                 } else {
                     receiver_args
                 };
-                let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver_ty) else {
+                let Some(sig) = self.specialize_fn_sig_from_receiver(
+                    fn_def,
+                    &resolved_generic_args,
+                    receiver_ty,
+                ) else {
                     return Ok(None);
                 };
                 return Ok(Some((
                     HirExpr {
-                        kind: HirExprKind::Path(ResolvedValue::Fn(fn_def, resolved_generic_args.clone())),
+                        kind: HirExprKind::Path(ResolvedValue::Fn(
+                            fn_def,
+                            resolved_generic_args.clone(),
+                        )),
                         ty: ResolvedValue::Fn(fn_def, resolved_generic_args).ty(),
                         span: self.to_rust_span(parser_span),
                     },
@@ -646,9 +676,13 @@ impl HirCtx<'_> {
                     },
                 )));
             }
-            MethodResolutionKind::Trait => vec![GenericArgKind::Type(trait_method_self_ty(receiver_ty))],
+            MethodResolutionKind::Trait => {
+                vec![GenericArgKind::Type(trait_method_self_ty(receiver_ty))]
+            }
         };
-        let Some(sig) = self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver_ty) else {
+        let Some(sig) =
+            self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver_ty)
+        else {
             return Ok(None);
         };
         let resolved = match resolution_kind {
@@ -764,14 +798,15 @@ impl HirCtx<'_> {
                         .decl_resolver
                         .as_ref()
                         .expect("const path lowering requires decl resolver");
-                    let value = resolver
-                        .dependency_const_value(def_id)
-                        .ok_or_else(|| format!("missing scalar constant value for def {def_id:?}"))?;
+                    let value = resolver.dependency_const_value(def_id).ok_or_else(|| {
+                        format!("missing scalar constant value for def {def_id:?}")
+                    })?;
                     Ok(lower_dependency_const(value, span))
                 }
-                co2_crate_sig::DefOrLocal::AssocMethod { .. } => {
-                    self.terminate_with_error(parser_span, "associated method path is only valid in call position")
-                }
+                co2_crate_sig::DefOrLocal::AssocMethod { .. } => self.terminate_with_error(
+                    parser_span,
+                    "associated method path is only valid in call position",
+                ),
                 co2_crate_sig::DefOrLocal::Local(l) => {
                     let Some(&local) = local_map.get(&(l as usize)) else {
                         self.terminate_with_error(
@@ -787,14 +822,12 @@ impl HirCtx<'_> {
                     });
                 }
                 co2_crate_sig::DefOrLocal::FuncName => Ok(HirExpr {
-                    kind: HirExprKind::ConstStr(
-                        self.function_name.clone().unwrap_or_else(|| {
-                            self.terminate_with_error(
-                                parser_span,
-                                "__func__ is only available inside function bodies",
-                            )
-                        }),
-                    ),
+                    kind: HirExprKind::ConstStr(self.function_name.clone().unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            parser_span,
+                            "__func__ is only available inside function bodies",
+                        )
+                    })),
                     ty: Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut),
                     span,
                 }),
@@ -824,31 +857,30 @@ impl HirCtx<'_> {
                 span,
             }),
             Expression::Call { func, params } => {
-                let (func_expr, sig, mut lowered_args) =
-                    if let Some(lowered) =
-                        self.try_lower_method_call(&func, &params, locals, local_map)?
-                    {
-                        lowered
-                    } else if let Some(lowered) =
-                        self.try_lower_assoc_method_call(&func, &params, locals, local_map)?
-                    {
-                        lowered
-                    } else {
-                        let func_expr = self.lower_expr((func.0, func.1), locals, local_map)?;
-                        let Some(sig) = callable_sig(func_expr.ty) else {
-                            self.terminate_with_error(parser_span, "Type is not callable");
-                        };
-
-                        let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
-
-                        let mut lowered_args = Vec::with_capacity(params.len());
-                        for param in params {
-                            let mut arg = self.lower_expr((param.0, param.1), locals, local_map)?;
-                            self.array_to_pointer_decay_if_array(&mut arg);
-                            lowered_args.push(arg);
-                        }
-                        (func_expr, sig, lowered_args)
+                let (func_expr, sig, mut lowered_args) = if let Some(lowered) =
+                    self.try_lower_method_call(&func, &params, locals, local_map)?
+                {
+                    lowered
+                } else if let Some(lowered) =
+                    self.try_lower_assoc_method_call(&func, &params, locals, local_map)?
+                {
+                    lowered
+                } else {
+                    let func_expr = self.lower_expr((func.0, func.1), locals, local_map)?;
+                    let Some(sig) = callable_sig(func_expr.ty) else {
+                        self.terminate_with_error(parser_span, "Type is not callable");
                     };
+
+                    let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
+
+                    let mut lowered_args = Vec::with_capacity(params.len());
+                    for param in params {
+                        let mut arg = self.lower_expr((param.0, param.1), locals, local_map)?;
+                        self.array_to_pointer_decay_if_array(&mut arg);
+                        lowered_args.push(arg);
+                    }
+                    (func_expr, sig, lowered_args)
+                };
 
                 self.lower_call_args(parser_span, &sig, &mut lowered_args);
 
@@ -1137,7 +1169,10 @@ impl HirCtx<'_> {
                     span,
                 })
             }
-            Expression::Offsetof { ty: type_name, field } => {
+            Expression::Offsetof {
+                ty: type_name,
+                field,
+            } => {
                 let ty = self.lower_type_name(*type_name, parser_span)?;
                 let (indices, _field_ty) = resolve_field_path_in_adt(ty, &field)
                     .ok_or_else(|| format!("offsetof: field '{field}' not found in type"))?;
@@ -1150,18 +1185,27 @@ impl HirCtx<'_> {
                         .map_err(|e| format!("offsetof: failed to compute layout: {e}"))?;
                     let field_offset = match &layout.shape().fields {
                         FieldsShape::Arbitrary { offsets, .. } => {
-                            let off = offsets.get(field_idx)
-                                .ok_or_else(|| format!("offsetof: field index {field_idx} out of bounds"))?
+                            let off = offsets
+                                .get(field_idx)
+                                .ok_or_else(|| {
+                                    format!("offsetof: field index {field_idx} out of bounds")
+                                })?
                                 .bytes();
                             off
                         }
-                        other => return Err(format!("offsetof: unsupported layout kind for type: {other:?}")),
+                        other => {
+                            return Err(format!(
+                                "offsetof: unsupported layout kind for type: {other:?}"
+                            ));
+                        }
                     };
                     offset_bytes += field_offset as u64;
                     // Descend into the field type for next iteration.
                     cur_ty = adt_field_tys(cur_ty)
                         .and_then(|tys| tys.into_iter().nth(field_idx))
-                        .ok_or_else(|| format!("offsetof: failed to get field type at index {field_idx}"))?;
+                        .ok_or_else(|| {
+                            format!("offsetof: failed to get field type at index {field_idx}")
+                        })?;
                 }
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(offset_bytes as i128),
@@ -1277,15 +1321,15 @@ impl HirCtx<'_> {
                 let tail = if let Some(last_item) = parsed.statements.pop() {
                     if let StatementOrDeclaration::Statement((Statement::Expression(tail), _)) =
                         last_item.0
-                {
-                    tail
+                    {
+                        tail
+                    } else {
+                        parsed.statements.push(last_item);
+                        (Expression::Empty, parser_span)
+                    }
                 } else {
-                    parsed.statements.push(last_item);
                     (Expression::Empty, parser_span)
-                }
-            } else {
-                (Expression::Empty, parser_span)
-            };
+                };
 
                 let mut scoped_map = local_map.clone();
                 let mut lowered_statements = Vec::new();
@@ -1380,13 +1424,11 @@ impl HirCtx<'_> {
                     );
                 }
             }
-            Expression::Empty => {
-                Ok(HirExpr {
-                    kind: HirExprKind::Zeroed,
-                    ty: Ty::new_tuple(&[]),
-                    span,
-                })
-            },
+            Expression::Empty => Ok(HirExpr {
+                kind: HirExprKind::Zeroed,
+                ty: Ty::new_tuple(&[]),
+                span,
+            }),
             Expression::Conditional {
                 cond,
                 then_expr,

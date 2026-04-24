@@ -1,4 +1,9 @@
-use chumsky::{Parser as _, error::Rich, input::Input as _, span::{SimpleSpan, Span as _}};
+use chumsky::{
+    Parser as _,
+    error::Rich,
+    input::Input as _,
+    span::{SimpleSpan, Span as _},
+};
 
 use crate::{lexer::lexer, parser::translation_unit};
 

@@ -1,16 +1,19 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Command;
-use std::path::{Path};
 
 use anyhow::{Context, Result, bail};
 use tempfile::Builder as TempDirBuilder;
 
 use crate::cli::SuiteArg;
-use crate::test_case::{TestCase, TestKind, TestOutcome, Mode, collect_tests, directive_text, directive_i32, directive_args};
-use crate::compiler::{compile_test, CompileResult};
-use crate::ui::{check_ui, parse_ui_span_expectations};
+use crate::compiler::{CompileResult, compile_test};
 use crate::error::{TestError, UiTestError, render_test_error, render_ui_error};
-use crate::util::{normalize, unescape_text, copy_dir_all};
+use crate::test_case::{
+    Mode, TestCase, TestKind, TestOutcome, collect_tests, directive_args, directive_i32,
+    directive_text,
+};
+use crate::ui::{check_ui, parse_ui_span_expectations};
+use crate::util::{copy_dir_all, normalize, unescape_text};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Suite {
@@ -110,7 +113,11 @@ fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
     let mut sources = HashMap::new();
     if suite == Suite::Ui {
         sources.insert(
-            test.path.file_name().unwrap().to_string_lossy().into_owned(),
+            test.path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
             test.source.clone(),
         );
         ui_spans.extend(parse_ui_span_expectations(&test.path, mode)?);

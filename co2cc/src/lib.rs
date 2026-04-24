@@ -255,10 +255,7 @@ fn compile_c_to_object(input: &Path, output: &Path, cpp_args: &[String]) {
         .or_else(|| std::env::current_exe().ok())
         .expect("failed to locate co2c executable");
     let mut cmd = Command::new(exe);
-    cmd.arg("--co2c-emit-obj")
-        .arg(input)
-        .arg("-o")
-        .arg(output);
+    cmd.arg("--co2c-emit-obj").arg(input).arg("-o").arg(output);
     for arg in cpp_args {
         cmd.arg(arg);
     }
@@ -287,7 +284,7 @@ fn link_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Pat
         .or_else(|| current_invocation_path())
         .or_else(|| std::env::current_exe().ok())
         .expect("failed to locate co2c executable");
-    
+
     let mut cmd = Command::new(exe);
     cmd.args(&rustc_args);
     // Force the applet name to co2rustc

@@ -10,7 +10,7 @@
 //! String allocations.
 
 use super::macro_defs::MacroTable;
-use super::utils::{is_ident_start_byte, is_ident_cont_byte, bytes_to_str};
+use super::utils::{bytes_to_str, is_ident_cont_byte, is_ident_start_byte};
 
 /// State of a single conditional (#if/#ifdef/#ifndef block).
 #[derive(Debug, Clone, Copy)]
@@ -36,7 +36,9 @@ impl ConditionalStack {
 
     /// Returns true if code should currently be emitted.
     pub fn is_active(&self) -> bool {
-        self.stack.last().is_none_or(|s| s.current_branch_active && s.parent_active)
+        self.stack
+            .last()
+            .is_none_or(|s| s.current_branch_active && s.parent_active)
     }
 
     /// Push a new #if/#ifdef/#ifndef.
@@ -292,30 +294,31 @@ fn tokenize_expr(expr: &str) -> Vec<ExprToken> {
         // Number (decimal, hex, octal)
         if b.is_ascii_digit() {
             let start = i;
-            let (raw_val, is_hex_or_oct) = if b == b'0' && i + 1 < len && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
-                i += 2;
-                let hex_start = i;
-                while i < len && bytes[i].is_ascii_hexdigit() {
+            let (raw_val, is_hex_or_oct) =
+                if b == b'0' && i + 1 < len && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
+                    i += 2;
+                    let hex_start = i;
+                    while i < len && bytes[i].is_ascii_hexdigit() {
+                        i += 1;
+                    }
+                    let hex_str = bytes_to_str(bytes, hex_start, i);
+                    (u64::from_str_radix(hex_str, 16).unwrap_or(0), true)
+                } else if b == b'0' && i + 1 < len && bytes[i + 1].is_ascii_digit() {
+                    // Octal
                     i += 1;
-                }
-                let hex_str = bytes_to_str(bytes, hex_start, i);
-                (u64::from_str_radix(hex_str, 16).unwrap_or(0), true)
-            } else if b == b'0' && i + 1 < len && bytes[i + 1].is_ascii_digit() {
-                // Octal
-                i += 1;
-                let oct_start = i;
-                while i < len && bytes[i].is_ascii_digit() {
-                    i += 1;
-                }
-                let oct_str = bytes_to_str(bytes, oct_start, i);
-                (u64::from_str_radix(oct_str, 8).unwrap_or(0), true)
-            } else {
-                while i < len && bytes[i].is_ascii_digit() {
-                    i += 1;
-                }
-                let num_str = bytes_to_str(bytes, start, i);
-                (num_str.parse::<u64>().unwrap_or(0), false)
-            };
+                    let oct_start = i;
+                    while i < len && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    let oct_str = bytes_to_str(bytes, oct_start, i);
+                    (u64::from_str_radix(oct_str, 8).unwrap_or(0), true)
+                } else {
+                    while i < len && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    let num_str = bytes_to_str(bytes, start, i);
+                    (num_str.parse::<u64>().unwrap_or(0), false)
+                };
             // Parse suffixes (U, L, UL, LL, ULL) - track unsigned
             let mut is_unsigned = false;
             while i < len && matches!(bytes[i], b'u' | b'U' | b'l' | b'L') {
@@ -421,23 +424,73 @@ fn tokenize_expr(expr: &str) -> Vec<ExprToken> {
 
         // Single-character operators and parens
         match b {
-            b'(' => { tokens.push(ExprToken::LParen); i += 1; }
-            b')' => { tokens.push(ExprToken::RParen); i += 1; }
-            b'!' => { tokens.push(ExprToken::Op("!")); i += 1; }
-            b'&' => { tokens.push(ExprToken::Op("&")); i += 1; }
-            b'|' => { tokens.push(ExprToken::Op("|")); i += 1; }
-            b'+' => { tokens.push(ExprToken::Op("+")); i += 1; }
-            b'-' => { tokens.push(ExprToken::Op("-")); i += 1; }
-            b'*' => { tokens.push(ExprToken::Op("*")); i += 1; }
-            b'/' => { tokens.push(ExprToken::Op("/")); i += 1; }
-            b'%' => { tokens.push(ExprToken::Op("%")); i += 1; }
-            b'~' => { tokens.push(ExprToken::Op("~")); i += 1; }
-            b'^' => { tokens.push(ExprToken::Op("^")); i += 1; }
-            b'?' => { tokens.push(ExprToken::Op("?")); i += 1; }
-            b':' => { tokens.push(ExprToken::Op(":")); i += 1; }
-            b'<' => { tokens.push(ExprToken::Op("<")); i += 1; }
-            b'>' => { tokens.push(ExprToken::Op(">")); i += 1; }
-            _ => { i += 1; } // skip unknown
+            b'(' => {
+                tokens.push(ExprToken::LParen);
+                i += 1;
+            }
+            b')' => {
+                tokens.push(ExprToken::RParen);
+                i += 1;
+            }
+            b'!' => {
+                tokens.push(ExprToken::Op("!"));
+                i += 1;
+            }
+            b'&' => {
+                tokens.push(ExprToken::Op("&"));
+                i += 1;
+            }
+            b'|' => {
+                tokens.push(ExprToken::Op("|"));
+                i += 1;
+            }
+            b'+' => {
+                tokens.push(ExprToken::Op("+"));
+                i += 1;
+            }
+            b'-' => {
+                tokens.push(ExprToken::Op("-"));
+                i += 1;
+            }
+            b'*' => {
+                tokens.push(ExprToken::Op("*"));
+                i += 1;
+            }
+            b'/' => {
+                tokens.push(ExprToken::Op("/"));
+                i += 1;
+            }
+            b'%' => {
+                tokens.push(ExprToken::Op("%"));
+                i += 1;
+            }
+            b'~' => {
+                tokens.push(ExprToken::Op("~"));
+                i += 1;
+            }
+            b'^' => {
+                tokens.push(ExprToken::Op("^"));
+                i += 1;
+            }
+            b'?' => {
+                tokens.push(ExprToken::Op("?"));
+                i += 1;
+            }
+            b':' => {
+                tokens.push(ExprToken::Op(":"));
+                i += 1;
+            }
+            b'<' => {
+                tokens.push(ExprToken::Op("<"));
+                i += 1;
+            }
+            b'>' => {
+                tokens.push(ExprToken::Op(">"));
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            } // skip unknown
         }
     }
 

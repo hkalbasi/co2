@@ -63,7 +63,13 @@ fn ensure_link(source: &Path, target: &Path) -> Result<()> {
 fn create_symlink_or_copy(source: &Path, target: &Path) -> Result<()> {
     std::os::unix::fs::symlink(source, target).or_else(|_| {
         fs::copy(source, target)
-            .with_context(|| format!("failed to copy {} to {}", source.display(), target.display()))
+            .with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    source.display(),
+                    target.display()
+                )
+            })
             .map(|_| ())
     })
 }
@@ -72,7 +78,13 @@ fn create_symlink_or_copy(source: &Path, target: &Path) -> Result<()> {
 fn create_symlink_or_copy(source: &Path, target: &Path) -> Result<()> {
     std::os::windows::fs::symlink_file(source, target).or_else(|_| {
         fs::copy(source, target)
-            .with_context(|| format!("failed to copy {} to {}", source.display(), target.display()))
+            .with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    source.display(),
+                    target.display()
+                )
+            })
             .map(|_| ())
     })
 }

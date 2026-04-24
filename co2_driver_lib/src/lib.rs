@@ -1,17 +1,16 @@
 #![feature(rustc_private)]
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 use std::panic::AssertUnwindSafe;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 
 use co2_ast::Initializer;
 use co2_crate_sig::{LocalResolver, MirOwnerInfo, WellknownDefs};
 use co2_hir::{
-    HirBody, HirCtx, HirExpr, HirExprKind, HirLocal, HirStmt, ResolvedValue, eval_usize_initializer,
-    infer_array_len_from_initializer,
-    lower_static_body_for_ty,
+    HirBody, HirCtx, HirExpr, HirExprKind, HirLocal, HirStmt, ResolvedValue,
+    eval_usize_initializer, infer_array_len_from_initializer, lower_static_body_for_ty,
 };
 use co2_preprocessor::PreprocessedSource;
 use la_arena::Arena;
@@ -74,7 +73,10 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let mut file_ids = HashMap::with_capacity(pending.preprocessed.files().len());
         let mut source_files = HashMap::with_capacity(pending.preprocessed.files().len());
         for (co2_file_id, file) in pending.preprocessed.files() {
-            file_ids.insert(*co2_file_id, ctx.add_custom_file(&file.path, file.source.as_ref()));
+            file_ids.insert(
+                *co2_file_id,
+                ctx.add_custom_file(&file.path, file.source.as_ref()),
+            );
             source_files.insert(
                 *co2_file_id,
                 (file.path.display().to_string(), file.source.clone()),
@@ -134,9 +136,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             MirOwnerInfo::StaticWithArrayLen {
                 initializer,
                 array_len,
-            } => {
-                self.lower_explicit_static_mir_with_array_len(&ctx, def, initializer, array_len)
-            }
+            } => self.lower_explicit_static_mir_with_array_len(&ctx, def, initializer, array_len),
             MirOwnerInfo::StaticZeroed | MirOwnerInfo::EnumConstZeroed => {
                 build_zeroed_static_initializer_body(
                     &self.wellknown_defs,
@@ -151,9 +151,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 resolver,
                 body,
             } => {
-                let span_converter = |span: co2_ast::Span| {
-                    self.map_co2_span(&ctx, span)
-                };
+                let span_converter = |span: co2_ast::Span| self.map_co2_span(&ctx, span);
                 let mut hir_ctx = HirCtx::new(
                     self.wellknown_defs,
                     &span_converter,
@@ -185,30 +183,15 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     }
                 };
 
-                co2_mir::build_mir_for_body(
-                    &hir,
-                    &ctx,
-                    def.0,
-                    self.file_id,
-                    self.wellknown_defs,
-                )
+                co2_mir::build_mir_for_body(&hir, &ctx, def.0, self.file_id, self.wellknown_defs)
             }
-            MirOwnerInfo::FnBodyError {
-                def,
-                body_span,
-            } => {
+            MirOwnerInfo::FnBodyError { def, body_span } => {
                 let hir = build_error_fn_body(
-                &self.wellknown_defs,
-                &def.fn_sig().skip_binder(),
-                self.map_co2_span(&ctx, body_span),
+                    &self.wellknown_defs,
+                    &def.fn_sig().skip_binder(),
+                    self.map_co2_span(&ctx, body_span),
                 );
-                co2_mir::build_mir_for_body(
-                    &hir,
-                    &ctx,
-                    def.0,
-                    self.file_id,
-                    self.wellknown_defs,
-                )
+                co2_mir::build_mir_for_body(&hir, &ctx, def.0, self.file_id, self.wellknown_defs)
             }
         }
     }
@@ -230,9 +213,7 @@ impl Co2GeneratorState {
         def: DefId,
         initializer: co2_ast::Spanned<Initializer<LocalResolver>>,
     ) -> Body {
-        let span_converter = |span: co2_ast::Span| {
-            self.map_co2_span(ctx, span)
-        };
+        let span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
         let hir_ctx = HirCtx::new(
             self.wellknown_defs,
             &span_converter,
@@ -243,12 +224,15 @@ impl Co2GeneratorState {
         let mut target_ty = CrateItem(def).ty();
         if let TyKind::RigidTy(RigidTy::Array(elem_ty, len)) = target_ty.kind() {
             if len.eval_target_usize().is_err() {
-                let inferred_len = infer_array_len_from_initializer(initializer.clone(), elem_ty, &hir_ctx)
-                    .expect("failed to infer static array length");
+                let inferred_len =
+                    infer_array_len_from_initializer(initializer.clone(), elem_ty, &hir_ctx)
+                        .expect("failed to infer static array length");
                 target_ty = Ty::from_rigid_kind(RigidTy::Array(
                     elem_ty,
-                    rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(inferred_len)
-                        .expect("failed to materialize inferred array length"),
+                    rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(
+                        inferred_len,
+                    )
+                    .expect("failed to materialize inferred array length"),
                 ));
             }
         }
@@ -268,9 +252,7 @@ impl Co2GeneratorState {
         let mut target_ty = CrateItem(def).ty();
         if let TyKind::RigidTy(RigidTy::Array(elem_ty, len)) = target_ty.kind() {
             if len.eval_target_usize().is_err() {
-                let len_span_converter = |span: co2_ast::Span| {
-                    self.map_co2_span(ctx, span)
-                };
+                let len_span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
                 let len_hir_ctx = HirCtx::new(
                     self.wellknown_defs,
                     &len_span_converter,
@@ -281,20 +263,15 @@ impl Co2GeneratorState {
                     .expect("failed to evaluate static array length");
                 target_ty = Ty::from_rigid_kind(RigidTy::Array(
                     elem_ty,
-                    rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(evaluated_len)
-                        .expect("failed to materialize static array length"),
+                    rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(
+                        evaluated_len,
+                    )
+                    .expect("failed to materialize static array length"),
                 ));
             }
         }
-        let span_converter = |span: co2_ast::Span| {
-            self.map_co2_span(ctx, span)
-        };
-        let hir_ctx = HirCtx::new(
-            self.wellknown_defs,
-            &span_converter,
-            None,
-            target_ty,
-        );
+        let span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
+        let hir_ctx = HirCtx::new(self.wellknown_defs, &span_converter, None, target_ty);
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
         co2_mir::build_mir_for_body(&hir, ctx, def, self.file_id, self.wellknown_defs)
     }

@@ -11,10 +11,7 @@ fn main() -> std::process::ExitCode {
     dispatch(&arg0, args)
 }
 
-fn dispatch(
-    arg0: &str,
-    args: impl IntoIterator<Item = String>,
-) -> std::process::ExitCode {
+fn dispatch(arg0: &str, args: impl IntoIterator<Item = String>) -> std::process::ExitCode {
     let mut args = args.into_iter();
     match applet_name(arg0) {
         Some("co2rustc") => {
@@ -24,7 +21,9 @@ fn dispatch(
             co2cc::main_with_args(std::iter::once("co2cc".to_owned()).chain(args).collect())
         }
         Some("co2cargo") => {
-            let code = co2cargo::main_with_args(std::iter::once("co2cargo".to_owned()).chain(args).collect());
+            let code = co2cargo::main_with_args(
+                std::iter::once("co2cargo".to_owned()).chain(args).collect(),
+            );
             std::process::ExitCode::from(code as u8)
         }
         Some("co2-multicall") => match args.next().as_deref() {
@@ -33,7 +32,7 @@ fn dispatch(
                 eprintln!("usage: co2-multicall install [target_dir]");
                 std::process::ExitCode::from(2)
             }
-        }
+        },
         _ => {
             if args.next().as_deref() == Some("install") {
                 install(args)
@@ -49,17 +48,23 @@ fn dispatch(
 }
 
 fn applet_name(arg0: &str) -> Option<&str> {
-    Path::new(arg0).file_name().and_then(OsStr::to_str).and_then(|name| match name {
-        "co2rustc" => Some("co2rustc"),
-        "co2cc" => Some("co2cc"),
-        "co2cargo" => Some("co2cargo"),
-        "co2-multicall" => Some("co2-multicall"),
-        _ => None,
-    })
+    Path::new(arg0)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(|name| match name {
+            "co2rustc" => Some("co2rustc"),
+            "co2cc" => Some("co2cc"),
+            "co2cargo" => Some("co2cargo"),
+            "co2-multicall" => Some("co2-multicall"),
+            _ => None,
+        })
 }
 
 fn install(mut args: impl Iterator<Item = String>) -> std::process::ExitCode {
-    let target_dir = args.next().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/usr/bin"));
+    let target_dir = args
+        .next()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/bin"));
     match try_install(&target_dir) {
         Ok(()) => {
             println!("Successfully installed to {}", target_dir.display());
@@ -76,17 +81,25 @@ fn try_install(bin_dir: &Path) -> Result<(), String> {
     let current = std::env::var_os("CO2_RUN_SCRIPT")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::current_exe().map_err(|err| format!("resolve current exe: {err}")).unwrap()
+            std::env::current_exe()
+                .map_err(|err| format!("resolve current exe: {err}"))
+                .unwrap()
         });
 
     if !bin_dir.exists() {
-        fs::create_dir_all(bin_dir).map_err(|err| format!("create {}: {err}", bin_dir.display()))?;
+        fs::create_dir_all(bin_dir)
+            .map_err(|err| format!("create {}: {err}", bin_dir.display()))?;
     }
 
     let installed = bin_dir.join(exe_name("co2-multicall"));
 
-    fs::copy(&current, &installed)
-        .map_err(|err| format!("copy {} -> {}: {err}", current.display(), installed.display()))?;
+    fs::copy(&current, &installed).map_err(|err| {
+        format!(
+            "copy {} -> {}: {err}",
+            current.display(),
+            installed.display()
+        )
+    })?;
 
     for applet in ["co2rustc", "co2cc", "co2cargo"] {
         let target = bin_dir.join(exe_name(applet));
@@ -106,13 +119,21 @@ fn replace_symlink(source: &Path, target: &Path) -> Result<(), String> {
         let metadata = fs::symlink_metadata(target)
             .map_err(|err| format!("stat {}: {err}", target.display()))?;
         if metadata.file_type().is_dir() {
-            return Err(format!("refusing to replace directory {}", target.display()));
+            return Err(format!(
+                "refusing to replace directory {}",
+                target.display()
+            ));
         }
         fs::remove_file(target).map_err(|err| format!("remove {}: {err}", target.display()))?;
     }
 
-    std::os::unix::fs::symlink(source, target)
-        .map_err(|err| format!("symlink {} -> {}: {err}", target.display(), source.display()))
+    std::os::unix::fs::symlink(source, target).map_err(|err| {
+        format!(
+            "symlink {} -> {}: {err}",
+            target.display(),
+            source.display()
+        )
+    })
 }
 
 #[cfg(not(unix))]

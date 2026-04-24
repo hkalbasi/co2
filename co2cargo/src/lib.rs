@@ -80,7 +80,10 @@ fn cargo_init(args: &[String]) -> Result<(), String> {
 
     fixup_project(&project_dir, is_lib)?;
 
-    println!("Successfully initialized co2 crate at {}", project_dir.display());
+    println!(
+        "Successfully initialized co2 crate at {}",
+        project_dir.display()
+    );
 
     Ok(())
 }
@@ -109,14 +112,21 @@ fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), String> {
     };
 
     if !src_dir.exists() {
-        return Err(format!("expected file {} does not exist", src_dir.display()));
+        return Err(format!(
+            "expected file {} does not exist",
+            src_dir.display()
+        ));
     }
 
     let new_content = "#![feature(register_tool)]\n#![feature(custom_inner_attributes)]\n#![register_tool(co2)]\n#![co2::language]\n".to_owned();
 
     fs::write(&src_dir, new_content).map_err(|e| format!("write {}: {}", src_dir.display(), e))?;
 
-    let co2_file = project_dir.join(if is_lib { "src/lib.co2" } else { "src/main.co2" });
+    let co2_file = project_dir.join(if is_lib {
+        "src/lib.co2"
+    } else {
+        "src/main.co2"
+    });
 
     let co2_template = if is_lib {
         "fn add(a: i32, b: i32) -> i32 {\n    return a + b;\n}\n"
@@ -124,7 +134,8 @@ fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), String> {
         "fn main() {}\n"
     };
 
-    fs::write(&co2_file, co2_template).map_err(|e| format!("write {}: {}", co2_file.display(), e))?;
+    fs::write(&co2_file, co2_template)
+        .map_err(|e| format!("write {}: {}", co2_file.display(), e))?;
 
     println!("Added #![co2::language] to {}", src_dir.display());
     println!("Created {}", co2_file.display());

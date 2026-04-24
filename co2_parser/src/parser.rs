@@ -22,7 +22,8 @@ fn single_token_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
 }
 
 fn slice_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
-    slice.first()
+    slice
+        .first()
         .zip(slice.last())
         .map(|(first, last)| join_spans(first.1, last.1))
         .unwrap_or(fallback)
@@ -371,17 +372,20 @@ where
                                 .or_not()
                                 .then_ignore(just(Token::Semicolon)),
                         )?;
-                        (
-                            expr.map(ForInit::Expression),
-                            init_resolver,
-                        )
+                        (expr.map(ForInit::Expression), init_resolver)
                     }
                 };
 
-                let loop_expr = expression(
-                    assignment_expression(loop_resolver.clone(), stmt_rec.clone()),
-                );
-                let cond = inp.parse(loop_expr.clone().or_not().then_ignore(just(Token::Semicolon)))?;
+                let loop_expr = expression(assignment_expression(
+                    loop_resolver.clone(),
+                    stmt_rec.clone(),
+                ));
+                let cond = inp.parse(
+                    loop_expr
+                        .clone()
+                        .or_not()
+                        .then_ignore(just(Token::Semicolon)),
+                )?;
                 let post = inp.parse(loop_expr.or_not())?;
                 inp.parse(just(Token::RParen))?;
                 let body = inp.parse(statement(loop_resolver))?;
@@ -1143,10 +1147,7 @@ where
             .map(|path| (RustTy::Path((path.0, path.1)), path.1));
 
         let ptr = just(Token::Star)
-            .ignore_then(choice((
-                just(Token::Const).to(false),
-                mut_token().to(true),
-            )))
+            .ignore_then(choice((just(Token::Const).to(false), mut_token().to(true))))
             .then(rec.clone())
             .map(|(mutable, inner)| RustTy::Ptr {
                 mutable,
@@ -1365,22 +1366,22 @@ where
         ])
         .or(struct_or_union_specifier)
         .or(enum_specifier)
-        .or(rust_path()
-            .try_map({
-                let resolver = resolver.clone();
-                move |path, _| {
-                    let path_span = rust_path_span(&path.0, path.1);
-                    match resolver.classify_path(&path.0) {
+        .or(rust_path().try_map({
+            let resolver = resolver.clone();
+            move |path, _| {
+                let path_span = rust_path_span(&path.0, path.1);
+                match resolver.classify_path(&path.0) {
                     Some((TypeQueryResult::Unsure | TypeQueryResult::Type, resolved)) => {
                         Ok(TypeSpecifier::TypedefName((resolved, path_span)))
                     }
-                    Some((TypeQueryResult::Expr, _)) => {
-                        Err(Rich::custom(path_span, "expected type name, found expression"))
-                    }
+                    Some((TypeQueryResult::Expr, _)) => Err(Rich::custom(
+                        path_span,
+                        "expected type name, found expression",
+                    )),
                     None => Err(Rich::custom(path_span, "Unresolved name")),
-                    }
                 }
-            }))
+            }
+        }))
         .map_with(|r, e| (r, e.span()))
         .labelled("Type specifier")
     })
@@ -1618,10 +1619,7 @@ where
             .map(|(resolved, span)| (RustTy::Path((resolved.unwrap().1, span)), span));
 
         let ptr = just(Token::Star)
-            .ignore_then(choice((
-                just(Token::Const).to(false),
-                mut_token().to(true),
-            )))
+            .ignore_then(choice((just(Token::Const).to(false), mut_token().to(true))))
             .then(rec.clone())
             .map(|(mutable, inner)| RustTy::Ptr {
                 mutable: mutable,
@@ -2080,9 +2078,10 @@ where
                 TranslationUnitItem::Use(item)
             } else if let Ok(item) = inp.parse(mod_item()) {
                 TranslationUnitItem::Mod(item)
-            } else if let Ok((decl, next_resolver)) =
-                inp.parse(declaration(current_resolver.clone(), statement(current_resolver.clone())))
-            {
+            } else if let Ok((decl, next_resolver)) = inp.parse(declaration(
+                current_resolver.clone(),
+                statement(current_resolver.clone()),
+            )) {
                 current_resolver = next_resolver;
                 TranslationUnitItem::Declaration(decl)
             } else {
@@ -2094,35 +2093,32 @@ where
 
         Ok(items)
     })
-        .map_with(|items, e| {
-            let mut rust_use_items = Vec::new();
-            let mut rust_mod_items = Vec::new();
-            let mut declarations = Vec::new();
-            for item in items {
-                match item {
-                    TranslationUnitItem::Use(item) => rust_use_items.push(item),
-                    TranslationUnitItem::Mod(item) => rust_mod_items.push(item),
-                    TranslationUnitItem::Declaration(item) => declarations.push(item),
-                    TranslationUnitItem::Empty => {}
-                }
+    .map_with(|items, e| {
+        let mut rust_use_items = Vec::new();
+        let mut rust_mod_items = Vec::new();
+        let mut declarations = Vec::new();
+        for item in items {
+            match item {
+                TranslationUnitItem::Use(item) => rust_use_items.push(item),
+                TranslationUnitItem::Mod(item) => rust_mod_items.push(item),
+                TranslationUnitItem::Declaration(item) => declarations.push(item),
+                TranslationUnitItem::Empty => {}
             }
-            (
-                TranslationUnit {
-                    rust_use_items,
-                    rust_mod_items,
-                    items: declarations,
-                },
-                e.span(),
-            )
-        })
+        }
+        (
+            TranslationUnit {
+                rust_use_items,
+                rust_mod_items,
+                items: declarations,
+            },
+            e.span(),
+        )
+    })
 }
 
 #[test]
 fn parser_is_constructible() {
     use chumsky::input::Input;
     let parser = translation_unit(crate::StatelessResolver::new());
-    parser.parse((&[]).map(
-        Span::new(0, 1..2),
-        |_| unreachable!(),
-    ));
+    parser.parse((&[]).map(Span::new(0, 1..2), |_| unreachable!()));
 }

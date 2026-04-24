@@ -2,9 +2,8 @@ use crate::{
     Declaration, DeclarationSpecifier, Declarator, Designator, EnumSpecifier, Enumerator,
     Expression, FunctionDefinitionSignature, GenericAssociation, InitDeclarator, Initializer,
     InitializerItem, ParameterList, RustFunctionParam, RustFunctionSignature, RustTy, Spanned,
- SpecifierQualifier,
-    StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeName,
-    TypeResolver, TypeSpecifier,
+    SpecifierQualifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
+    StructOrUnionSpecifier, TypeName, TypeResolver, TypeSpecifier,
 };
 
 pub trait Transformable<F: TypeResolver>: TypeResolver {

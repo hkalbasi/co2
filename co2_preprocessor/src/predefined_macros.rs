@@ -23,104 +23,176 @@ impl Preprocessor {
             ("__STDC_VERSION__", "201710L"), // C17
             ("__STDC_HOSTED__", "1"),
             // Platform
-            ("__linux__", "1"), ("__linux", "1"), ("linux", "1"),
+            ("__linux__", "1"),
+            ("__linux", "1"),
+            ("linux", "1"),
             ("__gnu_linux__", "1"),
-            ("__unix__", "1"), ("__unix", "1"), ("unix", "1"),
-            ("__LP64__", "1"), ("_LP64", "1"),
+            ("__unix__", "1"),
+            ("__unix", "1"),
+            ("unix", "1"),
+            ("__LP64__", "1"),
+            ("_LP64", "1"),
             // Default arch: x86_64 (overridden by set_target)
-            ("__x86_64__", "1"), ("__x86_64", "1"),
-            ("__amd64__", "1"), ("__amd64", "1"),
+            ("__x86_64__", "1"),
+            ("__x86_64", "1"),
+            ("__amd64__", "1"),
+            ("__amd64", "1"),
             // GCC compat: claim GCC 14.2.0. This is:
             //  - >= 5.1 (Linux kernel minimum requirement)
             //  - >= 7.4 (QEMU minimum requirement)
             //  - A modern version that satisfies most project requirements.
             // For glibc's _Float* types (expected native for GCC >= 7), we define
             // them as macros mapping to standard C types below.
-            ("__GNUC__", "14"), ("__GNUC_MINOR__", "2"), ("__GNUC_PATCHLEVEL__", "0"),
+            ("__GNUC__", "14"),
+            ("__GNUC_MINOR__", "2"),
+            ("__GNUC_PATCHLEVEL__", "0"),
             ("__VERSION__", "\"14.2.0\""),
             // C99 inline semantics: tells gnulib and other libraries that
             // plain `inline` provides an inline definition only (no external symbol).
             ("__GNUC_STDC_INLINE__", "1"),
             // sizeof macros
-            ("__SIZEOF_POINTER__", "8"), ("__SIZEOF_INT__", "4"),
-            ("__SIZEOF_LONG__", "8"), ("__SIZEOF_LONG_LONG__", "8"),
-            ("__SIZEOF_SHORT__", "2"), ("__SIZEOF_FLOAT__", "4"),
-            ("__SIZEOF_DOUBLE__", "8"), ("__SIZEOF_SIZE_T__", "8"),
-            ("__SIZEOF_PTRDIFF_T__", "8"), ("__SIZEOF_WCHAR_T__", "4"),
-            ("__SIZEOF_INT128__", "16"), ("__SIZEOF_WINT_T__", "4"),
+            ("__SIZEOF_POINTER__", "8"),
+            ("__SIZEOF_INT__", "4"),
+            ("__SIZEOF_LONG__", "8"),
+            ("__SIZEOF_LONG_LONG__", "8"),
+            ("__SIZEOF_SHORT__", "2"),
+            ("__SIZEOF_FLOAT__", "4"),
+            ("__SIZEOF_DOUBLE__", "8"),
+            ("__SIZEOF_SIZE_T__", "8"),
+            ("__SIZEOF_PTRDIFF_T__", "8"),
+            ("__SIZEOF_WCHAR_T__", "4"),
+            ("__SIZEOF_INT128__", "16"),
+            ("__SIZEOF_WINT_T__", "4"),
             // Byte order
             ("__BYTE_ORDER__", "__ORDER_LITTLE_ENDIAN__"),
-            ("__ORDER_LITTLE_ENDIAN__", "1234"), ("__ORDER_BIG_ENDIAN__", "4321"),
+            ("__ORDER_LITTLE_ENDIAN__", "1234"),
+            ("__ORDER_BIG_ENDIAN__", "4321"),
             // Type limits
             ("__CHAR_BIT__", "8"),
             ("__INT_MAX__", "2147483647"),
             ("__LONG_MAX__", "9223372036854775807L"),
             ("__LONG_LONG_MAX__", "9223372036854775807LL"),
-            ("__SCHAR_MAX__", "127"), ("__SHRT_MAX__", "32767"),
+            ("__SCHAR_MAX__", "127"),
+            ("__SHRT_MAX__", "32767"),
             ("__SIZE_MAX__", "18446744073709551615UL"),
             ("__PTRDIFF_MAX__", "9223372036854775807L"),
-            ("__WCHAR_MAX__", "2147483647"), ("__WCHAR_MIN__", "(-2147483647-1)"),
-            ("__WINT_MAX__", "4294967295U"), ("__WINT_MIN__", "0U"),
-            ("__SIG_ATOMIC_MAX__", "2147483647"), ("__SIG_ATOMIC_MIN__", "(-2147483647-1)"),
+            ("__WCHAR_MAX__", "2147483647"),
+            ("__WCHAR_MIN__", "(-2147483647-1)"),
+            ("__WINT_MAX__", "4294967295U"),
+            ("__WINT_MIN__", "0U"),
+            ("__SIG_ATOMIC_MAX__", "2147483647"),
+            ("__SIG_ATOMIC_MIN__", "(-2147483647-1)"),
             // Type names
-            ("__SIZE_TYPE__", "long unsigned int"), ("__PTRDIFF_TYPE__", "long int"),
-            ("__WCHAR_TYPE__", "int"), ("__WINT_TYPE__", "unsigned int"),
-            ("__CHAR16_TYPE__", "short unsigned int"), ("__CHAR32_TYPE__", "unsigned int"),
-            ("__INTMAX_TYPE__", "long int"), ("__UINTMAX_TYPE__", "long unsigned int"),
-            ("__INT8_TYPE__", "signed char"), ("__INT16_TYPE__", "short int"),
-            ("__INT32_TYPE__", "int"), ("__INT64_TYPE__", "long int"),
-            ("__UINT8_TYPE__", "unsigned char"), ("__UINT16_TYPE__", "unsigned short int"),
-            ("__UINT32_TYPE__", "unsigned int"), ("__UINT64_TYPE__", "long unsigned int"),
-            ("__INTPTR_TYPE__", "long int"), ("__UINTPTR_TYPE__", "long unsigned int"),
-            ("__INT_LEAST8_TYPE__", "signed char"), ("__INT_LEAST16_TYPE__", "short int"),
-            ("__INT_LEAST32_TYPE__", "int"), ("__INT_LEAST64_TYPE__", "long int"),
+            ("__SIZE_TYPE__", "long unsigned int"),
+            ("__PTRDIFF_TYPE__", "long int"),
+            ("__WCHAR_TYPE__", "int"),
+            ("__WINT_TYPE__", "unsigned int"),
+            ("__CHAR16_TYPE__", "short unsigned int"),
+            ("__CHAR32_TYPE__", "unsigned int"),
+            ("__INTMAX_TYPE__", "long int"),
+            ("__UINTMAX_TYPE__", "long unsigned int"),
+            ("__INT8_TYPE__", "signed char"),
+            ("__INT16_TYPE__", "short int"),
+            ("__INT32_TYPE__", "int"),
+            ("__INT64_TYPE__", "long int"),
+            ("__UINT8_TYPE__", "unsigned char"),
+            ("__UINT16_TYPE__", "unsigned short int"),
+            ("__UINT32_TYPE__", "unsigned int"),
+            ("__UINT64_TYPE__", "long unsigned int"),
+            ("__INTPTR_TYPE__", "long int"),
+            ("__UINTPTR_TYPE__", "long unsigned int"),
+            ("__INT_LEAST8_TYPE__", "signed char"),
+            ("__INT_LEAST16_TYPE__", "short int"),
+            ("__INT_LEAST32_TYPE__", "int"),
+            ("__INT_LEAST64_TYPE__", "long int"),
             ("__UINT_LEAST8_TYPE__", "unsigned char"),
             ("__UINT_LEAST16_TYPE__", "unsigned short int"),
             ("__UINT_LEAST32_TYPE__", "unsigned int"),
             ("__UINT_LEAST64_TYPE__", "long unsigned int"),
-            ("__INT_FAST8_TYPE__", "signed char"), ("__INT_FAST16_TYPE__", "long int"),
-            ("__INT_FAST32_TYPE__", "long int"), ("__INT_FAST64_TYPE__", "long int"),
+            ("__INT_FAST8_TYPE__", "signed char"),
+            ("__INT_FAST16_TYPE__", "long int"),
+            ("__INT_FAST32_TYPE__", "long int"),
+            ("__INT_FAST64_TYPE__", "long int"),
             ("__UINT_FAST8_TYPE__", "unsigned char"),
             ("__UINT_FAST16_TYPE__", "long unsigned int"),
             ("__UINT_FAST32_TYPE__", "unsigned int"),
             ("__UINT_FAST64_TYPE__", "long unsigned int"),
             // FLT characteristics
-            ("__FLT_MANT_DIG__", "24"), ("__FLT_DIG__", "6"),
-            ("__FLT_MIN_EXP__", "(-125)"), ("__FLT_MIN_10_EXP__", "(-37)"),
-            ("__FLT_MAX_EXP__", "128"), ("__FLT_MAX_10_EXP__", "38"),
+            ("__FLT_MANT_DIG__", "24"),
+            ("__FLT_DIG__", "6"),
+            ("__FLT_MIN_EXP__", "(-125)"),
+            ("__FLT_MIN_10_EXP__", "(-37)"),
+            ("__FLT_MAX_EXP__", "128"),
+            ("__FLT_MAX_10_EXP__", "38"),
             ("__FLT_MAX__", "3.40282346638528859811704183484516925e+38F"),
             ("__FLT_MIN__", "1.17549435082228750796873653722224568e-38F"),
-            ("__FLT_EPSILON__", "1.19209289550781250000000000000000000e-7F"),
+            (
+                "__FLT_EPSILON__",
+                "1.19209289550781250000000000000000000e-7F",
+            ),
             ("__FLT_RADIX__", "2"),
-            ("__FLT_DENORM_MIN__", "1.40129846432481707092372958328991613e-45F"),
+            (
+                "__FLT_DENORM_MIN__",
+                "1.40129846432481707092372958328991613e-45F",
+            ),
             // DBL characteristics
-            ("__DBL_MANT_DIG__", "53"), ("__DBL_DIG__", "15"),
-            ("__DBL_MIN_EXP__", "(-1021)"), ("__DBL_MIN_10_EXP__", "(-307)"),
-            ("__DBL_MAX_EXP__", "1024"), ("__DBL_MAX_10_EXP__", "308"),
+            ("__DBL_MANT_DIG__", "53"),
+            ("__DBL_DIG__", "15"),
+            ("__DBL_MIN_EXP__", "(-1021)"),
+            ("__DBL_MIN_10_EXP__", "(-307)"),
+            ("__DBL_MAX_EXP__", "1024"),
+            ("__DBL_MAX_10_EXP__", "308"),
             ("__DBL_MAX__", "1.79769313486231570814527423731704357e+308"),
             ("__DBL_MIN__", "2.22507385850720138309023271733240406e-308"),
-            ("__DBL_EPSILON__", "2.22044604925031308084726333618164062e-16"),
-            ("__DBL_DENORM_MIN__", "4.94065645841246544176568792868221372e-324"),
+            (
+                "__DBL_EPSILON__",
+                "2.22044604925031308084726333618164062e-16",
+            ),
+            (
+                "__DBL_DENORM_MIN__",
+                "4.94065645841246544176568792868221372e-324",
+            ),
             // LDBL characteristics
-            ("__LDBL_MANT_DIG__", "64"), ("__LDBL_DIG__", "18"),
-            ("__LDBL_MIN_EXP__", "(-16381)"), ("__LDBL_MIN_10_EXP__", "(-4931)"),
-            ("__LDBL_MAX_EXP__", "16384"), ("__LDBL_MAX_10_EXP__", "4932"),
-            ("__LDBL_MAX__", "1.18973149535723176502126385303097021e+4932L"),
-            ("__LDBL_MIN__", "3.36210314311209350626267781732175260e-4932L"),
-            ("__LDBL_EPSILON__", "1.08420217248550443400745280086994171e-19L"),
-            ("__LDBL_DENORM_MIN__", "3.64519953188247460252840593361941982e-4951L"),
+            ("__LDBL_MANT_DIG__", "64"),
+            ("__LDBL_DIG__", "18"),
+            ("__LDBL_MIN_EXP__", "(-16381)"),
+            ("__LDBL_MIN_10_EXP__", "(-4931)"),
+            ("__LDBL_MAX_EXP__", "16384"),
+            ("__LDBL_MAX_10_EXP__", "4932"),
+            (
+                "__LDBL_MAX__",
+                "1.18973149535723176502126385303097021e+4932L",
+            ),
+            (
+                "__LDBL_MIN__",
+                "3.36210314311209350626267781732175260e-4932L",
+            ),
+            (
+                "__LDBL_EPSILON__",
+                "1.08420217248550443400745280086994171e-19L",
+            ),
+            (
+                "__LDBL_DENORM_MIN__",
+                "3.64519953188247460252840593361941982e-4951L",
+            ),
             ("__SIZEOF_LONG_DOUBLE__", "16"),
             // Float feature flags
-            ("__FLT_HAS_INFINITY__", "1"), ("__FLT_HAS_QUIET_NAN__", "1"),
+            ("__FLT_HAS_INFINITY__", "1"),
+            ("__FLT_HAS_QUIET_NAN__", "1"),
             ("__FLT_HAS_DENORM__", "1"),
-            ("__DBL_HAS_INFINITY__", "1"), ("__DBL_HAS_QUIET_NAN__", "1"),
+            ("__DBL_HAS_INFINITY__", "1"),
+            ("__DBL_HAS_QUIET_NAN__", "1"),
             ("__DBL_HAS_DENORM__", "1"),
-            ("__LDBL_HAS_INFINITY__", "1"), ("__LDBL_HAS_QUIET_NAN__", "1"),
+            ("__LDBL_HAS_INFINITY__", "1"),
+            ("__LDBL_HAS_QUIET_NAN__", "1"),
             ("__LDBL_HAS_DENORM__", "1"),
-            ("__FLT_DECIMAL_DIG__", "9"), ("__DBL_DECIMAL_DIG__", "17"),
-            ("__LDBL_DECIMAL_DIG__", "21"), ("__DECIMAL_DIG__", "21"),
+            ("__FLT_DECIMAL_DIG__", "9"),
+            ("__DBL_DECIMAL_DIG__", "17"),
+            ("__LDBL_DECIMAL_DIG__", "21"),
+            ("__DECIMAL_DIG__", "21"),
             // GCC extensions
-            ("__GNUC_VA_LIST", "1"), ("__extension__", ""),
+            ("__GNUC_VA_LIST", "1"),
+            ("__extension__", ""),
             // NOTE: GNU keyword aliases (__inline__, __volatile__, __asm__, __const__,
             // __restrict__, __signed__, __typeof__) are handled as keyword tokens in
             // the lexer (token.rs), not as macros, because GCC treats them as reserved
@@ -131,7 +203,8 @@ impl Preprocessor {
             // Named address spaces (Linux kernel): __seg_gs/__seg_fs are handled
             // as keyword tokens in the lexer (token.rs), not as macros.
             // __float128 -> long double (glibc compat)
-            ("__float128", "long double"), ("__SIZEOF_FLOAT128__", "16"),
+            ("__float128", "long double"),
+            ("__SIZEOF_FLOAT128__", "16"),
             // _Float* types: For GCC >= 7, glibc expects the compiler to provide these
             // natively. We define them as macros to the corresponding standard C types.
             // TODO: Implement _Float* as proper builtin types with correct semantics
@@ -144,14 +217,19 @@ impl Preprocessor {
             ("_Float32x", "double"),
             ("_Float64x", "long double"),
             // MSVC integer type specifiers
-            ("__int8", "char"), ("__int16", "short"),
-            ("__int32", "int"), ("__int64", "long long"),
+            ("__int8", "char"),
+            ("__int16", "short"),
+            ("__int32", "int"),
+            ("__int64", "long long"),
             // ELF ABI
             ("__USER_LABEL_PREFIX__", ""),
             // GNU C attribute macros (strip)
-            ("__LEAF", ""), ("__LEAF_ATTR", ""), ("__wur", ""),
+            ("__LEAF", ""),
+            ("__LEAF_ATTR", ""),
+            ("__wur", ""),
             // Date/time
-            ("__DATE__", "\"Jan  1 2025\""), ("__TIME__", "\"00:00:00\""),
+            ("__DATE__", "\"Jan  1 2025\""),
+            ("__TIME__", "\"00:00:00\""),
             // GCC atomic lock-free macros
             ("__GCC_ATOMIC_BOOL_LOCK_FREE", "2"),
             ("__GCC_ATOMIC_CHAR_LOCK_FREE", "2"),
@@ -177,8 +255,11 @@ impl Preprocessor {
             // Removed for non-x86_64 targets in set_target().
             // Many projects (dr_libs, minimp3, stb_image, etc.) use #ifdef __SSE2__
             // to enable SIMD code paths.
-            ("__SSE__", "1"), ("__SSE2__", "1"), ("__MMX__", "1"),
-            ("__SSE_MATH__", "1"), ("__SSE2_MATH__", "1"),
+            ("__SSE__", "1"),
+            ("__SSE2__", "1"),
+            ("__MMX__", "1"),
+            ("__SSE_MATH__", "1"),
+            ("__SSE2_MATH__", "1"),
             // Pragma support flags
             ("__PRAGMA_REDEFINE_EXTNAME", "1"),
         ];
@@ -191,7 +272,11 @@ impl Preprocessor {
         // Note: __builtin_expect is handled as a real builtin (not a macro)
         // to properly evaluate side effects in the second argument.
         const PREDEFINED_FUNC_MACROS: &[(&str, &[&str], &str)] = &[
-            ("__builtin_offsetof", &["type", "member"], "((unsigned long)&((type *)0)->member)"),
+            (
+                "__builtin_offsetof",
+                &["type", "member"],
+                "((unsigned long)&((type *)0)->member)",
+            ),
             // __has_builtin, __has_attribute, __has_feature, __has_extension,
             // __has_include, and __has_include_next are NOT defined as macros.
             // They are handled as special preprocessor operators:
@@ -570,10 +655,22 @@ impl Preprocessor {
         // GCC predefined macros (__LDBL_*__)
         self.define_simple_macro("__LDBL_MANT_DIG__", "113");
         self.define_simple_macro("__LDBL_DIG__", "33");
-        self.define_simple_macro("__LDBL_EPSILON__", "1.92592994438723585305597794258492732e-34L");
-        self.define_simple_macro("__LDBL_MAX__", "1.18973149535723176508575932662800702e+4932L");
-        self.define_simple_macro("__LDBL_MIN__", "3.36210314311209350626267781732175260e-4932L");
-        self.define_simple_macro("__LDBL_DENORM_MIN__", "6.47517511943802511092443895822764655e-4966L");
+        self.define_simple_macro(
+            "__LDBL_EPSILON__",
+            "1.92592994438723585305597794258492732e-34L",
+        );
+        self.define_simple_macro(
+            "__LDBL_MAX__",
+            "1.18973149535723176508575932662800702e+4932L",
+        );
+        self.define_simple_macro(
+            "__LDBL_MIN__",
+            "3.36210314311209350626267781732175260e-4932L",
+        );
+        self.define_simple_macro(
+            "__LDBL_DENORM_MIN__",
+            "6.47517511943802511092443895822764655e-4966L",
+        );
         self.define_simple_macro("__LDBL_DECIMAL_DIG__", "36");
         self.define_simple_macro("__DECIMAL_DIG__", "36");
         // MIN_EXP, MAX_EXP, MIN_10_EXP, MAX_10_EXP are the same for x87 and binary128
@@ -584,5 +681,4 @@ impl Preprocessor {
         self.define_simple_macro("LDBL_DIG", "33");
         self.define_simple_macro("DECIMAL_DIG", "36");
     }
-
 }

@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 use co2_ast::{
     DeclarationSpecifier, Declarator, EnumSpecifier, Enumerator, Expression, Spanned,
-    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeQualifier,
-    TypeQueryResult,
+    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeQualifier, TypeQueryResult,
 };
 use rustc_public_generative::{
     DefData, StructField,
@@ -264,7 +263,11 @@ impl LocalResolverBase {
                             };
                             (format!("{ANON_FIELD_PREFIX}{id}"), ty)
                         } else {
-                            self.lower_value_decl_type(base.clone(), base_const, declarator.declarator)
+                            self.lower_value_decl_type(
+                                base.clone(),
+                                base_const,
+                                declarator.declarator,
+                            )
                         };
 
                         let id = self

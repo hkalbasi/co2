@@ -61,7 +61,12 @@ pub fn skip_literal_bytes(bytes: &[u8], start: usize, quote: u8) -> usize {
 /// Copy a string or character literal from a byte slice into a byte buffer result.
 /// Returns the position after the closing quote. Handles backslash escapes.
 /// Copies raw bytes without any char conversion to preserve UTF-8 sequences.
-pub fn copy_literal_bytes_raw(bytes: &[u8], start: usize, quote: u8, result: &mut Vec<u8>) -> usize {
+pub fn copy_literal_bytes_raw(
+    bytes: &[u8],
+    start: usize,
+    quote: u8,
+    result: &mut Vec<u8>,
+) -> usize {
     let len = bytes.len();
     result.push(bytes[start]); // opening quote
     let mut i = start + 1;
@@ -85,7 +90,12 @@ pub fn copy_literal_bytes_raw(bytes: &[u8], start: usize, quote: u8, result: &mu
 /// Returns the position after the closing quote. Handles backslash escapes.
 /// Copies the entire literal as a single `&str` slice for efficiency, rather than
 /// pushing individual bytes.
-pub fn copy_literal_bytes_to_string(bytes: &[u8], start: usize, quote: u8, result: &mut String) -> usize {
+pub fn copy_literal_bytes_to_string(
+    bytes: &[u8],
+    start: usize,
+    quote: u8,
+    result: &mut String,
+) -> usize {
     let len = bytes.len();
     // Find the end of the literal first, then copy as a single &str slice
     // (the common case), avoiding per-byte push.
@@ -96,8 +106,8 @@ pub fn copy_literal_bytes_to_string(bytes: &[u8], start: usize, quote: u8, resul
         } else if bytes[i] == quote {
             i += 1; // include closing quote
             // Source text is valid UTF-8 and we copy a contiguous substring.
-            let slice = std::str::from_utf8(&bytes[start..i])
-                .expect("literal copy produced non-UTF8");
+            let slice =
+                std::str::from_utf8(&bytes[start..i]).expect("literal copy produced non-UTF8");
             result.push_str(slice);
             return i;
         } else {
@@ -105,8 +115,7 @@ pub fn copy_literal_bytes_to_string(bytes: &[u8], start: usize, quote: u8, resul
         }
     }
     // Unterminated literal - copy what we have
-    let slice = std::str::from_utf8(&bytes[start..i])
-        .expect("literal copy produced non-UTF8");
+    let slice = std::str::from_utf8(&bytes[start..i]).expect("literal copy produced non-UTF8");
     result.push_str(slice);
     i
 }

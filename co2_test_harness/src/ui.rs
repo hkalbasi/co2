@@ -5,9 +5,9 @@ use std::process::Output;
 
 use anyhow::{Context, Result, bail};
 
-use crate::test_case::{Mode, TestCase};
 use crate::error::{UiTestError, UiTestIssue};
-use crate::util::{line_start_offsets};
+use crate::test_case::{Mode, TestCase};
+use crate::util::line_start_offsets;
 
 #[derive(Debug, Clone)]
 pub struct UiSpanExpectation {
@@ -53,7 +53,8 @@ pub fn check_ui(
         );
     }
 
-    if test.directives.contains_key("ui-error") || test.directives.contains_key("ui-stderr-contains")
+    if test.directives.contains_key("ui-error")
+        || test.directives.contains_key("ui-stderr-contains")
     {
         bail!(
             "legacy UI directives are no longer supported in {}; use `//@ compile-fail` with inline `//^^^^ error: ...` annotations",
@@ -75,7 +76,10 @@ pub fn check_ui(
         );
     }
 
-    if !span_expectations.iter().any(|expected| expected.message.is_some()) {
+    if !span_expectations
+        .iter()
+        .any(|expected| expected.message.is_some())
+    {
         bail!(
             "UI test must include diagnostic text in at least one inline span annotation: {}",
             test.path.display()
@@ -105,7 +109,10 @@ pub fn check_ui(
             let reason = if let Some(msg) = &expected.message {
                 let found = diagnostics.iter().any(|d| d.message.contains(msg));
                 if found {
-                    format!("Missing diagnostic span in {} for: {}", expected.file_name, msg)
+                    format!(
+                        "Missing diagnostic span in {} for: {}",
+                        expected.file_name, msg
+                    )
                 } else {
                     format!("Missing diagnostic: {}", msg)
                 }

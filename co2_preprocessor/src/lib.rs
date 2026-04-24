@@ -19,9 +19,9 @@ mod predefined_macros;
 mod text_processing;
 mod utils;
 
-use pipeline::Preprocessor;
 use co2_ast::FileId;
-use co2_ast::{Rich, Span, SourceMap};
+use co2_ast::{Rich, SourceMap, Span};
+use pipeline::Preprocessor;
 
 #[derive(Clone, Debug)]
 pub struct SourceFile {
@@ -186,12 +186,7 @@ fn emit_preprocessor_diagnostics(
     let files = preprocessed
         .files()
         .iter()
-        .map(|(id, file)| {
-            (
-                *id,
-                (file.path.display().to_string(), file.source.clone()),
-            )
-        })
+        .map(|(id, file)| (*id, (file.path.display().to_string(), file.source.clone())))
         .collect();
     co2_ast::set_source_map(Arc::new(PreprocessorSourceMap {
         files: Arc::new(files),
@@ -214,7 +209,12 @@ fn map_preprocessor_diagnostics(
 ) -> Vec<Rich<'static, String, Span>> {
     diagnostics
         .iter()
-        .map(|diagnostic| Rich::custom(preprocessor_diagnostic_span(preprocessed, diagnostic), diagnostic.message.clone()))
+        .map(|diagnostic| {
+            Rich::custom(
+                preprocessor_diagnostic_span(preprocessed, diagnostic),
+                diagnostic.message.clone(),
+            )
+        })
         .collect()
 }
 
@@ -283,12 +283,15 @@ mod tests {
         fs::create_dir_all(&temp_dir).unwrap();
 
         let input = temp_dir.join("warning.c");
-        fs::write(&input, "#warning keep going\nint main(void) { return 0; }\n").unwrap();
+        fs::write(
+            &input,
+            "#warning keep going\nint main(void) { return 0; }\n",
+        )
+        .unwrap();
 
         let mut preprocessor = Preprocessor::new();
         configure_preprocessor(&mut preprocessor, &input, &[]);
-        let input_source =
-            rewrite_main_source_for_preprocess(&fs::read_to_string(&input).unwrap());
+        let input_source = rewrite_main_source_for_preprocess(&fs::read_to_string(&input).unwrap());
         let preprocessed = preprocessor.preprocess(&input_source);
         let source = build_preprocessed_source(&input, preprocessed);
         let diagnostics = map_preprocessor_diagnostics(&source, preprocessor.warnings());
@@ -330,22 +333,22 @@ fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_arg
                 i += 1;
                 let include_path = cpp_args.get(i).expect("missing -include value");
                 let resolved = resolve_force_include(input, include_path);
-                let content = 
-                    fs::read_to_string(&resolved).unwrap_or_else(|e| {
-                        panic!("failed to read force include {}: {e}", resolved.display())
-                    });
+                let content = fs::read_to_string(&resolved).unwrap_or_else(|e| {
+                    panic!("failed to read force include {}: {e}", resolved.display())
+                });
                 preprocessor.preprocess_force_include(&content, &resolved.to_string_lossy());
             }
             "-isystem" => {
                 i += 1;
-                preprocessor.add_system_include_path(cpp_args.get(i).expect("missing -isystem value"));
+                preprocessor
+                    .add_system_include_path(cpp_args.get(i).expect("missing -isystem value"));
             }
             "-iquote" => {
                 i += 1;
-                preprocessor.add_quote_include_path(cpp_args.get(i).expect("missing -iquote value"));
+                preprocessor
+                    .add_quote_include_path(cpp_args.get(i).expect("missing -iquote value"));
             }
-            "-nostdinc" => {
-            }
+            "-nostdinc" => {}
             "-undef" => {}
             _ if arg.starts_with("-I") && arg.len() > 2 => {
                 preprocessor.add_include_path(&arg[2..]);
@@ -380,11 +383,7 @@ fn configure_target(preprocessor: &mut Preprocessor) {
 }
 
 fn add_discovered_system_include_paths(preprocessor: &mut Preprocessor) {
-    for pattern_root in [
-        "/usr/lib/gcc",
-        "/usr/local/lib/gcc",
-        "/usr/lib/clang",
-    ] {
+    for pattern_root in ["/usr/lib/gcc", "/usr/local/lib/gcc", "/usr/lib/clang"] {
         let root = Path::new(pattern_root);
         let Ok(first_level) = fs::read_dir(root) else {
             continue;
@@ -486,14 +485,17 @@ fn ensure_source_file(
         return idx;
     }
 
-    let source = 
-        fs::read_to_string(path).unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display()));
+    let source = fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display()));
     let idx = global_file_id(path);
-    files.insert(idx, SourceFile {
-        path: path.to_path_buf(),
-        line_offsets: Arc::new(compute_line_offsets(&source)),
-        source: Arc::<str>::from(source),
-    });
+    files.insert(
+        idx,
+        SourceFile {
+            path: path.to_path_buf(),
+            line_offsets: Arc::new(compute_line_offsets(&source)),
+            source: Arc::<str>::from(source),
+        },
+    );
     file_index.insert(path.to_path_buf(), idx);
     idx
 }
@@ -620,7 +622,10 @@ fn map_column(source_line: &str, normalized_line: &str, output_col: usize) -> us
     let output_col = output_col.min(normalized_line.len());
     let span_end = expand_token_end(normalized_line, output_col);
     let span_start = shrink_token_start(normalized_line, output_col, span_end);
-    let needle = normalized_line.get(span_start..span_end).unwrap_or("").trim();
+    let needle = normalized_line
+        .get(span_start..span_end)
+        .unwrap_or("")
+        .trim();
     if !needle.is_empty() {
         let mut matches = source_line.match_indices(needle);
         if let Some((idx, _)) = matches.next() {
@@ -633,7 +638,12 @@ fn map_column(source_line: &str, normalized_line: &str, output_col: usize) -> us
     output_col.min(source_line.len())
 }
 
-fn map_range(source_line: &str, normalized_line: &str, output_start: usize, output_end: usize) -> Range<usize> {
+fn map_range(
+    source_line: &str,
+    normalized_line: &str,
+    output_start: usize,
+    output_end: usize,
+) -> Range<usize> {
     let output_start = output_start.min(normalized_line.len());
     let output_end = output_end.min(normalized_line.len()).max(output_start);
     if output_start == output_end {
@@ -641,7 +651,10 @@ fn map_range(source_line: &str, normalized_line: &str, output_start: usize, outp
         return point..point;
     }
 
-    let needle = normalized_line.get(output_start..output_end).unwrap_or("").trim();
+    let needle = normalized_line
+        .get(output_start..output_end)
+        .unwrap_or("")
+        .trim();
     if !needle.is_empty() {
         let mut matches = source_line.match_indices(needle);
         if let Some((idx, _)) = matches.next() {

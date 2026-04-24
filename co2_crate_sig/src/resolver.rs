@@ -304,7 +304,9 @@ impl Resolver {
                 self.const_values.insert(alias.to_owned(), def_id);
                 continue;
             }
-            let Ok(item) = self.resolve_module_path(use_item.path.iter().map(|(segment, _)| segment.as_str())) else {
+            let Ok(item) =
+                self.resolve_module_path(use_item.path.iter().map(|(segment, _)| segment.as_str()))
+            else {
                 continue;
             };
             if let Some((def_id, TypeQueryResult::Type)) = item.id {
@@ -430,7 +432,10 @@ impl Resolver {
 
         for prefix_len in (0..=module_path.len()).rev() {
             let prefix = module_path[..prefix_len].iter().map(String::as_str);
-            if let Ok(found) = self.current.resolve_path(prefix.chain(parts.iter().copied())) {
+            if let Ok(found) = self
+                .current
+                .resolve_path(prefix.chain(parts.iter().copied()))
+            {
                 return Ok(found);
             }
         }
@@ -455,17 +460,14 @@ impl Resolver {
         }
     }
 
-    pub(crate) fn traits_in_scope_with_method(
-        &self,
-        method: &str,
-    ) -> Vec<(String, DefId, String)> {
+    pub(crate) fn traits_in_scope_with_method(&self, method: &str) -> Vec<(String, DefId, String)> {
         let mut out = Vec::new();
         for scoped_trait in &self.scoped_traits {
-            if !self
-                .trait_methods
-                .get(method)
-                .is_some_and(|candidates| candidates.iter().any(|candidate| candidate.trait_path == scoped_trait.path))
-            {
+            if !self.trait_methods.get(method).is_some_and(|candidates| {
+                candidates
+                    .iter()
+                    .any(|candidate| candidate.trait_path == scoped_trait.path)
+            }) {
                 continue;
             }
             out.push((
@@ -482,10 +484,13 @@ impl Resolver {
         trait_path: &str,
         method: &str,
     ) -> Option<(DefId, TypeQueryResult)> {
-        self.trait_methods.get(method)?.iter().find_map(|candidate| {
-            (candidate.trait_path == trait_path && candidate.method == method)
-                .then_some((candidate.def_id, TypeQueryResult::Expr))
-        })
+        self.trait_methods
+            .get(method)?
+            .iter()
+            .find_map(|candidate| {
+                (candidate.trait_path == trait_path && candidate.method == method)
+                    .then_some((candidate.def_id, TypeQueryResult::Expr))
+            })
     }
 
     fn is_known_trait_path(&self, path: &str) -> bool {

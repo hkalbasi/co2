@@ -47,6 +47,7 @@ Core pipeline:
 - Run compiletest harness:
   - `cargo run -q --locked -p co2_test_harness -- all`
 - Don't try mise, you don't have it.
+- Run `cargo +stable fmt` after each change. `cargo fmt` is broken.
 
 ## Known expectations
 - `co2c` should preserve C-style return-code behavior for `main`.

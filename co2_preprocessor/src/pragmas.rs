@@ -81,10 +81,7 @@ impl Preprocessor {
     fn handle_pragma_push_macro(&mut self, content: &str) {
         if let Some(name) = Self::extract_pragma_macro_name(content) {
             let saved = self.macros.get(&name).cloned();
-            self.macro_save_stack
-                .entry(name)
-                .or_default()
-                .push(saved);
+            self.macro_save_stack.entry(name).or_default().push(saved);
         }
     }
 

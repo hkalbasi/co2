@@ -56,9 +56,7 @@ impl CompressedTypeSpecifier {
                     TypeSpecifier::Float => {
                         CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F32))
                     }
-                    TypeSpecifier::Bool => {
-                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::Bool)
-                    }
+                    TypeSpecifier::Bool => CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::Bool),
                     &TypeSpecifier::StructOrUnion { kind, specifier } => {
                         CompressedTypeSpecifier::StructOrUnion { kind, specifier }
                     }
@@ -192,7 +190,11 @@ impl CrateSigCtx<'_> {
         base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
         resolver: &LocalResolver,
-    ) -> (String, CTy, Option<co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>>) {
+    ) -> (
+        String,
+        CTy,
+        Option<co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>>,
+    ) {
         let span = declarator.1;
         match self.extract_decl_type_with_consts(base, base_const, declarator, resolver) {
             Ok((ty, name, array_len)) => {
@@ -235,10 +237,11 @@ impl CrateSigCtx<'_> {
                     for param in param_list.parameters {
                         let param_base_const = has_const_qualifier_in_decl_specs(&param.0);
                         let param_base = self.base_ty_of_decl(param.0, span);
-                        let (param_decl_ty, _) = self
-                            .resolver
-                            .borrow_mut()
-                            .extract_decl_type(param_base, param_base_const, param.1)?;
+                        let (param_decl_ty, _) = self.resolver.borrow_mut().extract_decl_type(
+                            param_base,
+                            param_base_const,
+                            param.1,
+                        )?;
                         let param_ty = match param_decl_ty {
                             CTy::Ty(ty) => {
                                 if let HirTyKind::Array(_, inner) = ty.kind {
@@ -305,12 +308,7 @@ impl CrateSigCtx<'_> {
                 let next_const = qualifiers
                     .iter()
                     .any(|(q, _)| matches!(q, TypeQualifier::Const));
-                self.extract_decl_type_with_consts(
-                    ptr_or_fn_ptr,
-                    next_const,
-                    *declarator,
-                    resolver,
-                )
+                self.extract_decl_type_with_consts(ptr_or_fn_ptr, next_const, *declarator, resolver)
             }
             Declarator::ArrayDeclarator {
                 declarator,
@@ -344,13 +342,19 @@ impl CrateSigCtx<'_> {
                         .resolver
                         .borrow()
                         .lookup_array_len_const_expr(*def_id)
-                        .ok_or_else(|| "missing registered array size constant expression".to_owned())?;
+                        .ok_or_else(|| {
+                            "missing registered array size constant expression".to_owned()
+                        })?;
                     let literal_len = self.eval_array_len_expr(&expr)?;
                     (HirTyConst::Literal(literal_len), None)
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len.0, rust_span));
-                let (ty, name, nested_len) =
-                    self.extract_decl_type_with_consts(array_ty, current_const, *declarator, resolver)?;
+                let (ty, name, nested_len) = self.extract_decl_type_with_consts(
+                    array_ty,
+                    current_const,
+                    *declarator,
+                    resolver,
+                )?;
                 Ok((ty, name, nested_len.or(len.1)))
             }
         }
@@ -388,11 +392,10 @@ impl CrateSigCtx<'_> {
     ) -> HirTy {
         let rust_span = self.co2_span_to_rustc(span);
         match ty {
-            co2_ast::RustTy::Path((path, _)) => {
-                self.resolver
-                    .borrow_mut()
-                    .hir_ty_of_resolved_path(&path, span)
-            }
+            co2_ast::RustTy::Path((path, _)) => self
+                .resolver
+                .borrow_mut()
+                .hir_ty_of_resolved_path(&path, span),
             co2_ast::RustTy::Ptr { mutable, inner } => {
                 let inner = self.lower_rust_ty(*inner);
                 HirTy::new_ptr(
@@ -492,15 +495,23 @@ impl LocalResolverBase {
                 )
             }
             co2_ast::RustTy::Tuple(elems) => {
-                let elems = elems.into_iter().map(|e| self.hir_ty_of_rust_ty(e)).collect();
+                let elems = elems
+                    .into_iter()
+                    .map(|e| self.hir_ty_of_rust_ty(e))
+                    .collect();
                 HirTy::new_tuple(elems, rust_span)
             }
             co2_ast::RustTy::Array { inner, len } => {
                 let Some(len) = len.0.constant_len() else {
                     panic!("unsupported non-literal Rust array generic argument")
                 };
-                let len = usize::try_from(len).expect("array generic argument length should fit usize");
-                HirTy::new_array(self.hir_ty_of_rust_ty(*inner), HirTyConst::Literal(len), rust_span)
+                let len =
+                    usize::try_from(len).expect("array generic argument length should fit usize");
+                HirTy::new_array(
+                    self.hir_ty_of_rust_ty(*inner),
+                    HirTyConst::Literal(len),
+                    rust_span,
+                )
             }
             co2_ast::RustTy::BareFn { params, ret_ty } => {
                 let inputs = params
@@ -548,7 +559,11 @@ impl LocalResolverBase {
             crate::DefOrLocal::Def {
                 def_id,
                 generic_args,
-            } => HirTy::adt(*def_id, self.hir_generic_args_of_resolved_path(generic_args), span),
+            } => HirTy::adt(
+                *def_id,
+                self.hir_generic_args_of_resolved_path(generic_args),
+                span,
+            ),
             crate::DefOrLocal::Const(_) => panic!("invalid const in type position"),
             crate::DefOrLocal::AssocMethod { .. } => {
                 panic!("invalid associated method in type position")
@@ -638,7 +653,10 @@ impl LocalResolverBase {
                 let ty = self.type_of_expr_for_sizeof(expr)?;
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
             }
-            Expression::Offsetof { ty: type_name, field: _ } => {
+            Expression::Offsetof {
+                ty: type_name,
+                field: _,
+            } => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
             }
@@ -663,68 +681,71 @@ impl LocalResolverBase {
                     .get(def)
                     .cloned()
                     .ok_or_else(|| format!("missing global type for def {def:?}")),
-                crate::DefOrLocal::Const(def_id) => Ok(match self
-                    .hir_ctx
-                    .dependency_const_value(*def_id)
-                    .ok_or_else(|| format!("missing scalar constant value for def {def_id:?}"))?
-                {
-                    rustc_public_generative::DependencyConstValue::Bool(_) => {
-                        HirTy {
+                crate::DefOrLocal::Const(def_id) => Ok(
+                    match self
+                        .hir_ctx
+                        .dependency_const_value(*def_id)
+                        .ok_or_else(|| {
+                            format!("missing scalar constant value for def {def_id:?}")
+                        })? {
+                        rustc_public_generative::DependencyConstValue::Bool(_) => HirTy {
                             kind: HirTyKind::Bool,
                             span: rust_span,
+                        },
+                        rustc_public_generative::DependencyConstValue::Char(_) => {
+                            HirTy::signed_ty(IntTy::I32, rust_span)
                         }
-                    }
-                    rustc_public_generative::DependencyConstValue::Char(_) => {
-                        HirTy::signed_ty(IntTy::I32, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::I8(_) => {
-                        HirTy::signed_ty(IntTy::I8, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::I16(_) => {
-                        HirTy::signed_ty(IntTy::I16, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::I32(_) => {
-                        HirTy::signed_ty(IntTy::I32, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::I64(_) => {
-                        HirTy::signed_ty(IntTy::I64, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::I128(_) => {
-                        HirTy::signed_ty(IntTy::I128, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::Isize(_) => {
-                        HirTy::signed_ty(IntTy::Isize, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::U8(_) => {
-                        HirTy::unsigned_ty(UintTy::U8, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::U16(_) => {
-                        HirTy::unsigned_ty(UintTy::U16, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::U32(_) => {
-                        HirTy::unsigned_ty(UintTy::U32, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::U64(_) => {
-                        HirTy::unsigned_ty(UintTy::U64, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::U128(_) => {
-                        HirTy::unsigned_ty(UintTy::U128, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::Usize(_) => {
-                        HirTy::unsigned_ty(UintTy::Usize, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::F32(_) => {
-                        HirTy::float_ty(FloatTy::F32, rust_span)
-                    }
-                    rustc_public_generative::DependencyConstValue::F64(_) => {
-                        HirTy::float_ty(FloatTy::F64, rust_span)
-                    }
-                }),
+                        rustc_public_generative::DependencyConstValue::I8(_) => {
+                            HirTy::signed_ty(IntTy::I8, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::I16(_) => {
+                            HirTy::signed_ty(IntTy::I16, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::I32(_) => {
+                            HirTy::signed_ty(IntTy::I32, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::I64(_) => {
+                            HirTy::signed_ty(IntTy::I64, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::I128(_) => {
+                            HirTy::signed_ty(IntTy::I128, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::Isize(_) => {
+                            HirTy::signed_ty(IntTy::Isize, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::U8(_) => {
+                            HirTy::unsigned_ty(UintTy::U8, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::U16(_) => {
+                            HirTy::unsigned_ty(UintTy::U16, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::U32(_) => {
+                            HirTy::unsigned_ty(UintTy::U32, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::U64(_) => {
+                            HirTy::unsigned_ty(UintTy::U64, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::U128(_) => {
+                            HirTy::unsigned_ty(UintTy::U128, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::Usize(_) => {
+                            HirTy::unsigned_ty(UintTy::Usize, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::F32(_) => {
+                            HirTy::float_ty(FloatTy::F32, rust_span)
+                        }
+                        rustc_public_generative::DependencyConstValue::F64(_) => {
+                            HirTy::float_ty(FloatTy::F64, rust_span)
+                        }
+                    },
+                ),
                 crate::DefOrLocal::AssocMethod { .. } => {
                     Err("associated method path is invalid in sizeof".to_owned())
                 }
                 crate::DefOrLocal::FuncName => Err("__func__ is invalid in sizeof".to_owned()),
-                crate::DefOrLocal::Prim(primitive_ty) => Ok(self.hir_ty_of_prim(*primitive_ty, rust_span)),
+                crate::DefOrLocal::Prim(primitive_ty) => {
+                    Ok(self.hir_ty_of_prim(*primitive_ty, rust_span))
+                }
                 _ => Err("unsupported identifier in sizeof(array size expr)".to_owned()),
             },
             Expression::Field(base, field) => {
@@ -736,7 +757,9 @@ impl LocalResolverBase {
                 let pointee = match base_ty.kind {
                     HirTyKind::RawPtr(_, inner) | HirTyKind::Ref(_, _, inner) => *inner,
                     _ => {
-                        return Err("arrow base must be a pointer in sizeof(array size expr)".to_owned());
+                        return Err(
+                            "arrow base must be a pointer in sizeof(array size expr)".to_owned()
+                        );
                     }
                 };
                 self.lookup_field_ty_for_sizeof(pointee, &field.0)
@@ -747,34 +770,50 @@ impl LocalResolverBase {
                     HirTyKind::Array(_, inner)
                     | HirTyKind::RawPtr(_, inner)
                     | HirTyKind::Ref(_, _, inner) => Ok(*inner),
-                    _ => Err("subscript base must be array or pointer in sizeof(array size expr)".to_owned()),
+                    _ => Err(
+                        "subscript base must be array or pointer in sizeof(array size expr)"
+                            .to_owned(),
+                    ),
                 }
             }
-            Expression::Cast { type_name, .. } => self.lower_type_name_for_const(*type_name.clone(), *span),
-            Expression::UnaryOp(op, inner) => match op {
-                UnaryOp::Deref => {
-                    let inner_ty = self.type_of_expr_for_sizeof(inner)?;
-                    match inner_ty.kind {
-                        HirTyKind::RawPtr(_, pointee) | HirTyKind::Ref(_, _, pointee) => Ok(*pointee),
-                        _ => Err("cannot dereference non-pointer in sizeof(array size expr)".to_owned()),
+            Expression::Cast { type_name, .. } => {
+                self.lower_type_name_for_const(*type_name.clone(), *span)
+            }
+            Expression::UnaryOp(op, inner) => {
+                match op {
+                    UnaryOp::Deref => {
+                        let inner_ty = self.type_of_expr_for_sizeof(inner)?;
+                        match inner_ty.kind {
+                            HirTyKind::RawPtr(_, pointee) | HirTyKind::Ref(_, _, pointee) => {
+                                Ok(*pointee)
+                            }
+                            _ => Err("cannot dereference non-pointer in sizeof(array size expr)"
+                                .to_owned()),
+                        }
+                    }
+                    UnaryOp::AddrOf => {
+                        let inner_ty = self.type_of_expr_for_sizeof(inner)?;
+                        Ok(HirTy::new_ptr(inner_ty, Mutability::Mut, rust_span))
+                    }
+                    UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::Com => {
+                        self.type_of_expr_for_sizeof(inner)
                     }
                 }
-                UnaryOp::AddrOf => {
-                    let inner_ty = self.type_of_expr_for_sizeof(inner)?;
-                    Ok(HirTy::new_ptr(inner_ty, Mutability::Mut, rust_span))
-                }
-                UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::Com => {
-                    self.type_of_expr_for_sizeof(inner)
-                }
-            },
+            }
             _ => Err("unsupported sizeof operand in array size".to_owned()),
         }
     }
 
-    fn lookup_field_ty_for_sizeof(&self, base_ty: HirTy, field_name: &str) -> Result<HirTy, String> {
+    fn lookup_field_ty_for_sizeof(
+        &self,
+        base_ty: HirTy,
+        field_name: &str,
+    ) -> Result<HirTy, String> {
         let base_ty = self.peel_typedefs_for_sizeof(base_ty);
         let HirTyKind::Adt(def, _) = base_ty.kind else {
-            return Err("field access requires struct or union type in sizeof(array size expr)".to_owned());
+            return Err(
+                "field access requires struct or union type in sizeof(array size expr)".to_owned(),
+            );
         };
         self.adt_field_ty(def, field_name)
             .ok_or_else(|| format!("unknown field `{field_name}` in sizeof(array size expr)"))
@@ -1124,9 +1163,7 @@ impl LocalResolverBase {
     }
 
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
-        co2_ast::emit_errors_and_terminate(
-            vec![co2_ast::Rich::custom(span, msg)],
-        );
+        co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(span, msg)]);
     }
 }
 

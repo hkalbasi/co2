@@ -66,7 +66,7 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
     let lhs_is_void = matches!(lhs, RigidTy::Tuple(ref l) if l.is_empty());
     let rhs_is_void = matches!(rhs, RigidTy::Tuple(ref l) if l.is_empty());
     let one_is_void = lhs_is_void || rhs_is_void;
-    
+
     if one_is_void {
         return Some(Ty::new_tuple(&[]));
     }
@@ -78,8 +78,13 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
     {
         let common_mutability = if matches!(
             (lhs_mutability, rhs_mutability),
-            (rustc_public_generative::rustc_public::mir::Mutability::Not, _)
-                | (_, rustc_public_generative::rustc_public::mir::Mutability::Not)
+            (
+                rustc_public_generative::rustc_public::mir::Mutability::Not,
+                _
+            ) | (
+                _,
+                rustc_public_generative::rustc_public::mir::Mutability::Not
+            )
         ) {
             rustc_public_generative::rustc_public::mir::Mutability::Not
         } else {
@@ -90,8 +95,10 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
             return Some(Ty::new_ptr(lhs_pointee, common_mutability));
         }
 
-        let lhs_is_void_pointee = matches!(lhs_pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
-        let rhs_is_void_pointee = matches!(rhs_pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
+        let lhs_is_void_pointee =
+            matches!(lhs_pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
+        let rhs_is_void_pointee =
+            matches!(rhs_pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
         if lhs_is_void_pointee || rhs_is_void_pointee {
             return Some(Ty::new_ptr(Ty::new_tuple(&[]), common_mutability));
         }
@@ -148,8 +155,7 @@ pub(crate) fn is_condition_ty(ty: Ty) -> bool {
     matches!(
         ty.kind(),
         TyKind::RigidTy(RigidTy::Bool)
-            |
-        TyKind::RigidTy(RigidTy::Int(_))
+            | TyKind::RigidTy(RigidTy::Int(_))
             | TyKind::RigidTy(RigidTy::Uint(_))
             | TyKind::RigidTy(RigidTy::RawPtr(_, _))
             | TyKind::RigidTy(RigidTy::FnPtr(_))

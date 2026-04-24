@@ -1,8 +1,6 @@
 use std::any::Any;
 use std::sync::{
-    Once,
-    Mutex,
-    Arc,
+    Arc, Mutex, Once,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -10,7 +8,7 @@ use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::error::Rich;
 use serde_json::json;
 
-use crate::{Token, Span, FileId};
+use crate::{FileId, Span, Token};
 
 static ERRORS: Mutex<Vec<Rich<'static, Token, Span>>> = Mutex::new(Vec::new());
 static DIAGNOSTICS_EMITTED: AtomicBool = AtomicBool::new(false);
@@ -97,17 +95,25 @@ pub fn print_errors_and_terminate(
     emit_mapped_errors_and_terminate(filename, src, errs);
 }
 
-pub fn emit_errors_and_terminate(
-    errs: Vec<Rich<'_, String, Span>>,
-) -> ! {
-    emit_mapped_diagnostics("<unknown>".to_owned(), "", errs, DiagnosticLevel::Error, true);
+pub fn emit_errors_and_terminate(errs: Vec<Rich<'_, String, Span>>) -> ! {
+    emit_mapped_diagnostics(
+        "<unknown>".to_owned(),
+        "",
+        errs,
+        DiagnosticLevel::Error,
+        true,
+    );
     unreachable!("fatal diagnostics should abort");
 }
 
-pub fn emit_warnings(
-    warnings: Vec<Rich<'_, String, Span>>,
-) {
-    emit_mapped_diagnostics("<unknown>".to_owned(), "", warnings, DiagnosticLevel::Warning, false);
+pub fn emit_warnings(warnings: Vec<Rich<'_, String, Span>>) {
+    emit_mapped_diagnostics(
+        "<unknown>".to_owned(),
+        "",
+        warnings,
+        DiagnosticLevel::Warning,
+        false,
+    );
 }
 
 fn emit_mapped_errors_and_terminate(
@@ -179,17 +185,20 @@ fn emit_human_diagnostic(
     level: DiagnosticLevel,
 ) {
     if let Some(mapped) = get_diagnostic_info(*e.span()) {
-        Report::build(level.report_kind(), (mapped.file_name.clone(), mapped.start..mapped.end))
-            .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-            .with_message(e.to_string())
-            .with_label(
-                Label::new((mapped.file_name.clone(), mapped.start..mapped.end))
-                    .with_message(e.reason().to_string())
-                    .with_color(level.label_color()),
-            )
-            .finish()
-            .eprint(sources([(mapped.file_name, mapped.source.to_string())]))
-            .unwrap();
+        Report::build(
+            level.report_kind(),
+            (mapped.file_name.clone(), mapped.start..mapped.end),
+        )
+        .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+        .with_message(e.to_string())
+        .with_label(
+            Label::new((mapped.file_name.clone(), mapped.start..mapped.end))
+                .with_message(e.reason().to_string())
+                .with_color(level.label_color()),
+        )
+        .finish()
+        .eprint(sources([(mapped.file_name, mapped.source.to_string())]))
+        .unwrap();
         return;
     }
 
@@ -234,7 +243,13 @@ fn emit_json_diagnostic(
     }
 
     let range = safe_range(*e.span(), src.len());
-    let mut spans = vec![json_span(filename, src, range.clone(), true, Some(e.reason().to_string()))];
+    let mut spans = vec![json_span(
+        filename,
+        src,
+        range.clone(),
+        true,
+        Some(e.reason().to_string()),
+    )];
     spans.extend(e.contexts().map(|(label, span)| {
         json_span(
             filename,

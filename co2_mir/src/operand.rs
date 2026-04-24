@@ -289,10 +289,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 );
 
                 let transmute_fn = self.wellknown_defs.transmute;
-                let generic_args = vec![
-                    GenericArgKind::Type(src_ty),
-                    GenericArgKind::Type(args_ty),
-                ];
+                let generic_args =
+                    vec![GenericArgKind::Type(src_ty), GenericArgKind::Type(args_ty)];
                 self.emit_call_block(
                     fn_const_operand(transmute_fn, generic_args, expr.span),
                     vec![MirOperand::Move(place(clone_local))],
@@ -314,9 +312,9 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     need_deref = true;
                 }
                 let arg_ref_ty = Ty::new_ref(reg.clone(), args.ty, Mutability::Mut);
-                    let Some(args) = self.lower_expr_to_place(args) else {
-                        panic!("VaArg operand was not lvalue");
-                    };
+                let Some(args) = self.lower_expr_to_place(args) else {
+                    panic!("VaArg operand was not lvalue");
+                };
                 let arg_ref = {
                     let tmp = self.new_temp(arg_ref_ty, Mutability::Mut, expr.span);
                     self.stmts.push(MirStatement {
@@ -399,8 +397,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 let TyKind::RigidTy(RigidTy::Float(float_ty)) = expr.ty.kind() else {
                     panic!("float const must have float type, got {:?}", expr.ty);
                 };
-                let c = MirConst::try_from_float(*v, float_ty)
-                    .expect("failed to build float const");
+                let c =
+                    MirConst::try_from_float(*v, float_ty).expect("failed to build float const");
                 let const_op = MirOperand::Constant(ConstOperand {
                     span,
                     user_ty: None,
@@ -417,7 +415,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             }
             HirExprKind::PtrOffset { base, index } => {
                 let base_op = self.lower_expr_to_operand(base);
-                let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, mutability)) = base.ty.kind() else {
+                let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, mutability)) = base.ty.kind()
+                else {
                     panic!("ptr offset base must be raw pointer, got {:?}", base.ty);
                 };
                 self.emit_ptr_offset(base_op, pointee_ty, mutability, index, expr.ty, expr.span)
@@ -497,7 +496,9 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     let normalize_cmp_operand = |expr: &HirExpr| {
                         if matches!(
                             expr.ty.kind(),
-                            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
+                            TyKind::RigidTy(
+                                RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)
+                            )
                         ) || maybe_uninit_fn_ptr_inner(expr.ty).is_some()
                         {
                             HirExpr {
@@ -641,7 +642,10 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                         *fn_def,
                         GenericArgs(generic_args.clone()),
                     ));
-                    let fn_sig = fn_ty.kind().fn_sig().expect("failed to get fn ptr signature");
+                    let fn_sig = fn_ty
+                        .kind()
+                        .fn_sig()
+                        .expect("failed to get fn ptr signature");
                     let fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(fn_sig));
                     let fn_const =
                         MirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
@@ -775,7 +779,10 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     span: expr.span,
                 });
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, mutability)) = lhs.ty.kind() else {
-                    panic!("ptr offset assignment lhs must be raw pointer, got {:?}", lhs.ty);
+                    panic!(
+                        "ptr offset assignment lhs must be raw pointer, got {:?}",
+                        lhs.ty
+                    );
                 };
                 let new_ptr = self.emit_ptr_offset(
                     MirOperand::Copy(place(old_lhs)),
@@ -786,10 +793,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     expr.span,
                 );
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        lhs_place.clone(),
-                        Rvalue::Use(new_ptr),
-                    ),
+                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(new_ptr)),
                     span: expr.span,
                 });
                 match return_semantic {
@@ -799,7 +803,10 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             }
             HirExprKind::AddrOf(inner) => {
                 let TyKind::RigidTy(RigidTy::RawPtr(_, mutability)) = expr.ty.kind() else {
-                    panic!("address-of expression must have raw pointer type, got {:?}", expr.ty);
+                    panic!(
+                        "address-of expression must have raw pointer type, got {:?}",
+                        expr.ty
+                    );
                 };
                 let target_place = if let Some(place) = self.lower_expr_to_place(inner) {
                     place
@@ -890,31 +897,31 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             };
             let kind = match kind {
                 Mutability::Not => BorrowKind::Shared,
-                Mutability::Mut => BorrowKind::Mut { kind: MutBorrowKind::Default },
+                Mutability::Mut => BorrowKind::Mut {
+                    kind: MutBorrowKind::Default,
+                },
             };
             let tmp1 = self.new_temp(src_ty, Mutability::Mut, span);
             let tmp1_place = place(tmp1);
             let mut tmp1_deref = tmp1_place.clone();
             tmp1_deref.projection.push(MirProjection::Deref);
             self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    tmp1_place,
-                    Rvalue::Use(inner_op),
-                ),
+                kind: MirStatementKind::Assign(tmp1_place, Rvalue::Use(inner_op)),
                 span,
             });
             let tmp2 = self.new_temp(dst_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(tmp2),
-                    Rvalue::Ref(region, kind, tmp1_deref),
-                ),
+                kind: MirStatementKind::Assign(place(tmp2), Rvalue::Ref(region, kind, tmp1_deref)),
                 span,
             });
             return self.place_operand_for_ty(place(tmp2), dst_ty);
         }
         if dst_is_bool
-            && (src_is_int || src_is_ptr || src_is_fn_ptr || src_is_fn_def || src_mu_fn_ptr.is_some())
+            && (src_is_int
+                || src_is_ptr
+                || src_is_fn_ptr
+                || src_is_fn_def
+                || src_mu_fn_ptr.is_some())
         {
             let usize_ty = Ty::usize_ty();
             let cmp_op = if src_ty == usize_ty {
@@ -925,14 +932,21 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             let zero = MirOperand::Constant(ConstOperand {
                 span,
                 user_ty: None,
-                const_: MirConst::try_from_uint(0, rustc_public_generative::rustc_public::ty::UintTy::Usize)
-                    .expect("failed to build zero usize const"),
+                const_: MirConst::try_from_uint(
+                    0,
+                    rustc_public_generative::rustc_public::ty::UintTy::Usize,
+                )
+                .expect("failed to build zero usize const"),
             });
             let bool_local = self.new_temp(Ty::bool_ty(), Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(
                     place(bool_local),
-                    Rvalue::BinaryOp(rustc_public_generative::rustc_public::mir::BinOp::Ne, cmp_op, zero),
+                    Rvalue::BinaryOp(
+                        rustc_public_generative::rustc_public::mir::BinOp::Ne,
+                        cmp_op,
+                        zero,
+                    ),
                 ),
                 span,
             });
@@ -994,7 +1008,9 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     kind: MirStatementKind::Assign(
                         place(fn_ptr_local),
                         Rvalue::Cast(
-                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
+                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
+                                Safety::Safe,
+                            )),
                             inner_op,
                             src_fn_ptr_ty,
                         ),
@@ -1129,7 +1145,9 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     kind: MirStatementKind::Assign(
                         place(fn_ptr_local),
                         Rvalue::Cast(
-                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
+                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
+                                Safety::Safe,
+                            )),
                             inner_op,
                             fn_ptr_ty,
                         ),
@@ -1292,7 +1310,12 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 );
                 MirOperand::Copy(place(dst_fn_ptr_local))
             };
-            return self.write_value_into_maybe_uninit_storage(dst_ty, coerced_op, dst_fn_ptr_ty, span);
+            return self.write_value_into_maybe_uninit_storage(
+                dst_ty,
+                coerced_op,
+                dst_fn_ptr_ty,
+                span,
+            );
         }
         panic!("unsupported cast from {:?} to {:?}", src_ty, dst_ty);
     }
@@ -1620,15 +1643,16 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         }
         match &func.kind {
             HirExprKind::Path(ResolvedValue::Fn(fn_def, existing_generic_args)) => {
-                let generic_args = complete_fn_generic_args(*fn_def, &sig, args, ret_ty, existing_generic_args)
-                    .into_iter()
-                    .map(|arg| match arg {
-                        GenericArgKind::Type(ty) => {
-                            GenericArgKind::Type(self.ctx.normalize_ty_defaults(ty))
-                        }
-                        _ => arg,
-                    })
-                    .collect();
+                let generic_args =
+                    complete_fn_generic_args(*fn_def, &sig, args, ret_ty, existing_generic_args)
+                        .into_iter()
+                        .map(|arg| match arg {
+                            GenericArgKind::Type(ty) => {
+                                GenericArgKind::Type(self.ctx.normalize_ty_defaults(ty))
+                            }
+                            _ => arg,
+                        })
+                        .collect();
                 self.emit_call_block(
                     fn_const_operand(*fn_def, generic_args, span),
                     arg_ops,

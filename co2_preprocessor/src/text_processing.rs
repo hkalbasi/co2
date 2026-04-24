@@ -4,8 +4,8 @@
 //! line continuation (backslash-newline) joining, parenthesis
 //! balancing checks, and directive line splitting.
 
-use super::utils::{skip_literal_bytes, copy_literal_bytes_raw};
 use super::pipeline::Preprocessor;
+use super::utils::{copy_literal_bytes_raw, skip_literal_bytes};
 
 /// Mapping from output line numbers to original source line numbers.
 ///
@@ -75,10 +75,18 @@ impl Preprocessor {
                 b'"' | b'\'' => {
                     i = skip_literal_bytes(bytes, i, bytes[i]);
                 }
-                b'(' => { depth += 1; i += 1; }
-                b')' => { depth -= 1; i += 1; }
+                b'(' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b')' => {
+                    depth -= 1;
+                    i += 1;
+                }
                 b'/' if i + 1 < len && bytes[i + 1] == b'/' => break,
-                _ => { i += 1; }
+                _ => {
+                    i += 1;
+                }
             }
         }
 

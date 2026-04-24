@@ -2,16 +2,16 @@ use anyhow::Result;
 use clap::Parser;
 
 mod cli;
+mod compiler;
+mod error;
 mod suite;
 mod test_case;
-mod compiler;
 mod ui;
-mod error;
 mod util;
 
 use cli::Cli;
-use suite::{run_suite, suites_from_arg, Stats};
 use compiler::build_compilers;
+use suite::{Stats, run_suite, suites_from_arg};
 use util::workspace_root;
 
 fn main() {

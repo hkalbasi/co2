@@ -8,7 +8,7 @@
 //! All scanning operates on byte slices for performance (no Vec<char> allocation).
 
 use super::pipeline::Preprocessor;
-use super::utils::{is_ident_start_byte, is_ident_cont_byte, bytes_to_str};
+use super::utils::{bytes_to_str, is_ident_cont_byte, is_ident_start_byte};
 
 impl Preprocessor {
     /// Replace remaining identifiers (not keywords) with 0 in a #if expression.
@@ -66,7 +66,13 @@ impl Preprocessor {
                 // Skip entire number literal
                 result.push(bytes[i] as char);
                 i += 1;
-                if i < len && bytes[i - 1] == b'0' && (bytes[i] == b'x' || bytes[i] == b'X' || bytes[i] == b'b' || bytes[i] == b'B') {
+                if i < len
+                    && bytes[i - 1] == b'0'
+                    && (bytes[i] == b'x'
+                        || bytes[i] == b'X'
+                        || bytes[i] == b'b'
+                        || bytes[i] == b'B')
+                {
                     result.push(bytes[i] as char);
                     i += 1;
                 }
@@ -196,7 +202,11 @@ impl Preprocessor {
         if *i < len {
             *i += 1;
         }
-        if Self::is_supported_builtin(name) { "1" } else { "0" }
+        if Self::is_supported_builtin(name) {
+            "1"
+        } else {
+            "0"
+        }
     }
 
     /// Parse `(name)` after `__has_attribute` and return "1" or "0" (byte-oriented).
@@ -223,12 +233,21 @@ impl Preprocessor {
         if *i < len {
             *i += 1;
         }
-        if Self::is_supported_attribute(name) { "1" } else { "0" }
+        if Self::is_supported_attribute(name) {
+            "1"
+        } else {
+            "0"
+        }
     }
 
     /// Parse `(<header.h>)` or `("header.h")` after `__has_include` / `__has_include_next`
     /// and return "1" or "0" based on whether the header can be found.
-    fn resolve_has_include_call_bytes(&mut self, bytes: &[u8], i: &mut usize, is_next: bool) -> &'static str {
+    fn resolve_has_include_call_bytes(
+        &mut self,
+        bytes: &[u8],
+        i: &mut usize,
+        is_next: bool,
+    ) -> &'static str {
         let len = bytes.len();
         // Skip whitespace
         while *i < len && (bytes[*i] == b' ' || bytes[*i] == b'\t') {
@@ -251,7 +270,9 @@ impl Preprocessor {
                 *i += 1;
             }
             let name = bytes_to_str(bytes, start, *i);
-            if *i < len { *i += 1; } // skip '>'
+            if *i < len {
+                *i += 1;
+            } // skip '>'
             (name, true)
         } else if *i < len && bytes[*i] == b'"' {
             *i += 1; // skip '"'
@@ -260,7 +281,9 @@ impl Preprocessor {
                 *i += 1;
             }
             let name = bytes_to_str(bytes, start, *i);
-            if *i < len { *i += 1; } // skip closing '"'
+            if *i < len {
+                *i += 1;
+            } // skip closing '"'
             (name, false)
         } else {
             // Fallback: try to read as identifier (e.g. macro-expanded argument)
@@ -276,7 +299,9 @@ impl Preprocessor {
         while *i < len && bytes[*i] != b')' {
             *i += 1;
         }
-        if *i < len { *i += 1; } // skip ')'
+        if *i < len {
+            *i += 1;
+        } // skip ')'
 
         if header_name.is_empty() {
             return "0";
@@ -285,7 +310,8 @@ impl Preprocessor {
         // Use the preprocessor's include path resolution
         let found = if is_next {
             let current_file = self.include_stack.last().cloned();
-            self.resolve_include_next_path(header_name, current_file.as_ref()).is_some()
+            self.resolve_include_next_path(header_name, current_file.as_ref())
+                .is_some()
         } else {
             self.resolve_include_path(header_name, is_system).is_some()
         };
@@ -315,67 +341,120 @@ impl Preprocessor {
 
     /// Check if a builtin function name is supported by this compiler.
     pub(super) fn is_supported_builtin(name: &str) -> bool {
-        matches!(name,
+        matches!(
+            name,
             "__builtin_va_arg" |              // Special token (BuiltinVaArg)
             "__builtin_types_compatible_p" |  // Special AST node (BuiltinTypesCompatibleP)
-            "__builtin_offsetof"              // Predefined macro
+            "__builtin_offsetof" // Predefined macro
         )
     }
 
     /// Check if an attribute is supported by this compiler.
     pub(super) fn is_supported_attribute(name: &str) -> bool {
-        matches!(name,
-            "aligned" | "__aligned__" |
-            "packed" | "__packed__" |
-            "unused" | "__unused__" |
-            "used" | "__used__" |
-            "weak" | "__weak__" |
-            "alias" | "__alias__" |
-            "section" | "__section__" |
-            "visibility" | "__visibility__" |
-            "deprecated" | "__deprecated__" |
-            "noreturn" | "__noreturn__" |
-            "noinline" | "__noinline__" |
-            "always_inline" | "__always_inline__" |
-            "constructor" | "__constructor__" |
-            "destructor" | "__destructor__" |
-            "format" | "__format__" |
-            "warn_unused_result" | "__warn_unused_result__" |
-            "nonnull" | "__nonnull__" |
-            "const" | "__const__" |
-            "pure" | "__pure__" |
-            "cold" | "__cold__" |
-            "hot" | "__hot__" |
-            "malloc" | "__malloc__" |
-            "sentinel" | "__sentinel__" |
-            "may_alias" | "__may_alias__" |
-            "transparent_union" | "__transparent_union__" |
-            "error" | "__error__" |
-            "warning" | "__warning__" |
-            "cleanup" | "__cleanup__" |
-            "fallthrough" | "__fallthrough__" |
-            "flatten" | "__flatten__" |
-            "nonstring" | "__nonstring__" |
-            "uninitialized" | "__uninitialized__" |
-            "annotate" | "__annotate__" |
-            "no_instrument_function" | "__no_instrument_function__" |
-            "alloc_size" | "__alloc_size__" |
-            "format_arg" | "__format_arg__" |
-            "no_sanitize" | "__no_sanitize__" |
-            "no_sanitize_address" | "__no_sanitize_address__" |
-            "no_sanitize_thread" | "__no_sanitize_thread__" |
-            "no_sanitize_undefined" | "__no_sanitize_undefined__" |
-            "noclone" | "__noclone__" |
-            "optimize" | "__optimize__" |
-            "target" | "__target__" |
-            "assume_aligned" | "__assume_aligned__" |
-            "returns_nonnull" | "__returns_nonnull__" |
-            "externally_visible" | "__externally_visible__" |
-            "artificial" | "__artificial__" |
-            "leaf" | "__leaf__" |
-            "access" | "__access__" |
-            "fd_arg" | "__fd_arg__" |
-            "tls_model" | "__tls_model__"
+        matches!(
+            name,
+            "aligned"
+                | "__aligned__"
+                | "packed"
+                | "__packed__"
+                | "unused"
+                | "__unused__"
+                | "used"
+                | "__used__"
+                | "weak"
+                | "__weak__"
+                | "alias"
+                | "__alias__"
+                | "section"
+                | "__section__"
+                | "visibility"
+                | "__visibility__"
+                | "deprecated"
+                | "__deprecated__"
+                | "noreturn"
+                | "__noreturn__"
+                | "noinline"
+                | "__noinline__"
+                | "always_inline"
+                | "__always_inline__"
+                | "constructor"
+                | "__constructor__"
+                | "destructor"
+                | "__destructor__"
+                | "format"
+                | "__format__"
+                | "warn_unused_result"
+                | "__warn_unused_result__"
+                | "nonnull"
+                | "__nonnull__"
+                | "const"
+                | "__const__"
+                | "pure"
+                | "__pure__"
+                | "cold"
+                | "__cold__"
+                | "hot"
+                | "__hot__"
+                | "malloc"
+                | "__malloc__"
+                | "sentinel"
+                | "__sentinel__"
+                | "may_alias"
+                | "__may_alias__"
+                | "transparent_union"
+                | "__transparent_union__"
+                | "error"
+                | "__error__"
+                | "warning"
+                | "__warning__"
+                | "cleanup"
+                | "__cleanup__"
+                | "fallthrough"
+                | "__fallthrough__"
+                | "flatten"
+                | "__flatten__"
+                | "nonstring"
+                | "__nonstring__"
+                | "uninitialized"
+                | "__uninitialized__"
+                | "annotate"
+                | "__annotate__"
+                | "no_instrument_function"
+                | "__no_instrument_function__"
+                | "alloc_size"
+                | "__alloc_size__"
+                | "format_arg"
+                | "__format_arg__"
+                | "no_sanitize"
+                | "__no_sanitize__"
+                | "no_sanitize_address"
+                | "__no_sanitize_address__"
+                | "no_sanitize_thread"
+                | "__no_sanitize_thread__"
+                | "no_sanitize_undefined"
+                | "__no_sanitize_undefined__"
+                | "noclone"
+                | "__noclone__"
+                | "optimize"
+                | "__optimize__"
+                | "target"
+                | "__target__"
+                | "assume_aligned"
+                | "__assume_aligned__"
+                | "returns_nonnull"
+                | "__returns_nonnull__"
+                | "externally_visible"
+                | "__externally_visible__"
+                | "artificial"
+                | "__artificial__"
+                | "leaf"
+                | "__leaf__"
+                | "access"
+                | "__access__"
+                | "fd_arg"
+                | "__fd_arg__"
+                | "tls_model"
+                | "__tls_model__"
         )
     }
 }

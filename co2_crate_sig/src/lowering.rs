@@ -15,10 +15,13 @@ use co2_ast::{
 use co2_parser::{parse_compound_statement, parse_translation_unit};
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
-    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem, HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, rustc_public::{
+    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind,
+    HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
+    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst,
+    rustc_public::{
         DefId,
         ty::{AdtDef, FnDef, IntTy},
-    }
+    },
 };
 
 use crate::{
@@ -189,8 +192,7 @@ fn register_preprocessed_files(
     preprocessed: &PreprocessedSource,
     rustc_file_ids: &mut HashMap<co2_ast::FileId, FileId>,
     source_files: &mut HashMap<co2_ast::FileId, (String, Arc<str>)>,
-)
-{
+) {
     for (file_id, file) in preprocessed.files() {
         source_files
             .entry(*file_id)
@@ -263,13 +265,7 @@ fn build_module_data_tree(
     foreign_mod: DefId,
 ) -> ModuleData {
     let mut data =
-        ModuleData::forward_pass_parsed_module(
-            ctx,
-            &module.tu,
-            module.def_id,
-            foreign_mod,
-            false,
-        );
+        ModuleData::forward_pass_parsed_module(ctx, &module.tu, module.def_id, foreign_mod, false);
     for child in &module.children {
         data.insert_alias(&child.name, build_module_data_tree(ctx, child, foreign_mod));
     }
@@ -303,19 +299,18 @@ fn lower_translation_unit_items(
     let mut hir_items = Vec::new();
     for (item, parser_span) in tu.items.clone() {
         let span = ctx.co2_span_to_rustc(parser_span);
-        let mut resolver = LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
+        let mut resolver =
+            LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
         let item = item.transform(&resolver);
         match item {
-            Declaration::FunctionDefinition {
-                signature,
-                body,
-            } => {
+            Declaration::FunctionDefinition { signature, body } => {
                 let (name, sig, param_names, no_mangle) = match signature {
                     FunctionDefinitionSignature::C {
                         declaration_specifiers,
                         declarator,
                     } => {
-                        let is_static = declaration_specifiers.iter().any(|spec| spec.0.is_static());
+                        let is_static =
+                            declaration_specifiers.iter().any(|spec| spec.0.is_static());
                         let transformed_specs = declaration_specifiers;
                         let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
                         let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
@@ -504,12 +499,16 @@ fn lower_translation_unit_items(
                                         initializer: initializer.clone(),
                                     },
                                 );
-                                let len = infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
-                                    .unwrap_or_else(|err| {
-                                        ctx.terminate_with_error(parser_span, &err)
-                                    });
+                                let len =
+                                    infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
+                                        .unwrap_or_else(|err| {
+                                            ctx.terminate_with_error(parser_span, &err)
+                                        });
                                 let ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
-                                ctx.resolver.borrow_mut().global_value_tys.insert(id, ty.clone());
+                                ctx.resolver
+                                    .borrow_mut()
+                                    .global_value_tys
+                                    .insert(id, ty.clone());
                                 hir_items.push(HirModuleItem::Static {
                                     name,
                                     id,
@@ -519,7 +518,10 @@ fn lower_translation_unit_items(
                                 });
                             } else if is_extern {
                                 let ty = HirTy::new_array(elem_ty, HirTyConst::Literal(0), span);
-                                ctx.resolver.borrow_mut().global_value_tys.insert(id, ty.clone());
+                                ctx.resolver
+                                    .borrow_mut()
+                                    .global_value_tys
+                                    .insert(id, ty.clone());
                                 foreign_items.push(ForeignModItem::ForeignStatic {
                                     name,
                                     id,
@@ -567,10 +569,7 @@ fn lower_translation_unit_items(
         hir_items.push(HirModuleItem::Module {
             name: module.name.clone(),
             id: module.def_id,
-            module: HirModule {
-                span,
-                items,
-            },
+            module: HirModule { span, items },
             span,
         });
     }
@@ -591,10 +590,14 @@ pub fn lower_crate_sig(
     let span = ctx.span_in_file(file_id, 0, 0);
     let deps = ctx.dependencies();
 
-    let tu =
-        co2_parser::parse_translation_unit(source_name.clone(), src_static, Some(&preprocessed), StatelessResolver::new())
-        .expect("failed to parse co2 source")
-        .0;
+    let tu = co2_parser::parse_translation_unit(
+        source_name.clone(),
+        src_static,
+        Some(&preprocessed),
+        StatelessResolver::new(),
+    )
+    .expect("failed to parse co2 source")
+    .0;
 
     let tu = deduplicate_tu_items(tu);
     let mut loaded_paths = HashSet::new();
@@ -617,7 +620,11 @@ pub fn lower_crate_sig(
     let ctx = &*Box::leak(Box::new(ctx));
     let mut resolver = Resolver::new(&ctx, deps, &tu, foreign_mod);
     for module in &loaded_modules {
-        resolver.insert_module_data(&[], &module.name, build_module_data_tree(ctx, module, foreign_mod));
+        resolver.insert_module_data(
+            &[],
+            &module.name,
+            build_module_data_tree(ctx, module, foreign_mod),
+        );
     }
     resolver.import_use_items(&tu);
     resolver.rebuild_method_receivers();
@@ -717,7 +724,10 @@ pub fn lower_crate_sig(
         let (_, ty, _) =
             ctx.lower_value_decl_ctype(base_ty, base_const, declarator.declarator, &resolver);
         if let CTy::Ty(ty) = &ty {
-            ctx.resolver.borrow_mut().global_value_tys.insert(id, ty.clone());
+            ctx.resolver
+                .borrow_mut()
+                .global_value_tys
+                .insert(id, ty.clone());
         }
         match ty {
             CTy::Ty(ty) => {
@@ -865,7 +875,11 @@ pub fn lower_crate_sig(
 
     let defs = WellknownDefs {
         maybe_uninit: AdtDef(ctx.resolve("core::mem::MaybeUninit").unwrap().0),
-        maybe_uninit_uninit: FnDef(ctx.resolve("core::mem::MaybeUninit::<T>::uninit").unwrap().0),
+        maybe_uninit_uninit: FnDef(
+            ctx.resolve("core::mem::MaybeUninit::<T>::uninit")
+                .unwrap()
+                .0,
+        ),
         valist: AdtDef(ctx.resolve("core::ffi::VaList").unwrap().0),
         valist_fn_arg: FnDef(ctx.resolve("core::ffi::VaList::<'f>::arg").unwrap().0),
         clone: FnDef(ctx.resolve("core::clone::Clone::clone").unwrap().0),
@@ -873,9 +887,21 @@ pub fn lower_crate_sig(
         transmute: FnDef(ctx.resolve("core::intrinsics::transmute").unwrap().0),
         transmute_copy: FnDef(ctx.resolve("core::mem::transmute_copy").unwrap().0),
         str_as_ptr: FnDef(ctx.resolve("core::str::<impl str>::as_ptr").unwrap().0),
-        offset_mut: FnDef(ctx.resolve("core::ptr::mut_ptr::<impl *mut T>::offset").unwrap().0),
-        offset_const: FnDef(ctx.resolve("core::ptr::const_ptr::<impl *const T>::offset").unwrap().0),
-        offset_from: FnDef(ctx.resolve("core::ptr::const_ptr::<impl *const T>::offset_from").unwrap().0),
+        offset_mut: FnDef(
+            ctx.resolve("core::ptr::mut_ptr::<impl *mut T>::offset")
+                .unwrap()
+                .0,
+        ),
+        offset_const: FnDef(
+            ctx.resolve("core::ptr::const_ptr::<impl *const T>::offset")
+                .unwrap()
+                .0,
+        ),
+        offset_from: FnDef(
+            ctx.resolve("core::ptr::const_ptr::<impl *const T>::offset_from")
+                .unwrap()
+                .0,
+        ),
     };
     (
         HirStructure {
@@ -897,9 +923,10 @@ fn infer_unsized_array_len(
     elem_ty: &HirTy,
 ) -> Result<usize, String> {
     match initializer {
-        co2_ast::Initializer::Expr((co2_ast::Expression::Constant(co2_ast::Constant::String(s)), _)) => {
-            Ok(s.chars().count() + 1)
-        }
+        co2_ast::Initializer::Expr((
+            co2_ast::Expression::Constant(co2_ast::Constant::String(s)),
+            _,
+        )) => Ok(s.chars().count() + 1),
         co2_ast::Initializer::List(items) => {
             let slots_per_elem = flattened_scalar_slots(elem_ty, resolver)?;
             let mut next_index = 0usize;
@@ -932,7 +959,11 @@ fn infer_unsized_array_len(
                 }
                 let consumed_slots =
                     consumed_initializer_slots(&item.initializer.0, elem_ty, resolver)?;
-                let element_advance = if consumed_slots == 0 { 1 } else { consumed_slots };
+                let element_advance = if consumed_slots == 0 {
+                    1
+                } else {
+                    consumed_slots
+                };
                 let total_slots = used_slots_in_current + element_advance;
                 let fully_covered = total_slots.div_ceil(slots_per_elem);
                 max_len = max_len.max(index + fully_covered);
@@ -941,7 +972,9 @@ fn infer_unsized_array_len(
             }
             Ok(max_len)
         }
-        _ => Err("static with unsized array type should have list or string initializer".to_owned()),
+        _ => {
+            Err("static with unsized array type should have list or string initializer".to_owned())
+        }
     }
 }
 
@@ -956,10 +989,7 @@ fn consumed_initializer_slots(
     }
 }
 
-fn flattened_scalar_slots(
-    ty: &HirTy,
-    resolver: &LocalResolver,
-) -> Result<usize, String> {
+fn flattened_scalar_slots(ty: &HirTy, resolver: &LocalResolver) -> Result<usize, String> {
     match &ty.kind {
         rustc_public_generative::HirTyKind::Bool
         | rustc_public_generative::HirTyKind::Char
@@ -976,11 +1006,9 @@ fn flattened_scalar_slots(
             let base = resolver.base.borrow();
             if let Some((kind, fields)) = base.adt_layout_info(*def) {
                 match kind {
-                    StructOrUnionKind::Struct => fields
-                        .iter()
-                        .try_fold(0usize, |acc, field| {
-                            Ok(acc + flattened_scalar_slots(field, resolver)?)
-                        }),
+                    StructOrUnionKind::Struct => fields.iter().try_fold(0usize, |acc, field| {
+                        Ok(acc + flattened_scalar_slots(field, resolver)?)
+                    }),
                     StructOrUnionKind::Union => fields
                         .first()
                         .map(|field| flattened_scalar_slots(field, resolver))

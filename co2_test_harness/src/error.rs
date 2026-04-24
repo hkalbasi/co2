@@ -51,7 +51,10 @@ pub fn render_ui_error(err: &UiTestError) {
 
             if source.is_none() {
                 // Try finding by base name
-                if let Some(base_name) = Path::new(&span.file_name).file_name().and_then(|n| n.to_str()) {
+                if let Some(base_name) = Path::new(&span.file_name)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                {
                     if let Some(found_source) = err.sources.get(base_name) {
                         source = Some(found_source);
                         name = &err.sources.keys().find(|k| *k == base_name).unwrap();
@@ -76,7 +79,10 @@ pub fn render_ui_error(err: &UiTestError) {
                             eprintln!("Error: {}\n  at {}", issue.reason, name);
                         });
                 } else {
-                    eprintln!("Error: {}\n  at {} (byte offsets out of range)", issue.reason, name);
+                    eprintln!(
+                        "Error: {}\n  at {} (byte offsets out of range)",
+                        issue.reason, name
+                    );
                 }
             } else {
                 eprintln!("Error: {}\n  at {} (source not found)", issue.reason, name);

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use co2_ast::{CompoundStatement, Spanned};
 use co2_crate_sig::LocalResolver;
 use la_arena::{Arena, Idx};
+use rustc_public_generative::rustc_public::ty::TyConst;
 use rustc_public_generative::rustc_public::{
     CrateItem, DefId,
     ty::{
@@ -10,10 +11,9 @@ use rustc_public_generative::rustc_public::{
         Ty,
     },
 };
-use rustc_public_generative::rustc_public::ty::TyConst;
 
-use crate::{HirStmt, resolver::HirCtx};
 use crate::initializer_tree::{InitializerTree, eval_const_int};
+use crate::{HirStmt, resolver::HirCtx};
 
 #[derive(Clone, Debug)]
 pub struct HirLocal {
@@ -74,11 +74,7 @@ pub fn lower_static_body(
     def: DefId,
     hir_ctx: &HirCtx<'_>,
 ) -> Result<HirBody, String> {
-    lower_static_body_for_ty(
-        (initializer, parser_span),
-        CrateItem(def).ty(),
-        hir_ctx,
-    )
+    lower_static_body_for_ty((initializer, parser_span), CrateItem(def).ty(), hir_ctx)
 }
 
 pub fn lower_static_body_for_ty(

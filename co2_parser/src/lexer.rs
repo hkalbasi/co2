@@ -37,8 +37,12 @@ fn float_suffix_parser<'src>()
         .map(|opt| opt.unwrap_or(FloatSuffix::None))
 }
 
-pub fn lexer<'src>()
--> impl Parser<'src, &'src str, Vec<(Token, SimpleSpan<usize>)>, extra::Err<Rich<'src, char, SimpleSpan<usize>>>> {
+pub fn lexer<'src>() -> impl Parser<
+    'src,
+    &'src str,
+    Vec<(Token, SimpleSpan<usize>)>,
+    extra::Err<Rich<'src, char, SimpleSpan<usize>>>,
+> {
     // ----- Comments -----
     let line_comment = just("//")
         .then(any().and_is(just('\n').not()).repeated())

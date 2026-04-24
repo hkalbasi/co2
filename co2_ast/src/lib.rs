@@ -25,12 +25,9 @@ pub type Spanned<T> = (T, Span);
 
 pub use chumsky::prelude::Rich;
 pub use diagnostic::{
-    DiagnosticAbort, DiagnosticSpan, diagnostics_were_emitted,
-    emit_errors_and_terminate, emit_warnings, is_diagnostic_abort,
-    panic_with_diagnostic_abort,
-    print_errors_and_terminate,
-    reset_diagnostic_state, safe_range, take_errors,
-    set_source_map, SourceMap,
+    DiagnosticAbort, DiagnosticSpan, SourceMap, diagnostics_were_emitted,
+    emit_errors_and_terminate, emit_warnings, is_diagnostic_abort, panic_with_diagnostic_abort,
+    print_errors_and_terminate, reset_diagnostic_state, safe_range, set_source_map, take_errors,
 };
 pub use resolver::{StatelessResolver, TypeResolver};
 pub use transform::{DoTransform, Transformable};
@@ -291,10 +288,7 @@ impl Display for RustPath {
                     RustPathSegment::Ident(ident) => ident.clone(),
                     RustPathSegment::Generics(rust_tys) => format!(
                         "<{}>",
-                        rust_tys
-                            .iter()
-                            .map(|x| rust_ty_to_pretty(&x.0))
-                            .join(", ")
+                        rust_tys.iter().map(|x| rust_ty_to_pretty(&x.0)).join(", ")
                     ),
                 })
                 .join("::"),
@@ -322,7 +316,9 @@ fn rust_ty_to_pretty<R: TypeResolver>(ty: &RustTy<R>) -> String {
             format!("*{mutability}{}", rust_ty_to_pretty(&inner.0))
         }
         RustTy::Slice(inner) => format!("[{}]", rust_ty_to_pretty(&inner.0)),
-        RustTy::Array { inner, len } => format!("[{}; {:?}]", rust_ty_to_pretty(&inner.0), len.0.tokens),
+        RustTy::Array { inner, len } => {
+            format!("[{}; {:?}]", rust_ty_to_pretty(&inner.0), len.0.tokens)
+        }
         RustTy::BareFn { params, ret_ty } => {
             let params = params
                 .iter()

@@ -18,15 +18,13 @@ use rustc_public_generative::{
     },
 };
 
+use crate::expr::{HirExpr, HirExprKind};
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
 use crate::ty::{array_elem_ty, is_array_ty, ty_matches_expected};
 use crate::{
     expr::coerce_expr_to_type,
     item::{HirLocal, LocalId},
-};
-use crate::{
-    expr::{HirExpr, HirExprKind},
 };
 
 pub enum CTy {
@@ -219,7 +217,8 @@ impl HirCtx<'_> {
                                 locals,
                                 local_map,
                             );
-                            let tree_expr = self.initializer_tree_to_expr(&tree, real_ty, parser_span);
+                            let tree_expr =
+                                self.initializer_tree_to_expr(&tree, real_ty, parser_span);
 
                             let span = self.to_rust_span(parser_span);
                             let local = locals.alloc(HirLocal {
@@ -287,14 +286,10 @@ impl HirCtx<'_> {
                                     resolver.set_local_ty(name.0 as u32, hir_ty);
                                 }
                                 // END TODO.
-                                let expr = if self
-                                    .decl_resolver
-                                    .as_ref()
-                                    .is_some_and(|resolver| {
-                                        resolver.normalize_ty_for_current_owner(expr.ty)
-                                            == resolver.normalize_ty_for_current_owner(local_ty)
-                                    })
-                                {
+                                let expr = if self.decl_resolver.as_ref().is_some_and(|resolver| {
+                                    resolver.normalize_ty_for_current_owner(expr.ty)
+                                        == resolver.normalize_ty_for_current_owner(local_ty)
+                                }) {
                                     expr
                                 } else {
                                     match coerce_expr_to_type(expr, local_ty) {
@@ -551,8 +546,9 @@ impl HirCtx<'_> {
                                 })
                                 .ok_or_else(|| "Can not calculate subscription".to_owned())
                                 .and_then(|(resolver, def_id)| {
-                                    eval_registered_array_len_const(resolver, def_id)
-                                        .map_err(|err| format!("Can not calculate subscription: {err}"))
+                                    eval_registered_array_len_const(resolver, def_id).map_err(
+                                        |err| format!("Can not calculate subscription: {err}"),
+                                    )
                                 })?;
                             CTy::Ty(
                                 Ty::try_new_array(inner, len as u64)
@@ -599,7 +595,10 @@ impl HirCtx<'_> {
             TyKind::RigidTy(RigidTy::Uint(uint_ty)) => HirTy::unsigned_ty(uint_ty, span),
             TyKind::RigidTy(RigidTy::Float(float_ty)) => HirTy::float_ty(float_ty, span),
             TyKind::RigidTy(RigidTy::Tuple(items)) => HirTy::new_tuple(
-                items.iter().map(|ty| self.ty_to_hir_ty(*ty, span)).collect(),
+                items
+                    .iter()
+                    .map(|ty| self.ty_to_hir_ty(*ty, span))
+                    .collect(),
                 span,
             ),
             TyKind::RigidTy(RigidTy::RawPtr(inner, mutability)) => {
@@ -621,9 +620,7 @@ impl HirCtx<'_> {
                 args.0
                     .iter()
                     .map(|arg| match arg {
-                        GenericArgKind::Type(ty) => {
-                            HirGenericArg::Ty(self.ty_to_hir_ty(*ty, span))
-                        }
+                        GenericArgKind::Type(ty) => HirGenericArg::Ty(self.ty_to_hir_ty(*ty, span)),
                         GenericArgKind::Lifetime(_) => HirGenericArg::Lifetime(HirLifetime::Static),
                         _ => panic!("unsupported generic arg in local C type"),
                     })
@@ -638,20 +635,18 @@ impl HirCtx<'_> {
                     _ => panic!("unsupported fn ptr abi in local C type: {:?}", sig.abi),
                 };
                 HirTy {
-                    kind: rustc_public_generative::HirTyKind::FnPtr(Box::new(
-                        FunctionSignature {
-                            lifetimes: vec![],
-                            inputs: sig
-                                .inputs()
-                                .iter()
-                                .map(|ty| self.ty_to_hir_ty(*ty, span))
-                                .collect(),
-                            output: self.ty_to_hir_ty(sig.output(), span),
-                            abi,
-                            is_unsafe: matches!(sig.safety, Safety::Unsafe),
-                            c_variadic: sig.c_variadic,
-                        },
-                    )),
+                    kind: rustc_public_generative::HirTyKind::FnPtr(Box::new(FunctionSignature {
+                        lifetimes: vec![],
+                        inputs: sig
+                            .inputs()
+                            .iter()
+                            .map(|ty| self.ty_to_hir_ty(*ty, span))
+                            .collect(),
+                        output: self.ty_to_hir_ty(sig.output(), span),
+                        abi,
+                        is_unsafe: matches!(sig.safety, Safety::Unsafe),
+                        c_variadic: sig.c_variadic,
+                    })),
                     span,
                 }
             }

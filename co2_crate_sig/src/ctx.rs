@@ -16,9 +16,7 @@ pub(crate) struct CrateSigCtx<'a> {
 
 impl CrateSigCtx<'_> {
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
-        co2_ast::emit_errors_and_terminate(
-            vec![co2_ast::Rich::custom(span, msg)],
-        );
+        co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(span, msg)]);
     }
 
     pub(crate) fn root_crate_def_id(&self) -> DefId {

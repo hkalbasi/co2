@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
 use crate::{
-    Declaration, EnumSpecifier, Enumerator, LazySubscription, RustPath, Spanned,
-    StructOrUnionKind, StructOrUnionSpecifier, TypeQueryResult,
+    Declaration, EnumSpecifier, Enumerator, LazySubscription, RustPath, Spanned, StructOrUnionKind,
+    StructOrUnionSpecifier, TypeQueryResult,
 };
 
 pub trait TypeResolver: Clone + 'static {
@@ -87,15 +87,12 @@ impl TypeResolver for StatelessResolver {
         let mut rust_style_enabled = self.rust_style_enabled;
         match _decl {
             Declaration::FunctionDefinition { signature, .. } => {
-                rust_style_enabled &= signature
-                    .ident()
-                    .as_deref()
-                    != Some("fn");
+                rust_style_enabled &= signature.ident().as_deref() != Some("fn");
             }
             Declaration::Declaration { declarators, .. } => {
-                rust_style_enabled &= declarators.iter().all(|decl| {
-                    decl.0.declarator.0.ident().as_deref() != Some("fn")
-                });
+                rust_style_enabled &= declarators
+                    .iter()
+                    .all(|decl| decl.0.declarator.0.ident().as_deref() != Some("fn"));
             }
         }
         StatelessResolver::with_rust_style_enabled(rust_style_enabled)

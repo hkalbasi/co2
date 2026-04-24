@@ -16,8 +16,8 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use super::utils::{
-    is_ident_start_byte, is_ident_cont_byte, bytes_to_str,
-    skip_literal_bytes, copy_literal_bytes_to_string,
+    bytes_to_str, copy_literal_bytes_to_string, is_ident_cont_byte, is_ident_start_byte,
+    skip_literal_bytes,
 };
 
 /// Check if two adjacent bytes would form an unintended multi-character token
@@ -36,8 +36,13 @@ fn would_paste_tokens(last: u8, first: u8) -> bool {
         // == or ending = followed by =
         (b'=', b'=') => true,
         // != &= |= *= /= ^= %=
-        (b'!', b'=') | (b'&', b'=') | (b'|', b'=') | (b'*', b'=') |
-        (b'/', b'=') | (b'^', b'=') | (b'%', b'=') => true,
+        (b'!', b'=')
+        | (b'&', b'=')
+        | (b'|', b'=')
+        | (b'*', b'=')
+        | (b'/', b'=')
+        | (b'^', b'=')
+        | (b'%', b'=') => true,
         // && ||
         (b'&', b'&') | (b'|', b'|') => true,
         // ## (token paste)
@@ -163,14 +168,17 @@ impl MacroTable {
         if let Some(existing) = self.macros.get_mut("__FILE__") {
             existing.body = body;
         } else {
-            self.macros.insert("__FILE__".to_string(), MacroDef {
-                name: "__FILE__".to_string(),
-                is_function_like: false,
-                params: Vec::new(),
-                is_variadic: false,
-                has_named_variadic: false,
-                body,
-            });
+            self.macros.insert(
+                "__FILE__".to_string(),
+                MacroDef {
+                    name: "__FILE__".to_string(),
+                    is_function_like: false,
+                    params: Vec::new(),
+                    is_variadic: false,
+                    has_named_variadic: false,
+                    body,
+                },
+            );
         }
     }
 
@@ -198,8 +206,19 @@ impl MacroTable {
         // - 0x01 (BLUE_PAINT_MARKER): prevents re-expansion per C11 §6.10.3.4
         // - 0x02/0x03 (PASTE_PROTECT_START/END): should already be consumed by
         //   substitute_params, but strip defensively in case any leak through.
-        if result.as_bytes().iter().any(|&b| b == BLUE_PAINT_MARKER || b == PASTE_PROTECT_START || b == PASTE_PROTECT_END) {
-            result.replace([BLUE_PAINT_MARKER as char, PASTE_PROTECT_START as char, PASTE_PROTECT_END as char], "")
+        if result
+            .as_bytes()
+            .iter()
+            .any(|&b| b == BLUE_PAINT_MARKER || b == PASTE_PROTECT_START || b == PASTE_PROTECT_END)
+        {
+            result.replace(
+                [
+                    BLUE_PAINT_MARKER as char,
+                    PASTE_PROTECT_START as char,
+                    PASTE_PROTECT_END as char,
+                ],
+                "",
+            )
         } else {
             result
         }
@@ -262,7 +281,11 @@ impl MacroTable {
                                 let trimmed_len = expanded.trim_end().len();
                                 let prefix_len = trimmed_len - trail_ident.len();
                                 expanded.truncate(prefix_len);
-                                let (trail_expanded, _) = self.expand_function_macro(&trail_mac_clone, &trail_args, expanding);
+                                let (trail_expanded, _) = self.expand_function_macro(
+                                    &trail_mac_clone,
+                                    &trail_args,
+                                    expanding,
+                                );
                                 expanded.push_str(&trail_expanded);
                                 continue;
                             }
@@ -338,7 +361,9 @@ impl MacroTable {
                 i = Self::copy_block_comment(bytes, i, &mut result);
             } else if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
                 i = Self::copy_line_comment(bytes, i, &mut result);
-            } else if b.is_ascii_digit() || (b == b'.' && i + 1 < len && bytes[i + 1].is_ascii_digit()) {
+            } else if b.is_ascii_digit()
+                || (b == b'.' && i + 1 < len && bytes[i + 1].is_ascii_digit())
+            {
                 i = Self::copy_ppnumber(bytes, i, &mut result);
             } else if b < 0x80 {
                 // Batch consecutive non-special ASCII bytes into a single push_str.
@@ -348,9 +373,13 @@ impl MacroTable {
                 i += 1;
                 while i < len {
                     let c = bytes[i];
-                    if c == b'"' || c == b'\'' || c == BLUE_PAINT_MARKER
+                    if c == b'"'
+                        || c == b'\''
+                        || c == BLUE_PAINT_MARKER
                         || is_ident_start_byte(c)
-                        || (c == b'/' && i + 1 < len && (bytes[i + 1] == b'*' || bytes[i + 1] == b'/'))
+                        || (c == b'/'
+                            && i + 1 < len
+                            && (bytes[i + 1] == b'*' || bytes[i + 1] == b'/'))
                         || c.is_ascii_digit()
                         || (c == b'.' && i + 1 < len && bytes[i + 1].is_ascii_digit())
                         || c >= 0x80
@@ -386,8 +415,14 @@ impl MacroTable {
     }
 
     /// Process an identifier: expand macros, handle builtins, or copy verbatim.
-    fn expand_identifier(&self, text: &str, bytes: &[u8], start: usize,
-                         result: &mut String, expanding: &mut HashSet<String>) -> usize {
+    fn expand_identifier(
+        &self,
+        text: &str,
+        bytes: &[u8],
+        start: usize,
+        result: &mut String,
+        expanding: &mut HashSet<String>,
+    ) -> usize {
         let len = bytes.len();
         let mut i = start + 1;
         while i < len && is_ident_cont_byte(bytes[i]) {
@@ -427,7 +462,8 @@ impl MacroTable {
         // When an identifier matches one of these and is immediately followed by
         // a quote ('"' or '\''), it's a string/char literal prefix, not a macro name.
         // The preprocessor must not expand it; let the lexer handle it as a token.
-        if i < len && (bytes[i] == b'"' || bytes[i] == b'\'')
+        if i < len
+            && (bytes[i] == b'"' || bytes[i] == b'\'')
             && matches!(ident, "u8" | "u" | "U" | "L")
         {
             result.push_str(ident);
@@ -452,14 +488,18 @@ impl MacroTable {
     /// Check if an identifier is a pp-number suffix (e.g., the "I" in "1.I").
     fn is_ppnumber_suffix(result_bytes: &[u8], _ident: &str) -> bool {
         let rlen = result_bytes.len();
-        if rlen == 0 { return false; }
+        if rlen == 0 {
+            return false;
+        }
         let prev = result_bytes[rlen - 1];
         if prev.is_ascii_digit() {
             true
         } else if prev == b'.' && rlen >= 2 && result_bytes[rlen - 2].is_ascii_digit() {
             is_ppnumber_context(result_bytes, rlen - 2)
-        } else if (prev == b'+' || prev == b'-') && rlen >= 3
-            && matches!(result_bytes[rlen - 2], b'e' | b'E' | b'p' | b'P') {
+        } else if (prev == b'+' || prev == b'-')
+            && rlen >= 3
+            && matches!(result_bytes[rlen - 2], b'e' | b'E' | b'p' | b'P')
+        {
             is_ppnumber_context(result_bytes, rlen - 3)
         } else {
             false
@@ -470,7 +510,9 @@ impl MacroTable {
     fn skip_pragma(bytes: &[u8], i: usize, ident: &str, result: &mut String) -> usize {
         let len = bytes.len();
         let mut j = i;
-        while j < len && bytes[j].is_ascii_whitespace() { j += 1; }
+        while j < len && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
         if j < len && bytes[j] == b'(' {
             let mut depth = 1;
             j += 1;
@@ -492,17 +534,27 @@ impl MacroTable {
     }
 
     /// Expand a macro invocation (function-like or object-like).
-    fn expand_macro_invocation(&self, _text: &str, bytes: &[u8], i: usize, ident: &str,
-                               mac: &MacroDef, result: &mut String,
-                               expanding: &mut HashSet<String>) -> usize {
+    fn expand_macro_invocation(
+        &self,
+        _text: &str,
+        bytes: &[u8],
+        i: usize,
+        ident: &str,
+        mac: &MacroDef,
+        result: &mut String,
+        expanding: &mut HashSet<String>,
+    ) -> usize {
         let len = bytes.len();
         if mac.is_function_like {
             let mut j = i;
-            while j < len && bytes[j].is_ascii_whitespace() { j += 1; }
+            while j < len && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
             if j < len && bytes[j] == b'(' {
                 let (args, end_pos) = self.parse_macro_args(bytes, j);
                 let mut i = end_pos;
-                let (expanded, body_ended_with_func_ident) = self.expand_function_macro(mac, &args, expanding);
+                let (expanded, body_ended_with_func_ident) =
+                    self.expand_function_macro(mac, &args, expanding);
                 // Per C11 §6.10.3.4, only connect trailing function-like macro
                 // identifiers with subsequent source `(` if the substituted body
                 // (before rescan) truly ended with that identifier. If the body
@@ -626,8 +678,7 @@ impl MacroTable {
                 b')' => {
                     if paren_depth == 0 {
                         // Extract the argument as a trimmed &str from the byte span
-                        let arg_slice = std::str::from_utf8(&bytes[arg_start..i])
-                            .unwrap_or("");
+                        let arg_slice = std::str::from_utf8(&bytes[arg_start..i]).unwrap_or("");
                         let trimmed = arg_slice.trim();
                         if !trimmed.is_empty() || !args.is_empty() {
                             args.push(trimmed.to_string());
@@ -639,8 +690,7 @@ impl MacroTable {
                     }
                 }
                 b',' if paren_depth == 0 => {
-                    let arg_slice = std::str::from_utf8(&bytes[arg_start..i])
-                        .unwrap_or("");
+                    let arg_slice = std::str::from_utf8(&bytes[arg_start..i]).unwrap_or("");
                     args.push(arg_slice.trim().to_string());
                     i += 1;
                     arg_start = i;
@@ -657,8 +707,7 @@ impl MacroTable {
         }
 
         // Unterminated - return what we have
-        let arg_slice = std::str::from_utf8(&bytes[arg_start..i])
-            .unwrap_or("");
+        let arg_slice = std::str::from_utf8(&bytes[arg_start..i]).unwrap_or("");
         let trimmed = arg_slice.trim();
         if !trimmed.is_empty() || !args.is_empty() {
             args.push(trimmed.to_string());
@@ -696,17 +745,30 @@ impl MacroTable {
         // (e.g., `#define bitfs(bf, s) __bitf(bf, bf##_##s)`). In that case, the
         // non-## occurrence needs the expanded argument so that commas from macro
         // expansion create additional arguments during rescanning.
-        let expanded_args: Vec<String> = args.iter().map(|arg| {
-            self.expand_text(arg, expanding)
-        }).collect();
+        let expanded_args: Vec<String> = args
+            .iter()
+            .map(|arg| self.expand_text(arg, expanding))
+            .collect();
 
         // Step 3: Handle stringification (#param) and token pasting (##).
         // Returns Cow::Borrowed(&mac.body) when the body has no '#' (common case),
         // avoiding a String clone.
-        let body = self.handle_stringify_and_paste(&mac.body, &mac.params, args, mac.is_variadic, mac.has_named_variadic);
+        let body = self.handle_stringify_and_paste(
+            &mac.body,
+            &mac.params,
+            args,
+            mac.is_variadic,
+            mac.has_named_variadic,
+        );
 
         // Step 4: Substitute parameters with expanded arguments
-        let body = self.substitute_params(&body, &mac.params, &expanded_args, mac.is_variadic, mac.has_named_variadic);
+        let body = self.substitute_params(
+            &body,
+            &mac.params,
+            &expanded_args,
+            mac.is_variadic,
+            mac.has_named_variadic,
+        );
 
         // Check if the substituted body (before rescan) ends with a function-like
         // macro identifier. Per C11 §6.10.3.4, the rescan processes the replacement
@@ -867,7 +929,8 @@ impl MacroTable {
                             result.push(PASTE_PROTECT_END as char);
                         }
                     } else if let Some(idx) = params.iter().position(|p| p == right_ident) {
-                        let is_named_variadic_param = is_variadic && has_named_variadic && idx == params.len() - 1;
+                        let is_named_variadic_param =
+                            is_variadic && has_named_variadic && idx == params.len() - 1;
                         if is_named_variadic_param {
                             let va_args_raw = self.get_named_va_args(idx, args);
                             let va_args = strip_blue_paint(&va_args_raw);
@@ -935,11 +998,12 @@ impl MacroTable {
                         result.push_str(&stringify_arg(&va_args));
                         result.push('"');
                     } else if let Some(idx) = params.iter().position(|p| p == param_name) {
-                        let arg_str = if is_variadic && has_named_variadic && idx == params.len() - 1 {
-                            self.get_named_va_args(idx, args)
-                        } else {
-                            args.get(idx).map(|s| s.to_string()).unwrap_or_default()
-                        };
+                        let arg_str =
+                            if is_variadic && has_named_variadic && idx == params.len() - 1 {
+                                self.get_named_va_args(idx, args)
+                            } else {
+                                args.get(idx).map(|s| s.to_string()).unwrap_or_default()
+                            };
                         result.push('"');
                         result.push_str(&stringify_arg(&arg_str));
                         result.push('"');
@@ -1109,7 +1173,8 @@ fn is_ppnumber_context(bytes: &[u8], pos: usize) -> bool {
                 return ch.is_ascii_digit();
             }
             j -= 1;
-        } else if (ch == b'+' || ch == b'-') && j >= 1
+        } else if (ch == b'+' || ch == b'-')
+            && j >= 1
             && matches!(bytes[j - 1], b'e' | b'E' | b'p' | b'P')
         {
             if j < 2 {
@@ -1169,8 +1234,8 @@ fn contains_standalone_ident(s: &str, ident: &str) -> bool {
             // Check that the character before is not an ident character
             let before_ok = i == 0 || !is_ident_cont_byte(s_bytes[i - 1]);
             // Check that the character after is not an ident character
-            let after_ok = i + ident_len >= s_bytes.len()
-                || !is_ident_cont_byte(s_bytes[i + ident_len]);
+            let after_ok =
+                i + ident_len >= s_bytes.len() || !is_ident_cont_byte(s_bytes[i + ident_len]);
             if before_ok && after_ok {
                 return true;
             }
@@ -1415,7 +1480,10 @@ mod itoa {
 
     impl Buffer {
         pub fn new() -> Self {
-            Buffer { bytes: [0u8; 20], len: 0 }
+            Buffer {
+                bytes: [0u8; 20],
+                len: 0,
+            }
         }
 
         pub fn format(&mut self, mut n: usize) -> &str {
@@ -1435,8 +1503,7 @@ mod itoa {
             // Shift to beginning for simpler return
             self.bytes.copy_within(pos..20, 0);
             // All bytes are ASCII digits (b'0'..=b'9'), which are valid UTF-8.
-            std::str::from_utf8(&self.bytes[..self.len])
-                .expect("digit buffer is not valid UTF-8")
+            std::str::from_utf8(&self.bytes[..self.len]).expect("digit buffer is not valid UTF-8")
         }
     }
 }

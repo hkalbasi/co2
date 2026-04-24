@@ -35,8 +35,8 @@ mod hir_ty;
 mod internal;
 
 pub use hir_structure::{
-    ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirImplItem, HirImplItemKind,
-    HirModule, HirModuleItem, HirSelfKind, HirStructure, StructField, AdtRepr,
+    AdtRepr, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirImplItem,
+    HirImplItemKind, HirModule, HirModuleItem, HirSelfKind, HirStructure, StructField,
 };
 pub use hir_ty::{HirGenericArg, HirLifetime, HirTy, HirTyConst, HirTyKind};
 
@@ -213,7 +213,9 @@ fn erase_bound_regions_in_fn_sig(mut sig: rustc_public::ty::FnSig) -> rustc_publ
 }
 
 fn erase_bound_regions_in_ty(ty: rustc_public::ty::Ty) -> rustc_public::ty::Ty {
-    use rustc_public::ty::{GenericArgKind, Region, RegionKind, RigidTy, TyConst, TyConstKind, TyKind};
+    use rustc_public::ty::{
+        GenericArgKind, Region, RegionKind, RigidTy, TyConst, TyConstKind, TyKind,
+    };
 
     fn erase_region(region: Region) -> Region {
         let kind = match region.kind {
@@ -278,9 +280,7 @@ fn erase_bound_regions_in_ty(ty: rustc_public::ty::Ty) -> rustc_public::ty::Ty {
                     mutability,
                 ),
                 RigidTy::FnDef(def, args) => RigidTy::FnDef(def, erase_args(args)),
-                RigidTy::FnPtr(sig) => {
-                    RigidTy::FnPtr(sig.map_bound(erase_bound_regions_in_fn_sig))
-                }
+                RigidTy::FnPtr(sig) => RigidTy::FnPtr(sig.map_bound(erase_bound_regions_in_fn_sig)),
                 RigidTy::Closure(def, args) => RigidTy::Closure(def, erase_args(args)),
                 RigidTy::Coroutine(def, args) => RigidTy::Coroutine(def, erase_args(args)),
                 RigidTy::CoroutineClosure(def, args) => {
@@ -311,7 +311,9 @@ fn erase_bound_regions_in_ty(ty: rustc_public::ty::Ty) -> rustc_public::ty::Ty {
                                                     )
                                                 }
                                                 rustc_public::ty::TermKind::Const(c) => {
-                                                    rustc_public::ty::TermKind::Const(erase_const(c))
+                                                    rustc_public::ty::TermKind::Const(erase_const(
+                                                        c,
+                                                    ))
                                                 }
                                             },
                                         },

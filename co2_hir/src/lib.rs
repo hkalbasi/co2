@@ -13,8 +13,8 @@ pub use decl::HirDecl;
 pub use expr::{HirBinOp, HirExpr, HirExprKind, HirLogicalOp, ReturnSemantic};
 pub use item::{
     HirBody, HirLabel, HirLocal, LabelId, LocalId, eval_usize_initializer,
-    infer_array_len_from_initializer,
-    lower_function_body, lower_static_body, lower_static_body_for_ty,
+    infer_array_len_from_initializer, lower_function_body, lower_static_body,
+    lower_static_body_for_ty,
 };
 pub use resolver::{HirCtx, ResolvedValue};
 pub use stmt::HirStmt;
