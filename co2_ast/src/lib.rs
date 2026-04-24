@@ -1009,6 +1009,7 @@ pub struct TranslationUnit<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub struct UseItem {
     pub path: Vec<Spanned<String>>,
+    pub alias: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Clone)]

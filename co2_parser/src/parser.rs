@@ -2017,21 +2017,82 @@ where
     })
 }
 
+fn use_tree<'src, I>()
+-> impl Parser<'src, I, Vec<(Vec<Spanned<String>>, Option<Spanned<String>>)>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    recursive(|tree| {
+        let path = identifier()
+            .separated_by(just(Token::ColonColon))
+            .at_least(1)
+            .collect::<Vec<_>>();
+
+        let alias = just(Token::Ident("as".to_string()))
+            .ignore_then(identifier())
+            .or_not();
+
+        let star = just(Token::Star).map_with(|_, e| vec![(vec![("*".to_string(), e.span())], None)]);
+
+        let group_or_simple = path
+            .then(
+                just(Token::ColonColon)
+                    .ignore_then(choice((
+                        tree.clone()
+                            .separated_by(just(Token::Comma))
+                            .allow_trailing()
+                            .collect::<Vec<Vec<(Vec<Spanned<String>>, Option<Spanned<String>>)>>>()
+                            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                            .map(|nested_lists| {
+                                nested_lists.into_iter().flatten().collect::<Vec<_>>()
+                            }),
+                        just(Token::Star)
+                            .map_with(|_, e| vec![(vec![("*".to_string(), e.span())], None)]),
+                    )))
+                    .or_not(),
+            )
+            .then(alias)
+            .map(|((prefix, nested), alias)| {
+                if let Some(nested_items) = nested {
+                    let mut flattened = Vec::new();
+                    for (mut nested_path, nested_alias) in nested_items {
+                        let mut full_path = prefix.clone();
+                        full_path.append(&mut nested_path);
+                        flattened.push((full_path, nested_alias));
+                    }
+                    flattened
+                } else {
+                    vec![(prefix, alias)]
+                }
+            });
+
+        let just_group = tree
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<Vec<(Vec<Spanned<String>>, Option<Spanned<String>>)>>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(|nested_lists| nested_lists.into_iter().flatten().collect());
+
+        choice((group_or_simple, just_group, star))
+    })
+}
+
 fn use_item<'src, I>()
--> impl Parser<'src, I, Spanned<UseItem>, extra::Err<Rich<'src, Token, Span>>> + Clone
+-> impl Parser<'src, I, Vec<Spanned<UseItem>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     just(Token::Ident("use".to_owned()))
-        .ignore_then(
-            identifier()
-                .separated_by(just(Token::ColonColon))
-                .collect()
-                .map(|path| UseItem { path }),
-        )
+        .ignore_then(use_tree())
         .then_ignore(just(Token::Semicolon))
-        .map_with(|r, e| (r, e.span()))
+        .map_with(|items, e| {
+            items
+                .into_iter()
+                .map(|(path, alias)| (UseItem { path, alias }, e.span()))
+                .collect()
+        })
 }
 
 fn mod_item<'src, I>()
@@ -2074,8 +2135,11 @@ where
             }
             inp.rewind(checkpoint);
 
-            let item = if let Ok(item) = inp.parse(use_item()) {
-                TranslationUnitItem::Use(item)
+            let item = if let Ok(use_items) = inp.parse(use_item()) {
+                for item in use_items {
+                    items.push(TranslationUnitItem::Use(item));
+                }
+                TranslationUnitItem::Empty
             } else if let Ok(item) = inp.parse(mod_item()) {
                 TranslationUnitItem::Mod(item)
             } else if let Ok((decl, next_resolver)) = inp.parse(declaration(

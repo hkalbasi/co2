@@ -1,3 +1,7 @@
 fn f_foo() {
 
 }
+
+fn something_else() {
+
+}

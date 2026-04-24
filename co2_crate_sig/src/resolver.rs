@@ -356,8 +356,35 @@ impl Resolver {
     ) {
         let mut errors: Vec<co2_ast::Rich<'static, String, co2_ast::Span>> = Vec::new();
         for (use_item, _) in &p.rust_use_items {
-            let Some(alias) = use_item.path.last().map(|(segment, _)| segment.as_str()) else {
+            let Some((last_segment, _)) = use_item.path.last() else {
                 continue;
+            };
+
+            if last_segment == "*" {
+                let Ok(item) = self.resolve_module_path_relative(
+                    module_path,
+                    use_item.path[..use_item.path.len() - 1]
+                        .iter()
+                        .map(|(segment, _)| segment.as_str()),
+                ) else {
+                    if let Some((_, span)) =
+                        self.first_unresolved_use_segment(module_path, use_item)
+                    {
+                        errors.push(co2_ast::Rich::custom(*span, "Unresolved item".to_owned()));
+                    }
+                    continue;
+                };
+
+                for (name, child_item) in item.items {
+                    self.module_mut(module_path).insert_alias(&name, child_item);
+                }
+                continue;
+            }
+
+            let alias = if let Some((alias_name, _)) = &use_item.alias {
+                alias_name.as_str()
+            } else {
+                last_segment.as_str()
             };
             let module = self.module_mut(module_path);
             if module.resolve_path([alias].into_iter()).is_ok()
