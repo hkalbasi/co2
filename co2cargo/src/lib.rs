@@ -4,6 +4,26 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn main_with_args(args: Vec<String>) -> i32 {
+    if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
+        println!("co2cargo: A wrapper around cargo that supports CO2 language features.");
+        println!();
+        println!("Usage: co2cargo <subcommand> [args...]");
+        println!();
+        println!("CO2 Specific Commands:");
+        println!("    init        Initialize a new co2 project in an existing directory.");
+        println!("                Creates src/main.co2 and adds #![co2::language] to src/main.rs.");
+        println!();
+        println!("Common Cargo Commands (forwarded with RUSTC=co2rustc):");
+        println!("    build, b    Compile the current package");
+        println!("    check, c    Analyze the current package and report errors");
+        println!("    run, r      Run a binary or example of the local package");
+        println!("    test, t     Run the tests");
+        println!("    add         Add dependencies to a manifest file");
+        println!();
+        println!("All other cargo commands are supported and forwarded to cargo.");
+        return 0;
+    }
+
     if args.is_empty() {
         eprintln!("usage: co2cargo <subcommand> [args...]");
         return 1;
