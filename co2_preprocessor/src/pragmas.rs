@@ -16,12 +16,8 @@ impl Preprocessor {
             return None;
         }
 
-        // Handle #pragma pack directives (suppress in asm mode since these
-        // emit synthetic __ccc_pack_* tokens that the assembler can't parse)
+        // Handle #pragma pack directives.
         if let Some(pack_content) = rest.strip_prefix("pack") {
-            if self.macros.asm_mode {
-                return None;
-            }
             return self.handle_pragma_pack(pack_content.trim());
         }
 
@@ -47,15 +43,10 @@ impl Preprocessor {
             return None;
         }
 
-        // Handle #pragma GCC visibility push(hidden|default|protected|internal) / pop
-        // Suppressed in asm mode: synthetic __ccc_visibility_* tokens are C parser-
-        // specific and would cause assembler errors when preprocessing .S files.
+        // Handle #pragma GCC visibility push(hidden|default|protected|internal) / pop.
         if let Some(gcc_content) = rest.strip_prefix("GCC") {
             let gcc_content = gcc_content.trim();
             if let Some(vis_content) = gcc_content.strip_prefix("visibility") {
-                if self.macros.asm_mode {
-                    return None;
-                }
                 return self.handle_pragma_gcc_visibility(vis_content.trim());
             }
         }

@@ -9,3 +9,7 @@ cases when CO2 miscompiles or reject valid C code.
   floating point. Linking with libraries built with other compilers and passing long double to them will break (e.g
   You can't use printf `%Lf`)
 * Variable length arrays are not implemented (they are optional in the C standard).
+
+## Incompatibilities which seems doesn't worth the effort to fix
+
+* non-UTF8 source files are not supported (not required by the C standard).

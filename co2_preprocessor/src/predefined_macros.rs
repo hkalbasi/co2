@@ -286,67 +286,6 @@ impl Preprocessor {
         paths
     }
 
-    /// Define `__STRICT_ANSI__` for strict ISO C modes (`-std=c99`, `-std=c11`, etc.).
-    /// GCC defines this macro when `-std=cXX` (non-GNU) modes are used, and many
-    /// headers (glibc's `<features.h>`, CPython's `pymacro.h`) check for it to
-    /// gate GNU extensions like `typeof`.
-    pub fn set_strict_ansi(&mut self, strict: bool) {
-        if strict {
-            self.define_simple_macro("__STRICT_ANSI__", "1");
-        } else {
-            self.macros.undefine("__STRICT_ANSI__");
-        }
-    }
-
-    /// Set inline semantics mode: GNU89 vs C99.
-    /// When `gnu89` is true, defines `__GNUC_GNU_INLINE__` and undefines `__GNUC_STDC_INLINE__`.
-    /// When `gnu89` is false (default), `__GNUC_STDC_INLINE__` remains defined.
-    /// GCC sets `__GNUC_GNU_INLINE__` with `-fgnu89-inline` or `-std=gnu89`,
-    /// and `__GNUC_STDC_INLINE__` with `-std=gnu99` and later.
-    pub fn set_gnu89_inline(&mut self, gnu89: bool) {
-        if gnu89 {
-            self.macros.undefine("__GNUC_STDC_INLINE__");
-            self.define_simple_macro("__GNUC_GNU_INLINE__", "1");
-        } else {
-            self.macros.undefine("__GNUC_GNU_INLINE__");
-            self.define_simple_macro("__GNUC_STDC_INLINE__", "1");
-        }
-    }
-
-    /// Define __OPTIMIZE__ and __OPTIMIZE_SIZE__ based on the optimization level.
-    ///
-    /// GCC defines __OPTIMIZE__ for any optimization level >= 1 (-O, -O1, -O2, -O3, -Os, -Oz).
-    /// GCC defines __OPTIMIZE_SIZE__ for -Os and -Oz.
-    /// The Linux kernel relies on __OPTIMIZE__ for BUILD_BUG() and related compile-time
-    /// assertion macros that expand to noreturn function calls when optimization is enabled.
-    pub fn set_optimize(&mut self, optimize: bool, optimize_size: bool) {
-        if optimize {
-            self.define_simple_macro("__OPTIMIZE__", "1");
-        } else {
-            self.macros.undefine("__OPTIMIZE__");
-        }
-        if optimize_size {
-            self.define_simple_macro("__OPTIMIZE_SIZE__", "1");
-        } else {
-            self.macros.undefine("__OPTIMIZE_SIZE__");
-        }
-    }
-
-    /// Define or undefine __PIC__/__pic__ based on whether PIC mode is active.
-    /// GCC defines these to 1 for -fpic and 2 for -fPIC; we always use 2.
-    /// When PIC is disabled (e.g. -fno-PIC), these must not be defined, as
-    /// kernel code (RIP_REL_REF) checks `#ifndef __pic__` to decide whether
-    /// to use RIP-relative inline asm for position-independent references.
-    pub fn set_pic(&mut self, enabled: bool) {
-        if enabled {
-            self.define_simple_macro("__PIC__", "2");
-            self.define_simple_macro("__pic__", "2");
-        } else {
-            self.macros.undefine("__PIC__");
-            self.macros.undefine("__pic__");
-        }
-    }
-
     /// Define x86/x86_64 SIMD feature macros (__SSE__, __SSE2__, __MMX__, etc.).
     ///
     /// GCC/Clang always define these for x86_64 (SSE2 is baseline for the ISA).
@@ -380,44 +319,6 @@ impl Preprocessor {
             self.define_simple_macro("__SSE2_MATH__", "1");
             // GCC also defines this for x86_64
             self.define_simple_macro("__MMX_WITH_SSE__", "1");
-        }
-    }
-
-    /// Define extended SIMD feature macros (__SSE3__, __AVX__, __AVX2__, etc.)
-    /// when the corresponding -msse3, -mavx, -mavx2 flags are passed.
-    /// Projects like blosc use #ifdef __AVX2__ to select optimized code paths.
-    /// Must be called after set_sse_macros().
-    pub fn set_extended_simd_macros(
-        &mut self,
-        sse3: bool,
-        ssse3: bool,
-        sse4_1: bool,
-        sse4_2: bool,
-        avx: bool,
-        avx2: bool,
-    ) {
-        // Only define SSE/AVX macros for x86 targets.
-        let is_x86 = self.macros.is_defined("__x86_64__") || self.macros.is_defined("__i386__");
-        if !is_x86 {
-            return;
-        }
-        if sse3 {
-            self.define_simple_macro("__SSE3__", "1");
-        }
-        if ssse3 {
-            self.define_simple_macro("__SSSE3__", "1");
-        }
-        if sse4_1 {
-            self.define_simple_macro("__SSE4_1__", "1");
-        }
-        if sse4_2 {
-            self.define_simple_macro("__SSE4_2__", "1");
-        }
-        if avx {
-            self.define_simple_macro("__AVX__", "1");
-        }
-        if avx2 {
-            self.define_simple_macro("__AVX2__", "1");
         }
     }
 
@@ -684,72 +585,4 @@ impl Preprocessor {
         self.define_simple_macro("DECIMAL_DIG", "36");
     }
 
-    /// Override RISC-V preprocessor macros based on -mabi= and -march= flags.
-    ///
-    /// The kernel uses `-mabi=lp64` (soft-float ABI) and `-march=rv64imac...`
-    /// (no F/D extensions). When these flags are set, we must adjust:
-    /// - Float ABI macros: `__riscv_float_abi_soft` vs `__riscv_float_abi_double`
-    /// - `__riscv_flen`: only defined when FPU is available
-    /// - Extension macros: `__riscv_f`, `__riscv_d`, `__riscv_fdiv`, `__riscv_fsqrt`
-    pub fn set_riscv_abi(&mut self, abi: &str) {
-        match abi {
-            "lp64" => {
-                // Soft-float ABI (no FPU registers for argument passing).
-                // Undefine double-float macros and define soft-float.
-                self.macros.undefine("__riscv_float_abi_double");
-                self.macros.undefine("__riscv_flen");
-                self.macros.undefine("__riscv_fdiv");
-                self.macros.undefine("__riscv_fsqrt");
-                self.define_simple_macro("__riscv_float_abi_soft", "1");
-            }
-            "lp64f" => {
-                // Single-float ABI.
-                self.macros.undefine("__riscv_float_abi_double");
-                self.define_simple_macro("__riscv_float_abi_single", "1");
-                self.define_simple_macro("__riscv_flen", "32");
-            }
-            "lp64d" => {
-                // Double-float ABI (default) - macros already set by set_target.
-            }
-            _ => {
-                // Unknown ABI value - leave defaults (lp64d) in place.
-                // This covers ilp32* ABIs and any future additions.
-            }
-        }
-    }
-
-    /// Override RISC-V extension macros based on -march= flag.
-    ///
-    /// The kernel uses -march=rv64imac... (no F/D extensions). When the march
-    /// string doesn't contain 'f' or 'd' (or 'g' which implies both), we must
-    /// remove F/D extension macros that set_target unconditionally defines.
-    pub fn set_riscv_march(&mut self, march: &str) {
-        // Extract the base ISA string (strip rv32/rv64 prefix for extension parsing).
-        let exts = if let Some(rest) = march.strip_prefix("rv64") {
-            rest
-        } else if let Some(rest) = march.strip_prefix("rv32") {
-            rest
-        } else {
-            march
-        };
-        // 'g' = imafd, so check for 'g' as well.
-        // NOTE: This simple character check may false-positive on sub-extension names
-        // (e.g., 'f' in "zifencei"). In practice, kernel -march strings use the
-        // underscore-separated format (rv64imac_zicsr_zifencei) where single-letter
-        // extensions precede the first underscore, so this heuristic works correctly.
-        let has_f = exts.contains('f') || exts.contains('g');
-        let has_d = exts.contains('d') || exts.contains('g');
-
-        if !has_f {
-            self.macros.undefine("__riscv_f");
-            self.macros.undefine("__riscv_fdiv");
-            self.macros.undefine("__riscv_fsqrt");
-        }
-        if !has_d {
-            self.macros.undefine("__riscv_d");
-        }
-        if !has_f && !has_d {
-            self.macros.undefine("__riscv_flen");
-        }
-    }
 }

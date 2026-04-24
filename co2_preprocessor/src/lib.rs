@@ -8,10 +8,18 @@ use std::sync::{
 };
 
 use chumsky::span::Span as _;
-pub mod common;
-pub mod frontend;
+mod builtin_macros;
+mod conditionals;
+mod expr_eval;
+mod includes;
+mod macro_defs;
+mod pipeline;
+mod pragmas;
+mod predefined_macros;
+mod text_processing;
+mod utils;
 
-use frontend::preprocessor::pipeline::Preprocessor;
+use pipeline::Preprocessor;
 use co2_ast::FileId;
 use co2_ast::{Rich, Span, SourceMap};
 
@@ -158,8 +166,8 @@ pub fn preprocess(input: &Path, cpp_args: &[String]) -> PreprocessedSource {
     let mut preprocessor = Preprocessor::new();
     configure_preprocessor(&mut preprocessor, &input, cpp_args);
 
-    let input_bytes = fs::read(&input).expect("failed to read C input for preprocessing");
-    let input_source = rewrite_main_source_for_preprocess(&common::encoding::bytes_to_string(input_bytes));
+    let input_bytes = fs::read_to_string(&input).expect("failed to read C input for preprocessing");
+    let input_source = rewrite_main_source_for_preprocess(&input_bytes);
     let preprocessed = preprocessor.preprocess(&input_source);
     let source = build_preprocessed_source(&input, preprocessed);
     emit_preprocessor_diagnostics(&source, preprocessor.warnings(), preprocessor.errors());
@@ -168,8 +176,8 @@ pub fn preprocess(input: &Path, cpp_args: &[String]) -> PreprocessedSource {
 
 fn emit_preprocessor_diagnostics(
     preprocessed: &PreprocessedSource,
-    warnings: &[frontend::preprocessor::pipeline::PreprocessorDiagnostic],
-    errors: &[frontend::preprocessor::pipeline::PreprocessorDiagnostic],
+    warnings: &[pipeline::PreprocessorDiagnostic],
+    errors: &[pipeline::PreprocessorDiagnostic],
 ) {
     if warnings.is_empty() && errors.is_empty() {
         return;
@@ -202,7 +210,7 @@ fn emit_preprocessor_diagnostics(
 
 fn map_preprocessor_diagnostics(
     preprocessed: &PreprocessedSource,
-    diagnostics: &[frontend::preprocessor::pipeline::PreprocessorDiagnostic],
+    diagnostics: &[pipeline::PreprocessorDiagnostic],
 ) -> Vec<Rich<'static, String, Span>> {
     diagnostics
         .iter()
@@ -212,7 +220,7 @@ fn map_preprocessor_diagnostics(
 
 fn preprocessor_diagnostic_span(
     preprocessed: &PreprocessedSource,
-    diagnostic: &frontend::preprocessor::pipeline::PreprocessorDiagnostic,
+    diagnostic: &pipeline::PreprocessorDiagnostic,
 ) -> Span {
     let wanted_path = absolute_path(Path::new(&diagnostic.file));
     let Some((file_id, file)) = preprocessed
@@ -279,9 +287,8 @@ mod tests {
 
         let mut preprocessor = Preprocessor::new();
         configure_preprocessor(&mut preprocessor, &input, &[]);
-        let input_bytes = fs::read(&input).unwrap();
         let input_source =
-            rewrite_main_source_for_preprocess(&common::encoding::bytes_to_string(input_bytes));
+            rewrite_main_source_for_preprocess(&fs::read_to_string(&input).unwrap());
         let preprocessed = preprocessor.preprocess(&input_source);
         let source = build_preprocessed_source(&input, preprocessed);
         let diagnostics = map_preprocessor_diagnostics(&source, preprocessor.warnings());
@@ -323,11 +330,10 @@ fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_arg
                 i += 1;
                 let include_path = cpp_args.get(i).expect("missing -include value");
                 let resolved = resolve_force_include(input, include_path);
-                let content = common::encoding::bytes_to_string(
-                    fs::read(&resolved).unwrap_or_else(|e| {
+                let content = 
+                    fs::read_to_string(&resolved).unwrap_or_else(|e| {
                         panic!("failed to read force include {}: {e}", resolved.display())
-                    }),
-                );
+                    });
                 preprocessor.preprocess_force_include(&content, &resolved.to_string_lossy());
             }
             "-isystem" => {
@@ -480,9 +486,8 @@ fn ensure_source_file(
         return idx;
     }
 
-    let source = common::encoding::bytes_to_string(
-        fs::read(path).unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display())),
-    );
+    let source = 
+        fs::read_to_string(path).unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display()));
     let idx = global_file_id(path);
     files.insert(idx, SourceFile {
         path: path.to_path_buf(),

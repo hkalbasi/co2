@@ -314,17 +314,7 @@ impl Preprocessor {
     }
 
     /// Check if a builtin function name is supported by this compiler.
-    /// Delegates to the sema builtin registry (BUILTIN_MAP + atomic builtins)
-    /// and adds a few names handled as special syntax rather than function calls.
     pub(super) fn is_supported_builtin(name: &str) -> bool {
-        // Check the canonical builtin registry (covers BUILTIN_MAP, __builtin_choose_expr,
-        // __builtin_unreachable, __builtin_trap, and all __atomic_*/__sync_* builtins)
-        if crate::frontend::sema::builtins::is_builtin(name) {
-            return true;
-        }
-        // These are handled as special syntax (dedicated AST nodes or parser keywords)
-        // rather than through the normal builtin function call path, so they are not
-        // in the sema builtin registry but are still supported.
         matches!(name,
             "__builtin_va_arg" |              // Special token (BuiltinVaArg)
             "__builtin_types_compatible_p" |  // Special AST node (BuiltinTypesCompatibleP)

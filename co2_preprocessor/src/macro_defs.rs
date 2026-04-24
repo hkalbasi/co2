@@ -13,8 +13,7 @@
 //! literals are copied verbatim without interpretation.
 
 use std::cell::Cell;
-
-use crate::common::fx_hash::{FxHashMap, FxHashSet};
+use std::collections::{HashMap, HashSet};
 
 use super::utils::{
     is_ident_start_byte, is_ident_cont_byte, bytes_to_str,
@@ -105,36 +104,19 @@ fn strip_blue_paint(s: &str) -> std::borrow::Cow<'_, str> {
 /// Stores all macro definitions and handles expansion.
 #[derive(Debug, Clone)]
 pub struct MacroTable {
-    macros: FxHashMap<String, MacroDef>,
+    macros: HashMap<String, MacroDef>,
     /// Counter for the __COUNTER__ built-in macro. Increments on each expansion.
     counter: Cell<usize>,
     /// Cached __LINE__ value. Updated by set_line(), expanded specially in expand_text.
     line_value: Cell<usize>,
-    /// Collects names of macros expanded during the current expand_line_reuse() call.
-    /// Used by the preprocessor to build macro expansion metadata for diagnostics
-    /// ("in expansion of macro 'X'" notes). Wrapped in RefCell because expansion
-    /// methods take &self.
-    expanded_macros: std::cell::RefCell<Vec<String>>,
-    /// Whether to track macro expansions (disabled by default for performance;
-    /// enabled by the preprocessor for the main expansion pass).
-    track_expansions: Cell<bool>,
-    /// Assembly preprocessing mode: when true, '$' is NOT treated as an identifier
-    /// character during macro expansion. In AT&T assembly syntax, '$' is the
-    /// immediate operand prefix (e.g., `$UNIX64_RET_LAST`), not part of the
-    /// identifier. Without this, `$FOO` is tokenized as one identifier and the
-    /// macro `FOO` is never expanded.
-    pub(super) asm_mode: bool,
 }
 
 impl MacroTable {
     pub fn new() -> Self {
         Self {
-            macros: FxHashMap::default(),
+            macros: HashMap::new(),
             counter: Cell::new(0),
             line_value: Cell::new(1),
-            expanded_macros: std::cell::RefCell::new(Vec::new()),
-            track_expansions: Cell::new(false),
-            asm_mode: false,
         }
     }
 
@@ -160,12 +142,6 @@ impl MacroTable {
             || name == "__has_extension"
             || name == "__has_include"
             || name == "__has_include_next"
-    }
-
-    /// Iterate over all macro definitions.
-    /// Used by -dM (dump defines) to enumerate all predefined and user-defined macros.
-    pub fn iter(&self) -> impl Iterator<Item = &MacroDef> {
-        self.macros.values()
     }
 
     /// Get a macro definition.
@@ -204,35 +180,19 @@ impl MacroTable {
         self.macros.get("__FILE__").map(|m| m.body.as_str())
     }
 
-    /// Enable or disable macro expansion tracking.
-    /// When enabled, expand_line_reuse() records which macros were expanded,
-    /// retrievable via take_expanded_macros().
-    pub fn set_track_expansions(&self, enabled: bool) {
-        self.track_expansions.set(enabled);
-    }
-
-    /// Take the list of macro names expanded during the last expand_line_reuse() call.
-    /// Returns an empty Vec if tracking is disabled or no macros were expanded.
-    pub fn take_expanded_macros(&self) -> Vec<String> {
-        std::mem::take(&mut *self.expanded_macros.borrow_mut())
-    }
-
     /// Expand macros in a line of text.
     /// Returns the expanded text.
     pub fn expand_line(&self, line: &str) -> String {
-        let mut expanding = FxHashSet::default();
+        let mut expanding = HashSet::new();
         self.expand_line_reuse(line, &mut expanding)
     }
 
     /// Expand macros in a line of text, reusing the provided `expanding` set.
-    /// The set is cleared before use. This avoids allocating a new FxHashSet
+    /// The set is cleared before use. This avoids allocating a new HashSet
     /// for every line (the previous per-line allocation was a measurable
     /// overhead when preprocessing kernel headers with thousands of lines).
-    pub fn expand_line_reuse(&self, line: &str, expanding: &mut FxHashSet<String>) -> String {
+    pub fn expand_line_reuse(&self, line: &str, expanding: &mut HashSet<String>) -> String {
         expanding.clear();
-        if self.track_expansions.get() {
-            self.expanded_macros.borrow_mut().clear();
-        }
         let result = self.expand_text(line, expanding);
         // Strip internal marker bytes from the final output:
         // - 0x01 (BLUE_PAINT_MARKER): prevents re-expansion per C11 §6.10.3.4
@@ -282,7 +242,7 @@ impl MacroTable {
         mut expanded: String,
         bytes: &[u8],
         mut i: usize,
-        expanding: &mut FxHashSet<String>,
+        expanding: &mut HashSet<String>,
     ) -> (String, usize) {
         let len = bytes.len();
         loop {
@@ -324,7 +284,7 @@ impl MacroTable {
         expanded: &str,
         bytes: &[u8],
         i: usize,
-        expanding: &mut FxHashSet<String>,
+        expanding: &mut HashSet<String>,
     ) -> Option<(String, usize)> {
         let len = bytes.len();
         let expanded_trimmed = expanded.trim();
@@ -359,7 +319,7 @@ impl MacroTable {
     /// currently being expanded to prevent infinite recursion.
     ///
     /// Operates on bytes for performance: avoids allocating Vec<char>.
-    fn expand_text(&self, text: &str, expanding: &mut FxHashSet<String>) -> String {
+    fn expand_text(&self, text: &str, expanding: &mut HashSet<String>) -> String {
         let mut result = String::with_capacity(text.len());
         let bytes = text.as_bytes();
         let len = bytes.len();
@@ -372,7 +332,7 @@ impl MacroTable {
                 i = copy_literal_bytes_to_string(bytes, i, b, &mut result);
             } else if b == BLUE_PAINT_MARKER {
                 i = Self::copy_blue_painted(bytes, i, &mut result);
-            } else if is_ident_start_byte(b) && !(self.asm_mode && b == b'$') {
+            } else if is_ident_start_byte(b) {
                 i = self.expand_identifier(text, bytes, i, &mut result, expanding);
             } else if b == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
                 i = Self::copy_block_comment(bytes, i, &mut result);
@@ -389,7 +349,7 @@ impl MacroTable {
                 while i < len {
                     let c = bytes[i];
                     if c == b'"' || c == b'\'' || c == BLUE_PAINT_MARKER
-                        || (is_ident_start_byte(c) && !(self.asm_mode && c == b'$'))
+                        || is_ident_start_byte(c)
                         || (c == b'/' && i + 1 < len && (bytes[i + 1] == b'*' || bytes[i + 1] == b'/'))
                         || c.is_ascii_digit()
                         || (c == b'.' && i + 1 < len && bytes[i + 1].is_ascii_digit())
@@ -427,7 +387,7 @@ impl MacroTable {
 
     /// Process an identifier: expand macros, handle builtins, or copy verbatim.
     fn expand_identifier(&self, text: &str, bytes: &[u8], start: usize,
-                         result: &mut String, expanding: &mut FxHashSet<String>) -> usize {
+                         result: &mut String, expanding: &mut HashSet<String>) -> usize {
         let len = bytes.len();
         let mut i = start + 1;
         while i < len && is_ident_cont_byte(bytes[i]) {
@@ -534,11 +494,7 @@ impl MacroTable {
     /// Expand a macro invocation (function-like or object-like).
     fn expand_macro_invocation(&self, _text: &str, bytes: &[u8], i: usize, ident: &str,
                                mac: &MacroDef, result: &mut String,
-                               expanding: &mut FxHashSet<String>) -> usize {
-        // Record this macro expansion for diagnostic tracing
-        if self.track_expansions.get() {
-            self.expanded_macros.borrow_mut().push(ident.to_string());
-        }
+                               expanding: &mut HashSet<String>) -> usize {
         let len = bytes.len();
         if mac.is_function_like {
             let mut j = i;
@@ -728,7 +684,7 @@ impl MacroTable {
         &self,
         mac: &MacroDef,
         args: &[String],
-        expanding: &mut FxHashSet<String>,
+        expanding: &mut HashSet<String>,
     ) -> (String, bool) {
         // Step 1-2: Prescan - expand ALL arguments (C11 §6.10.3.1).
         // Per the standard, arguments adjacent to # or ## use the RAW (unexpanded)

@@ -5,7 +5,7 @@
 //! live in `predefined_macros`, pragma handling in `pragmas`, and text
 //! processing (comment stripping, line joining) in `text_processing`.
 
-use crate::common::fx_hash::{FxHashMap, FxHashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -14,18 +14,6 @@ use super::conditionals::{ConditionalStack, evaluate_condition};
 use super::builtin_macros::define_builtin_macros;
 use super::utils::{is_ident_start, is_ident_cont};
 use super::text_processing::{strip_line_comment, split_first_word};
-
-/// Deduplicate a list of macro names, preserving order (first occurrence wins).
-/// Used to remove duplicate names from nested macro expansions.
-fn dedup_macro_names(names: Vec<String>) -> Vec<String> {
-    let mut unique = Vec::new();
-    for name in names {
-        if !unique.contains(&name) {
-            unique.push(name);
-        }
-    }
-    unique
-}
 
 /// Maximum number of newlines to accumulate while joining lines for unbalanced
 /// parentheses in macro arguments. Prevents runaway accumulation when a source
@@ -65,21 +53,17 @@ pub struct Preprocessor {
     pub(super) quote_include_paths: Vec<PathBuf>,
     /// System include paths explicitly added (from -isystem flags)
     pub(super) isystem_include_paths: Vec<PathBuf>,
-    /// After include paths (from -idirafter flags), searched last
-    pub(super) after_include_paths: Vec<PathBuf>,
     /// System include paths (default search paths)
     pub(super) system_include_paths: Vec<PathBuf>,
     /// Files currently being processed (for recursion detection)
     pub(super) include_stack: Vec<PathBuf>,
     /// Files that have been included with #pragma once
-    pub(super) pragma_once_files: FxHashSet<PathBuf>,
-    /// Whether to actually resolve includes (can be disabled for testing)
-    pub(super) resolve_includes: bool,
+    pub(super) pragma_once_files: HashSet<PathBuf>,
     /// Declarations to inject into the output (from #include processing).
     pub(super) pending_injections: Vec<String>,
     /// Stack for #pragma push_macro / pop_macro.
     /// Maps macro name -> stack of saved definitions (None = was undefined).
-    pub(super) macro_save_stack: FxHashMap<String, Vec<Option<MacroDef>>>,
+    pub(super) macro_save_stack: HashMap<String, Vec<Option<MacroDef>>>,
     /// Line offset set by #line directive: effective_line = line_offset + (source_line - line_offset_base)
     /// When None, no #line has been issued and __LINE__ uses the source line directly.
     line_override: Option<(usize, usize)>, // (target_line, source_line_at_directive)
@@ -99,7 +83,7 @@ pub struct Preprocessor {
     /// multiple locations with the same include search path configuration.
     /// The current_dir_key is the parent directory of the including file for quoted
     /// includes (since resolution depends on it), or empty for system includes.
-    pub(super) include_resolve_cache: FxHashMap<(String, bool, PathBuf), Option<PathBuf>>,
+    pub(super) include_resolve_cache: HashMap<(String, bool, PathBuf), Option<PathBuf>>,
     /// Include guard detection: maps file paths to their guard macro names.
     ///
     /// After preprocessing an included file, we scan the raw source to detect if
@@ -111,14 +95,10 @@ pub struct Preprocessor {
     ///
     /// On subsequent #include of the same file, if the guard macro is still defined,
     /// we skip re-processing entirely (same optimization as GCC/Clang).
-    pub(super) include_guard_macros: FxHashMap<PathBuf, String>,
-    /// Reusable FxHashSet for directive-level macro expansion (handle_if, handle_elif,
-    /// handle_line_directive, #error). Avoids allocating a new FxHashSet per directive.
-    directive_expanding: FxHashSet<String>,
-    /// Macro expansion metadata: maps preprocessed output line numbers to
-    /// the macros expanded on that line. Populated during preprocessing and
-    /// passed to the SourceManager for diagnostic rendering.
-    macro_expansion_info: Vec<crate::common::source::MacroExpansionInfo>,
+    pub(super) include_guard_macros: HashMap<PathBuf, String>,
+    /// Reusable set for directive-level macro expansion (handle_if, handle_elif,
+    /// handle_line_directive, #error). Avoids allocating a new set per directive.
+    directive_expanding: HashSet<String>,
 }
 
 impl Preprocessor {
@@ -133,21 +113,18 @@ impl Preprocessor {
             include_paths: Vec::new(),
             quote_include_paths: Vec::new(),
             isystem_include_paths: Vec::new(),
-            after_include_paths: Vec::new(),
             system_include_paths: Self::default_system_include_paths(),
             include_stack: Vec::new(),
-            pragma_once_files: FxHashSet::default(),
-            resolve_includes: true,
+            pragma_once_files: HashSet::new(),
             pending_injections: Vec::new(),
-            macro_save_stack: FxHashMap::default(),
+            macro_save_stack: HashMap::new(),
             line_override: None,
             weak_pragmas: Vec::new(),
             redefine_extname_pragmas: Vec::new(),
             force_include_output: String::new(),
-            include_resolve_cache: FxHashMap::default(),
-            include_guard_macros: FxHashMap::default(),
-            directive_expanding: FxHashSet::default(),
-            macro_expansion_info: Vec::new(),
+            include_resolve_cache: HashMap::new(),
+            include_guard_macros: HashMap::new(),
+            directive_expanding: HashSet::new(),
         };
         pp.define_predefined_macros();
         define_builtin_macros(&mut pp.macros);
@@ -161,25 +138,16 @@ impl Preprocessor {
         let line_marker = format!("# 1 \"{}\"\n", self.filename);
         let main_output = self.preprocess_source(source, false);
         // Prepend any output from force-included files (e.g., pragma synthetic tokens)
-        let (result, prefix_lines) = if self.force_include_output.is_empty() {
-            let prefix_lines = line_marker.as_bytes().iter().filter(|&&b| b == b'\n').count() as u32;
+        let result = if self.force_include_output.is_empty() {
             let mut result = line_marker;
             result.push_str(&main_output);
-            (result, prefix_lines)
+            result
         } else {
             let mut result = std::mem::take(&mut self.force_include_output);
             result.push_str(&line_marker);
-            let prefix_lines = result.as_bytes().iter().filter(|&&b| b == b'\n').count() as u32;
             result.push_str(&main_output);
-            (result, prefix_lines)
+            result
         };
-        // Adjust macro expansion line numbers to account for prepended content
-        // (line markers, force-include output) that shifts all line numbers.
-        if prefix_lines > 0 {
-            for info in &mut self.macro_expansion_info {
-                info.pp_line += prefix_lines;
-            }
-        }
         result
     }
 
@@ -220,21 +188,11 @@ impl Preprocessor {
         let mut pending_line = String::new();
         let mut pending_newlines: usize = 0;
 
-        // Track current line number in the preprocessed output for macro expansion metadata.
-        // Incremented whenever a newline is appended to the output string.
-        let mut pp_output_line: u32 = 0;
-
-        // Reusable FxHashSet for macro expansion, avoiding per-line allocation.
+        // Reusable set for macro expansion, avoiding per-line allocation.
         // This set tracks which macros are currently being expanded (to prevent
         // infinite recursion per C11 §6.10.3.4). It's cleared before each use
         // by expand_line_reuse().
-        let mut expanding = crate::common::fx_hash::FxHashSet::default();
-
-        // Enable macro expansion tracking for diagnostic "in expansion of macro" notes.
-        // Only track at top level (not within included files) to avoid duplicate entries.
-        if !is_include {
-            self.macros.set_track_expansions(true);
-        }
+        let mut expanding = HashSet::new();
 
         for (line_num, line) in source.lines().enumerate() {
             let trimmed = line.trim();
@@ -342,7 +300,6 @@ impl Preprocessor {
                 // that was active when those tokens were encountered, not the definition
                 // (or lack thereof) after the directive. Per C standard, directives take
                 // effect for tokens that follow them, not tokens that precede them.
-                let output_len_before_directive = output.len();
                 if !pending_line.is_empty() && !is_include {
                     let after_hash = trimmed[1..].trim_start();
                     if after_hash.starts_with("define") || after_hash.starts_with("undef") {
@@ -396,46 +353,20 @@ impl Preprocessor {
                     } else {
                         output.push('\n');
                     }
-                    // Update pp_output_line for directive path
-                    let added = &output.as_bytes()[output_len_before_directive..];
-                    pp_output_line += added.iter().filter(|&&b| b == b'\n').count() as u32;
                 }
             } else if self.conditionals.is_active() {
                 // Regular line (or directive during include with pending line) -
                 // expand macros, handling multi-line macro invocations
-                let output_len_before = output.len();
                 self.accumulate_and_expand(
                     line, &mut pending_line, &mut pending_newlines, &mut output,
                     &mut expanding,
                 );
-                // Collect macro expansion info for diagnostics.
-                // If expansion added content to the output, check if macros were used.
-                if !is_include && output.len() > output_len_before {
-                    let expanded_names = self.macros.take_expanded_macros();
-                    if !expanded_names.is_empty() {
-                        let unique_names = dedup_macro_names(expanded_names);
-                        self.macro_expansion_info.push(
-                            crate::common::source::MacroExpansionInfo {
-                                pp_line: pp_output_line,
-                                macro_names: unique_names,
-                            }
-                        );
-                    }
-                }
-                // Update pp_output_line by counting newlines in the newly added content
-                if !is_include {
-                    let added = &output.as_bytes()[output_len_before..];
-                    pp_output_line += added.iter().filter(|&&b| b == b'\n').count() as u32;
-                }
             } else {
                 // Inactive conditional block - skip the line but preserve numbering
                 if !pending_line.is_empty() {
                     pending_newlines += 1;
                 } else {
                     output.push('\n');
-                    if !is_include {
-                        pp_output_line += 1;
-                    }
                 }
             }
         }
@@ -445,24 +376,6 @@ impl Preprocessor {
             let expanded = self.macros.expand_line_reuse(&pending_line, &mut expanding);
             output.push_str(&expanded);
             output.push('\n');
-            // Collect macro expansion info for the flushed line
-            if !is_include {
-                let expanded_names = self.macros.take_expanded_macros();
-                if !expanded_names.is_empty() {
-                    let unique_names = dedup_macro_names(expanded_names);
-                    self.macro_expansion_info.push(
-                        crate::common::source::MacroExpansionInfo {
-                            pp_line: pp_output_line,
-                            macro_names: unique_names,
-                        }
-                    );
-                }
-            }
-        }
-
-        // Disable macro expansion tracking
-        if !is_include {
-            self.macros.set_track_expansions(false);
         }
 
         // Restore conditional stack and line override for included files
@@ -480,7 +393,7 @@ impl Preprocessor {
     /// and expand when complete. This is the shared logic for both preprocess
     /// paths, avoiding the previous duplication of ~40 lines.
     ///
-    /// The `expanding` parameter is a reusable FxHashSet that avoids per-line
+    /// The `expanding` parameter is a reusable set that avoids per-line
     /// allocation for macro expansion tracking.
     fn accumulate_and_expand(
         &self,
@@ -488,7 +401,7 @@ impl Preprocessor {
         pending_line: &mut String,
         pending_newlines: &mut usize,
         output: &mut String,
-        expanding: &mut crate::common::fx_hash::FxHashSet<String>,
+        expanding: &mut HashSet<String>,
     ) {
         if pending_line.is_empty() {
             if Self::has_unbalanced_parens(line) {
@@ -603,13 +516,6 @@ impl Preprocessor {
         }
     }
 
-    /// Enable assembly preprocessing mode. In this mode, '$' is not treated
-    /// as an identifier character during macro expansion, so that AT&T assembly
-    /// immediates like `$MACRO_NAME` correctly expand the macro.
-    pub fn set_asm_mode(&mut self, asm_mode: bool) {
-        self.macros.asm_mode = asm_mode;
-    }
-
     /// Set the filename for __FILE__ and __BASE_FILE__ macros and set as the base include directory.
     pub fn set_filename(&mut self, filename: &str) {
         self.filename = filename.to_string();
@@ -652,38 +558,6 @@ impl Preprocessor {
             .unwrap_or_else(|| self.filename.clone())
     }
 
-    /// Take macro expansion metadata collected during preprocessing.
-    /// This metadata maps preprocessed output line numbers to the macros
-    /// that were expanded on each line, for use in diagnostic rendering.
-    pub fn take_macro_expansion_info(&mut self) -> Vec<crate::common::source::MacroExpansionInfo> {
-        std::mem::take(&mut self.macro_expansion_info)
-    }
-
-    /// Dump all macro definitions in GCC `-dM` format.
-    ///
-    /// Returns a string with one `#define` per line for every currently-defined
-    /// macro, sorted alphabetically. Function-like macros include their parameter
-    /// lists. This output is used by build systems like Meson to detect compiler
-    /// features via preprocessor defines (e.g., `__GNUC__`, `__GNUC_MINOR__`).
-    pub fn dump_defines(&self) -> String {
-        let mut defs: Vec<String> = self.macros.iter().map(|def| {
-            if def.is_function_like {
-                let params = def.params.join(",");
-                if def.body.is_empty() {
-                    format!("#define {}({})", def.name, params)
-                } else {
-                    format!("#define {}({}) {}", def.name, params, def.body)
-                }
-            } else if def.body.is_empty() {
-                format!("#define {}", def.name)
-            } else {
-                format!("#define {} {}", def.name, def.body)
-            }
-        }).collect();
-        defs.sort();
-        defs.join("\n")
-    }
-
     /// Define a macro from a command-line -D flag.
     /// Takes a name and value (e.g., name="FOO", value="1").
     pub fn define_macro(&mut self, name: &str, value: &str) {
@@ -719,12 +593,6 @@ impl Preprocessor {
     /// These paths are searched after -I paths, before default system paths.
     pub fn add_system_include_path(&mut self, path: &str) {
         self.isystem_include_paths.push(PathBuf::from(path));
-    }
-
-    /// Add an after include path (-idirafter flag).
-    /// These paths are searched last, after all other include paths.
-    pub fn add_after_include_path(&mut self, path: &str) {
-        self.after_include_paths.push(PathBuf::from(path));
     }
 
     /// Process a force-included file (-include flag). This preprocesses the file content
@@ -964,5 +832,3 @@ impl Default for Preprocessor {
         Self::new()
     }
 }
-
-

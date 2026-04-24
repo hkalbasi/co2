@@ -208,12 +208,9 @@ fn strip_inline_comments<'a>(line: &'a str, in_block_comment: &mut bool) -> std:
     std::borrow::Cow::Owned(result)
 }
 
-/// Read a C source file, tolerating non-UTF-8 content.
-/// Valid UTF-8 files are returned as-is. Non-UTF-8 bytes are encoded as PUA
-/// code points which the lexer decodes back to raw bytes.
+/// Read a UTF-8 C source file.
 fn read_c_source_file(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    Ok(crate::common::encoding::bytes_to_string(bytes))
+    std::fs::read_to_string(path)
 }
 
 /// Make a path absolute without resolving symlinks.
@@ -340,13 +337,6 @@ impl Preprocessor {
         // (e.g., stdarg.h's va_start/va_end, stdbool.h's true/false).
         // These use compiler builtins and should always be available.
         self.inject_builtin_macros_for_header(&include_path);
-
-        if !self.resolve_includes {
-            // When not resolving includes, inject all fallback declarations
-            // since we won't have any real headers to provide them.
-            self.inject_fallback_declarations_for_header(&include_path);
-            return None;
-        }
 
         // Resolve the include path to an actual file
         if let Some(resolved_path) = self.resolve_include_path(&include_path, is_system) {
@@ -479,10 +469,6 @@ impl Preprocessor {
             include_path
         };
 
-        if !self.resolve_includes {
-            return None;
-        }
-
         // Get the current file path for include_next resolution
         let current_file = self.include_stack.last().cloned();
 
@@ -552,12 +538,11 @@ impl Preprocessor {
     /// `current_file` is the full path to the file containing the #include_next.
     pub(super) fn resolve_include_next_path(&self, include_path: &str, current_file: Option<&PathBuf>) -> Option<PathBuf> {
         // Collect all search paths in order:
-        // -iquote -> -I -> -isystem -> default system -> -idirafter
+        // -iquote -> -I -> -isystem -> default system
         let all_paths: Vec<&Path> = self.quote_include_paths.iter()
             .chain(self.include_paths.iter())
             .chain(self.isystem_include_paths.iter())
             .chain(self.system_include_paths.iter())
-            .chain(self.after_include_paths.iter())
             .map(|p| p.as_path())
             .collect();
 
@@ -648,13 +633,11 @@ impl Preprocessor {
         //   3. -I paths
         //   4. -isystem paths
         //   5. Default system paths
-        //   6. -idirafter paths
         //
         // For system includes (#include <...>), search in this order:
         //   1. -I paths
         //   2. -isystem paths
         //   3. Default system paths
-        //   4. -idirafter paths
 
         if !is_system {
             // Step 1: Search relative to the current file's directory
@@ -709,14 +692,6 @@ impl Preprocessor {
             }
         }
 
-        // Step 6: Search -idirafter paths
-        for dir in &self.after_include_paths {
-            let candidate = dir.join(include_path);
-            if candidate.is_file() {
-                return Some(make_absolute(&candidate));
-            }
-        }
-
         None
     }
 
@@ -728,7 +703,7 @@ impl Preprocessor {
         match header {
             "stdbool.h" => {
                 // Define true/false macros only when stdbool.h is explicitly included
-                crate::frontend::preprocessor::builtin_macros::define_stdbool_true_false(&mut self.macros);
+                crate::builtin_macros::define_stdbool_true_false(&mut self.macros);
             }
             "complex.h" => {
                 // C99 <complex.h> support - define standard complex macros
