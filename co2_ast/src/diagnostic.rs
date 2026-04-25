@@ -244,7 +244,7 @@ fn emit_json_diagnostic(
             "message": e.to_string(),
             "code": null,
             "level": level.json_level(),
-            "spans": [json_span_unadjusted(&mapped.file_name, &mapped.source, range, true, Some(e.reason().to_string()))],
+            "spans": [json_span(&mapped.file_name, range, true, Some(e.reason().to_string()))],
             "children": [],
             "rendered": null,
         });
@@ -255,7 +255,6 @@ fn emit_json_diagnostic(
     let range = safe_range(*e.span(), src.len());
     let mut spans = vec![json_span(
         filename,
-        src,
         range.clone(),
         true,
         Some(e.reason().to_string()),
@@ -263,7 +262,6 @@ fn emit_json_diagnostic(
     spans.extend(e.contexts().map(|(label, span)| {
         json_span(
             filename,
-            src,
             safe_range(*span, src.len()),
             false,
             Some(format!("while parsing this {label}")),
@@ -284,21 +282,14 @@ fn emit_json_diagnostic(
 
 fn json_span(
     filename: &str,
-    src: &str,
     range: std::ops::Range<usize>,
     is_primary: bool,
     label: Option<String>,
 ) -> serde_json::Value {
-    let (line_start, column_start) = byte_to_line_col(src, range.start);
-    let (line_end, column_end) = byte_to_line_col(src, range.end);
     json!({
         "file_name": filename,
         "byte_start": range.start,
         "byte_end": range.end,
-        "line_start": line_start,
-        "line_end": line_end,
-        "column_start": column_start,
-        "column_end": column_end,
         "is_primary": is_primary,
         "text": [],
         "label": label,
@@ -306,16 +297,6 @@ fn json_span(
         "suggestion_applicability": null,
         "expansion": null,
     })
-}
-
-fn json_span_unadjusted(
-    filename: &str,
-    src: &str,
-    range: std::ops::Range<usize>,
-    is_primary: bool,
-    label: Option<String>,
-) -> serde_json::Value {
-    json_span(filename, src, range, is_primary, label)
 }
 
 fn get_diagnostic_info(span: Span) -> Option<DiagnosticSpan> {
@@ -328,15 +309,4 @@ fn get_diagnostic_info(span: Span) -> Option<DiagnosticSpan> {
         start: span.start,
         end: span.end,
     })
-}
-
-fn byte_to_line_col(src: &str, byte_idx: usize) -> (usize, usize) {
-    let clamped = byte_idx.min(src.len());
-    let prefix = &src[..clamped];
-    let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
-    let col = prefix
-        .rsplit_once('\n')
-        .map(|(_, tail)| tail.chars().count() + 1)
-        .unwrap_or_else(|| prefix.chars().count() + 1);
-    (line, col)
 }

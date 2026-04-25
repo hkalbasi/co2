@@ -112,8 +112,6 @@ pub struct MacroTable {
     macros: HashMap<String, MacroDef>,
     /// Counter for the __COUNTER__ built-in macro. Increments on each expansion.
     counter: Cell<usize>,
-    /// Cached __LINE__ value. Updated by set_line(), expanded specially in expand_text.
-    line_value: Cell<usize>,
 }
 
 impl MacroTable {
@@ -121,7 +119,6 @@ impl MacroTable {
         Self {
             macros: HashMap::new(),
             counter: Cell::new(0),
-            line_value: Cell::new(1),
         }
     }
 
@@ -152,12 +149,6 @@ impl MacroTable {
     /// Get a macro definition.
     pub fn get(&self, name: &str) -> Option<&MacroDef> {
         self.macros.get(name)
-    }
-
-    /// Set the current __LINE__ value without allocating a MacroDef.
-    /// This avoids per-line allocation of MacroDef { name: "__LINE__", ... }.
-    pub fn set_line(&self, line: usize) {
-        self.line_value.set(line);
     }
 
     /// Set the __FILE__ macro body without allocating a full MacroDef.
@@ -450,11 +441,11 @@ impl MacroTable {
             return i;
         }
 
-        // Handle __LINE__ built-in
+        // Byte-only preprocessor mode does not track display rows.
+        // Keep __LINE__ parseable for system macros like assert by folding it
+        // to a stable constant instead of carrying line-number state.
         if ident == "__LINE__" {
-            let val = self.line_value.get();
-            let mut buf = itoa::Buffer::new();
-            result.push_str(buf.format(val));
+            result.push('0');
             return i;
         }
 
@@ -1471,7 +1462,7 @@ pub fn parse_define(line: &str) -> Option<MacroDef> {
 }
 
 /// Inline integer-to-string formatting buffer.
-/// Avoids heap allocation for small integers (which __LINE__, __COUNTER__ produce).
+/// Avoids heap allocation for small integers (which __COUNTER__ produces).
 mod itoa {
     pub struct Buffer {
         bytes: [u8; 20], // enough for u64::MAX

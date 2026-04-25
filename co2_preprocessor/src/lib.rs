@@ -21,23 +21,23 @@ mod utils;
 
 use co2_ast::FileId;
 use co2_ast::{Rich, SourceMap, Span};
-use pipeline::Preprocessor;
+use pipeline::{PreprocessOutput, Preprocessor};
 
 #[derive(Clone, Debug)]
 pub struct SourceFile {
     pub path: PathBuf,
     pub source: Arc<str>,
-    line_offsets: Arc<Vec<usize>>,
 }
 
 #[derive(Clone, Debug)]
-struct OutputLineMap {
+struct OutputChunkMap {
     file_idx: FileId,
-    raw_line: Arc<str>,
-    normalized_line: Arc<str>,
-    source_logical_line: Arc<str>,
-    source_byte_boundaries: Arc<Vec<usize>>,
-    source_range: Range<usize>,
+    raw_chunk: Arc<str>,
+    normalized_chunk: Arc<str>,
+    normalized_to_raw: Arc<Vec<usize>>,
+    source_chunk: Arc<str>,
+    source_boundaries: Arc<Vec<usize>>,
+    output_range: Range<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -60,8 +60,9 @@ pub struct PreprocessedSource {
     pub normalized: Arc<str>,
     pub main_file_idx: FileId,
     files: Arc<HashMap<FileId, SourceFile>>,
-    output_lines: Arc<Vec<OutputLineMap>>,
-    normalized_line_offsets: Arc<Vec<usize>>,
+    output_chunks: Arc<Vec<OutputChunkMap>>,
+    chunk_offsets: Arc<Vec<usize>>,
+    main_rewrite_boundaries: Arc<Vec<usize>>,
 }
 
 impl PreprocessedSource {
@@ -71,22 +72,21 @@ impl PreprocessedSource {
 
     pub fn real_span(&self, start: usize, end: usize) -> co2_ast::Span {
         let end_lookup = if end > start { end - 1 } else { end };
-        let start_line_idx = line_index_for_offset(&self.normalized_line_offsets, start);
-        let end_line_idx = line_index_for_offset(&self.normalized_line_offsets, end_lookup);
-        if let Some(start_line_idx) = start_line_idx
-            && let Some(end_line_idx) = end_line_idx
-            && start_line_idx == end_line_idx
-            && let Some(line) = self.output_lines.get(start_line_idx)
+        let start_chunk_idx = chunk_index_for_offset(&self.chunk_offsets, start);
+        let end_chunk_idx = chunk_index_for_offset(&self.chunk_offsets, end_lookup);
+        if let Some(start_chunk_idx) = start_chunk_idx
+            && let Some(end_chunk_idx) = end_chunk_idx
+            && start_chunk_idx == end_chunk_idx
+            && let Some(chunk) = self.output_chunks.get(start_chunk_idx)
         {
-            let output_line_start = self.normalized_line_offsets[start_line_idx];
-            let mapped = line.normalized_range_to_source(
-                start.saturating_sub(output_line_start),
-                end.saturating_sub(output_line_start),
+            let mapped = chunk.normalized_range_to_source(
+                start.saturating_sub(chunk.output_range.start),
+                end.saturating_sub(chunk.output_range.start),
             );
             return co2_ast::Span {
                 start: mapped.start,
                 end: mapped.end,
-                context: line.file_idx,
+                context: chunk.file_idx,
             };
         }
 
@@ -120,76 +120,72 @@ impl PreprocessedSource {
     }
 
     fn map_offset(&self, output_offset: usize) -> Option<MappedSpan> {
-        let line_idx = line_index_for_offset(&self.normalized_line_offsets, output_offset)?;
-        let line = self.output_lines.get(line_idx)?;
-        let output_line_start = *self.normalized_line_offsets.get(line_idx)?;
-        let output_col = output_offset.saturating_sub(output_line_start);
-        let mapped = line.normalized_offset_to_source(output_col);
+        let chunk_idx = chunk_index_for_offset(&self.chunk_offsets, output_offset)?;
+        let chunk = self.output_chunks.get(chunk_idx)?;
+        let mapped = chunk
+            .normalized_offset_to_source(output_offset.saturating_sub(chunk.output_range.start));
         Some(MappedSpan {
-            file_idx: line.file_idx,
+            file_idx: chunk.file_idx,
             start: mapped,
             end: mapped,
         })
     }
 }
 
-impl OutputLineMap {
+impl OutputChunkMap {
     fn normalized_offset_to_source(&self, normalized_offset: usize) -> usize {
-        let raw_offset = if self.normalized_line.as_ref() == self.raw_line.as_ref() {
-            normalized_offset.min(self.raw_line.len())
+        let raw_offset = self
+            .normalized_to_raw
+            .get(normalized_offset.min(self.normalized_chunk.len()))
+            .copied()
+            .unwrap_or(self.raw_chunk.len());
+        let source_offset = if self.raw_chunk.as_ref() == self.source_chunk.as_ref() {
+            raw_offset.min(self.source_chunk.len())
         } else {
-            map_column(
-                self.raw_line.as_ref(),
-                self.normalized_line.as_ref(),
-                normalized_offset,
-            )
-        };
-        let logical_offset = if self.raw_line.as_ref() == self.source_logical_line.as_ref() {
-            raw_offset.min(self.source_logical_line.len())
-        } else {
-            map_column(
-                self.source_logical_line.as_ref(),
-                self.raw_line.as_ref(),
+            map_text_offset(
+                self.source_chunk.as_ref(),
+                self.raw_chunk.as_ref(),
                 raw_offset,
             )
         };
-        self.source_boundary(logical_offset)
+        self.source_boundary(source_offset)
     }
 
     fn normalized_range_to_source(&self, start: usize, end: usize) -> Range<usize> {
-        let start = start.min(self.normalized_line.len());
-        let end = end.min(self.normalized_line.len()).max(start);
-        let raw_range = if self.normalized_line.as_ref() == self.raw_line.as_ref() {
-            start.min(self.raw_line.len())..end.min(self.raw_line.len())
+        let start = start.min(self.normalized_chunk.len());
+        let end = end.min(self.normalized_chunk.len()).max(start);
+        let raw_range = if self.normalized_chunk.as_ref() == self.raw_chunk.as_ref() {
+            start.min(self.raw_chunk.len())..end.min(self.raw_chunk.len())
         } else {
-            map_range(
-                self.raw_line.as_ref(),
-                self.normalized_line.as_ref(),
-                start,
-                end,
-            )
+            self.normalized_offset_to_raw(start)..self.normalized_offset_to_raw(end)
         };
-        let logical_range = if self.raw_line.as_ref() == self.source_logical_line.as_ref() {
-            raw_range.start.min(self.source_logical_line.len())
-                ..raw_range.end.min(self.source_logical_line.len())
+        let source_range = if self.raw_chunk.as_ref() == self.source_chunk.as_ref() {
+            raw_range.start.min(self.source_chunk.len())..raw_range.end.min(self.source_chunk.len())
         } else {
-            map_range(
-                self.source_logical_line.as_ref(),
-                self.raw_line.as_ref(),
+            map_text_range(
+                self.source_chunk.as_ref(),
+                self.raw_chunk.as_ref(),
                 raw_range.start,
                 raw_range.end,
             )
         };
-        let start = self.source_boundary(logical_range.start);
-        let end = self.source_boundary(logical_range.end).max(start);
+        let start = self.source_boundary(source_range.start);
+        let end = self.source_boundary(source_range.end).max(start);
         start..end
     }
 
-    fn source_boundary(&self, logical_offset: usize) -> usize {
-        self.source_byte_boundaries
-            .get(logical_offset.min(self.source_logical_line.len()))
+    fn normalized_offset_to_raw(&self, offset: usize) -> usize {
+        self.normalized_to_raw
+            .get(offset.min(self.normalized_chunk.len()))
             .copied()
-            .unwrap_or(self.source_range.end)
+            .unwrap_or(self.raw_chunk.len())
+    }
+
+    fn source_boundary(&self, source_offset: usize) -> usize {
+        self.source_boundaries
+            .get(source_offset.min(self.source_chunk.len()))
+            .copied()
+            .unwrap_or(*self.source_boundaries.last().unwrap_or(&0))
     }
 }
 
@@ -210,8 +206,8 @@ pub fn preprocess(input: &Path, cpp_args: &[String]) -> PreprocessedSource {
 
     let input_bytes = fs::read_to_string(&input).expect("failed to read C input for preprocessing");
     let input_source = rewrite_main_source_for_preprocess(&input_bytes);
-    let preprocessed = preprocessor.preprocess(&input_source);
-    let source = build_preprocessed_source(&input, preprocessed);
+    let preprocessed = preprocessor.preprocess(&input_source.text);
+    let source = build_preprocessed_source(&input, preprocessed, &input_source.boundaries);
     emit_preprocessor_diagnostics(&source, preprocessor.warnings(), preprocessor.errors());
     source
 }
@@ -273,39 +269,34 @@ fn preprocessor_diagnostic_span(
         return Span::new(preprocessed.main_file_idx, 0..0);
     };
 
-    let source_line = if *file_id == preprocessed.main_file_idx {
-        diagnostic.line.saturating_sub(2)
+    let remap: &[usize] = if *file_id == preprocessed.main_file_idx {
+        preprocessed.main_rewrite_boundaries.as_ref()
     } else {
-        diagnostic.line.saturating_sub(1)
+        &[]
     };
-    let Some(line_range) = line_range(file, source_line) else {
-        return Span::new(*file_id, 0..0);
-    };
-
-    let line = &file.source[line_range.clone()];
-    let start_in_line = diagnostic.col.saturating_sub(1).min(line.len());
-    let start = line_range.start + start_in_line;
-    let end = line
-        .get(start_in_line..)
-        .and_then(first_preprocessor_token_len)
-        .map(|len| start + len)
-        .unwrap_or(start);
-    let end = if end == start && start < line_range.end {
-        start + 1
+    let start = if remap.is_empty() {
+        diagnostic.range.start
     } else {
-        end
-    };
-
-    Span::new(*file_id, start..end.min(line_range.end))
-}
-
-fn first_preprocessor_token_len(src: &str) -> Option<usize> {
-    let len = src
-        .char_indices()
-        .take_while(|(_, ch)| !ch.is_whitespace())
-        .last()
-        .map(|(idx, ch)| idx + ch.len_utf8())?;
-    Some(len)
+        remap
+            .get(diagnostic.range.start)
+            .copied()
+            .unwrap_or(*remap.last().unwrap_or(&0))
+    }
+    .min(file.source.len());
+    let mut end = if remap.is_empty() {
+        diagnostic.range.end
+    } else {
+        remap
+            .get(diagnostic.range.end)
+            .copied()
+            .unwrap_or(*remap.last().unwrap_or(&0))
+    }
+    .min(file.source.len())
+    .max(start);
+    if end == start && start < file.source.len() {
+        end += 1;
+    }
+    Span::new(*file_id, start..end)
 }
 
 #[cfg(test)]
@@ -334,8 +325,8 @@ mod tests {
         let mut preprocessor = Preprocessor::new();
         configure_preprocessor(&mut preprocessor, &input, &[]);
         let input_source = rewrite_main_source_for_preprocess(&fs::read_to_string(&input).unwrap());
-        let preprocessed = preprocessor.preprocess(&input_source);
-        let source = build_preprocessed_source(&input, preprocessed);
+        let preprocessed = preprocessor.preprocess(&input_source.text);
+        let source = build_preprocessed_source(&input, preprocessed, &input_source.boundaries);
         let diagnostics = map_preprocessor_diagnostics(&source, preprocessor.warnings());
 
         assert_eq!(diagnostics.len(), 1);
@@ -468,46 +459,54 @@ fn resolve_force_include(input: &Path, include: &str) -> PathBuf {
     absolute_path(&input.parent().unwrap_or_else(|| Path::new(".")).join(path))
 }
 
-fn build_preprocessed_source(input: &Path, preprocessed: String) -> PreprocessedSource {
+fn build_preprocessed_source(
+    input: &Path,
+    preprocessed: PreprocessOutput,
+    main_rewrite_boundaries: &[usize],
+) -> PreprocessedSource {
     let mut files = HashMap::<FileId, SourceFile>::new();
     let mut file_index = HashMap::<PathBuf, FileId>::new();
     let main_file_idx = ensure_source_file(input, &mut files, &mut file_index);
 
     let mut normalized = String::new();
-    let mut output_lines = Vec::new();
-    let mut current_file = input.to_path_buf();
-    let mut current_line = 1usize;
+    let mut output_chunks = Vec::new();
+    let mut chunk_offsets = Vec::new();
 
-    for line in preprocessed.lines() {
-        if let Some((path, line_no)) = parse_line_marker(line) {
-            current_file = absolutize_marker_path(input, path);
-            current_line = line_no;
-            ensure_source_file(&current_file, &mut files, &mut file_index);
+    for mut chunk in preprocessed.chunks {
+        if chunk.file == input {
+            chunk.source_boundaries = chunk
+                .source_boundaries
+                .into_iter()
+                .map(|offset| {
+                    main_rewrite_boundaries
+                        .get(offset)
+                        .copied()
+                        .unwrap_or(*main_rewrite_boundaries.last().unwrap_or(&0))
+                })
+                .collect();
+        }
+        let file_idx = ensure_source_file(&chunk.file, &mut files, &mut file_index);
+        let mapped = if should_skip_file_contents(&chunk.file) {
+            keep_newlines_only(&chunk.raw)
+        } else {
+            normalize_preprocessed_chunk(&chunk.raw)
+        };
+        if mapped.text.is_empty() {
             continue;
         }
-
-        let normalized_line = if should_skip_file_contents(&current_file) {
-            String::new()
-        } else if line.trim_start().starts_with('#') {
-            String::new()
-        } else {
-            normalize_preprocessed_line(line)
-        };
-        normalized.push_str(&normalized_line);
-        normalized.push('\n');
-
-        let file_idx = ensure_source_file(&current_file, &mut files, &mut file_index);
-        let source_line_idx = mapped_source_line_index(input, &current_file, current_line);
-        let source_projection = project_source_logical_line(&files[&file_idx], source_line_idx);
-        output_lines.push(OutputLineMap {
+        let output_start = normalized.len();
+        normalized.push_str(&mapped.text);
+        let output_end = normalized.len();
+        chunk_offsets.push(output_start);
+        output_chunks.push(OutputChunkMap {
             file_idx,
-            raw_line: Arc::<str>::from(line),
-            normalized_line: Arc::<str>::from(normalized_line),
-            source_logical_line: Arc::<str>::from(source_projection.text),
-            source_byte_boundaries: Arc::new(source_projection.boundaries),
-            source_range: source_projection.source_range,
+            raw_chunk: Arc::<str>::from(chunk.raw),
+            normalized_chunk: Arc::<str>::from(mapped.text),
+            normalized_to_raw: Arc::new(mapped.boundaries),
+            source_chunk: Arc::<str>::from(chunk.source_text),
+            source_boundaries: Arc::new(chunk.source_boundaries),
+            output_range: output_start..output_end,
         });
-        current_line += 1;
     }
 
     if let Some(path) = std::env::var_os("CO2_DUMP_PREPROCESSED") {
@@ -515,11 +514,12 @@ fn build_preprocessed_source(input: &Path, preprocessed: String) -> Preprocessed
     }
 
     PreprocessedSource {
-        normalized_line_offsets: Arc::new(compute_line_offsets(&normalized)),
         normalized: Arc::<str>::from(normalized),
         main_file_idx,
         files: Arc::new(files),
-        output_lines: Arc::new(output_lines),
+        output_chunks: Arc::new(output_chunks),
+        chunk_offsets: Arc::new(chunk_offsets),
+        main_rewrite_boundaries: Arc::new(main_rewrite_boundaries.to_vec()),
     }
 }
 
@@ -539,7 +539,6 @@ fn ensure_source_file(
         idx,
         SourceFile {
             path: path.to_path_buf(),
-            line_offsets: Arc::new(compute_line_offsets(&source)),
             source: Arc::<str>::from(source),
         },
     );
@@ -573,37 +572,65 @@ fn absolute_path(path: &Path) -> PathBuf {
         .join(path)
 }
 
-fn absolutize_marker_path(main_input: &Path, path: &str) -> PathBuf {
-    let marker = PathBuf::from(path);
-    if marker.is_absolute() {
-        return marker;
-    }
-    let cwd_resolved = absolute_path(&marker);
-    if cwd_resolved.exists() {
-        return cwd_resolved;
-    }
-    let main_input = absolute_path(main_input);
-    main_input
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(marker)
-}
+fn rewrite_main_source_for_preprocess(source: &str) -> MappedText {
+    let prefix = "#define __CO2__ 1\n";
+    let mut rewritten = String::from(prefix);
+    let mut boundaries = vec![0; prefix.len() + 1];
+    let mut line_start = 0usize;
 
-fn rewrite_main_source_for_preprocess(source: &str) -> String {
-    let mut rewritten = String::from("#define __CO2__ 1\n");
-    for line in source.lines() {
+    for raw_line in source.split_inclusive('\n') {
+        let has_newline = raw_line.ends_with('\n');
+        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let line_end = line_start + line.len();
         if line.trim_start().starts_with('#') {
-            rewritten.push_str(
-                &line
-                    .replace("__GNUC__", "__CO2_HIDDEN_GNUC__")
-                    .replace("__clang__", "__CO2_HIDDEN_CLANG__"),
-            );
+            rewrite_hidden_macros_in_directive(line, line_start, &mut rewritten, &mut boundaries);
         } else {
             rewritten.push_str(line);
+            for idx in line_start + 1..=line_end {
+                boundaries.push(idx);
+            }
         }
-        rewritten.push('\n');
+        if has_newline {
+            rewritten.push('\n');
+            boundaries.push(line_end + 1);
+        }
+        line_start += raw_line.len();
     }
-    rewritten
+
+    MappedText {
+        text: rewritten,
+        boundaries,
+    }
+}
+
+fn rewrite_hidden_macros_in_directive(
+    line: &str,
+    absolute_start: usize,
+    rewritten: &mut String,
+    boundaries: &mut Vec<usize>,
+) {
+    let mut i = 0usize;
+    while i < line.len() {
+        let replacement = if line[i..].starts_with("__GNUC__") {
+            Some(("__CO2_HIDDEN_GNUC__", "__GNUC__".len()))
+        } else if line[i..].starts_with("__clang__") {
+            Some(("__CO2_HIDDEN_CLANG__", "__clang__".len()))
+        } else {
+            None
+        };
+        if let Some((replacement, consumed)) = replacement {
+            rewritten.push_str(replacement);
+            boundaries.extend(std::iter::repeat_n(
+                absolute_start + i + consumed,
+                replacement.len(),
+            ));
+            i += consumed;
+        } else {
+            rewritten.push(line.as_bytes()[i] as char);
+            i += 1;
+            boundaries.push(absolute_start + i);
+        }
+    }
 }
 
 fn should_skip_file_contents(path: &Path) -> bool {
@@ -613,134 +640,32 @@ fn should_skip_file_contents(path: &Path) -> bool {
     )
 }
 
-fn mapped_source_line_index(main_input: &Path, current_file: &Path, current_line: usize) -> usize {
-    if current_file == main_input {
-        current_line.saturating_sub(2)
-    } else {
-        current_line.saturating_sub(1)
-    }
-}
-
-fn parse_line_marker(line: &str) -> Option<(&str, usize)> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('#') {
-        return None;
-    }
-    let rest = trimmed[1..].trim_start();
-    let digits_len = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
-    if digits_len == 0 {
-        return None;
-    }
-    let line_no = rest[..digits_len].parse().ok()?;
-    let rest = rest[digits_len..].trim_start();
-    let rest = rest.strip_prefix('"')?;
-    let end_quote = rest.find('"')?;
-    Some((&rest[..end_quote], line_no))
-}
-
-fn normalize_preprocessed_line(line: &str) -> String {
-    let line = strip_gnu_attributes(line);
-    let line = strip_gnu_asm_annotations(&line);
-    let line = replace_gnu_typeof_with_usize(&line);
-    strip_extension_keywords(&line)
-}
-
 #[derive(Debug)]
-struct SourceLogicalLineProjection {
+struct MappedText {
     text: String,
     boundaries: Vec<usize>,
-    source_range: Range<usize>,
 }
 
-fn project_source_logical_line(
-    file: &SourceFile,
-    source_line_idx: usize,
-) -> SourceLogicalLineProjection {
-    let Some(source_range) = line_range(file, source_line_idx) else {
-        return SourceLogicalLineProjection {
-            text: String::new(),
-            boundaries: vec![file.source.len()],
-            source_range: file.source.len()..file.source.len(),
-        };
-    };
-    let bytes = file.source.as_bytes();
-    let len = bytes.len();
-    let mut out = Vec::new();
-    let mut boundaries = vec![source_range.start];
-    let mut i = source_range.start;
-    let mut end = source_range.start;
+fn normalize_preprocessed_chunk(chunk: &str) -> MappedText {
+    let chunk = strip_gnu_attributes_mapped(chunk);
+    let chunk = strip_gnu_asm_annotations_mapped(&chunk);
+    let chunk = replace_gnu_typeof_with_usize_mapped(&chunk);
+    strip_extension_keywords_mapped(&chunk)
+}
 
-    while i < len {
-        match bytes[i] {
-            b'"' | b'\'' => {
-                let next = utils::skip_literal_bytes(bytes, i, bytes[i]).min(len);
-                for idx in i..next {
-                    out.push(bytes[idx]);
-                    boundaries.push(idx + 1);
-                }
-                end = next;
-                i = next;
-            }
-            b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
-                i += 2;
-                while i < len {
-                    if i + 1 < len && bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-                out.push(b' ');
-                boundaries.push(i.min(len));
-                end = i.min(len);
-            }
-            b'/' if i + 1 < len && bytes[i + 1] == b'/' => {
-                while i < len && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                end = i.min(len);
-                break;
-            }
-            b'\\' if let Some(next) = continued_line_end(bytes, i) => {
-                i = next;
-                end = next.min(len);
-            }
-            b'\n' => {
-                end = i;
-                break;
-            }
-            _ => {
-                out.push(bytes[i]);
-                i += 1;
-                boundaries.push(i);
-                end = i;
-            }
+fn keep_newlines_only(chunk: &str) -> MappedText {
+    let mut text = String::new();
+    let mut boundaries = vec![0];
+    for (idx, byte) in chunk.bytes().enumerate() {
+        if byte == b'\n' {
+            text.push('\n');
+            boundaries.push(idx + 1);
         }
     }
-
-    SourceLogicalLineProjection {
-        text: String::from_utf8(out).expect("source logical line must stay utf-8"),
-        boundaries,
-        source_range: source_range.start..end.max(source_range.start),
-    }
+    MappedText { text, boundaries }
 }
 
-fn continued_line_end(bytes: &[u8], start: usize) -> Option<usize> {
-    if bytes.get(start) != Some(&b'\\') {
-        return None;
-    }
-    let mut i = start + 1;
-    while let Some(byte) = bytes.get(i) {
-        if matches!(byte, b' ' | b'\t' | b'\r') {
-            i += 1;
-            continue;
-        }
-        return (*byte == b'\n').then_some(i + 1);
-    }
-    None
-}
-
-fn line_index_for_offset(offsets: &[usize], offset: usize) -> Option<usize> {
+fn chunk_index_for_offset(offsets: &[usize], offset: usize) -> Option<usize> {
     if offsets.is_empty() {
         return None;
     }
@@ -750,55 +675,41 @@ fn line_index_for_offset(offsets: &[usize], offset: usize) -> Option<usize> {
     }
 }
 
-fn line_range(file: &SourceFile, line_idx: usize) -> Option<Range<usize>> {
-    let start = *file.line_offsets.get(line_idx)?;
-    let end = if let Some(next) = file.line_offsets.get(line_idx + 1) {
-        next.saturating_sub(1)
-    } else {
-        file.source.len()
-    };
-    Some(start..end)
-}
-
-fn map_column(source_line: &str, normalized_line: &str, output_col: usize) -> usize {
-    let output_col = output_col.min(normalized_line.len());
-    let span_end = expand_token_end(normalized_line, output_col);
-    let span_start = shrink_token_start(normalized_line, output_col, span_end);
-    let needle = normalized_line
-        .get(span_start..span_end)
-        .unwrap_or("")
-        .trim();
+fn map_text_offset(source_text: &str, mapped_text: &str, output_offset: usize) -> usize {
+    let output_offset = output_offset.min(mapped_text.len());
+    let span_end = expand_token_end(mapped_text, output_offset);
+    let span_start = shrink_token_start(mapped_text, output_offset, span_end);
+    let needle = mapped_text.get(span_start..span_end).unwrap_or("").trim();
     if !needle.is_empty() {
-        let mut matches = source_line.match_indices(needle);
+        let mut matches = source_text.match_indices(needle);
         if let Some((idx, _)) = matches.next() {
             if matches.next().is_none() {
-                return idx + output_col.saturating_sub(span_start);
+                return idx + output_offset.saturating_sub(span_start);
             }
         }
     }
-
-    output_col.min(source_line.len())
+    output_offset.min(source_text.len())
 }
 
-fn map_range(
-    source_line: &str,
-    normalized_line: &str,
+fn map_text_range(
+    source_text: &str,
+    mapped_text: &str,
     output_start: usize,
     output_end: usize,
 ) -> Range<usize> {
-    let output_start = output_start.min(normalized_line.len());
-    let output_end = output_end.min(normalized_line.len()).max(output_start);
+    let output_start = output_start.min(mapped_text.len());
+    let output_end = output_end.min(mapped_text.len()).max(output_start);
     if output_start == output_end {
-        let point = map_column(source_line, normalized_line, output_start);
+        let point = map_text_offset(source_text, mapped_text, output_start);
         return point..point;
     }
 
-    let needle = normalized_line
+    let needle = mapped_text
         .get(output_start..output_end)
         .unwrap_or("")
         .trim();
     if !needle.is_empty() {
-        let mut matches = source_line.match_indices(needle);
+        let mut matches = source_text.match_indices(needle);
         if let Some((idx, _)) = matches.next() {
             if matches.next().is_none() {
                 return idx..(idx + needle.len());
@@ -806,11 +717,11 @@ fn map_range(
         }
     }
 
-    source_token_range(source_line, output_start, output_end)
+    source_token_range(source_text, output_start, output_end)
 }
 
-fn source_token_range(source_line: &str, output_start: usize, output_end: usize) -> Range<usize> {
-    let bytes = source_line.as_bytes();
+fn source_token_range(source_text: &str, output_start: usize, output_end: usize) -> Range<usize> {
+    let bytes = source_text.as_bytes();
     if bytes.is_empty() {
         return 0..0;
     }
@@ -863,28 +774,25 @@ fn is_ident_continue(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-fn compute_line_offsets(content: &str) -> Vec<usize> {
-    let mut result = vec![0];
-    for (idx, b) in content.bytes().enumerate() {
-        if b == b'\n' {
-            result.push(idx + 1);
-        }
-    }
-    result
+fn strip_gnu_attributes_mapped(src: &str) -> MappedText {
+    strip_balanced_call_mapped(src, "__attribute__")
 }
 
-fn strip_gnu_attributes(src: &str) -> String {
-    strip_balanced_call(src, "__attribute__")
+fn strip_gnu_asm_annotations_mapped(src: &MappedText) -> MappedText {
+    let src = compose_boundaries(
+        strip_balanced_call_mapped(src.text.as_str(), "__asm__"),
+        &src.boundaries,
+    );
+    compose_boundaries(
+        strip_balanced_call_mapped(src.text.as_str(), "__asm"),
+        &src.boundaries,
+    )
 }
 
-fn strip_gnu_asm_annotations(src: &str) -> String {
-    let src = strip_balanced_call(src, "__asm__");
-    strip_balanced_call(&src, "__asm")
-}
-
-fn strip_balanced_call(src: &str, keyword: &str) -> String {
+fn strip_balanced_call_mapped(src: &str, keyword: &str) -> MappedText {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
+    let mut boundaries = vec![0];
     let mut i = 0usize;
     while i < bytes.len() {
         if src[i..].starts_with(keyword) {
@@ -909,26 +817,48 @@ fn strip_balanced_call(src: &str, keyword: &str) -> String {
                     j += 1;
                 }
                 out.push(' ');
+                boundaries.push(j);
                 i = j;
                 continue;
             }
         }
         out.push(bytes[i] as char);
         i += 1;
+        boundaries.push(i);
     }
-    out
+    MappedText {
+        text: out,
+        boundaries,
+    }
 }
 
-fn replace_gnu_typeof_with_usize(src: &str) -> String {
-    let bytes = src.as_bytes();
-    let mut out = String::with_capacity(src.len());
+fn compose_boundaries(mapped: MappedText, prior: &[usize]) -> MappedText {
+    MappedText {
+        text: mapped.text,
+        boundaries: mapped
+            .boundaries
+            .into_iter()
+            .map(|offset| {
+                prior
+                    .get(offset)
+                    .copied()
+                    .unwrap_or(*prior.last().unwrap_or(&0))
+            })
+            .collect(),
+    }
+}
+
+fn replace_gnu_typeof_with_usize_mapped(src: &MappedText) -> MappedText {
+    let bytes = src.text.as_bytes();
+    let mut out = String::with_capacity(src.text.len());
+    let mut boundaries = vec![0];
     let mut i = 0usize;
     while i < bytes.len() {
-        let kw_len = if src[i..].starts_with("__typeof__") {
+        let kw_len = if src.text[i..].starts_with("__typeof__") {
             Some("__typeof__".len())
-        } else if src[i..].starts_with("__typeof") {
+        } else if src.text[i..].starts_with("__typeof") {
             Some("__typeof".len())
-        } else if src[i..].starts_with("typeof") {
+        } else if src.text[i..].starts_with("typeof") {
             Some("typeof".len())
         } else {
             None
@@ -955,26 +885,34 @@ fn replace_gnu_typeof_with_usize(src: &str) -> String {
                     j += 1;
                 }
                 out.push_str("usize");
+                boundaries.extend(std::iter::repeat_n(j, "usize".len()));
                 i = j;
                 continue;
             }
         }
         out.push(bytes[i] as char);
         i += 1;
+        boundaries.push(i);
     }
-    out
+    compose_boundaries(
+        MappedText {
+            text: out,
+            boundaries,
+        },
+        &src.boundaries,
+    )
 }
 
-fn strip_extension_keywords(src: &str) -> String {
+fn strip_extension_keywords_mapped(src: &MappedText) -> MappedText {
     fn is_ident_start(b: u8) -> bool {
         b.is_ascii_alphabetic() || b == b'_'
     }
     fn is_ident_continue_local(b: u8) -> bool {
         b.is_ascii_alphanumeric() || b == b'_'
     }
-
-    let bytes = src.as_bytes();
-    let mut out = String::with_capacity(src.len());
+    let bytes = src.text.as_bytes();
+    let mut out = String::with_capacity(src.text.len());
+    let mut boundaries = vec![0];
     let mut i = 0usize;
     while i < bytes.len() {
         if is_ident_start(bytes[i]) {
@@ -983,7 +921,7 @@ fn strip_extension_keywords(src: &str) -> String {
             while i < bytes.len() && is_ident_continue_local(bytes[i]) {
                 i += 1;
             }
-            let ident = &src[start..i];
+            let ident = &src.text[start..i];
             if matches!(
                 ident,
                 "__extension__"
@@ -995,13 +933,24 @@ fn strip_extension_keywords(src: &str) -> String {
                     | "_Noreturn"
             ) {
                 out.push(' ');
+                boundaries.push(i);
             } else {
                 out.push_str(ident);
+                for offset in (start + 1)..=i {
+                    boundaries.push(offset);
+                }
             }
         } else {
             out.push(bytes[i] as char);
             i += 1;
+            boundaries.push(i);
         }
     }
-    out
+    compose_boundaries(
+        MappedText {
+            text: out,
+            boundaries,
+        },
+        &src.boundaries,
+    )
 }

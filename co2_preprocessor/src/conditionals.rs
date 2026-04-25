@@ -9,11 +9,13 @@
 //! directly from byte spans using `bytes_to_str()`, eliminating intermediate
 //! String allocations.
 
+use std::ops::Range;
+
 use super::macro_defs::MacroTable;
 use super::utils::{bytes_to_str, is_ident_cont_byte, is_ident_start_byte};
 
 /// State of a single conditional (#if/#ifdef/#ifndef block).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ConditionalState {
     /// Whether any branch in this if/elif/else chain has been true
     any_branch_taken: bool,
@@ -21,8 +23,8 @@ struct ConditionalState {
     current_branch_active: bool,
     /// Whether the parent context is active
     parent_active: bool,
-    /// Line number and col where this conditional started (1-based)
-    position: (usize, usize),
+    /// Source byte range where this conditional started.
+    range: Range<usize>,
 }
 
 /// Tracks the stack of nested conditionals.
@@ -44,14 +46,14 @@ impl ConditionalStack {
     }
 
     /// Push a new #if/#ifdef/#ifndef.
-    pub fn push_if(&mut self, condition: bool, position: (usize, usize)) {
+    pub fn push_if(&mut self, condition: bool, range: Range<usize>) {
         let parent_active = self.is_active();
         let active = parent_active && condition;
         self.stack.push(ConditionalState {
             any_branch_taken: condition,
             current_branch_active: active,
             parent_active,
-            position,
+            range,
         });
     }
 
@@ -87,9 +89,8 @@ impl ConditionalStack {
         self.stack.pop();
     }
 
-    /// Returns the line number of the first unclosed conditional.
-    pub fn unclosed_line(&self) -> Option<(usize, usize)> {
-        self.stack.first().map(|s| s.position)
+    pub fn unclosed_range(&self) -> Option<Range<usize>> {
+        self.stack.first().map(|s| s.range.clone())
     }
 }
 

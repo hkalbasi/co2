@@ -239,16 +239,8 @@ pub(super) fn make_absolute(path: &Path) -> PathBuf {
     }
 }
 
-/// Format a path for use in `#line` directives.
-///
-/// GCC emits relative paths in `#line` directives when the file is under the
-/// current working directory, and absolute paths otherwise. We replicate this
-/// behavior because some build systems (notably Perl's `makedepend`) parse
-/// `#line` directives and add compilation recipes for `.c` dependencies that
-/// contain a `/` in their path. Using absolute paths would cause files like
-/// `vutil.c` (which is `#include`d from `util.c`) to match the pattern and
-/// generate a spurious inline recipe that overrides the correct `.c.o` rule.
-pub(super) fn format_path_for_line_directive(path: &Path) -> String {
+/// Format a path for diagnostics and `__FILE__`.
+pub(super) fn display_include_path(path: &Path) -> String {
     if let Ok(cwd) = std::env::current_dir() {
         if let Ok(relative) = path.strip_prefix(&cwd) {
             return relative.display().to_string();
@@ -302,16 +294,12 @@ fn normalize_include_path(path: String) -> String {
 }
 
 impl Preprocessor {
-    /// Handle #include directive. Returns the preprocessed content of the included file,
-    /// or None if the include couldn't be resolved (falls back to old behavior).
-    /// `line_num` is the 1-based source line and `col` is the 1-based column of `#`
-    /// for diagnostics.
+    /// Handle #include directive.
     pub(super) fn handle_include(
         &mut self,
         path: &str,
-        line_num: usize,
-        col: usize,
-    ) -> Option<String> {
+        range: std::ops::Range<usize>,
+    ) -> Option<super::pipeline::PreprocessOutput> {
         let path = path.trim();
 
         // Expand macros in include path (for computed includes)
@@ -352,14 +340,14 @@ impl Preprocessor {
         if let Some(resolved_path) = self.resolve_include_path(&include_path, is_system) {
             // Check for #pragma once
             if self.pragma_once_files.contains(&resolved_path) {
-                return Some(String::new());
+                return Some(super::pipeline::PreprocessOutput::default());
             }
 
             // Check for include guard: if this file has a known guard macro and
             // that macro is still defined, skip re-processing entirely.
             if let Some(guard) = self.include_guard_macros.get(&resolved_path) {
                 if self.macros.is_defined(guard) {
-                    return Some(String::new());
+                    return Some(super::pipeline::PreprocessOutput::default());
                 }
             }
 
@@ -374,7 +362,7 @@ impl Preprocessor {
                     .filter(|p| *p == &resolved_path)
                     .count();
                 if depth >= MAX_INCLUDE_DEPTH {
-                    return Some(String::new());
+                    return Some(super::pipeline::PreprocessOutput::default());
                 }
             }
 
@@ -389,19 +377,13 @@ impl Preprocessor {
                     // Push onto include stack
                     self.include_stack.push(resolved_path.clone());
 
-                    // Format path for line directive (relative when under cwd, matching GCC)
-                    let display_path = format_path_for_line_directive(&resolved_path);
+                    let display_path = display_include_path(&resolved_path);
 
                     // Update __FILE__ (uses set_file to avoid full MacroDef allocation)
                     let old_file = self.macros.get_file_body().map(|s| s.to_string());
                     self.macros.set_file(format!("\"{}\"", display_path));
 
-                    // Emit line marker for entering the included file
-                    // Flag 1 indicates entering a new include file (GCC convention)
-                    let mut result = format!("# 1 \"{}\" 1\n", display_path);
-
-                    // Preprocess the included content
-                    result.push_str(&self.preprocess_included(&content));
+                    let result = self.preprocess_included(&content);
 
                     // Restore __FILE__
                     if let Some(old) = old_file {
@@ -433,14 +415,9 @@ impl Preprocessor {
             // well-known standard headers so compilation can still proceed.
             self.inject_fallback_declarations_for_header(&include_path);
 
-            // Emit a fatal error with source location.
-            // Compute approximate column of the include path for better diagnostics.
-            // The include path token is at col (of '#') + len("include") + whitespace.
-            let include_path_col = col + "include ".len();
             self.errors.push(super::pipeline::PreprocessorDiagnostic {
                 file: self.current_file(),
-                line: line_num,
-                col: include_path_col,
+                range,
                 message: format!("{}: No such file or directory", include_path),
             });
             None
@@ -450,14 +427,11 @@ impl Preprocessor {
     /// Handle #include_next directive (GCC extension).
     /// Searches for the header starting from the next include path after the one
     /// that contained the current file.
-    /// `line_num` is the 1-based source line and `col` is the 1-based column of `#`
-    /// for diagnostics.
     pub(super) fn handle_include_next(
         &mut self,
         path: &str,
-        line_num: usize,
-        col: usize,
-    ) -> Option<String> {
+        range: std::ops::Range<usize>,
+    ) -> Option<super::pipeline::PreprocessOutput> {
         let path = path.trim();
 
         // Parse the include path
@@ -497,13 +471,13 @@ impl Preprocessor {
         {
             // Check for #pragma once
             if self.pragma_once_files.contains(&resolved_path) {
-                return Some(String::new());
+                return Some(super::pipeline::PreprocessOutput::default());
             }
 
             // Check for include guard
             if let Some(guard) = self.include_guard_macros.get(&resolved_path) {
                 if self.macros.is_defined(guard) {
-                    return Some(String::new());
+                    return Some(super::pipeline::PreprocessOutput::default());
                 }
             }
 
@@ -515,7 +489,7 @@ impl Preprocessor {
                     .filter(|p| *p == &resolved_path)
                     .count();
                 if depth >= MAX_INCLUDE_DEPTH {
-                    return Some(String::new());
+                    return Some(super::pipeline::PreprocessOutput::default());
                 }
             }
 
@@ -526,17 +500,12 @@ impl Preprocessor {
 
                     self.include_stack.push(resolved_path.clone());
 
-                    // Format path for line directive (relative when under cwd, matching GCC)
-                    let display_path = format_path_for_line_directive(&resolved_path);
+                    let display_path = display_include_path(&resolved_path);
 
                     let old_file = self.macros.get_file_body().map(|s| s.to_string());
                     self.macros.set_file(format!("\"{}\"", display_path));
 
-                    // Emit line marker for entering the included file
-                    // Flag 1 indicates entering a new include file (GCC convention)
-                    let mut result = format!("# 1 \"{}\" 1\n", display_path);
-
-                    result.push_str(&self.preprocess_included(&content));
+                    let result = self.preprocess_included(&content);
 
                     if let Some(old) = old_file {
                         self.macros.set_file(old);
@@ -554,7 +523,7 @@ impl Preprocessor {
             }
         } else {
             // Fall back to regular include if include_next can't find it
-            self.handle_include(path, line_num, col)
+            self.handle_include(path, range)
         }
     }
 

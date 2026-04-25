@@ -6,13 +6,13 @@
 //! processing (comment stripping, line joining) in `text_processing`.
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write;
+use std::ops::Range;
 use std::path::PathBuf;
 
 use super::builtin_macros::define_builtin_macros;
 use super::conditionals::{ConditionalStack, evaluate_condition};
 use super::macro_defs::{MacroDef, MacroTable, parse_define};
-use super::text_processing::{split_first_word, strip_line_comment};
+use super::text_processing::{LogicalSlice, split_first_word, strip_line_comment};
 use super::utils::{is_ident_cont, is_ident_start};
 
 /// Maximum number of newlines to accumulate while joining lines for unbalanced
@@ -22,21 +22,106 @@ use super::utils::{is_ident_cont, is_ident_start};
 /// has a single QLIT_QLIST() macro invocation spanning ~32000 lines).
 const MAX_PENDING_NEWLINES: usize = 100_000;
 
-/// A preprocessor diagnostic with source location information.
-///
-/// Stores the file name, line number, and column where the diagnostic was
-/// generated, enabling GCC-compatible `file:line:col: error:` / `file:line:col: warning:`
-/// output for `#error`, `#warning`, and missing `#include` errors.
 #[derive(Debug, Clone)]
 pub struct PreprocessorDiagnostic {
-    /// The source file where the diagnostic originated.
     pub file: String,
-    /// The 1-based line number in the source file.
-    pub line: usize,
-    /// The 1-based column number in the source file.
-    pub col: usize,
-    /// The diagnostic message text (e.g., `#error "bad config"`).
+    pub range: Range<usize>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PreprocessOutput {
+    pub(crate) chunks: Vec<PreprocessChunk>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreprocessChunk {
+    pub(crate) file: PathBuf,
+    pub(crate) raw: String,
+    pub(crate) source_text: String,
+    pub(crate) source_boundaries: Vec<usize>,
+}
+
+impl PreprocessOutput {
+    pub(crate) fn push(&mut self, chunk: PreprocessChunk) {
+        if !chunk.raw.is_empty() {
+            self.chunks.push(chunk);
+        }
+    }
+
+    pub(crate) fn append(&mut self, mut other: PreprocessOutput) {
+        self.chunks.append(&mut other.chunks);
+    }
+
+    pub(crate) fn is_blank(&self) -> bool {
+        self.chunks
+            .iter()
+            .all(|chunk| chunk.raw.chars().all(char::is_whitespace))
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct PendingExpansion {
+    text: String,
+    slices: Vec<LogicalSlice>,
+}
+
+impl PendingExpansion {
+    fn is_empty(&self) -> bool {
+        self.slices.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.text.clear();
+        self.slices.clear();
+    }
+
+    fn push(&mut self, slice: &LogicalSlice) {
+        if !self.text.is_empty() {
+            self.text.push('\n');
+        }
+        self.text.push_str(&slice.text);
+        self.slices.push(slice.clone());
+    }
+
+    fn push_gap(&mut self, slice: &LogicalSlice) {
+        if !self.text.is_empty() {
+            self.text.push('\n');
+        }
+        self.slices.push(LogicalSlice {
+            text: String::new(),
+            source_boundaries: vec![slice.source_offset(0)],
+            terminator: slice.terminator,
+        });
+    }
+
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    fn line_count(&self) -> usize {
+        self.slices.len()
+    }
+
+    fn joined_source(&self) -> (String, Vec<usize>) {
+        let mut text = String::new();
+        let mut boundaries = Vec::new();
+        for (idx, slice) in self.slices.iter().enumerate() {
+            if idx == 0 {
+                text.push_str(&slice.text);
+                boundaries.extend_from_slice(&slice.source_boundaries);
+                continue;
+            }
+            text.push('\n');
+            boundaries.push(self.slices[idx - 1].terminator);
+            text.push_str(&slice.text);
+            boundaries.extend_from_slice(&slice.source_boundaries[1..]);
+        }
+        if boundaries.is_empty() {
+            boundaries.push(0);
+        }
+        (text, boundaries)
+    }
 }
 
 pub struct Preprocessor {
@@ -64,9 +149,6 @@ pub struct Preprocessor {
     /// Stack for #pragma push_macro / pop_macro.
     /// Maps macro name -> stack of saved definitions (None = was undefined).
     pub(super) macro_save_stack: HashMap<String, Vec<Option<MacroDef>>>,
-    /// Line offset set by #line directive: effective_line = line_offset + (source_line - line_offset_base)
-    /// When None, no #line has been issued and __LINE__ uses the source line directly.
-    line_override: Option<(usize, usize)>, // (target_line, source_line_at_directive)
     /// #pragma weak directives: (symbol, optional_alias_target)
     /// - (symbol, None) means "mark symbol as weak"
     /// - (symbol, Some(target)) means "symbol is a weak alias for target"
@@ -76,7 +158,7 @@ pub struct Preprocessor {
     /// Accumulated output from force-included files (-include).
     /// Prepended to the main source's preprocessed output so that pragma
     /// synthetic tokens (e.g., visibility push/pop) take effect.
-    force_include_output: String,
+    force_include_output: PreprocessOutput,
     /// Cache for include path resolution.
     /// Maps (include_path, is_system, current_dir_key) to the resolved filesystem path.
     /// This avoids repeated `stat()` calls when the same header is included from
@@ -97,7 +179,7 @@ pub struct Preprocessor {
     /// we skip re-processing entirely (same optimization as GCC/Clang).
     pub(super) include_guard_macros: HashMap<PathBuf, String>,
     /// Reusable set for directive-level macro expansion (handle_if, handle_elif,
-    /// handle_line_directive, #error). Avoids allocating a new set per directive.
+    /// #error). Avoids allocating a new set per directive.
     directive_expanding: HashSet<String>,
 }
 
@@ -118,10 +200,9 @@ impl Preprocessor {
             pragma_once_files: HashSet::new(),
             pending_injections: Vec::new(),
             macro_save_stack: HashMap::new(),
-            line_override: None,
             weak_pragmas: Vec::new(),
             redefine_extname_pragmas: Vec::new(),
-            force_include_output: String::new(),
+            force_include_output: PreprocessOutput::default(),
             include_resolve_cache: HashMap::new(),
             include_guard_macros: HashMap::new(),
             directive_expanding: HashSet::new(),
@@ -131,105 +212,34 @@ impl Preprocessor {
         pp
     }
 
-    /// Process source code, expanding macros and handling conditionals.
-    /// Returns the preprocessed source with embedded line markers for source tracking.
-    pub fn preprocess(&mut self, source: &str) -> String {
-        // Emit initial line marker for the main file
-        let line_marker = format!("# 1 \"{}\"\n", self.filename);
+    pub fn preprocess(&mut self, source: &str) -> PreprocessOutput {
         let main_output = self.preprocess_source(source, false);
 
-        // Check for unclosed conditionals
-        if let Some((line, col)) = self.conditionals.unclosed_line() {
+        if let Some(range) = self.conditionals.unclosed_range() {
             self.errors.push(PreprocessorDiagnostic {
                 file: self.filename.clone(),
-                line,
-                col,
+                range,
                 message: "Unterminated conditional directive".to_string(),
             });
         }
 
-        // Prepend any output from force-included files (e.g., pragma synthetic tokens)
-        let result = if self.force_include_output.is_empty() {
-            let mut result = line_marker;
-            result.push_str(&main_output);
-            result
-        } else {
-            let mut result = std::mem::take(&mut self.force_include_output);
-            result.push_str(&line_marker);
-            result.push_str(&main_output);
-            result
-        };
+        let mut result = std::mem::take(&mut self.force_include_output);
+        result.append(main_output);
         result
     }
 
-    /// Process source code from an included file. Same pipeline as preprocess()
-    /// but saves/restores the conditional stack and skips pending_injections.
-    pub(super) fn preprocess_included(&mut self, source: &str) -> String {
+    pub(super) fn preprocess_included(&mut self, source: &str) -> PreprocessOutput {
         self.preprocess_source(source, true)
     }
 
-    /// Unified preprocessing pipeline for both top-level and included sources.
-    ///
-    /// When `is_include` is true:
-    /// - Saves and restores the conditional stack (each file gets its own)
-    /// - Does not emit pending_injections (those only apply to top-level)
-    /// - Only processes directives when no multi-line accumulation is pending
-    fn preprocess_source(&mut self, source: &str, is_include: bool) -> String {
-        // Per C standard (C11 5.1.1.2), translation phases are:
-        // Phase 2: Line splicing (backslash-newline removal)
-        // Phase 3: Comment replacement
-        // So we must join continued lines BEFORE stripping comments.
-        let source = self.join_continued_lines(source);
-        let (source, line_map) = Self::strip_block_comments(&source);
-        let mut output = String::with_capacity(source.len());
-
-        // For included files, save and reset the conditional stack and line override
-        let saved_conditionals = if is_include {
-            Some(std::mem::take(&mut self.conditionals))
-        } else {
-            None
-        };
-        let saved_line_override = if is_include {
-            self.line_override.take()
-        } else {
-            None
-        };
-
-        // Buffer for accumulating multi-line macro invocations
-        let mut pending_line = String::new();
-        let mut pending_start_source_line = None;
-        let mut pending_newlines: usize = 0;
-        let mut next_output_source_line = 0usize;
-
-        // Reusable set for macro expansion, avoiding per-line allocation.
-        // This set tracks which macros are currently being expanded (to prevent
-        // infinite recursion per C11 §6.10.3.4). It's cleared before each use
-        // by expand_line_reuse().
+    fn preprocess_source(&mut self, source: &str, is_include: bool) -> PreprocessOutput {
+        let mut output = PreprocessOutput::default();
+        let saved_conditionals = is_include.then(|| std::mem::take(&mut self.conditionals));
+        let mut pending = PendingExpansion::default();
         let mut expanding = HashSet::new();
 
-        for (line_num, line) in source.lines().enumerate() {
-            let trimmed = line.trim();
-
-            // Map output line number to original source line number using the
-            // line_map from comment stripping (accounts for removed newlines in
-            // block comments).
-            let source_line_num = line_map.get(line_num);
-
-            // Update __LINE__, accounting for any #line directive override
-            let effective_line =
-                if let Some((target_line, source_line_at_directive)) = self.line_override {
-                    // After #line N, __LINE__ = N + (current_source_line - source_line_of_directive)
-                    let offset = source_line_num.saturating_sub(source_line_at_directive);
-                    target_line + offset
-                } else {
-                    source_line_num + 1
-                };
-            self.macros.set_line(effective_line);
-
-            // Directive handling: #if/#ifdef/#ifndef/#elif/#else/#endif must always
-            // be processed regardless of pending multi-line accumulation. Other
-            // directives (#include, #define, etc.) are only processed when there's
-            // no pending line in included files.
+        for slice in Self::logical_slices(source) {
+            let trimmed = slice.text.trim();
             let is_directive = trimmed.starts_with('#');
             let is_conditional_directive = if is_directive {
                 let after_hash = trimmed[1..].trim_start();
@@ -240,400 +250,207 @@ impl Preprocessor {
             } else {
                 false
             };
-
-            // When we're accumulating a multi-line macro invocation (pending_line
-            // is non-empty) and hit a conditional directive, we must process the
-            // directive to update the conditional stack but NOT flush the pending
-            // line. The macro argument collection must continue across
-            // #ifdef/#endif boundaries. This handles cases like:
-            //   FOO(1, #ifdef BAR 2, #endif 3)
-            // where the #ifdef/#endif must be evaluated but the macro args keep
-            // accumulating until the closing ')'.
-            if is_conditional_directive && !pending_line.is_empty() {
-                // Process the conditional directive (updates conditional stack)
-                // Column of the directive keyword (1-based, after '#')
-                let hash_col = line.find('#').map(|i| i + 2).unwrap_or(1);
-                self.process_directive(trimmed, source_line_num + 1, hash_col);
-                // Don't add the directive line to pending_line, don't flush.
-                // Just count a newline for line numbering preservation.
-                pending_newlines += 1;
-                continue;
-            }
-
-            // Similarly, when accumulating a multi-line macro invocation in an
-            // included file, #define/#undef directives must be processed (to
-            // register/remove macros) without interrupting the accumulation.
-            // Without this, #define directives inside #ifdef blocks in included
-            // files would leak into the output as literal text. This mirrors the
-            // conditional directive handling above.
-            let is_define_undef_directive = if is_directive && !is_conditional_directive {
+            let is_state_only_directive = if is_directive && !is_conditional_directive {
                 let after_hash = trimmed[1..].trim_start();
                 after_hash.starts_with("define") || after_hash.starts_with("undef")
             } else {
                 false
             };
-            if is_define_undef_directive && is_include && !pending_line.is_empty() {
+
+            if !pending.is_empty()
+                && (is_conditional_directive || (is_include && is_state_only_directive))
+            {
                 if self.conditionals.is_active() {
-                    let hash_col = line.find('#').map(|i| i + 2).unwrap_or(1);
-                    self.process_directive(trimmed, source_line_num + 1, hash_col);
+                    self.process_directive(&slice);
                 }
-                pending_newlines += 1;
+                self.emit_blank_slice(&mut output, &slice);
                 continue;
             }
 
-            // Handle #line directives during multi-line accumulation.
-            // Generated code (e.g. gforth's prim.i) can have #line directives
-            // between every line of code, including in the middle of multi-line
-            // expressions. These must be consumed (updating line tracking state)
-            // without being appended to the pending accumulation buffer.
-            let is_line_directive = if is_directive && !is_conditional_directive {
-                let after_hash = trimmed[1..].trim_start();
-                after_hash.starts_with("line ")
-                    || after_hash.starts_with("line\t")
-                    || after_hash
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_digit())
-            } else {
-                false
-            };
-            if is_line_directive && !pending_line.is_empty() {
-                if self.conditionals.is_active() {
-                    let hash_col = line.find('#').map(|i| i + 2).unwrap_or(1);
-                    self.process_directive(trimmed, source_line_num + 1, hash_col);
-                }
-                pending_newlines += 1;
-                continue;
-            }
-
-            let process_directive = is_directive && (!is_include || pending_line.is_empty());
+            let process_directive = is_directive && (!is_include || pending.is_empty());
 
             if process_directive {
-                // When accumulating a multi-line expression (pending_line is non-empty)
-                // and a #define or #undef directive appears, we must expand macros in
-                // the accumulated text BEFORE the directive modifies the macro table.
-                // This ensures tokens like D(0) are expanded using the macro definition
-                // that was active when those tokens were encountered, not the definition
-                // (or lack thereof) after the directive. Per C standard, directives take
-                // effect for tokens that follow them, not tokens that precede them.
-                if !pending_line.is_empty() && !is_include {
-                    let after_hash = trimmed[1..].trim_start();
-                    if after_hash.starts_with("define") || after_hash.starts_with("undef") {
-                        let expanded = self.macros.expand_line_reuse(&pending_line, &mut expanding);
-                        let start_source_line_num = pending_start_source_line.take().unwrap_or(
-                            source_line_num.saturating_sub(pending_newlines.saturating_sub(1)),
-                        );
-                        self.emit_pending_output(
-                            &mut output,
-                            &mut next_output_source_line,
-                            start_source_line_num,
-                            pending_newlines,
-                            &expanded,
-                        );
-                        pending_line.clear();
-                    } else if after_hash.starts_with("include") {
-                        // When #include appears in the middle of a multi-line expression
-                        // (e.g. a function call with args spanning lines), flush the
-                        // pending tokens to output first. The included content must appear
-                        // after the preceding tokens, not before them.
-                        let expanded = self.macros.expand_line_reuse(&pending_line, &mut expanding);
-                        let start_source_line_num = pending_start_source_line.take().unwrap_or(
-                            source_line_num.saturating_sub(pending_newlines.saturating_sub(1)),
-                        );
-                        self.emit_pending_output(
-                            &mut output,
-                            &mut next_output_source_line,
-                            start_source_line_num,
-                            pending_newlines,
-                            &expanded,
-                        );
-                        pending_line.clear();
-                        pending_newlines = 0;
-                    }
+                let after_hash = trimmed[1..].trim_start();
+                if !pending.is_empty()
+                    && (!is_include
+                        && (after_hash.starts_with("define")
+                            || after_hash.starts_with("undef")
+                            || after_hash.starts_with("include")))
+                {
+                    self.flush_pending(&mut output, &mut pending, &mut expanding);
                 }
-                // Column of the directive keyword (1-based, after '#')
-                let hash_col = line.find('#').map(|i| i + 2).unwrap_or(1);
-                let include_result = self.process_directive(trimmed, source_line_num + 1, hash_col);
-                if let Some(included_content) = include_result {
-                    output.push_str(&included_content);
-                    next_output_source_line = source_line_num + 1;
-                    // After included content, emit a return-to-parent line marker
-                    // so the source manager can map subsequent lines back to the
-                    // correct file and line number. source_line_num is 0-based,
-                    // and the next line of the parent file is source_line_num + 2
-                    // (since the #include directive itself was source_line_num + 1).
-                    let parent_file = self
-                        .include_stack
-                        .last()
-                        .map(|p| super::includes::format_path_for_line_directive(p))
-                        .unwrap_or_else(|| self.filename.clone());
-                    // Flag 2 indicates returning from an include file (GCC convention)
-                    let _ = writeln!(output, "# {} \"{}\" 2", source_line_num + 2, parent_file);
+
+                if let Some(included_content) = self.process_directive(&slice) {
+                    output.append(included_content);
                 } else if is_include {
-                    // Included files always emit a newline for non-include directives
-                    self.emit_blank_output_line(
-                        &mut output,
-                        &mut next_output_source_line,
-                        source_line_num,
-                    );
+                    self.emit_blank_slice(&mut output, &slice);
                 }
-                // Top-level: emit injected declarations from #include processing
+
                 if !is_include && !self.pending_injections.is_empty() {
                     for decl in std::mem::take(&mut self.pending_injections) {
-                        output.push_str(&decl);
+                        self.emit_synthetic_text(&mut output, decl);
                     }
                 }
-                // Preserve line numbering during multi-line accumulation
+
                 if !is_include {
-                    if !pending_line.is_empty() {
-                        pending_newlines += 1;
-                    } else {
-                        self.emit_blank_output_line(
-                            &mut output,
-                            &mut next_output_source_line,
-                            source_line_num,
-                        );
-                    }
+                    self.emit_blank_slice(&mut output, &slice);
                 }
             } else if self.conditionals.is_active() {
-                // Regular line (or directive during include with pending line) -
-                // expand macros, handling multi-line macro invocations
-                self.accumulate_and_expand(
-                    line,
-                    source_line_num,
-                    &mut pending_line,
-                    &mut pending_start_source_line,
-                    &mut pending_newlines,
-                    &mut output,
-                    &mut next_output_source_line,
-                    &mut expanding,
-                );
+                self.accumulate_and_expand(&slice, &mut pending, &mut output, &mut expanding);
             } else {
-                // Inactive conditional block - skip the line but preserve numbering
-                if !pending_line.is_empty() {
-                    pending_newlines += 1;
+                if pending.is_empty() {
+                    self.emit_blank_slice(&mut output, &slice);
                 } else {
-                    self.emit_blank_output_line(
-                        &mut output,
-                        &mut next_output_source_line,
-                        source_line_num,
-                    );
+                    pending.push_gap(&slice);
                 }
             }
         }
 
-        // Flush any remaining pending line
-        if !pending_line.is_empty() {
-            let expanded = self.macros.expand_line_reuse(&pending_line, &mut expanding);
-            let start_source_line_num = pending_start_source_line
-                .take()
-                .unwrap_or(next_output_source_line);
-            self.emit_pending_output(
-                &mut output,
-                &mut next_output_source_line,
-                start_source_line_num,
-                pending_newlines.max(1),
-                &expanded,
-            );
-        }
+        self.flush_pending(&mut output, &mut pending, &mut expanding);
 
-        // Restore conditional stack and line override for included files
         if let Some(saved) = saved_conditionals {
             self.conditionals = saved;
-        }
-        if is_include {
-            self.line_override = saved_line_override;
         }
 
         output
     }
 
-    fn current_line_directive_file(&self) -> String {
-        self.include_stack
-            .last()
-            .map(|path| super::includes::format_path_for_line_directive(path))
-            .unwrap_or_else(|| self.filename.clone())
-    }
-
-    fn sync_output_line_mapping(
+    fn accumulate_and_expand(
         &self,
-        output: &mut String,
-        next_output_source_line: &mut usize,
-        source_line_num: usize,
+        slice: &LogicalSlice,
+        pending: &mut PendingExpansion,
+        output: &mut PreprocessOutput,
+        expanding: &mut HashSet<String>,
     ) {
-        if *next_output_source_line == source_line_num {
+        if pending.is_empty() {
+            if Self::has_unbalanced_parens(&slice.text)
+                || self.ends_with_funclike_macro(&slice.text)
+            {
+                pending.push(slice);
+                return;
+            }
+
+            let expanded = self.macros.expand_line_reuse(&slice.text, expanding);
+            if self.ends_with_funclike_macro(&expanded) {
+                pending.push(slice);
+            } else {
+                self.emit_text_from_slice(output, slice, expanded);
+                self.emit_newline(output, slice.newline_boundaries());
+            }
             return;
         }
-        let _ = writeln!(
-            output,
-            "# {} \"{}\"",
-            source_line_num + 1,
-            self.current_line_directive_file()
-        );
-        *next_output_source_line = source_line_num;
+
+        let needs_more = Self::has_unbalanced_parens(pending.text());
+        pending.push(slice);
+
+        if pending.line_count() > MAX_PENDING_NEWLINES {
+            self.flush_pending(output, pending, expanding);
+            return;
+        }
+
+        if needs_more {
+            let expanded = self.macros.expand_line_reuse(pending.text(), expanding);
+            if !Self::has_unbalanced_parens(pending.text())
+                && !self.ends_with_funclike_macro(&expanded)
+            {
+                self.emit_pending_output(output, pending, expanded);
+                pending.clear();
+            }
+            return;
+        }
+
+        if Self::has_unbalanced_parens(pending.text()) {
+            return;
+        }
+
+        let expanded = self.macros.expand_line_reuse(pending.text(), expanding);
+        if !self.ends_with_funclike_macro(&expanded) {
+            self.emit_pending_output(output, pending, expanded);
+            pending.clear();
+        }
     }
 
-    fn emit_output_line(
+    fn flush_pending(
         &self,
-        output: &mut String,
-        next_output_source_line: &mut usize,
-        source_line_num: usize,
-        line: &str,
+        output: &mut PreprocessOutput,
+        pending: &mut PendingExpansion,
+        expanding: &mut HashSet<String>,
     ) {
-        self.sync_output_line_mapping(output, next_output_source_line, source_line_num);
-        output.push_str(line);
-        output.push('\n');
-        *next_output_source_line = source_line_num + 1;
-    }
-
-    fn emit_blank_output_line(
-        &self,
-        output: &mut String,
-        next_output_source_line: &mut usize,
-        source_line_num: usize,
-    ) {
-        self.emit_output_line(output, next_output_source_line, source_line_num, "");
+        if pending.is_empty() {
+            return;
+        }
+        let expanded = self.macros.expand_line_reuse(pending.text(), expanding);
+        self.emit_pending_output(output, pending, expanded);
+        pending.clear();
     }
 
     fn emit_pending_output(
         &self,
-        output: &mut String,
-        next_output_source_line: &mut usize,
-        start_source_line_num: usize,
-        line_count: usize,
-        expanded: &str,
+        output: &mut PreprocessOutput,
+        pending: &PendingExpansion,
+        expanded: String,
     ) {
-        self.sync_output_line_mapping(output, next_output_source_line, start_source_line_num);
-        output.push_str(expanded);
-        output.push('\n');
-        for _ in 1..line_count {
-            output.push('\n');
+        let (source_text, source_boundaries) = pending.joined_source();
+        self.emit_source_text(output, expanded, source_text, source_boundaries);
+        for slice in &pending.slices {
+            self.emit_newline(output, slice.newline_boundaries());
         }
-        *next_output_source_line = start_source_line_num + line_count;
     }
 
-    /// Accumulate lines for multi-line macro invocations (unbalanced parens)
-    /// and expand when complete. This is the shared logic for both preprocess
-    /// paths, avoiding the previous duplication of ~40 lines.
-    ///
-    /// The `expanding` parameter is a reusable set that avoids per-line
-    /// allocation for macro expansion tracking.
-    fn accumulate_and_expand(
-        &self,
-        line: &str,
-        source_line_num: usize,
-        pending_line: &mut String,
-        pending_start_source_line: &mut Option<usize>,
-        pending_newlines: &mut usize,
-        output: &mut String,
-        next_output_source_line: &mut usize,
-        expanding: &mut HashSet<String>,
-    ) {
-        if pending_line.is_empty() {
-            if Self::has_unbalanced_parens(line) {
-                *pending_line = line.to_string();
-                *pending_start_source_line = Some(source_line_num);
-                *pending_newlines = 1;
-            } else if self.ends_with_funclike_macro(line) {
-                // Line ends with a function-like macro name without '(' on same line.
-                // Per C standard, whitespace (including newlines) between macro name
-                // and '(' is allowed, so accumulate to check next line for '('.
-                *pending_line = line.to_string();
-                *pending_start_source_line = Some(source_line_num);
-                *pending_newlines = 1;
-            } else {
-                let expanded = self.macros.expand_line_reuse(line, expanding);
-                // After expansion, check if the expanded result ends with a
-                // function-like macro name. This handles chained macros like:
-                //   #define STEP1(x) x STEP2
-                //   #define STEP2(y) y STEP3
-                //   STEP1(int)    <- expands to "int STEP2"
-                //   (foo)         <- should be STEP2's argument
-                // The original source line doesn't end with a func-like macro,
-                // but the expanded result does. We need to accumulate the next
-                // line so STEP2 can find its '(' argument.
-                if self.ends_with_funclike_macro(&expanded) {
-                    *pending_line = line.to_string();
-                    *pending_start_source_line = Some(source_line_num);
-                    *pending_newlines = 1;
-                } else {
-                    self.emit_output_line(
-                        output,
-                        next_output_source_line,
-                        source_line_num,
-                        &expanded,
-                    );
-                }
-            }
-        } else {
-            // Check if this continuation line starts with '(' (after whitespace)
-            // when we were accumulating for a trailing function-like macro name.
-            let needs_more = Self::has_unbalanced_parens(pending_line);
-            pending_line.push('\n');
-            pending_line.push_str(line);
-            *pending_newlines += 1;
+    fn emit_blank_slice(&self, output: &mut PreprocessOutput, slice: &LogicalSlice) {
+        self.emit_newline(output, slice.newline_boundaries());
+    }
 
-            if needs_more {
-                // Was accumulating for unbalanced parens
-                if !Self::has_unbalanced_parens(pending_line)
-                    || *pending_newlines > MAX_PENDING_NEWLINES
-                {
-                    let expanded = self.macros.expand_line_reuse(pending_line, expanding);
-                    // Check if the expanded result ends with a function-like macro
-                    // that needs args from the next line (chained macros).
-                    if self.ends_with_funclike_macro(&expanded)
-                        && *pending_newlines <= MAX_PENDING_NEWLINES
-                    {
-                        // Don't clear pending_line - keep accumulating
-                    } else {
-                        let start_source_line_num = pending_start_source_line.take().unwrap_or(
-                            source_line_num.saturating_sub(pending_newlines.saturating_sub(1)),
-                        );
-                        self.emit_pending_output(
-                            output,
-                            next_output_source_line,
-                            start_source_line_num,
-                            *pending_newlines,
-                            &expanded,
-                        );
-                        pending_line.clear();
-                        *pending_newlines = 0;
-                    }
-                }
-            } else {
-                // Was accumulating for trailing function-like macro name.
-                // Now we have the next line joined. Check if parens are balanced.
-                if Self::has_unbalanced_parens(pending_line)
-                    && *pending_newlines <= MAX_PENDING_NEWLINES
-                {
-                    // The joined text has unbalanced parens (macro args span more lines)
-                    // Keep accumulating.
-                } else {
-                    // Parens balanced or next line didn't start with '(' - expand now.
-                    let expanded = self.macros.expand_line_reuse(pending_line, expanding);
-                    // Check if the expanded result itself ends with a function-like
-                    // macro name that needs args from the next line (chained macros).
-                    if self.ends_with_funclike_macro(&expanded)
-                        && *pending_newlines <= MAX_PENDING_NEWLINES
-                    {
-                        // Don't clear pending_line - keep accumulating
-                    } else {
-                        let start_source_line_num = pending_start_source_line.take().unwrap_or(
-                            source_line_num.saturating_sub(pending_newlines.saturating_sub(1)),
-                        );
-                        self.emit_pending_output(
-                            output,
-                            next_output_source_line,
-                            start_source_line_num,
-                            *pending_newlines,
-                            &expanded,
-                        );
-                        pending_line.clear();
-                        *pending_newlines = 0;
-                    }
-                }
-            }
+    fn emit_text_from_slice(
+        &self,
+        output: &mut PreprocessOutput,
+        slice: &LogicalSlice,
+        raw: String,
+    ) {
+        self.emit_source_text(
+            output,
+            raw,
+            slice.text.clone(),
+            slice.source_boundaries.clone(),
+        );
+    }
+
+    fn emit_source_text(
+        &self,
+        output: &mut PreprocessOutput,
+        raw: String,
+        source_text: String,
+        source_boundaries: Vec<usize>,
+    ) {
+        if raw.is_empty() {
+            return;
         }
+        output.push(PreprocessChunk {
+            file: self.current_path(),
+            raw,
+            source_text,
+            source_boundaries,
+        });
+    }
+
+    fn emit_newline(&self, output: &mut PreprocessOutput, source_boundaries: Vec<usize>) {
+        output.push(PreprocessChunk {
+            file: self.current_path(),
+            raw: "\n".to_string(),
+            source_text: "\n".to_string(),
+            source_boundaries,
+        });
+    }
+
+    fn emit_synthetic_text(&self, output: &mut PreprocessOutput, raw: String) {
+        let base = self.current_offset();
+        let len = raw.len();
+        output.push(PreprocessChunk {
+            file: self.current_path(),
+            raw,
+            source_text: " ".repeat(len),
+            source_boundaries: vec![base; len + 1],
+        });
     }
 
     /// Check if a line ends with an identifier that is a defined function-like macro.
@@ -704,10 +521,18 @@ impl Preprocessor {
     /// Returns the top of the include stack (the file currently being preprocessed),
     /// falling back to `self.filename` for the main translation unit.
     pub(super) fn current_file(&self) -> String {
+        self.current_path().display().to_string()
+    }
+
+    pub(super) fn current_path(&self) -> PathBuf {
         self.include_stack
             .last()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| self.filename.clone())
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from(&self.filename))
+    }
+
+    fn current_offset(&self) -> usize {
+        0
     }
 
     /// Define a macro from a command-line -D flag.
@@ -776,13 +601,14 @@ impl Preprocessor {
         // Preprocess the included content (macros persist; any pragma synthetic tokens
         // like __ccc_visibility_push_hidden are collected and prepended to main output)
         let output = self.preprocess_included(content);
-        // Collect any non-whitespace output (e.g., pragma synthetic tokens) for prepending
-        // to the main source's preprocessed output. This ensures that pragmas like
-        // #pragma GCC visibility push(hidden) in force-included files take effect.
-        let trimmed = output.trim();
-        if !trimmed.is_empty() {
-            self.force_include_output.push_str(trimmed);
-            self.force_include_output.push('\n');
+        if !output.is_blank() {
+            self.force_include_output.append(output);
+            self.force_include_output.push(PreprocessChunk {
+                file: self.current_path(),
+                raw: "\n".to_string(),
+                source_text: "\n".to_string(),
+                source_boundaries: vec![self.current_offset(); 2],
+            });
         }
 
         // Restore __FILE__
@@ -794,37 +620,49 @@ impl Preprocessor {
         self.include_stack.pop();
     }
 
-    /// Process a preprocessor directive line.
-    /// Returns Some(content) if an #include was processed and should be inserted.
-    /// `line_num` is the 1-based source line number, `col` is the 1-based column
-    /// of the `#` character (used for diagnostic source locations).
-    fn process_directive(&mut self, line: &str, line_num: usize, col: usize) -> Option<String> {
-        // Strip leading # and whitespace
-        let after_hash = line.trim_start_matches('#').trim();
-
-        // Strip trailing comments (// style)
+    fn process_directive(&mut self, slice: &LogicalSlice) -> Option<PreprocessOutput> {
+        let hash_pos = slice.text.find('#').unwrap_or(0);
+        let after_hash_raw = &slice.text[hash_pos + 1..];
+        let after_hash = after_hash_raw.trim_start();
+        let keyword_offset = hash_pos + 1 + (after_hash_raw.len() - after_hash.len());
         let after_hash = strip_line_comment(after_hash);
-
-        // Get directive keyword
-        let (keyword, rest) = split_first_word(&after_hash);
-
-        // Handle #include<file> and #include"file" (no space between include and path)
-        // This handles the common C pattern: #include<stdio.h>
-        let (keyword, rest) = if keyword.starts_with("include<") || keyword.starts_with("include\"")
+        let after_hash_ref = after_hash.as_ref();
+        let (keyword, rest) = split_first_word(after_hash_ref);
+        let mut rest_offset = keyword_offset + keyword.len();
+        while rest_offset < slice.text.len()
+            && slice.text.as_bytes()[rest_offset].is_ascii_whitespace()
         {
-            ("include", &after_hash["include".len()..])
-        } else if keyword.starts_with("include_next<") || keyword.starts_with("include_next\"") {
-            ("include_next", &after_hash["include_next".len()..])
-        } else {
-            (keyword, rest)
-        };
+            rest_offset += 1;
+        }
 
-        // Some directives are processed even in inactive conditional blocks
+        let (keyword, rest, rest_offset) = if keyword.starts_with("include<")
+            || keyword.starts_with("include\"")
+        {
+            (
+                "include",
+                &after_hash_ref["include".len()..],
+                keyword_offset + "include".len(),
+            )
+        } else if keyword.starts_with("include_next<") || keyword.starts_with("include_next\"") {
+            (
+                "include_next",
+                &after_hash_ref["include_next".len()..],
+                keyword_offset + "include_next".len(),
+            )
+        } else {
+            (keyword, rest, rest_offset)
+        };
         match keyword {
             "ifdef" | "ifndef" | "if" => {
                 if !self.conditionals.is_active() {
-                    // In an inactive block, just push a nested inactive conditional
-                    self.conditionals.push_if(false, (line_num, col));
+                    self.conditionals.push_if(
+                        false,
+                        self.slice_range(
+                            slice,
+                            keyword_offset,
+                            keyword_offset + keyword.len().max(1),
+                        ),
+                    );
                     return None;
                 }
             }
@@ -840,71 +678,85 @@ impl Preprocessor {
                 self.conditionals.handle_endif();
                 return None;
             }
-            _ => {
-                // Other directives only processed in active blocks
-                if !self.conditionals.is_active() {
-                    return None;
-                }
-            }
+            _ if !self.conditionals.is_active() => return None,
+            _ => {}
         }
 
-        // Process directive in active block
         match keyword {
             "include" => {
-                return self.handle_include(rest, line_num, col);
+                return self.handle_include(
+                    rest,
+                    self.slice_range(slice, rest_offset, rest_offset + rest.len().max(1)),
+                );
             }
             "include_next" => {
-                // GCC extension: include_next searches from the next path after the
-                // current file's directory in the include search list
-                return self.handle_include_next(rest, line_num, col);
+                return self.handle_include_next(
+                    rest,
+                    self.slice_range(slice, rest_offset, rest_offset + rest.len().max(1)),
+                );
             }
             "define" => self.handle_define(rest),
             "undef" => self.handle_undef(rest),
-            "ifdef" => self.handle_ifdef(rest, false, (line_num, col)),
-            "ifndef" => self.handle_ifdef(rest, true, (line_num, col)),
-            "if" => self.handle_if(rest, (line_num, col)),
+            "ifdef" => self.handle_ifdef(
+                rest,
+                false,
+                self.slice_range(slice, keyword_offset, keyword_offset + keyword.len().max(1)),
+            ),
+            "ifndef" => self.handle_ifdef(
+                rest,
+                true,
+                self.slice_range(slice, keyword_offset, keyword_offset + keyword.len().max(1)),
+            ),
+            "if" => self.handle_if(
+                rest,
+                self.slice_range(slice, keyword_offset, keyword_offset + keyword.len().max(1)),
+            ),
             "pragma" => {
-                return self.handle_pragma(rest);
+                if let Some(raw) = self.handle_pragma(rest) {
+                    let mut output = PreprocessOutput::default();
+                    self.emit_synthetic_text(&mut output, raw);
+                    return Some(output);
+                }
+                return None;
             }
             "error" => {
-                // Expand macros in error message
                 let expanded = self
                     .macros
                     .expand_line_reuse(rest, &mut self.directive_expanding);
                 self.errors.push(PreprocessorDiagnostic {
                     file: self.current_file(),
-                    line: line_num,
-                    col,
+                    range: self.slice_range(
+                        slice,
+                        keyword_offset,
+                        keyword_offset + keyword.len().max(1),
+                    ),
                     message: format!("#error {}", expanded),
                 });
             }
             "warning" => {
-                // GCC extension, collect warning for structured diagnostic output
                 self.warnings.push(PreprocessorDiagnostic {
                     file: self.current_file(),
-                    line: line_num,
-                    col,
+                    range: self.slice_range(
+                        slice,
+                        keyword_offset,
+                        keyword_offset + keyword.len().max(1),
+                    ),
                     message: format!("#warning {}", rest),
                 });
             }
-            "line" => {
-                self.handle_line_directive(rest, line_num);
-            }
-            "" => {
-                // Empty # directive (null directive), valid in C
-            }
-            _ => {
-                // Handle GNU linemarker: # <digit-sequence> ["filename" [flags]]
-                // This is equivalent to #line <digit-sequence> ["filename"]
-                if keyword.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                    let line_rest = format!("{} {}", keyword, rest);
-                    self.handle_line_directive(&line_rest, line_num);
-                }
-                // Otherwise unknown directive, ignore silently
-            }
+            "" => {}
+            _ => {}
         }
 
         None
+    }
+
+    fn slice_range(&self, slice: &LogicalSlice, start: usize, end: usize) -> Range<usize> {
+        let text_start = start.min(slice.text.len());
+        let text_end = end.min(slice.text.len()).max(text_start);
+        let start = slice.source_offset(text_start);
+        let end = slice.source_offset(text_end).max(start);
+        start..end
     }
 
     fn handle_define(&mut self, rest: &str) {
@@ -920,14 +772,14 @@ impl Preprocessor {
         }
     }
 
-    fn handle_ifdef(&mut self, rest: &str, negate: bool, position: (usize, usize)) {
+    fn handle_ifdef(&mut self, rest: &str, negate: bool, position: Range<usize>) {
         let name = rest.split_whitespace().next().unwrap_or("");
         let defined = self.macros.is_defined(name);
         let condition = if negate { !defined } else { defined };
         self.conditionals.push_if(condition, position);
     }
 
-    fn handle_if(&mut self, expr: &str, position: (usize, usize)) {
+    fn handle_if(&mut self, expr: &str, position: Range<usize>) {
         // First resolve `defined(X)` and `__has_*()` before macro expansion
         let resolved = self.resolve_defined_in_expr(expr);
         // Expand macros in the resolved expression (reuse directive_expanding set)
@@ -953,35 +805,6 @@ impl Preprocessor {
         let final_expr = self.replace_remaining_idents_with_zero(&expanded);
         let condition = evaluate_condition(&final_expr, &self.macros);
         self.conditionals.handle_elif(condition);
-    }
-
-    fn handle_line_directive(&mut self, rest: &str, source_line_num: usize) {
-        // #line digit-sequence ["filename"]
-        // The argument undergoes macro expansion first
-        let expanded = self
-            .macros
-            .expand_line_reuse(rest, &mut self.directive_expanding);
-        let expanded = expanded.trim();
-
-        // Parse the line number (first token)
-        let mut parts = expanded.split_whitespace();
-        if let Some(line_str) = parts.next() {
-            if let Ok(target_line) = line_str.parse::<usize>() {
-                // source_line_num is 1-based (the line where #line appears)
-                // The line AFTER #line should be target_line, so we record:
-                // (target_line, source_line_num_0based_of_directive)
-                // source_line_num is already 1-based from process_directive caller
-                self.line_override = Some((target_line, source_line_num));
-
-                // If there's a filename argument, update __FILE__
-                if let Some(filename_str) = parts.next() {
-                    let filename = filename_str.trim_matches('"');
-                    if !filename.is_empty() {
-                        self.macros.set_file(format!("\"{}\"", filename));
-                    }
-                }
-            }
-        }
     }
 }
 
