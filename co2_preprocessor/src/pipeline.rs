@@ -197,7 +197,9 @@ impl Preprocessor {
 
         // Buffer for accumulating multi-line macro invocations
         let mut pending_line = String::new();
+        let mut pending_start_source_line = None;
         let mut pending_newlines: usize = 0;
+        let mut next_output_source_line = 0usize;
 
         // Reusable set for macro expansion, avoiding per-line allocation.
         // This set tracks which macros are currently being expanded (to prevent
@@ -318,19 +320,33 @@ impl Preprocessor {
                     let after_hash = trimmed[1..].trim_start();
                     if after_hash.starts_with("define") || after_hash.starts_with("undef") {
                         let expanded = self.macros.expand_line_reuse(&pending_line, &mut expanding);
+                        let start_source_line_num = pending_start_source_line.take().unwrap_or(
+                            source_line_num.saturating_sub(pending_newlines.saturating_sub(1)),
+                        );
+                        self.emit_pending_output(
+                            &mut output,
+                            &mut next_output_source_line,
+                            start_source_line_num,
+                            pending_newlines,
+                            &expanded,
+                        );
                         pending_line.clear();
-                        pending_line.push_str(&expanded);
                     } else if after_hash.starts_with("include") {
                         // When #include appears in the middle of a multi-line expression
                         // (e.g. a function call with args spanning lines), flush the
                         // pending tokens to output first. The included content must appear
                         // after the preceding tokens, not before them.
                         let expanded = self.macros.expand_line_reuse(&pending_line, &mut expanding);
-                        output.push_str(&expanded);
-                        output.push('\n');
-                        for _ in 1..pending_newlines {
-                            output.push('\n');
-                        }
+                        let start_source_line_num = pending_start_source_line.take().unwrap_or(
+                            source_line_num.saturating_sub(pending_newlines.saturating_sub(1)),
+                        );
+                        self.emit_pending_output(
+                            &mut output,
+                            &mut next_output_source_line,
+                            start_source_line_num,
+                            pending_newlines,
+                            &expanded,
+                        );
                         pending_line.clear();
                         pending_newlines = 0;
                     }
@@ -340,6 +356,7 @@ impl Preprocessor {
                 let include_result = self.process_directive(trimmed, source_line_num + 1, hash_col);
                 if let Some(included_content) = include_result {
                     output.push_str(&included_content);
+                    next_output_source_line = source_line_num + 1;
                     // After included content, emit a return-to-parent line marker
                     // so the source manager can map subsequent lines back to the
                     // correct file and line number. source_line_num is 0-based,
@@ -354,7 +371,11 @@ impl Preprocessor {
                     let _ = writeln!(output, "# {} \"{}\" 2", source_line_num + 2, parent_file);
                 } else if is_include {
                     // Included files always emit a newline for non-include directives
-                    output.push('\n');
+                    self.emit_blank_output_line(
+                        &mut output,
+                        &mut next_output_source_line,
+                        source_line_num,
+                    );
                 }
                 // Top-level: emit injected declarations from #include processing
                 if !is_include && !self.pending_injections.is_empty() {
@@ -367,7 +388,11 @@ impl Preprocessor {
                     if !pending_line.is_empty() {
                         pending_newlines += 1;
                     } else {
-                        output.push('\n');
+                        self.emit_blank_output_line(
+                            &mut output,
+                            &mut next_output_source_line,
+                            source_line_num,
+                        );
                     }
                 }
             } else if self.conditionals.is_active() {
@@ -375,9 +400,12 @@ impl Preprocessor {
                 // expand macros, handling multi-line macro invocations
                 self.accumulate_and_expand(
                     line,
+                    source_line_num,
                     &mut pending_line,
+                    &mut pending_start_source_line,
                     &mut pending_newlines,
                     &mut output,
+                    &mut next_output_source_line,
                     &mut expanding,
                 );
             } else {
@@ -385,7 +413,11 @@ impl Preprocessor {
                 if !pending_line.is_empty() {
                     pending_newlines += 1;
                 } else {
-                    output.push('\n');
+                    self.emit_blank_output_line(
+                        &mut output,
+                        &mut next_output_source_line,
+                        source_line_num,
+                    );
                 }
             }
         }
@@ -393,8 +425,16 @@ impl Preprocessor {
         // Flush any remaining pending line
         if !pending_line.is_empty() {
             let expanded = self.macros.expand_line_reuse(&pending_line, &mut expanding);
-            output.push_str(&expanded);
-            output.push('\n');
+            let start_source_line_num = pending_start_source_line
+                .take()
+                .unwrap_or(next_output_source_line);
+            self.emit_pending_output(
+                &mut output,
+                &mut next_output_source_line,
+                start_source_line_num,
+                pending_newlines.max(1),
+                &expanded,
+            );
         }
 
         // Restore conditional stack and line override for included files
@@ -408,6 +448,70 @@ impl Preprocessor {
         output
     }
 
+    fn current_line_directive_file(&self) -> String {
+        self.include_stack
+            .last()
+            .map(|path| super::includes::format_path_for_line_directive(path))
+            .unwrap_or_else(|| self.filename.clone())
+    }
+
+    fn sync_output_line_mapping(
+        &self,
+        output: &mut String,
+        next_output_source_line: &mut usize,
+        source_line_num: usize,
+    ) {
+        if *next_output_source_line == source_line_num {
+            return;
+        }
+        let _ = writeln!(
+            output,
+            "# {} \"{}\"",
+            source_line_num + 1,
+            self.current_line_directive_file()
+        );
+        *next_output_source_line = source_line_num;
+    }
+
+    fn emit_output_line(
+        &self,
+        output: &mut String,
+        next_output_source_line: &mut usize,
+        source_line_num: usize,
+        line: &str,
+    ) {
+        self.sync_output_line_mapping(output, next_output_source_line, source_line_num);
+        output.push_str(line);
+        output.push('\n');
+        *next_output_source_line = source_line_num + 1;
+    }
+
+    fn emit_blank_output_line(
+        &self,
+        output: &mut String,
+        next_output_source_line: &mut usize,
+        source_line_num: usize,
+    ) {
+        self.emit_output_line(output, next_output_source_line, source_line_num, "");
+    }
+
+    fn emit_pending_output(
+        &self,
+        output: &mut String,
+        next_output_source_line: &mut usize,
+        start_source_line_num: usize,
+        line_count: usize,
+        expanded: &str,
+    ) {
+        self.sync_output_line_mapping(output, next_output_source_line, start_source_line_num);
+        output.push_str(expanded);
+        output.push('\n');
+        for _ in 1..line_count {
+            output.push('\n');
+        }
+        *next_output_source_line = start_source_line_num + line_count;
+    }
+
     /// Accumulate lines for multi-line macro invocations (unbalanced parens)
     /// and expand when complete. This is the shared logic for both preprocess
     /// paths, avoiding the previous duplication of ~40 lines.
@@ -417,20 +521,25 @@ impl Preprocessor {
     fn accumulate_and_expand(
         &self,
         line: &str,
+        source_line_num: usize,
         pending_line: &mut String,
+        pending_start_source_line: &mut Option<usize>,
         pending_newlines: &mut usize,
         output: &mut String,
+        next_output_source_line: &mut usize,
         expanding: &mut HashSet<String>,
     ) {
         if pending_line.is_empty() {
             if Self::has_unbalanced_parens(line) {
                 *pending_line = line.to_string();
+                *pending_start_source_line = Some(source_line_num);
                 *pending_newlines = 1;
             } else if self.ends_with_funclike_macro(line) {
                 // Line ends with a function-like macro name without '(' on same line.
                 // Per C standard, whitespace (including newlines) between macro name
                 // and '(' is allowed, so accumulate to check next line for '('.
                 *pending_line = line.to_string();
+                *pending_start_source_line = Some(source_line_num);
                 *pending_newlines = 1;
             } else {
                 let expanded = self.macros.expand_line_reuse(line, expanding);
@@ -445,10 +554,15 @@ impl Preprocessor {
                 // line so STEP2 can find its '(' argument.
                 if self.ends_with_funclike_macro(&expanded) {
                     *pending_line = line.to_string();
+                    *pending_start_source_line = Some(source_line_num);
                     *pending_newlines = 1;
                 } else {
-                    output.push_str(&expanded);
-                    output.push('\n');
+                    self.emit_output_line(
+                        output,
+                        next_output_source_line,
+                        source_line_num,
+                        &expanded,
+                    );
                 }
             }
         } else {
@@ -472,11 +586,16 @@ impl Preprocessor {
                     {
                         // Don't clear pending_line - keep accumulating
                     } else {
-                        output.push_str(&expanded);
-                        output.push('\n');
-                        for _ in 1..*pending_newlines {
-                            output.push('\n');
-                        }
+                        let start_source_line_num = pending_start_source_line.take().unwrap_or(
+                            source_line_num.saturating_sub(pending_newlines.saturating_sub(1)),
+                        );
+                        self.emit_pending_output(
+                            output,
+                            next_output_source_line,
+                            start_source_line_num,
+                            *pending_newlines,
+                            &expanded,
+                        );
                         pending_line.clear();
                         *pending_newlines = 0;
                     }
@@ -499,11 +618,16 @@ impl Preprocessor {
                     {
                         // Don't clear pending_line - keep accumulating
                     } else {
-                        output.push_str(&expanded);
-                        output.push('\n');
-                        for _ in 1..*pending_newlines {
-                            output.push('\n');
-                        }
+                        let start_source_line_num = pending_start_source_line.take().unwrap_or(
+                            source_line_num.saturating_sub(pending_newlines.saturating_sub(1)),
+                        );
+                        self.emit_pending_output(
+                            output,
+                            next_output_source_line,
+                            start_source_line_num,
+                            *pending_newlines,
+                            &expanded,
+                        );
                         pending_line.clear();
                         *pending_newlines = 0;
                     }

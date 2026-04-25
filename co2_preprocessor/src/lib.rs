@@ -33,8 +33,11 @@ pub struct SourceFile {
 #[derive(Clone, Debug)]
 struct OutputLineMap {
     file_idx: FileId,
-    source_line: usize,
+    raw_line: Arc<str>,
     normalized_line: Arc<str>,
+    source_logical_line: Arc<str>,
+    source_byte_boundaries: Arc<Vec<usize>>,
+    source_range: Range<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -76,22 +79,15 @@ impl PreprocessedSource {
             && let Some(line) = self.output_lines.get(start_line_idx)
         {
             let output_line_start = self.normalized_line_offsets[start_line_idx];
-            let file = &self.files[&line.file_idx];
-            if let Some(source_range) = line_range(file, line.source_line) {
-                let source_line = &file.source[source_range.clone()];
-                let normalized_line = line.normalized_line.as_ref();
-                let mapped = map_range(
-                    source_line,
-                    normalized_line,
-                    start.saturating_sub(output_line_start),
-                    end.saturating_sub(output_line_start),
-                );
-                return co2_ast::Span {
-                    start: source_range.start + mapped.start,
-                    end: source_range.start + mapped.end,
-                    context: line.file_idx,
-                };
-            }
+            let mapped = line.normalized_range_to_source(
+                start.saturating_sub(output_line_start),
+                end.saturating_sub(output_line_start),
+            );
+            return co2_ast::Span {
+                start: mapped.start,
+                end: mapped.end,
+                context: line.file_idx,
+            };
         }
 
         let start_mapped = self.map_offset(start);
@@ -128,26 +124,72 @@ impl PreprocessedSource {
         let line = self.output_lines.get(line_idx)?;
         let output_line_start = *self.normalized_line_offsets.get(line_idx)?;
         let output_col = output_offset.saturating_sub(output_line_start);
-        let file = self.files.get(&line.file_idx)?;
-        let source_range = line_range(file, line.source_line)?;
-        let source_line = &file.source[source_range.clone()];
-
-        if source_line.is_empty() {
-            return Some(MappedSpan {
-                file_idx: line.file_idx,
-                start: source_range.start,
-                end: source_range.start,
-            });
-        }
-
-        let normalized_line = line.normalized_line.as_ref();
-        let mapped_col = map_column(source_line, normalized_line, output_col);
-        let mapped = source_range.start + mapped_col.min(source_line.len());
+        let mapped = line.normalized_offset_to_source(output_col);
         Some(MappedSpan {
             file_idx: line.file_idx,
             start: mapped,
             end: mapped,
         })
+    }
+}
+
+impl OutputLineMap {
+    fn normalized_offset_to_source(&self, normalized_offset: usize) -> usize {
+        let raw_offset = if self.normalized_line.as_ref() == self.raw_line.as_ref() {
+            normalized_offset.min(self.raw_line.len())
+        } else {
+            map_column(
+                self.raw_line.as_ref(),
+                self.normalized_line.as_ref(),
+                normalized_offset,
+            )
+        };
+        let logical_offset = if self.raw_line.as_ref() == self.source_logical_line.as_ref() {
+            raw_offset.min(self.source_logical_line.len())
+        } else {
+            map_column(
+                self.source_logical_line.as_ref(),
+                self.raw_line.as_ref(),
+                raw_offset,
+            )
+        };
+        self.source_boundary(logical_offset)
+    }
+
+    fn normalized_range_to_source(&self, start: usize, end: usize) -> Range<usize> {
+        let start = start.min(self.normalized_line.len());
+        let end = end.min(self.normalized_line.len()).max(start);
+        let raw_range = if self.normalized_line.as_ref() == self.raw_line.as_ref() {
+            start.min(self.raw_line.len())..end.min(self.raw_line.len())
+        } else {
+            map_range(
+                self.raw_line.as_ref(),
+                self.normalized_line.as_ref(),
+                start,
+                end,
+            )
+        };
+        let logical_range = if self.raw_line.as_ref() == self.source_logical_line.as_ref() {
+            raw_range.start.min(self.source_logical_line.len())
+                ..raw_range.end.min(self.source_logical_line.len())
+        } else {
+            map_range(
+                self.source_logical_line.as_ref(),
+                self.raw_line.as_ref(),
+                raw_range.start,
+                raw_range.end,
+            )
+        };
+        let start = self.source_boundary(logical_range.start);
+        let end = self.source_boundary(logical_range.end).max(start);
+        start..end
+    }
+
+    fn source_boundary(&self, logical_offset: usize) -> usize {
+        self.source_byte_boundaries
+            .get(logical_offset.min(self.source_logical_line.len()))
+            .copied()
+            .unwrap_or(self.source_range.end)
     }
 }
 
@@ -455,10 +497,15 @@ fn build_preprocessed_source(input: &Path, preprocessed: String) -> Preprocessed
         normalized.push('\n');
 
         let file_idx = ensure_source_file(&current_file, &mut files, &mut file_index);
+        let source_line_idx = mapped_source_line_index(input, &current_file, current_line);
+        let source_projection = project_source_logical_line(&files[&file_idx], source_line_idx);
         output_lines.push(OutputLineMap {
             file_idx,
-            source_line: mapped_source_line_index(input, &current_file, current_line),
+            raw_line: Arc::<str>::from(line),
             normalized_line: Arc::<str>::from(normalized_line),
+            source_logical_line: Arc::<str>::from(source_projection.text),
+            source_byte_boundaries: Arc::new(source_projection.boundaries),
+            source_range: source_projection.source_range,
         });
         current_line += 1;
     }
@@ -596,6 +643,101 @@ fn normalize_preprocessed_line(line: &str) -> String {
     let line = strip_gnu_asm_annotations(&line);
     let line = replace_gnu_typeof_with_usize(&line);
     strip_extension_keywords(&line)
+}
+
+#[derive(Debug)]
+struct SourceLogicalLineProjection {
+    text: String,
+    boundaries: Vec<usize>,
+    source_range: Range<usize>,
+}
+
+fn project_source_logical_line(
+    file: &SourceFile,
+    source_line_idx: usize,
+) -> SourceLogicalLineProjection {
+    let Some(source_range) = line_range(file, source_line_idx) else {
+        return SourceLogicalLineProjection {
+            text: String::new(),
+            boundaries: vec![file.source.len()],
+            source_range: file.source.len()..file.source.len(),
+        };
+    };
+    let bytes = file.source.as_bytes();
+    let len = bytes.len();
+    let mut out = Vec::new();
+    let mut boundaries = vec![source_range.start];
+    let mut i = source_range.start;
+    let mut end = source_range.start;
+
+    while i < len {
+        match bytes[i] {
+            b'"' | b'\'' => {
+                let next = utils::skip_literal_bytes(bytes, i, bytes[i]).min(len);
+                for idx in i..next {
+                    out.push(bytes[idx]);
+                    boundaries.push(idx + 1);
+                }
+                end = next;
+                i = next;
+            }
+            b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i < len {
+                    if i + 1 < len && bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+                out.push(b' ');
+                boundaries.push(i.min(len));
+                end = i.min(len);
+            }
+            b'/' if i + 1 < len && bytes[i + 1] == b'/' => {
+                while i < len && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                end = i.min(len);
+                break;
+            }
+            b'\\' if let Some(next) = continued_line_end(bytes, i) => {
+                i = next;
+                end = next.min(len);
+            }
+            b'\n' => {
+                end = i;
+                break;
+            }
+            _ => {
+                out.push(bytes[i]);
+                i += 1;
+                boundaries.push(i);
+                end = i;
+            }
+        }
+    }
+
+    SourceLogicalLineProjection {
+        text: String::from_utf8(out).expect("source logical line must stay utf-8"),
+        boundaries,
+        source_range: source_range.start..end.max(source_range.start),
+    }
+}
+
+fn continued_line_end(bytes: &[u8], start: usize) -> Option<usize> {
+    if bytes.get(start) != Some(&b'\\') {
+        return None;
+    }
+    let mut i = start + 1;
+    while let Some(byte) = bytes.get(i) {
+        if matches!(byte, b' ' | b'\t' | b'\r') {
+            i += 1;
+            continue;
+        }
+        return (*byte == b'\n').then_some(i + 1);
+    }
+    None
 }
 
 fn line_index_for_offset(offsets: &[usize], offset: usize) -> Option<usize> {
