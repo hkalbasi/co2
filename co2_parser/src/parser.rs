@@ -1754,22 +1754,26 @@ where
                 let resolver = resolver.clone();
                 move |(name, span)| {
                     let ident = resolver.register_ident(name);
-                    Declarator::Identifier((ident, span))
+                    (Declarator::Identifier((ident, span)), span)
                 }
             })
-            .or(empty().to(Declarator::Abstract))
-            .map_with(|r, e| (r, e.span()));
+            .or(empty().map_with(|_, e| (Declarator::Abstract, e.span())));
         let grouped = rec
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        let param_list = parameter_type_list(rec, assign_expression_rec, resolver.clone()).map(Err);
+        let param_list = parameter_type_list(rec, assign_expression_rec, resolver.clone())
+            .map_with(|param_list, e| (param_list, slice_span(e.slice(), e.span())))
+            .map(Err);
         let subscription_resolver = resolver.clone();
         let subscription = lazy_subscription()
             .map(move |subscription| {
                 let span = subscription.1;
                 (
-                    subscription_resolver.register_subscription(subscription),
+                    (
+                        subscription_resolver.register_subscription(subscription),
+                        span,
+                    ),
                     span,
                 )
             })
@@ -1779,18 +1783,30 @@ where
             .then(param_list.or(subscription).repeated().collect())
             .map(|(mut base, tails): (_, Vec<_>)| {
                 for tail in tails {
+                    let base_span = base.1;
+                    let has_placeholder_span = matches!(base.0, Declarator::Abstract);
                     match tail {
-                        Ok(subscription) => {
+                        Ok((subscription, tail_span)) => {
                             base.0 = Declarator::ArrayDeclarator {
                                 declarator: Box::new((base.0, base.1)),
                                 subscription,
-                            }
+                            };
+                            base.1 = if has_placeholder_span {
+                                tail_span
+                            } else {
+                                join_spans(base_span, tail_span)
+                            };
                         }
-                        Err(param_list) => {
+                        Err((param_list, tail_span)) => {
                             base.0 = Declarator::FunctionDeclarator {
                                 declarator: Box::new((base.0, base.1)),
                                 param_list,
-                            }
+                            };
+                            base.1 = if has_placeholder_span {
+                                tail_span
+                            } else {
+                                join_spans(base_span, tail_span)
+                            };
                         }
                     }
                 }

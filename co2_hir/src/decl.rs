@@ -460,10 +460,9 @@ impl HirCtx<'_> {
                             self.extract_decl_type(param_base.0, param_base_const, param.1)?;
                         let mut param_ty = match param_decl_ty {
                             CTy::Ty(ty) => ty,
-                            CTy::Function(_) => {
-                                return Err(
-                                    "function type is invalid in parameter position".to_owned()
-                                );
+                            CTy::Function(sig) => {
+                                // C adjusts function parameters to function pointers.
+                                Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)))
                             }
                             CTy::UnsizedArray(elem) => Ty::new_ptr(elem, Mutability::Mut),
                         };

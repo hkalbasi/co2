@@ -329,7 +329,7 @@ fn lower_translation_unit_items(
                         let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
                         let (name, sig, param_names) = ctx
                             .lower_function_signature(base, base_const, declarator)
-                            .expect("failed to lower function signature");
+                            .unwrap_or_else(|err| ctx.terminate_with_error(parser_span, &err));
                         (name, sig, param_names, !is_static)
                     }
                     FunctionDefinitionSignature::Rust(sig) => {

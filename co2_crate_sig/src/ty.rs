@@ -250,10 +250,12 @@ impl CrateSigCtx<'_> {
                                     ty
                                 }
                             }
-                            CTy::Function(_) => {
-                                return Err(
-                                    "function type is invalid in parameter position".to_owned()
-                                );
+                            CTy::Function(sig) => {
+                                // C adjusts function parameters to function pointers.
+                                HirTy {
+                                    kind: HirTyKind::FnPtr(Box::new(sig)),
+                                    span: rust_span,
+                                }
                             }
                             CTy::UnsizedArray(elem) => {
                                 let span = elem.span;
@@ -1055,10 +1057,12 @@ impl LocalResolverBase {
                                     ty
                                 }
                             }
-                            CTy::Function(_) => {
-                                return Err(
-                                    "function type is invalid in parameter position".to_owned()
-                                );
+                            CTy::Function(sig) => {
+                                // C adjusts function parameters to function pointers.
+                                HirTy {
+                                    kind: HirTyKind::FnPtr(Box::new(sig)),
+                                    span: rust_span,
+                                }
                             }
                             CTy::UnsizedArray(elem) => {
                                 let span = elem.span;
