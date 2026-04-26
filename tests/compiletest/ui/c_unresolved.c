@@ -36,3 +36,32 @@ int f5() {
          //^^^^^^^^^ error: Unresolved name missing
 }
 
+int f6(int cond) {
+    if (cond) {
+        cond = (missing_symbol() || 0);
+              //^^^^^^^^^^^^^^ error: Unresolved name missing_symbol
+    }
+    return cond;
+}
+
+int f7(int cond) {
+    if (cond) {
+        return cond;
+    } else {
+        cond = (missing_symbol() || 0);
+              //^^^^^^^^^^^^^^ error: Unresolved name missing_symbol
+    }
+    return cond;
+}
+
+void sink(int);
+
+int f8(int cond, int *ptr) {
+    if (cond) {
+        return 0;
+    } else {
+        sink(missing_symbol(ptr));
+           //^^^^^^^^^^^^^^ error: Unresolved name missing_symbol
+    }
+    return 1;
+}

@@ -151,10 +151,13 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    repeated_statement_with_modified_resolver(resolver)
-        .map(|statements| CompoundStatement { statements })
-        .map_with(|r, e| (r, e.span()))
-        .delimited_by(just(Token::LBrace), just(Token::RBrace))
+    custom(move |inp| {
+        let before = inp.cursor();
+        inp.parse(just(Token::LBrace))?;
+        let statements = inp.parse(repeated_statement_with_modified_resolver(resolver.clone()))?;
+        inp.parse(just(Token::RBrace))?;
+        Ok((CompoundStatement { statements }, inp.span_since(&before)))
+    })
 }
 
 fn statement_or_declaration<'src, I, R: TypeResolver>(
@@ -171,7 +174,8 @@ where
     custom(move |inp| {
         let before = inp.cursor();
         let checkpoint = inp.save();
-        let prefer_declaration = match inp.next() {
+        let first = inp.next();
+        let prefer_declaration = match first {
             Some(
                 Token::Typedef
                 | Token::Extern
@@ -289,31 +293,53 @@ where
         let compound =
             compound_statement(resolver.clone(), stmt_rec.clone()).map(Statement::Compound);
 
-        let if_statement = just(Token::If)
-            .ignore_then(
-                expression_rec
-                    .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .then(stmt_rec.clone())
-            .then(just(Token::Else).ignore_then(stmt_rec.clone()).or_not())
-            .map(|((cond, then_branch), else_branch)| Statement::If {
-                cond,
-                then_branch: Box::new(then_branch),
-                else_branch: else_branch.map(Box::new),
-            });
+        let if_statement = custom({
+            let expression_rec = expression_rec.clone();
+            let stmt_rec = stmt_rec.clone();
+            move |inp| {
+                inp.parse(just(Token::If))?;
+                let cond = inp.parse(
+                    expression_rec
+                        .clone()
+                        .delimited_by(just(Token::LParen), just(Token::RParen)),
+                )?;
+                let then_branch = inp.parse(stmt_rec.clone())?;
+                let else_branch = {
+                    let checkpoint = inp.save();
+                    let has_else = inp.next() == Some(Token::Else);
+                    inp.rewind(checkpoint);
+                    if has_else {
+                        inp.parse(just(Token::Else))?;
+                        Some(inp.parse(stmt_rec.clone())?)
+                    } else {
+                        None
+                    }
+                };
+                Ok(Statement::If {
+                    cond,
+                    then_branch: Box::new(then_branch),
+                    else_branch: else_branch.map(Box::new),
+                })
+            }
+        });
 
-        let while_statement = just(Token::While)
-            .ignore_then(
-                expression_rec
-                    .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .then(stmt_rec.clone())
-            .map(|(cond, body)| Statement::While {
-                cond,
-                body: Box::new(body),
-            });
+        let while_statement = custom({
+            let expression_rec = expression_rec.clone();
+            let stmt_rec = stmt_rec.clone();
+            move |inp| {
+                inp.parse(just(Token::While))?;
+                let cond = inp.parse(
+                    expression_rec
+                        .clone()
+                        .delimited_by(just(Token::LParen), just(Token::RParen)),
+                )?;
+                let body = inp.parse(stmt_rec.clone())?;
+                Ok(Statement::While {
+                    cond,
+                    body: Box::new(body),
+                })
+            }
+        });
         let do_while_statement = just(Token::Do)
             .ignore_then(stmt_rec.clone())
             .then_ignore(just(Token::While))
@@ -399,23 +425,31 @@ where
             }
         }));
 
-        choice((
-            if_statement,
-            while_statement,
-            do_while_statement,
-            for_statement,
-            switch_statement,
-            case_statement,
-            default_statement,
-            labeled_or_expression_statement,
-            goto_statement,
-            break_statement,
-            continue_statement,
-            jump_statement,
-            empty_statement,
-            compound,
-        ))
-        .map_with(|r, e| (r, e.span()))
+        custom(move |inp| {
+            let before = inp.cursor();
+            let checkpoint = inp.save();
+            let first = inp.next();
+            inp.rewind(checkpoint);
+
+            let stmt = match first {
+                Some(Token::If) => inp.parse(if_statement.clone())?,
+                Some(Token::While) => inp.parse(while_statement.clone())?,
+                Some(Token::Do) => inp.parse(do_while_statement.clone())?,
+                Some(Token::For) => inp.parse(for_statement.clone())?,
+                Some(Token::Switch) => inp.parse(switch_statement.clone())?,
+                Some(Token::Case) => inp.parse(case_statement.clone())?,
+                Some(Token::Default) => inp.parse(default_statement.clone())?,
+                Some(Token::Goto) => inp.parse(goto_statement.clone())?,
+                Some(Token::Break) => inp.parse(break_statement.clone())?,
+                Some(Token::Continue) => inp.parse(continue_statement.clone())?,
+                Some(Token::Return) => inp.parse(jump_statement.clone())?,
+                Some(Token::Semicolon) => inp.parse(empty_statement.clone())?,
+                Some(Token::LBrace) => inp.parse(compound.clone())?,
+                _ => inp.parse(labeled_or_expression_statement.clone())?,
+            };
+
+            Ok((stmt, inp.span_since(&before)))
+        })
     })
 }
 
@@ -599,17 +633,14 @@ where
                 )
                 .then_ignore(just(Token::RParen))
                 .to(Expression::Constant(Constant::Float(f64::NAN))),
+            expression(rec.clone())
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .map(|x: Spanned<Expression<R>>| x.0),
             just(Token::LParen)
-                .then_ignore(look_ahead(Token::LBrace))
-                .ignore_then(stmt_rec.clone())
+                .ignore_then(compound_statement(resolver.clone(), stmt_rec.clone()))
                 .then_ignore(just(Token::RParen))
-                .map(|(body, _)| Expression::GnuStatementExpr {
-                    body: Box::new({
-                        let Statement::Compound(body) = body else {
-                            unreachable!();
-                        };
-                        body
-                    }),
+                .map(|body| Expression::GnuStatementExpr {
+                    body: Box::new(body),
                 }),
             rust_path().try_map({
                 let resolver = resolver.clone();
@@ -641,9 +672,6 @@ where
                     Expression::Constant(Constant::Char(ch))
                 },
             },
-            expression(rec.clone())
-                .delimited_by(just(Token::LParen), just(Token::RParen))
-                .map(|x: Spanned<Expression<R>>| x.0),
         ))
         .map_with(|r, e| (r, e.span()));
 
