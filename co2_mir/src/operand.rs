@@ -861,6 +861,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         if src_ty == dst_ty {
             return inner_op;
         }
+        let src_is_bool = matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::Bool));
         let src_is_int = matches!(
             src_ty.kind(),
             TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
@@ -953,6 +954,17 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             return MirOperand::Copy(place(bool_local));
         }
         if src_is_int && dst_is_int {
+            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(tmp),
+                    Rvalue::Cast(CastKind::IntToInt, inner_op, dst_ty),
+                ),
+                span,
+            });
+            return MirOperand::Copy(place(tmp));
+        }
+        if src_is_bool && dst_is_int {
             let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(

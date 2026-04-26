@@ -241,11 +241,7 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
             return Err(TestError {
                 source: test.source.clone(),
                 span: None,
-                message: format!(
-                    "stdout mismatch:\n  expected: {}\n  actual:   {}",
-                    expected.lines().next().unwrap_or(""),
-                    stdout.lines().next().unwrap_or("")
-                ),
+                message: format!("stdout mismatch:\n  expected: {expected}\n  actual:   {stdout}",),
             }
             .into());
         }

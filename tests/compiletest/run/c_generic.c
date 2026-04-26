@@ -1,6 +1,6 @@
 //@ mode: c
 //@ run-status: 0
-//@ run-stdout: 20\n10\n20\n123\n2\n0\n5\n1\n2\n3\n4\nlong\n1\n3\n
+//@ run-stdout: 20\n10\n20\n123\n2\n0\n5\n1\n2\n3\n4\nlong\n1\n3\n3\n2\n
 
 #include <stdio.h>
 
@@ -71,6 +71,10 @@ int main()
 	i = _Generic(l, long: 1, int: 2);
 	printf("%d\n", i);
 	i = _Generic(foo, fptr: 3, int: 4);
+	printf("%d\n", i);
+	i = _Generic(l + 2, _Bool: 1, int: 2, signed long int: 3);
+	printf("%d\n", i);
+	i = _Generic(l == 2, _Bool: 1, int: 2, signed long int: 3);
 	printf("%d\n", i);
 	return 0;
 }

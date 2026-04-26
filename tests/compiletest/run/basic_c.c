@@ -1661,6 +1661,19 @@ main76()
 	}
 }
 
+int main77() {
+	int a = 2;
+	int x = (int)(a == 2);
+	_Bool b = x;
+	int y = (int)b;
+	int z = b;
+	int p = (a != 2);
+	if (p || !x || !b || !y || !z) {
+		return 1;
+	}
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1681,7 +1694,7 @@ int main() {
 		main61, main62, main63, main64, main65,
 		main66, main67, main68, main69, main70,
 		main71, main72, main73, main74, main75,
-		main76,
+		main76, main77,
 	};
 	
 	int i;

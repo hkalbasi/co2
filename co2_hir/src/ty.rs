@@ -7,7 +7,8 @@ const ANON_FIELD_PREFIX: &str = "__anon_field_";
 pub(crate) fn is_numeric_ty(ty: Ty) -> bool {
     matches!(
         ty.kind(),
-        TyKind::RigidTy(RigidTy::Int(_))
+        TyKind::RigidTy(RigidTy::Bool)
+            | TyKind::RigidTy(RigidTy::Int(_))
             | TyKind::RigidTy(RigidTy::Uint(_))
             | TyKind::RigidTy(RigidTy::Float(_))
     )
@@ -15,6 +16,7 @@ pub(crate) fn is_numeric_ty(ty: Ty) -> bool {
 
 fn numeric_rank(ty: Ty) -> Option<(u8, bool)> {
     match ty.kind() {
+        TyKind::RigidTy(RigidTy::Bool) => Some((0, false)),
         TyKind::RigidTy(RigidTy::Int(int_ty)) => {
             let rank = match int_ty {
                 IntTy::I8 => 1,

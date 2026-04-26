@@ -106,10 +106,15 @@ pub fn render_test_error(path: &Path, err: &TestError) {
             .eprint((path.display().to_string(), Source::from(source)))
             .unwrap_or_else(|e| eprintln!("{e:#}"));
     } else {
-        let mut r = Report::build(ReportKind::Error, (path.display().to_string(), 0..0));
-        r.set_note(&err.message);
-        r.finish()
-            .eprint((path.display().to_string(), Source::from(source)))
-            .unwrap_or_else(|e| eprintln!("{e:#}"));
+        eprintln!("Error: {}", err.message);
+        eprintln!("  at {}", path.display());
+
+        if let Some(first_code_line) = source
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with("//@") && !line.starts_with("#@"))
+        {
+            eprintln!("  source: {}", first_code_line);
+        }
     }
 }
