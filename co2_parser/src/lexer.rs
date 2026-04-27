@@ -107,7 +107,11 @@ pub fn lexer<'src>() -> impl Parser<
 
     // Float constants
     let decimal_float = text::int(10)
-        .then(just('.').ignore_then(text::digits(10).to_slice()).or_not())
+        .then(
+            just('.')
+                .ignore_then(text::digits(10).to_slice().or(empty().to("")))
+                .or_not(),
+        )
         .then(
             just('e')
                 .or(just('E'))
