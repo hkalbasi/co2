@@ -15,6 +15,12 @@ pub fn main() -> std::process::ExitCode {
 }
 
 pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
+    if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        co2_ast::set_diagnostic_base_path(Some(std::path::PathBuf::from(manifest_dir)));
+    }
+
+    co2_ast::set_force_json_diagnostics(rustc_requests_json_diagnostics(&args));
+
     let args = maybe_force_json_diagnostics(args);
     let co2_file = match detect_co2(&args) {
         DetectResult::Continue(exit_code) => {
@@ -49,4 +55,11 @@ fn maybe_force_json_diagnostics(mut args: Vec<String>) -> Vec<String> {
         args.push("--error-format=json".to_owned());
     }
     args
+}
+
+fn rustc_requests_json_diagnostics(args: &[String]) -> bool {
+    args.iter().enumerate().any(|(idx, arg)| {
+        arg == "--error-format=json"
+            || (arg == "--error-format" && args.get(idx + 1).is_some_and(|value| value == "json"))
+    })
 }

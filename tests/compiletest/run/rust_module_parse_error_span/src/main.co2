@@ -1,0 +1,3 @@
+mod broken;
+
+fn main() {}

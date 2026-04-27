@@ -222,6 +222,9 @@ fn load_modules(
 
         let preprocessed = co2_preprocessor::preprocess(&module_path, &Vec::new());
         register_preprocessed_files(ctx, &preprocessed, rustc_file_ids, source_files);
+        co2_ast::set_source_map(Arc::new(SourceMapSnapshot {
+            files: Arc::new(source_files.clone()),
+        }));
 
         let source_name = module_path.to_string_lossy().into_owned();
         let source: &'static str = Box::leak(preprocessed.normalized.to_string().into_boxed_str());

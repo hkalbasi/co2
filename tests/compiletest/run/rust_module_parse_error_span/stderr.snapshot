@@ -1,0 +1,8 @@
+Error: found 'int' expected ';'
+   ╭─[ src/broken.co2:1:1 ]
+   │
+ 1 │ int version(void)
+   │ ─┬─  
+   │  ╰─── found 'int' expected ';'
+───╯
+error: could not compile `rust_module_parse_error_span` (bin "rust_module_parse_error_span") due to 1 previous error

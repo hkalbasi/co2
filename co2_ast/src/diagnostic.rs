@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex, Once,
     atomic::{AtomicBool, Ordering},
@@ -12,6 +13,7 @@ use crate::{FileId, Span, Token};
 
 static ERRORS: Mutex<Vec<Rich<'static, Token, Span>>> = Mutex::new(Vec::new());
 static DIAGNOSTICS_EMITTED: AtomicBool = AtomicBool::new(false);
+static FORCE_JSON_DIAGNOSTICS: AtomicBool = AtomicBool::new(false);
 static INSTALL_HOOK: Once = Once::new();
 static SOURCE_MAP: Mutex<Option<Arc<dyn SourceMap>>> = Mutex::new(None);
 
@@ -51,6 +53,10 @@ pub fn reset_diagnostic_state() {
 
 pub fn set_source_map(source_map: Arc<dyn SourceMap>) {
     *SOURCE_MAP.try_lock().unwrap() = Some(source_map);
+}
+
+pub fn set_force_json_diagnostics(force: bool) {
+    FORCE_JSON_DIAGNOSTICS.store(force, Ordering::SeqCst);
 }
 
 pub fn diagnostics_were_emitted() -> bool {
@@ -172,7 +178,9 @@ fn emit_mapped_diagnostics(
     terminate: bool,
 ) {
     DIAGNOSTICS_EMITTED.store(true, Ordering::SeqCst);
-    if std::env::var_os("CO2_FORCE_JSON_DIAGNOSTICS").is_some() {
+    if FORCE_JSON_DIAGNOSTICS.load(Ordering::SeqCst)
+        || std::env::var_os("CO2_FORCE_JSON_DIAGNOSTICS").is_some()
+    {
         for e in diagnostics {
             emit_json_diagnostic(&filename, src, &e, level);
         }
@@ -188,6 +196,24 @@ fn emit_mapped_diagnostics(
     }
 }
 
+static DIAGNOSTIC_BASE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+pub fn set_diagnostic_base_path(path: Option<PathBuf>) {
+    let mut guard = DIAGNOSTIC_BASE_PATH.lock().unwrap();
+    *guard = path;
+}
+
+fn relativize_path(path: &str) -> String {
+    let path = std::path::Path::new(path);
+    let guard = DIAGNOSTIC_BASE_PATH.lock().unwrap();
+    if let Some(base) = guard.as_ref() {
+        if let Ok(relative) = path.strip_prefix(base) {
+            return relative.display().to_string();
+        }
+    }
+    path.display().to_string()
+}
+
 fn emit_human_diagnostic(
     filename: &str,
     src: &str,
@@ -195,40 +221,45 @@ fn emit_human_diagnostic(
     level: DiagnosticLevel,
 ) {
     if let Some(mapped) = get_diagnostic_info(*e.span()) {
+        let display_name = relativize_path(&mapped.file_name);
         Report::build(
             level.report_kind(),
-            (mapped.file_name.clone(), mapped.start..mapped.end),
+            (display_name.clone(), mapped.start..mapped.end),
         )
         .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
         .with_message(e.to_string())
         .with_label(
-            Label::new((mapped.file_name.clone(), mapped.start..mapped.end))
+            Label::new((display_name.clone(), mapped.start..mapped.end))
                 .with_message(e.reason().to_string())
                 .with_color(level.label_color()),
         )
         .finish()
-        .eprint(sources([(mapped.file_name, mapped.source.to_string())]))
+        .eprint(sources([(display_name, mapped.source.to_string())]))
         .unwrap();
         return;
     }
 
     let range = safe_range(*e.span(), src.len());
-    Report::build(level.report_kind(), (filename.to_owned(), range.clone()))
-        .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-        .with_message(e.to_string())
-        .with_label(
-            Label::new((filename.to_owned(), range))
-                .with_message(e.reason().to_string())
-                .with_color(level.label_color()),
-        )
-        .with_labels(e.contexts().map(|(label, span)| {
-            Label::new((filename.to_owned(), safe_range(*span, src.len())))
-                .with_message(format!("while parsing this {label}"))
-                .with_color(Color::Yellow)
-        }))
-        .finish()
-        .eprint(sources([(filename.to_owned(), src.to_owned())]))
-        .unwrap();
+    let display_name = relativize_path(filename);
+    Report::build(
+        level.report_kind(),
+        (display_name.to_owned(), range.clone()),
+    )
+    .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+    .with_message(e.to_string())
+    .with_label(
+        Label::new((display_name.to_owned(), range))
+            .with_message(e.reason().to_string())
+            .with_color(level.label_color()),
+    )
+    .with_labels(e.contexts().map(|(label, span)| {
+        Label::new((display_name.to_owned(), safe_range(*span, src.len())))
+            .with_message(format!("while parsing this {label}"))
+            .with_color(Color::Yellow)
+    }))
+    .finish()
+    .eprint(sources([(display_name, src.to_owned())]))
+    .unwrap();
 }
 
 fn emit_json_diagnostic(
@@ -239,34 +270,74 @@ fn emit_json_diagnostic(
 ) {
     if let Some(mapped) = get_diagnostic_info(*e.span()) {
         let range = mapped.start..mapped.end;
+        let display_name = relativize_path(&mapped.file_name);
+        let mut rendered = Vec::new();
+        Report::build(level.report_kind(), (display_name.clone(), range.clone()))
+            .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+            .with_message(e.to_string())
+            .with_label(
+                Label::new((display_name.clone(), range.clone()))
+                    .with_message(e.reason().to_string())
+                    .with_color(level.label_color()),
+            )
+            .finish()
+            .write(
+                sources([(display_name.clone(), mapped.source.to_string())]),
+                &mut rendered,
+            )
+            .unwrap();
         let diagnostic = json!({
             "$message_type": "diagnostic",
             "message": e.to_string(),
             "code": null,
             "level": level.json_level(),
-            "spans": [json_span(&mapped.file_name, range, true, Some(e.reason().to_string()))],
+            "spans": [json_span(&display_name, range, true, Some(e.reason().to_string()))],
             "children": [],
-            "rendered": null,
+            "rendered": String::from_utf8(rendered).unwrap(),
         });
         eprintln!("{diagnostic}");
         return;
     }
 
     let range = safe_range(*e.span(), src.len());
+    let display_name = relativize_path(filename);
     let mut spans = vec![json_span(
-        filename,
+        &display_name,
         range.clone(),
         true,
         Some(e.reason().to_string()),
     )];
     spans.extend(e.contexts().map(|(label, span)| {
         json_span(
-            filename,
+            &display_name,
             safe_range(*span, src.len()),
             false,
             Some(format!("while parsing this {label}")),
         )
     }));
+    let mut rendered = Vec::new();
+    Report::build(
+        level.report_kind(),
+        (display_name.to_owned(), range.clone()),
+    )
+    .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+    .with_message(e.to_string())
+    .with_label(
+        Label::new((display_name.to_owned(), range.clone()))
+            .with_message(e.reason().to_string())
+            .with_color(level.label_color()),
+    )
+    .with_labels(e.contexts().map(|(label, span)| {
+        Label::new((display_name.to_owned(), safe_range(*span, src.len())))
+            .with_message(format!("while parsing this {label}"))
+            .with_color(Color::Yellow)
+    }))
+    .finish()
+    .write(
+        sources([(display_name.to_owned(), src.to_owned())]),
+        &mut rendered,
+    )
+    .unwrap();
 
     let diagnostic = json!({
         "$message_type": "diagnostic",
@@ -275,7 +346,7 @@ fn emit_json_diagnostic(
         "level": level.json_level(),
         "spans": spans,
         "children": [],
-        "rendered": null,
+        "rendered": String::from_utf8(rendered).unwrap(),
     });
     eprintln!("{diagnostic}");
 }

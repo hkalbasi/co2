@@ -273,11 +273,25 @@ impl LocalResolver {
             .0
             .tokens
             .get(1..subscription.0.tokens.len().saturating_sub(1))?;
+        let tokens = tokens
+            .iter()
+            .skip_while(|(token, _)| {
+                matches!(
+                    token,
+                    co2_ast::Token::Static
+                        | co2_ast::Token::Const
+                        | co2_ast::Token::Restrict
+                        | co2_ast::Token::Volatile
+                        | co2_ast::Token::Atomic
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         // Extract source info into locals first so the Ref guards are dropped before
         // parse_expression_tokens runs. If the arguments were inline borrows, they would
         // live until the end of the statement, causing a RefCell panic when the parser
         // tries to borrow_mut (e.g. to register an anonymous struct in sizeof).
-        let expr = parse_expression_tokens(tokens, subscription.1, self.clone());
+        let expr = parse_expression_tokens(&tokens, subscription.1, self.clone());
         let mut base = self.base.borrow_mut();
         let id = base.array_len_consts.len();
         let registered = RegisteredArrayLenConst {

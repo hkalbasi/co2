@@ -27,7 +27,8 @@ pub use chumsky::prelude::Rich;
 pub use diagnostic::{
     DiagnosticAbort, DiagnosticSpan, SourceMap, diagnostics_were_emitted, emit_errors,
     emit_errors_and_terminate, emit_warnings, is_diagnostic_abort, panic_with_diagnostic_abort,
-    print_errors_and_terminate, reset_diagnostic_state, safe_range, set_source_map, take_errors,
+    print_errors_and_terminate, reset_diagnostic_state, safe_range, set_diagnostic_base_path,
+    set_force_json_diagnostics, set_source_map, take_errors,
 };
 pub use resolver::{StatelessResolver, TypeResolver};
 pub use transform::{DoTransform, Transformable};
@@ -843,34 +844,43 @@ impl LazySubscription {
     }
 
     pub fn constant_len(&self) -> Option<u128> {
-        let mut len = None;
-        if let [_, (token, _), _] = &self.tokens[..] {
-            let next = match token {
-                Token::Integer(text, suffix) => {
-                    if !matches!(suffix, IntegerSuffix::None) {
-                        return None;
-                    }
-                    parse_unsigned_integer_constant(text).ok()
-                }
-                Token::FloatLit(text, suffix) => {
-                    if !matches!(suffix, FloatSuffix::None) {
-                        return None;
-                    }
-                    if !text.chars().all(|c| c.is_ascii_digit()) {
-                        return None;
-                    }
-                    text.parse::<u128>().ok()
-                }
-                _ => None,
-            };
-            if let Some(parsed) = next {
-                if len.is_some() {
+        let [_, inner @ .., _] = &self.tokens[..] else {
+            return None;
+        };
+        let inner = inner
+            .iter()
+            .skip_while(|(token, _)| {
+                matches!(
+                    token,
+                    Token::Static
+                        | Token::Const
+                        | Token::Restrict
+                        | Token::Volatile
+                        | Token::Atomic
+                )
+            })
+            .collect::<Vec<_>>();
+        let [(token, _)] = inner.as_slice() else {
+            return None;
+        };
+        match token {
+            Token::Integer(text, suffix) => {
+                if !matches!(suffix, IntegerSuffix::None) {
                     return None;
                 }
-                len = Some(parsed);
+                parse_unsigned_integer_constant(text).ok()
             }
+            Token::FloatLit(text, suffix) => {
+                if !matches!(suffix, FloatSuffix::None) {
+                    return None;
+                }
+                if !text.chars().all(|c| c.is_ascii_digit()) {
+                    return None;
+                }
+                text.parse::<u128>().ok()
+            }
+            _ => None,
         }
-        len
     }
 }
 

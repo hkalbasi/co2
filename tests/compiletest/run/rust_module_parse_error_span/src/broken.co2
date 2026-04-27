@@ -1,0 +1,4 @@
+int version(void)
+static inline int helper(int x) {
+    return x;
+}
