@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rustc_abi::ExternAbi;
@@ -1749,21 +1748,16 @@ pub fn allocate_def_id<'tcx>(
         crate::DefData::Impl => DefPathData::Impl,
         crate::DefData::AnonConst => DefPathData::AnonConst,
     };
-    let mut disamb = match kind {
-        crate::DefData::Impl => {
-            static IMPL_DISAMB: AtomicU32 = AtomicU32::new(1);
-            let idx = IMPL_DISAMB.fetch_add(1, Ordering::Relaxed);
-            DisambiguatorState::with(CRATE_DEF_ID, DefPathData::Impl, idx)
-        }
-        _ => DisambiguatorState::with(CRATE_DEF_ID, DefPathData::ValueNs(Symbol::intern("gen")), 1),
-    };
-    let def_id = defs_mut.create_def(parent, data, &mut disamb);
+    let def_id =
+        DEF_DISAMBIGUATORS.with_borrow_mut(|disamb| defs_mut.create_def(parent, data, disamb));
     rustc_def_to_my_def(tcx, def_id.to_def_id())
 }
 
 thread_local! {
     static CACHE_TO: RefCell<HashMap<DefId, RustcDefId>> = RefCell::new(HashMap::new());
     static CACHE_FROM: RefCell<HashMap<RustcDefId, DefId>> = RefCell::new(HashMap::new());
+    static DEF_DISAMBIGUATORS: RefCell<DisambiguatorState> =
+        const { RefCell::new(DisambiguatorState::new()) };
 }
 
 fn my_def_id_to_rustc_def_id<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> RustcDefId {
