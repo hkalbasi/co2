@@ -359,9 +359,6 @@ impl co2_ast::TypeResolver for LocalResolver {
             return Some((TypeQueryResult::Expr, DefOrLocal::FuncName));
         }
         let base = self.base.borrow();
-        if let Some(prim) = PrimitiveTy::parse(&path_pretty) {
-            return Some((TypeQueryResult::Type, DefOrLocal::Prim(prim)));
-        }
         if let Some(ty) = self
             .base
             .borrow()
@@ -429,6 +426,13 @@ impl co2_ast::TypeResolver for LocalResolver {
                     ResolvedExprPath::Const(def_id) => {
                         Some((DefOrLocal::Const(def_id), TypeQueryResult::Expr))
                     }
+                }
+            })
+            .or_else(|| {
+                if let Some(prim) = PrimitiveTy::parse(&path_pretty) {
+                    Some((DefOrLocal::Prim(prim), TypeQueryResult::Type))
+                } else {
+                    None
                 }
             })?;
         Some((class, def))
