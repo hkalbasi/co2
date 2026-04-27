@@ -127,6 +127,10 @@ pub fn check_ui(
     }
 
     for diagnostic in &diagnostics {
+        if diagnostic.message.starts_with("aborting due to ") {
+            continue;
+        }
+
         let matched = span_expectations.iter().any(|expected| {
             if let Some(message) = &expected.message
                 && diagnostic.message != *message

@@ -10,12 +10,12 @@ if $status.exit_code != 0 {
     exit 1
 }
 
-# Check main.rs has #![co2::language]
+# Check main.rs has #![language(co2)]
 let project_dir = ($test_dir | path join "co2cargo_init_test" "test_project")
 let main_rs = ($project_dir | path join "src" "main.rs")
 let content = (open $main_rs)
-if not ($content | str contains "#![co2::language]") {
-    print $"main.rs missing #![co2::language]: ($content)"
+if not ($content | str contains "#![language(co2)]") {
+    print $"main.rs missing #![language\(co2)]: ($content)"
     exit 1
 }
 

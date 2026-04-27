@@ -11,7 +11,7 @@ pub fn main_with_args(args: Vec<String>) -> i32 {
         println!();
         println!("CO2 Specific Commands:");
         println!("    init        Initialize a new co2 project in an existing directory.");
-        println!("                Creates src/main.co2 and adds #![co2::language] to src/main.rs.");
+        println!("                Creates src/main.co2 and adds #![language(co2)] to src/main.rs.");
         println!();
         println!("Common Cargo Commands (forwarded with RUSTC=co2rustc):");
         println!("    build, b    Compile the current package");
@@ -138,7 +138,7 @@ fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), String> {
         ));
     }
 
-    let new_content = "#![feature(register_tool)]\n#![feature(custom_inner_attributes)]\n#![register_tool(co2)]\n#![co2::language]\n".to_owned();
+    let new_content = "#![language(co2)]\n".to_owned();
 
     fs::write(&src_dir, new_content).map_err(|e| format!("write {}: {}", src_dir.display(), e))?;
 
@@ -157,7 +157,7 @@ fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), String> {
     fs::write(&co2_file, co2_template)
         .map_err(|e| format!("write {}: {}", co2_file.display(), e))?;
 
-    println!("Added #![co2::language] to {}", src_dir.display());
+    println!("Added #![language(co2)] to {}", src_dir.display());
     println!("Created {}", co2_file.display());
 
     Ok(())

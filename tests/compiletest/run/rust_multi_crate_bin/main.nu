@@ -5,11 +5,7 @@ let lib_rlib = ($test_dir | path join "libsupport_lib.rlib")
 let app = ($test_dir | path join "app")
 let lib_shim = ($test_dir | path join "support_lib.rs")
 
-'#![feature(register_tool)]
-#![feature(custom_inner_attributes)]
-#![register_tool(co2)]
-#![co2::language]
-' | save -f $lib_shim
+'#![language(co2)]' | save -f $lib_shim
 
 let compile_lib = (do {
     ^co2rustc $lib_shim --crate-type=lib --crate-name support_lib --edition=2024 -o $lib_rlib

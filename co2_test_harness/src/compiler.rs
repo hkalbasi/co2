@@ -144,11 +144,8 @@ pub fn compile_test(
             fs::copy(&test.path, &co2_src).context("failed to copy co2 test source")?;
 
             let shim = temp_path.join(format!("{name}.rs"));
-            fs::write(
-                &shim,
-                "#![feature(register_tool)]\n#![feature(custom_inner_attributes)]\n#![register_tool(co2)]\n#![co2::language]\n",
-            )
-            .context("failed to write co2 shim rust file")?;
+            fs::write(&shim, "#![language(co2)]\n")
+                .context("failed to write co2 shim rust file")?;
 
             let mut cmd = Command::new(root.join("target").join("debug").join("co2rustc"));
             cmd.arg(&shim)

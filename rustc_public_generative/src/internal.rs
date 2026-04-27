@@ -1834,6 +1834,35 @@ impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
         _compiler: &rustc_interface::interface::Compiler,
         krate: &mut rustc_ast::Crate,
     ) -> rustc_driver::Compilation {
+        let is_co2 = krate.attrs.iter().any(|attr| {
+            let meta = match attr.meta() {
+                Some(meta) => meta,
+                None => return false,
+            };
+            let path_segments = meta
+                .path
+                .segments
+                .iter()
+                .map(|s| s.ident.as_str())
+                .collect::<Vec<_>>();
+
+            path_segments.as_slice() == ["language"]
+                && match &meta.kind {
+                    rustc_ast::MetaItemKind::List(items) => items.iter().any(|item| match item {
+                        rustc_ast::MetaItemInner::MetaItem(item) => {
+                            item.path.segments.iter().all(|s| s.ident.as_str() == "co2")
+                        }
+                        rustc_ast::MetaItemInner::Lit(_) => false,
+                    }),
+                    _ => false,
+                }
+        });
+
+        if is_co2 {
+            krate.attrs.clear();
+            krate.items.clear();
+        }
+
         krate.attrs.push(Attribute {
             kind: rustc_ast::AttrKind::Normal(Box::new(rustc_ast::NormalAttr {
                 item: rustc_ast::AttrItem {
@@ -1939,17 +1968,6 @@ pub fn collect_dependency_info<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>) -> Dep
             };
             collect_dependency_def(tcx, def_id, &mut info);
         }
-    }
-
-    // Also expose local crate definitions so generated items can refer to user-defined
-    // structs/functions from the current compilation unit.
-    let local_count = tcx.definitions_untracked().def_index_count();
-    for idx in 0..local_count {
-        let def_id = RustcDefId {
-            krate: rustc_hir::def_id::LOCAL_CRATE,
-            index: rustc_span::def_id::DefIndex::from_usize(idx),
-        };
-        collect_dependency_def(tcx, def_id, &mut info);
     }
 
     info

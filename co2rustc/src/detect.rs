@@ -17,22 +17,7 @@ fn is_language_co2(attr: &Attribute) -> bool {
         .map(|s| s.ident.as_str())
         .collect::<Vec<_>>();
 
-    if path_segments.as_slice() == ["language_co2"] {
-        return true;
-    }
-
-    if path_segments.as_slice() == ["co2", "language"] {
-        return true;
-    }
-
-    let is_language = meta
-        .path
-        .segments
-        .iter()
-        .map(|s| s.ident.as_str())
-        .eq(std::iter::once("language"));
-
-    if !is_language {
+    if path_segments.as_slice() != ["language"] {
         return false;
     }
 
@@ -67,22 +52,55 @@ impl Callbacks for DetectCallbacks {
         compiler: &rustc_interface::interface::Compiler,
         krate: &mut rustc_ast::Crate,
     ) -> Compilation {
+        let mut co2_attr = None;
         for attr in &krate.attrs {
             if is_language_co2(attr) {
-                self.enabled = true;
-                let files_lock = compiler.sess.source_map().files();
-                let original_file = files_lock.iter().exactly_one().unwrap();
+                co2_attr = Some(attr.span);
+                break;
+            }
+        }
 
-                let rustc_span::FileName::Real(original_file) = &original_file.name else {
-                    panic!("File was not real");
-                };
+        if let Some(_span) = co2_attr {
+            let mut has_other = false;
+            for attr in &krate.attrs {
+                if !is_language_co2(attr) {
+                    compiler.sess.dcx().span_err(
+                        attr.span,
+                        "CO2 host file must not contain any other attributes",
+                    );
+                    has_other = true;
+                }
+            }
 
-                let original_file = original_file.path(rustc_span::RemapPathScopeComponents::MACRO);
-                let co2_file = original_file.with_extension("co2");
-                drop(files_lock);
-                self.co2_file = Some(co2_file);
+            if let Some(item) = krate.items.first() {
+                compiler
+                    .sess
+                    .dcx()
+                    .span_err(item.span, "CO2 host file must not contain any items");
+                has_other = true;
+            }
+
+            if has_other {
                 return Compilation::Stop;
             }
+
+            self.enabled = true;
+            let files_lock = compiler.sess.source_map().files();
+            let original_file = files_lock.iter().exactly_one().unwrap();
+
+            let rustc_span::FileName::Real(original_file) = &original_file.name else {
+                panic!("File was not real");
+            };
+
+            let original_file = original_file.path(rustc_span::RemapPathScopeComponents::MACRO);
+            let co2_file = original_file.with_extension("co2");
+            drop(files_lock);
+            self.co2_file = Some(co2_file);
+
+            krate.attrs.clear();
+            krate.items.clear();
+
+            return Compilation::Stop;
         }
 
         Compilation::Continue

@@ -38,7 +38,8 @@ CO2 is designed to be a "C with Rust powers." It maintains high compatibility wi
 CO2 integrates into the Rust module system. 
 
 ### .rs and .co2 Relationship
-A Rust file (e.g., `main.rs`) can "host" a CO2 file by using the `#![co2::language]` attribute at the crate root or a module level. When `co2rustc` sees this, it looks for a corresponding `.co2` file (e.g., `main.co2`) in the same directory.
+A Rust file (e.g., `main.rs`) can "host" a CO2 file by using the `#![language(co2)]` attribute at the crate root or a module level.
+When `co2rustc` sees this, it looks for a corresponding `.co2` file (e.g., `main.co2`) in the same directory.
 
 ### Submodules
 You can define submodules in CO2 using the `mod` keyword, similar to Rust:
@@ -86,7 +87,7 @@ co2cargo init
 ```
 This will:
 - Run `cargo init` to create a `Cargo.toml`.
-- Add `#![co2::language]` to `src/main.rs`.
+- Add `#![language(co2)]` to `src/main.rs`.
 - Create a template `src/main.co2`.
 
 ### 2. Migration of C Source Files
