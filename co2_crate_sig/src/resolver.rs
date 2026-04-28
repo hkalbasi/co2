@@ -309,6 +309,38 @@ impl Resolver {
                     .unwrap(),
             ),
         );
+        // __builtin_clz: count leading zeros for unsigned int (u32)
+        this.current.insert_path(
+            ["__builtin_clz"].into_iter(),
+            Some(
+                this.resolve_in_deps("std", ["num", "<impl u32>", "leading_zeros"])
+                    .unwrap(),
+            ),
+        );
+        // __builtin_clzll: count leading zeros for unsigned long long (u64)
+        this.current.insert_path(
+            ["__builtin_clzll"].into_iter(),
+            Some(
+                this.resolve_in_deps("std", ["num", "<impl u64>", "leading_zeros"])
+                    .unwrap(),
+            ),
+        );
+        // __builtin_ctz: count trailing zeros for unsigned int (u32)
+        this.current.insert_path(
+            ["__builtin_ctz"].into_iter(),
+            Some(
+                this.resolve_in_deps("std", ["num", "<impl u32>", "trailing_zeros"])
+                    .unwrap(),
+            ),
+        );
+        // __builtin_ctzll: count trailing zeros for unsigned long long (u64)
+        this.current.insert_path(
+            ["__builtin_ctzll"].into_iter(),
+            Some(
+                this.resolve_in_deps("std", ["num", "<impl u64>", "trailing_zeros"])
+                    .unwrap(),
+            ),
+        );
         this.rebuild_method_receivers();
         this
     }
