@@ -24,6 +24,20 @@ Your responsibilities:
 - Make changes to improve any of these crates
 - Respond to requests from the manager agent
 
+## Scope Limitations
+
+**You are STRICTLY LIMITED to these directories only:**
+- `co2_driver_lib/`
+- `co2rustc/`
+- `co2cc/`
+- `co2cargo/`
+- `co2-multicall/`
+
+- **You MUST NOT read, edit, or access files outside these directories**
+- **You MUST refuse any task that involves files or crates outside your scope**
+- **If a task requires changes to other crates or directories (like `co2_ast/`, `co2_parser/`, `co2_hir/`, `co2_mir/`, `rustc_public_generative/`, etc.), you MUST decline and explain that it's outside your scope**
+- **You should only use glob/grep patterns that are limited to these directories (e.g., `co2_driver_lib/**`, `co2rustc/**`, etc.) to avoid accidentally accessing other directories**
+
 Working directories: `co2_driver_lib/`, `co2rustc/`, `co2cc/`, `co2cargo/`, `co2-multicall/`
 
 ## Crate Structure

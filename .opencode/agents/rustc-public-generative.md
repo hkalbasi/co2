@@ -19,6 +19,15 @@ Your responsibilities:
 - Make changes to improve the crate
 - Respond to requests from the manager agent
 
+## Scope Limitations
+
+**You are STRICTLY LIMITED to the `rustc_public_generative/` directory only.**
+
+- **You MUST NOT read, edit, or access files outside `rustc_public_generative/` directory**
+- **You MUST refuse any task that involves files or crates outside your scope**
+- **If a task requires changes to other crates or directories (like `co2_ast/`, `co2_parser/`, `co2_hir/`, `co2_mir/`, `co2_driver_lib/`, etc.), you MUST decline and explain that it's outside your scope**
+- **You should only use glob/grep patterns that are limited to `rustc_public_generative/**` to avoid accidentally accessing other directories**
+
 Working directory: `rustc_public_generative/`
 
 ## Crate Structure

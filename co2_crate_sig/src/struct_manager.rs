@@ -5,7 +5,7 @@ use co2_ast::{
     StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeQualifier, TypeQueryResult,
 };
 use rustc_public_generative::{
-    DefData, StructField,
+    DefData, HirTy, StructField,
     rustc_public::{DefId, ty::Span},
 };
 
@@ -219,66 +219,95 @@ impl LocalResolverBase {
         fields: &[co2_ast::Spanned<StructOrUnionField<LocalResolver>>],
         _span: Span,
     ) {
+        let struct_kind = self.struct_manager.definitions.get(&def).unwrap().kind;
         let data = self.struct_manager.definitions.get(&def).unwrap();
         if data.fields.is_some() {
             panic!("Redefinition happened");
         }
         let mut anon_field_count = 0;
-        let fields = fields
-            .iter()
-            .flat_map(|(field, span)| {
-                let specifiers = field
-                    .specifiers
-                    .iter()
-                    .map(|f| {
-                        let spec = match &f.0 {
-                            co2_ast::SpecifierQualifier::TypeSpecifier(ts) => {
-                                DeclarationSpecifier::TypeSpecifier(ts.clone())
-                            }
-                            co2_ast::SpecifierQualifier::TypeQualifier(tq) => {
-                                DeclarationSpecifier::TypeQualifier(*tq)
-                            }
-                        };
-                        (spec, f.1)
-                    })
-                    .collect::<Vec<_>>();
-                let base_const = has_const_qualifier_in_decl_specs(&specifiers);
-                let base = self.base_ty_of_decl(specifiers, *span);
-                field
-                    .declarators
-                    .iter()
-                    .cloned()
-                    .map(|(declarator, parser_span)| {
-                        let span = self.co2_span_to_rustc(parser_span);
 
-                        let (name, ty) = if matches!(declarator.declarator.0, Declarator::Abstract)
-                        {
-                            let id = anon_field_count;
-                            anon_field_count += 1;
-                            let CTy::Ty(ty) = base.clone() else {
-                                self.terminate_with_error(
-                                    parser_span,
-                                    "Function is invalid for anon fields",
-                                );
-                            };
-                            (format!("{ANON_FIELD_PREFIX}{id}"), ty)
-                        } else {
-                            self.lower_value_decl_type(
-                                base.clone(),
-                                base_const,
-                                declarator.declarator,
-                            )
-                        };
+        struct PendingField {
+            name: String,
+            ty: HirTy,
+            span: co2_ast::Span,
+            is_unsized: bool,
+        }
 
-                        let id = self
-                            .hir_ctx
-                            .allocate_def_id(def, DefData::ValueNs(name.clone()));
-                        StructField { id, name, ty, span }
-                    })
-                    .collect::<Vec<_>>()
-                    .into_iter()
+        let mut pending_fields = Vec::new();
+
+        for (field, span) in fields {
+            let specifiers = field
+                .specifiers
+                .iter()
+                .map(|f| {
+                    let spec = match &f.0 {
+                        co2_ast::SpecifierQualifier::TypeSpecifier(ts) => {
+                            DeclarationSpecifier::TypeSpecifier(ts.clone())
+                        }
+                        co2_ast::SpecifierQualifier::TypeQualifier(tq) => {
+                            DeclarationSpecifier::TypeQualifier(*tq)
+                        }
+                    };
+                    (spec, f.1)
+                })
+                .collect::<Vec<_>>();
+            let base_const = has_const_qualifier_in_decl_specs(&specifiers);
+            let base = self.base_ty_of_decl(specifiers, *span);
+            for (declarator, parser_span) in &field.declarators {
+                let (name, ty, is_unsized) =
+                    if matches!(declarator.declarator.0, Declarator::Abstract) {
+                        let id = anon_field_count;
+                        anon_field_count += 1;
+                        let CTy::Ty(ty) = base.clone() else {
+                            self.terminate_with_error(
+                                *parser_span,
+                                "Function is invalid for anon fields",
+                            );
+                        };
+                        (format!("{ANON_FIELD_PREFIX}{id}"), ty, false)
+                    } else {
+                        self.lower_value_decl_type_maybe_unsized(
+                            base.clone(),
+                            base_const,
+                            declarator.declarator.clone(),
+                        )
+                    };
+                pending_fields.push(PendingField {
+                    name,
+                    ty,
+                    span: *parser_span,
+                    is_unsized,
+                });
+            }
+        }
+
+        let fields_len = pending_fields.len();
+        let fields = pending_fields
+            .into_iter()
+            .enumerate()
+            .map(|(i, pending)| {
+                if pending.is_unsized {
+                    let is_last = i == fields_len - 1;
+                    if !is_last || matches!(struct_kind, StructOrUnionKind::Union) {
+                        self.terminate_with_error(
+                            pending.span,
+                            "unsized array is not a first-class declaration type in this context",
+                        );
+                    }
+                }
+
+                let id = self
+                    .hir_ctx
+                    .allocate_def_id(def, DefData::ValueNs(pending.name.clone()));
+                StructField {
+                    id,
+                    name: pending.name,
+                    ty: pending.ty,
+                    span: self.co2_span_to_rustc(pending.span),
+                }
             })
             .collect();
+
         let data = self.struct_manager.definitions.get_mut(&def).unwrap();
         if data.fields.is_some() {
             todo!()

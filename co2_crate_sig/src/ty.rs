@@ -950,14 +950,14 @@ impl LocalResolverBase {
         Ok((name, sig, names))
     }
 
-    pub(crate) fn lower_value_decl_type(
+    pub(crate) fn lower_value_decl_type_maybe_unsized(
         &mut self,
         base: CTy,
         base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> (String, HirTy) {
+    ) -> (String, HirTy, bool) {
         let span = declarator.1;
-        match self.try_lower_value_decl_type(base, base_const, declarator) {
+        match self.try_lower_value_decl_type_maybe_unsized(base, base_const, declarator) {
             Ok(x) => x,
             Err(e) => {
                 self.terminate_with_error(span, &e);
@@ -965,22 +965,28 @@ impl LocalResolverBase {
         }
     }
 
-    pub(crate) fn try_lower_value_decl_type(
+    pub(crate) fn try_lower_value_decl_type_maybe_unsized(
         &mut self,
         base: CTy,
         base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> Result<(String, HirTy), String> {
+    ) -> Result<(String, HirTy, bool), String> {
+        let span = declarator.1;
         let (decl_ty, name) = self.extract_decl_type(base, base_const, declarator)?;
         let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
         match decl_ty {
-            CTy::Ty(ty) => Ok((name, ty)),
+            CTy::Ty(ty) => Ok((name, ty, false)),
             CTy::Function(_) => {
                 Err("function is not a first-class declaration type in this context".to_owned())
             }
-            CTy::UnsizedArray(_) => Err(
-                "unsized array is not a first-class declaration type in this context".to_owned(),
-            ),
+            CTy::UnsizedArray(ty) => {
+                let rust_span = self.co2_span_to_rustc(span);
+                Ok((
+                    name,
+                    HirTy::new_array(ty, HirTyConst::Literal(0), rust_span),
+                    true,
+                ))
+            }
         }
     }
 

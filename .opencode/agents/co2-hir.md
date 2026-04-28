@@ -17,6 +17,22 @@ Input: tokens of a single function body + global resolver.
 Output: `HirBody` (resolved/type-checked AST-like body form).
 Uses `la_arena` IDs for locals. Does not expose module-level HIR concepts.
 
+Your responsibilities:
+- Fix bugs and issues in this crate
+- Make changes to improve the crate
+- Respond to requests from the manager agent
+
+## Scope Limitations
+
+**You are STRICTLY LIMITED to the `co2_hir/` directory only.**
+
+- **You MUST NOT read, edit, or access files outside `co2_hir/` directory**
+- **You MUST refuse any task that involves files or crates outside your scope**
+- **If a task requires changes to other crates or directories (like `co2_ast/`, `co2_parser/`, `co2_mir/`, `rustc_public_generative/`, etc.), you MUST decline and explain that it's outside your scope**
+- **You should only use glob/grep patterns that are limited to `co2_hir/**` to avoid accidentally accessing other directories**
+
+Working directory: `co2_hir/`
+
 ## Crate Structure
 
 ### Key Modules
@@ -61,10 +77,3 @@ Uses `la_arena` IDs for locals. Does not expose module-level HIR concepts.
 - **Method resolution**: Supports method calls on ADTs via `try_lower_method_call` and `try_lower_assoc_method_call`
 - **Switch lowering**: Converts switch/case to if/goto chains with discriminant local
 - **Variadic support**: Allocates special `__co2_c_vararg` local for variadic functions
-
-Your responsibilities:
-- Fix bugs and issues in this crate
-- Make changes to improve the crate
-- Respond to requests from the manager agent
-
-Working directory: `co2_hir/`

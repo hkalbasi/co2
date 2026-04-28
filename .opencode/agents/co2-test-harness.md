@@ -18,6 +18,33 @@ Run all tests with: `cargo run -q --locked -p co2_test_harness -- all`
 Run a specific suite: `cargo run -q --locked -p co2_test_harness -- ui|run|debuginfo`
 Filter tests: `cargo run -q --locked -p co2_test_harness -- all --filter <pattern>`
 
+Your responsibilities:
+- Fix bugs and issues in this crate
+- Make changes to improve the crate
+- Respond to requests from the manager agent
+
+## Scope Limitations
+
+**You are STRICTLY LIMITED to these directories only:**
+- `co2_test_harness/`
+- `tests/`
+
+- **You MUST NOT read, edit, or access files outside these directory**
+- **You MUST refuse any task that involves files or crates outside your scope**
+- **If a task requires changes to other crates or directories (like `co2_ast/`, `co2_parser/`, `co2_hir/`, `co2_mir/`, `co2_driver_lib/`, `rustc_public_generative/`, etc.), you MUST decline and explain that it's outside your scope**
+- **You should only use glob/grep patterns that are limited to your directories to avoid accidentally accessing other directories**
+- **Note: While you run tests that compile code from other crates, you should NOT modify those crates.**
+
+Working directory: `co2_test_harness/`
+
+## Your job
+
+You just write the tests, making them pass is not your job. You check your tests
+with ground truth and expectations. For C tests, the ground truth is the C standard
+and the gcc behaviour. You should check the tests you doubt in health or you newly
+added using gcc. For co2 tests, the ground truth is compatibility with Rust syntax
+and common sense.
+
 ## Crate Structure
 
 ### Key Modules
@@ -43,15 +70,6 @@ Filter tests: `cargo run -q --locked -p co2_test_harness -- all --filter <patter
 - `UiDiagnostic`/`UiDiagnosticSpan` - parsed JSON diagnostic from compiler
 - `TestError`, `UiTestError`, `UiTestIssue` - error types with ariadne rendering
 
-### Dependencies (from Cargo.toml)
-
-- `anyhow = "1"` - error handling
-- `ariadne = "0.5"` - rich error reporting with source spans
-- `clap = { version = "4", features = ["derive"] }` - CLI argument parsing
-- `serde_json = "1"` - JSON diagnostic parsing
-- `shlex = "1"` - shell argument splitting for directives
-- `tempfile = "3.25.0"` - temporary directories for test artifacts
-
 ### Notable Patterns
 
 - Test directives use `//@ key: value` (C/co2) or `#@ key: value` (Rust) comment syntax
@@ -60,10 +78,3 @@ Filter tests: `cargo run -q --locked -p co2_test_harness -- all --filter <patter
 - Debuginfo tests auto-skip when debugger (GDB/LLDB) is unavailable or restricted (ptrace, permissions)
 - Nushell directory tests (`NuDir`) execute `main.nu` with compiler binaries on PATH
 - JSON diagnostics are enabled via `CO2_FORCE_JSON_DIAGNOSTICS` env var for UI tests
-
-Your responsibilities:
-- Fix bugs and issues in this crate
-- Make changes to improve the crate
-- Respond to requests from the manager agent
-
-Working directory: `co2_test_harness/`
