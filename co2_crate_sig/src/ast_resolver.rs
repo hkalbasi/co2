@@ -56,6 +56,7 @@ pub struct LocalResolverBase {
     pub(crate) global_value_tys: HashMap<DefId, HirTy>,
     pub(crate) global_struct_tags: Rc<RefCell<StructAndEnumData>>,
     pub(crate) global_locals: Rc<RefCell<im::HashMap<String, (DefOrLocal, TypeQueryResult)>>>,
+    pub(crate) enum_const_values: HashMap<DefId, i128>,
 }
 
 impl std::fmt::Debug for LocalResolverBase {
@@ -115,6 +116,13 @@ pub fn eval_registered_array_len_const(
         .lookup_array_len_const_expr(id)
         .ok_or_else(|| "missing registered array size constant expression".to_owned())?;
     base.eval_array_len_expr(&expr)
+}
+
+pub fn eval_const_expr_as_usize(
+    resolver: &LocalResolver,
+    expr: &co2_ast::Spanned<Expression<LocalResolver>>,
+) -> Result<usize, String> {
+    resolver.base.borrow_mut().eval_array_len_expr(expr)
 }
 
 #[derive(Debug, Clone)]

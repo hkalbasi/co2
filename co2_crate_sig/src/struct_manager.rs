@@ -29,8 +29,8 @@ pub(crate) struct PendingEnum {
 
 #[derive(Debug, Default)]
 pub(crate) struct StructManager {
-    definitions: HashMap<DefId, StructData>,
-    pending_enum_consts: Vec<PendingEnum>,
+    pub(crate) definitions: HashMap<DefId, StructData>,
+    pub(crate) pending_enum_consts: Vec<PendingEnum>,
 }
 
 const ANON_FIELD_PREFIX: &str = "__anon_field_";
@@ -137,7 +137,10 @@ impl LocalResolver {
                     let mir_info = match value {
                         Some((initializer, span)) => {
                             let initializer = (initializer, span);
-                            MirOwnerInfo::EnumConstExplicit { initializer }
+                            MirOwnerInfo::EnumConstExplicit {
+                                resolver: self.clone(),
+                                initializer,
+                            }
                         }
                         None => match prev {
                             Some(prev) => MirOwnerInfo::EnumConstPrevPlus(prev, span),

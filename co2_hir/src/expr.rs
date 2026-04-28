@@ -499,9 +499,7 @@ impl HirCtx<'_> {
         )>,
         String,
     > {
-        let Some(resolver) = self.decl_resolver.as_ref() else {
-            return Ok(None);
-        };
+        let resolver = &self.decl_resolver;
 
         let (receiver, method_name, parser_span) = match &func.0 {
             Expression::Field(base, field) => {
@@ -590,9 +588,7 @@ impl HirCtx<'_> {
         )>,
         String,
     > {
-        let Some(resolver) = self.decl_resolver.as_ref() else {
-            return Ok(None);
-        };
+        let resolver = &self.decl_resolver;
 
         let (receiver, parsed_receiver_generic_args, method_name, parser_span) = match &func.0 {
             Expression::Identifier((
@@ -794,10 +790,7 @@ impl HirCtx<'_> {
                     })
                 }
                 co2_crate_sig::DefOrLocal::Const(def_id) => {
-                    let resolver = self
-                        .decl_resolver
-                        .as_ref()
-                        .expect("const path lowering requires decl resolver");
+                    let resolver = &self.decl_resolver;
                     let value = resolver.dependency_const_value(def_id).ok_or_else(|| {
                         format!("missing scalar constant value for def {def_id:?}")
                     })?;

@@ -8,6 +8,7 @@ use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst,
 use rustc_public_generative::{
     HirGenericArg,
     rustc_public::{
+        DefId,
         mir::Mutability,
         ty::{FloatTy, IntTy, UintTy},
     },
@@ -598,6 +599,43 @@ impl LocalResolverBase {
         match expr {
             Expression::Constant(Constant::Int(v, _)) => Ok(*v),
             Expression::Constant(Constant::Char(ch)) => Ok(*ch as i128),
+            Expression::Identifier((resolved, _)) => match resolved {
+                crate::DefOrLocal::Const(def_id) => {
+                    if let Some(val) = self.hir_ctx.dependency_const_value(*def_id) {
+                        match val {
+                            rustc_public_generative::DependencyConstValue::Bool(b) => Ok(b as i128),
+                            rustc_public_generative::DependencyConstValue::Char(c) => Ok(c as i128),
+                            rustc_public_generative::DependencyConstValue::I8(i) => Ok(i as i128),
+                            rustc_public_generative::DependencyConstValue::I16(i) => Ok(i as i128),
+                            rustc_public_generative::DependencyConstValue::I32(i) => Ok(i as i128),
+                            rustc_public_generative::DependencyConstValue::I64(i) => Ok(i as i128),
+                            rustc_public_generative::DependencyConstValue::I128(i) => Ok(i),
+                            rustc_public_generative::DependencyConstValue::Isize(i) => {
+                                Ok(i as i128)
+                            }
+                            rustc_public_generative::DependencyConstValue::U8(u) => Ok(u as i128),
+                            rustc_public_generative::DependencyConstValue::U16(u) => Ok(u as i128),
+                            rustc_public_generative::DependencyConstValue::U32(u) => Ok(u as i128),
+                            rustc_public_generative::DependencyConstValue::U64(u) => Ok(u as i128),
+                            rustc_public_generative::DependencyConstValue::U128(u) => Ok(u as i128),
+                            rustc_public_generative::DependencyConstValue::Usize(u) => {
+                                Ok(u as i128)
+                            }
+                            rustc_public_generative::DependencyConstValue::F32(_)
+                            | rustc_public_generative::DependencyConstValue::F64(_) => {
+                                Err("float constant in array size".to_owned())
+                            }
+                        }
+                    } else {
+                        self.eval_local_const(*def_id)
+                    }
+                }
+                crate::DefOrLocal::Def { def_id, .. } => self.eval_local_const(*def_id),
+                _ => Err(format!(
+                    "unsupported identifier in constant expression: {:?}",
+                    resolved
+                )),
+            },
             Expression::UnaryOp(op, inner) => {
                 let inner = self.eval_const_expr(inner)?;
                 match op {
@@ -646,7 +684,11 @@ impl LocalResolverBase {
                     self.eval_const_expr(else_expr)
                 }
             }
-            Expression::Cast { expr, .. } => self.eval_const_expr(expr),
+            Expression::Cast { type_name, expr } => {
+                let value = self.eval_const_expr(expr)?;
+                let target_ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
+                self.cast_const_int(value, &target_ty)
+            }
             Expression::SizeofType(type_name) => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
@@ -666,81 +708,181 @@ impl LocalResolverBase {
         }
     }
 
+    fn eval_local_const(&mut self, def_id: DefId) -> Result<i128, String> {
+        if let Some(val) = self.enum_const_values.get(&def_id) {
+            return Ok(*val);
+        }
+
+        let mir_info = self
+            .struct_manager
+            .pending_enum_consts
+            .iter()
+            .find(|e| e.def_id == def_id)
+            .map(|e| &e.mir_info)
+            .ok_or_else(|| format!("could not find enum constant {:?}", def_id))?;
+
+        let value = match &mir_info {
+            crate::MirOwnerInfo::EnumConstZeroed => 0,
+            crate::MirOwnerInfo::EnumConstExplicit { initializer, .. } => {
+                self.eval_const_expr(&initializer.clone())?
+            }
+            crate::MirOwnerInfo::EnumConstPrevPlus(prev_id, _) => {
+                let prev_id = *prev_id;
+                self.eval_local_const(prev_id)? + 1
+            }
+            _ => return Err(format!("def {:?} is not an enum constant", def_id)),
+        };
+
+        self.enum_const_values.insert(def_id, value);
+        Ok(value)
+    }
+
+    fn hir_ty_of_dependency_const_value(
+        &self,
+        value: rustc_public_generative::DependencyConstValue,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) -> HirTy {
+        match value {
+            rustc_public_generative::DependencyConstValue::Bool(_) => HirTy {
+                kind: HirTyKind::Bool,
+                span,
+            },
+            rustc_public_generative::DependencyConstValue::Char(_) => {
+                HirTy::signed_ty(IntTy::I32, span)
+            }
+            rustc_public_generative::DependencyConstValue::I8(_) => {
+                HirTy::signed_ty(IntTy::I8, span)
+            }
+            rustc_public_generative::DependencyConstValue::I16(_) => {
+                HirTy::signed_ty(IntTy::I16, span)
+            }
+            rustc_public_generative::DependencyConstValue::I32(_) => {
+                HirTy::signed_ty(IntTy::I32, span)
+            }
+            rustc_public_generative::DependencyConstValue::I64(_) => {
+                HirTy::signed_ty(IntTy::I64, span)
+            }
+            rustc_public_generative::DependencyConstValue::I128(_) => {
+                HirTy::signed_ty(IntTy::I128, span)
+            }
+            rustc_public_generative::DependencyConstValue::Isize(_) => {
+                HirTy::signed_ty(IntTy::Isize, span)
+            }
+            rustc_public_generative::DependencyConstValue::U8(_) => {
+                HirTy::unsigned_ty(UintTy::U8, span)
+            }
+            rustc_public_generative::DependencyConstValue::U16(_) => {
+                HirTy::unsigned_ty(UintTy::U16, span)
+            }
+            rustc_public_generative::DependencyConstValue::U32(_) => {
+                HirTy::unsigned_ty(UintTy::U32, span)
+            }
+            rustc_public_generative::DependencyConstValue::U64(_) => {
+                HirTy::unsigned_ty(UintTy::U64, span)
+            }
+            rustc_public_generative::DependencyConstValue::U128(_) => {
+                HirTy::unsigned_ty(UintTy::U128, span)
+            }
+            rustc_public_generative::DependencyConstValue::Usize(_) => {
+                HirTy::unsigned_ty(UintTy::Usize, span)
+            }
+            rustc_public_generative::DependencyConstValue::F32(_) => {
+                HirTy::float_ty(FloatTy::F32, span)
+            }
+            rustc_public_generative::DependencyConstValue::F64(_) => {
+                HirTy::float_ty(FloatTy::F64, span)
+            }
+        }
+    }
+
+    fn maybe_local_enum_const_ty(
+        &self,
+        def_id: DefId,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) -> Option<HirTy> {
+        (self.enum_const_values.contains_key(&def_id)
+            || self
+                .struct_manager
+                .pending_enum_consts
+                .iter()
+                .any(|pending| pending.def_id == def_id))
+        .then(|| HirTy::signed_ty(IntTy::I32, span))
+    }
+
+    fn scalar_const_ty(
+        &self,
+        def_id: DefId,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) -> Option<HirTy> {
+        self.hir_ctx
+            .dependency_const_value(def_id)
+            .map(|value| self.hir_ty_of_dependency_const_value(value, span))
+            .or_else(|| self.maybe_local_enum_const_ty(def_id, span))
+    }
+
+    fn maybe_const_eval_named_ty(
+        &self,
+        def_id: DefId,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) -> Option<HirTy> {
+        self.global_value_tys
+            .get(&def_id)
+            .cloned()
+            .or_else(|| self.maybe_local_enum_const_ty(def_id, span))
+    }
+
+    fn cast_const_int(&self, value: i128, target_ty: &HirTy) -> Result<i128, String> {
+        match target_ty.kind {
+            HirTyKind::Bool => Ok((value != 0) as i128),
+            HirTyKind::Char => {
+                let codepoint =
+                    u32::try_from(value).map_err(|_| format!("invalid char cast value {value}"))?;
+                char::from_u32(codepoint)
+                    .map(|ch| ch as i128)
+                    .ok_or_else(|| format!("invalid char cast value {value}"))
+            }
+            HirTyKind::Int(IntTy::I8) => Ok((value as i8) as i128),
+            HirTyKind::Int(IntTy::I16) => Ok((value as i16) as i128),
+            HirTyKind::Int(IntTy::I32) => Ok((value as i32) as i128),
+            HirTyKind::Int(IntTy::I64) => Ok((value as i64) as i128),
+            HirTyKind::Int(IntTy::I128) => Ok(value),
+            HirTyKind::Int(IntTy::Isize) => Ok((value as isize) as i128),
+            HirTyKind::Uint(UintTy::U8) => Ok((value as u8) as i128),
+            HirTyKind::Uint(UintTy::U16) => Ok((value as u16) as i128),
+            HirTyKind::Uint(UintTy::U32) => Ok((value as u32) as i128),
+            HirTyKind::Uint(UintTy::U64) => Ok((value as u64) as i128),
+            HirTyKind::Uint(UintTy::U128) => Ok((value as u128) as i128),
+            HirTyKind::Uint(UintTy::Usize) => Ok((value as usize) as i128),
+            _ => Err(format!(
+                "unsupported cast target in constant expression: {:?}",
+                target_ty.kind
+            )),
+        }
+    }
+
     fn type_of_expr_for_sizeof(
         &mut self,
         (expr, span): &Spanned<Expression<LocalResolver>>,
     ) -> Result<HirTy, String> {
         let rust_span = self.co2_span_to_rustc(*span);
         match expr {
+            Expression::Constant(Constant::String(s)) => Ok(HirTy::new_array(
+                HirTy::signed_ty(IntTy::I8, rust_span),
+                HirTyConst::Literal(s.chars().count() + 1),
+                rust_span,
+            )),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Local(local) => self
                     .local_tys
                     .get(local)
                     .cloned()
                     .ok_or_else(|| format!("missing local type for local {local}")),
-                crate::DefOrLocal::Def { def_id: def, .. } => self
-                    .global_value_tys
-                    .get(def)
-                    .cloned()
-                    .ok_or_else(|| format!("missing global type for def {def:?}")),
-                crate::DefOrLocal::Const(def_id) => Ok(
-                    match self
-                        .hir_ctx
-                        .dependency_const_value(*def_id)
-                        .ok_or_else(|| {
-                            format!("missing scalar constant value for def {def_id:?}")
-                        })? {
-                        rustc_public_generative::DependencyConstValue::Bool(_) => HirTy {
-                            kind: HirTyKind::Bool,
-                            span: rust_span,
-                        },
-                        rustc_public_generative::DependencyConstValue::Char(_) => {
-                            HirTy::signed_ty(IntTy::I32, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::I8(_) => {
-                            HirTy::signed_ty(IntTy::I8, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::I16(_) => {
-                            HirTy::signed_ty(IntTy::I16, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::I32(_) => {
-                            HirTy::signed_ty(IntTy::I32, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::I64(_) => {
-                            HirTy::signed_ty(IntTy::I64, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::I128(_) => {
-                            HirTy::signed_ty(IntTy::I128, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::Isize(_) => {
-                            HirTy::signed_ty(IntTy::Isize, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::U8(_) => {
-                            HirTy::unsigned_ty(UintTy::U8, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::U16(_) => {
-                            HirTy::unsigned_ty(UintTy::U16, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::U32(_) => {
-                            HirTy::unsigned_ty(UintTy::U32, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::U64(_) => {
-                            HirTy::unsigned_ty(UintTy::U64, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::U128(_) => {
-                            HirTy::unsigned_ty(UintTy::U128, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::Usize(_) => {
-                            HirTy::unsigned_ty(UintTy::Usize, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::F32(_) => {
-                            HirTy::float_ty(FloatTy::F32, rust_span)
-                        }
-                        rustc_public_generative::DependencyConstValue::F64(_) => {
-                            HirTy::float_ty(FloatTy::F64, rust_span)
-                        }
-                    },
-                ),
+                crate::DefOrLocal::Def { def_id, .. } => self
+                    .maybe_const_eval_named_ty(*def_id, rust_span)
+                    .ok_or_else(|| format!("missing global or const type for def {def_id:?}")),
+                crate::DefOrLocal::Const(def_id) => self
+                    .scalar_const_ty(*def_id, rust_span)
+                    .ok_or_else(|| format!("missing scalar constant value for def {def_id:?}")),
                 crate::DefOrLocal::AssocMethod { .. } => {
                     Err("associated method path is invalid in sizeof".to_owned())
                 }
@@ -842,6 +984,43 @@ impl LocalResolverBase {
         type_name: TypeName<LocalResolver>,
         span: Span,
     ) -> Result<HirTy, String> {
+        if type_name.abstract_declarator.is_none() {
+            if let [
+                (
+                    co2_ast::SpecifierQualifier::TypeSpecifier((
+                        TypeSpecifier::TypedefName((path, path_span)),
+                        _,
+                    )),
+                    _,
+                ),
+            ] = type_name.specifier_qualifier_list.as_slice()
+            {
+                let rust_span = self.co2_span_to_rustc(*path_span);
+                match path {
+                    crate::DefOrLocal::UnrepresentableType(ty) => match ty {
+                        CTy::Ty(ty) => return Ok(ty.clone()),
+                        CTy::Function(_) => {
+                            return Err("function is invalid as a type name".to_owned());
+                        }
+                        CTy::UnsizedArray(_) => {
+                            return Err("unsized array is invalid as a type name".to_owned());
+                        }
+                    },
+                    crate::DefOrLocal::Def { def_id, .. } => {
+                        if let Some(ty) = self.maybe_const_eval_named_ty(*def_id, rust_span) {
+                            return Ok(ty);
+                        }
+                    }
+                    crate::DefOrLocal::Const(def_id) => {
+                        return self.scalar_const_ty(*def_id, rust_span).ok_or_else(|| {
+                            format!("missing scalar constant value for def {def_id:?}")
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let specifiers = type_name
             .specifier_qualifier_list
             .into_iter()

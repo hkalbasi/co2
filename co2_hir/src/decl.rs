@@ -238,10 +238,8 @@ impl HirCtx<'_> {
                     };
 
                     let span = self.to_rust_span(parser_span);
-                    if let Some(resolver) = &self.decl_resolver {
-                        let hir_ty = self.ty_to_hir_ty(ty, span);
-                        resolver.set_local_ty(name.0 as u32, hir_ty);
-                    }
+                    let hir_ty = self.ty_to_hir_ty(ty, span);
+                    self.decl_resolver.set_local_ty(name.0 as u32, hir_ty);
 
                     let local = locals.alloc(HirLocal {
                         name: name.1.clone(),
@@ -281,15 +279,14 @@ impl HirCtx<'_> {
                                     ty
                                 };
                                 locals[local].ty = local_ty;
-                                if let Some(resolver) = &self.decl_resolver {
-                                    let hir_ty = self.ty_to_hir_ty(local_ty, span);
-                                    resolver.set_local_ty(name.0 as u32, hir_ty);
-                                }
+                                let hir_ty = self.ty_to_hir_ty(local_ty, span);
+                                self.decl_resolver.set_local_ty(name.0 as u32, hir_ty);
+
                                 // END TODO.
-                                let expr = if self.decl_resolver.as_ref().is_some_and(|resolver| {
-                                    resolver.normalize_ty_for_current_owner(expr.ty)
+                                let expr = if let resolver = &self.decl_resolver
+                                    && resolver.normalize_ty_for_current_owner(expr.ty)
                                         == resolver.normalize_ty_for_current_owner(local_ty)
-                                }) {
+                                {
                                     expr
                                 } else {
                                     match coerce_expr_to_type(expr, local_ty) {
@@ -532,17 +529,12 @@ impl HirCtx<'_> {
                         } else if subscription.0.raw.is_unsized() {
                             CTy::UnsizedArray(inner)
                         } else {
-                            let len = self
-                                .decl_resolver
+                            let len = subscription
+                                .0
+                                .array_len_const
                                 .as_ref()
-                                .and_then(|resolver| {
-                                    subscription
-                                        .0
-                                        .array_len_const
-                                        .as_ref()
-                                        .copied()
-                                        .map(|def_id| (resolver, def_id))
-                                })
+                                .copied()
+                                .map(|def_id| (&self.decl_resolver, def_id))
                                 .ok_or_else(|| "Can not calculate subscription".to_owned())
                                 .and_then(|(resolver, def_id)| {
                                     eval_registered_array_len_const(resolver, def_id).map_err(

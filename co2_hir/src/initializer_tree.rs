@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use co2_ast::{Designator, Expression, Initializer, InitializerItem, Spanned};
-use co2_crate_sig::LocalResolver;
+use co2_crate_sig::{LocalResolver, eval_const_expr_as_usize};
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{AdtKind, RigidTy, Ty, TyKind};
 
@@ -9,10 +9,7 @@ use crate::{
     expr::{HirExpr, HirExprKind, coerce_expr_to_type},
     item::{HirLocal, LocalId},
     resolver::HirCtx,
-    ty::{
-        adt_field_tys, array_elem_ty, is_array_ty, is_numeric_ty, is_union_ty,
-        resolve_field_path_in_adt,
-    },
+    ty::{adt_field_tys, array_elem_ty, is_array_ty, is_union_ty, resolve_field_path_in_adt},
 };
 
 #[derive(Clone, Debug)]
@@ -34,8 +31,6 @@ impl InitializerCursor {
         designators: &[Spanned<Designator<LocalResolver>>],
         base_ty: Ty,
         span: rustc_public_generative::rustc_public::ty::Span,
-        locals: &mut Arena<HirLocal>,
-        local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<Self, String> {
         let mut current_ty = base_ty;
         let mut cursor = InitializerCursor {
@@ -45,11 +40,7 @@ impl InitializerCursor {
         for (designator, _) in designators {
             match designator {
                 Designator::Subscript(expr) => {
-                    let idx_expr = ctx.lower_expr(expr.clone(), locals, local_map)?;
-                    if !is_numeric_ty(idx_expr.ty) {
-                        return Err("array designator index must be integer".to_owned());
-                    }
-                    let idx = eval_const_int(&idx_expr)? as usize;
+                    let idx = eval_const_expr_as_usize(&ctx.decl_resolver, expr)?;
                     let elem_ty = array_elem_ty(current_ty).ok_or_else(|| {
                         format!("array designator used on non-array type: {:?}", current_ty)
                     })?;
@@ -370,8 +361,6 @@ impl HirCtx<'_> {
                             designators,
                             expected_ty,
                             self.to_rust_span(item_span),
-                            locals,
-                            local_map,
                         )?;
                     }
                     if cursor.stack.is_empty() {

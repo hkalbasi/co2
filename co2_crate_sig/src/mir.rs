@@ -12,12 +12,15 @@ pub enum MirOwnerInfo {
     EnumConstZeroed,
     EnumConstPrevPlus(DefId, Span),
     EnumConstExplicit {
+        resolver: LocalResolver,
         initializer: co2_ast::Spanned<co2_ast::Expression<LocalResolver>>,
     },
     Static {
+        resolver: LocalResolver,
         initializer: co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>,
     },
     StaticWithArrayLen {
+        resolver: LocalResolver,
         initializer: co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>,
         array_len: co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>,
     },

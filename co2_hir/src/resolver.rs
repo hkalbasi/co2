@@ -64,7 +64,7 @@ pub struct HirCtx<'a> {
     break_labels: RefCell<Vec<LabelId>>,
     switch_scopes: RefCell<Vec<SwitchScope>>,
     pub(crate) c_variadic_local: Option<LocalId>,
-    pub(crate) decl_resolver: Option<LocalResolver>,
+    pub(crate) decl_resolver: LocalResolver,
     pub(crate) function_name: Option<String>,
     pub(crate) ret_ty: Ty,
 }
@@ -75,6 +75,7 @@ impl<'a> HirCtx<'a> {
         span_converter: &'a dyn Fn(ParserSpan) -> RustSpan,
         function_name: Option<String>,
         ret_ty: Ty,
+        decl_resolver: LocalResolver,
     ) -> Self {
         Self {
             wellknown_defs,
@@ -85,14 +86,10 @@ impl<'a> HirCtx<'a> {
             break_labels: RefCell::new(Vec::new()),
             switch_scopes: RefCell::new(Vec::new()),
             c_variadic_local: None,
-            decl_resolver: None,
+            decl_resolver,
             function_name,
             ret_ty,
         }
-    }
-
-    pub fn set_decl_resolver(&mut self, resolver: LocalResolver) {
-        self.decl_resolver = Some(resolver);
     }
 
     pub(crate) fn resolve_value_with_generic_args(

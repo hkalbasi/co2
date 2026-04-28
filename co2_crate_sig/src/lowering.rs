@@ -478,10 +478,14 @@ fn lower_translation_unit_items(
                                     id,
                                     match array_len {
                                         Some(array_len) => MirOwnerInfo::StaticWithArrayLen {
+                                            resolver: resolver.clone(),
                                             initializer,
                                             array_len,
                                         },
-                                        None => MirOwnerInfo::Static { initializer },
+                                        None => MirOwnerInfo::Static {
+                                            resolver: resolver.clone(),
+                                            initializer,
+                                        },
                                     },
                                 );
                             } else {
@@ -511,6 +515,7 @@ fn lower_translation_unit_items(
                                 ctx.mir_owners.insert(
                                     id,
                                     MirOwnerInfo::Static {
+                                        resolver: resolver.clone(),
                                         initializer: initializer.clone(),
                                     },
                                 );
@@ -675,6 +680,7 @@ pub fn lower_crate_sig(
             global_value_tys: HashMap::new(),
             global_struct_tags: Rc::new(RefCell::new(StructAndEnumData::default())),
             global_locals: Rc::new(RefCell::new(im::HashMap::new())),
+            enum_const_values: HashMap::new(),
         })),
         hir_ctx: ctx,
         file_ids,
@@ -764,8 +770,13 @@ pub fn lower_crate_sig(
                     mutable: true,
                 });
                 if let Some(initializer) = declarator.initializer {
-                    ctx.mir_owners
-                        .insert(id, MirOwnerInfo::Static { initializer });
+                    ctx.mir_owners.insert(
+                        id,
+                        MirOwnerInfo::Static {
+                            resolver: resolver.clone(),
+                            initializer,
+                        },
+                    );
                 } else {
                     ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
                 }
@@ -793,8 +804,13 @@ pub fn lower_crate_sig(
                     span,
                     mutable: true,
                 });
-                ctx.mir_owners
-                    .insert(id, MirOwnerInfo::Static { initializer });
+                ctx.mir_owners.insert(
+                    id,
+                    MirOwnerInfo::Static {
+                        resolver: resolver.clone(),
+                        initializer,
+                    },
+                );
             }
             _ => {
                 ctx.terminate_with_error(parser_span, "static did not lower to a first-class type");

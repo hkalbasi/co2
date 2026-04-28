@@ -126,17 +126,33 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             MirOwnerInfo::EnumConstPrevPlus(prev, span) => {
                 self.build_enum_prev_plus_body(prev, span, &ctx)
             }
-            MirOwnerInfo::EnumConstExplicit { initializer } => {
+            MirOwnerInfo::EnumConstExplicit {
+                initializer,
+                resolver,
+            } => {
                 let span = initializer.1;
-                self.lower_explicit_static_mir(&ctx, def, (Initializer::Expr(initializer), span))
+                self.lower_explicit_static_mir(
+                    &ctx,
+                    def,
+                    resolver,
+                    (Initializer::Expr(initializer), span),
+                )
             }
-            MirOwnerInfo::Static { initializer } => {
-                self.lower_explicit_static_mir(&ctx, def, initializer)
-            }
+            MirOwnerInfo::Static {
+                resolver,
+                initializer,
+            } => self.lower_explicit_static_mir(&ctx, def, resolver, initializer),
             MirOwnerInfo::StaticWithArrayLen {
+                resolver,
                 initializer,
                 array_len,
-            } => self.lower_explicit_static_mir_with_array_len(&ctx, def, initializer, array_len),
+            } => self.lower_explicit_static_mir_with_array_len(
+                &ctx,
+                def,
+                resolver,
+                initializer,
+                array_len,
+            ),
             MirOwnerInfo::StaticZeroed | MirOwnerInfo::EnumConstZeroed => {
                 build_zeroed_static_initializer_body(
                     &self.wellknown_defs,
@@ -157,8 +173,8 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     &span_converter,
                     Some(function_name),
                     def.fn_sig().skip_binder().output(),
+                    resolver,
                 );
-                hir_ctx.set_decl_resolver(resolver);
 
                 let hir = match std::panic::catch_unwind(AssertUnwindSafe(|| {
                     co2_hir::lower_function_body(body, def, &param_names, &mut hir_ctx).unwrap()
@@ -211,6 +227,7 @@ impl Co2GeneratorState {
         &mut self,
         ctx: &HirStructureCtx<'_>,
         def: DefId,
+        resolver: LocalResolver,
         initializer: co2_ast::Spanned<Initializer<LocalResolver>>,
     ) -> Body {
         let span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
@@ -219,6 +236,7 @@ impl Co2GeneratorState {
             &span_converter,
             None,
             CrateItem(def).ty(),
+            resolver,
         );
 
         let mut target_ty = CrateItem(def).ty();
@@ -246,6 +264,7 @@ impl Co2GeneratorState {
         &mut self,
         ctx: &HirStructureCtx<'_>,
         def: DefId,
+        resolver: LocalResolver,
         initializer: co2_ast::Spanned<Initializer<LocalResolver>>,
         array_len: co2_ast::Spanned<Initializer<LocalResolver>>,
     ) -> Body {
@@ -258,6 +277,7 @@ impl Co2GeneratorState {
                     &len_span_converter,
                     None,
                     Ty::usize_ty(),
+                    resolver.clone(),
                 );
                 let evaluated_len = eval_usize_initializer(array_len, &len_hir_ctx)
                     .expect("failed to evaluate static array length");
@@ -271,7 +291,13 @@ impl Co2GeneratorState {
             }
         }
         let span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
-        let hir_ctx = HirCtx::new(self.wellknown_defs, &span_converter, None, target_ty);
+        let hir_ctx = HirCtx::new(
+            self.wellknown_defs,
+            &span_converter,
+            None,
+            target_ty,
+            resolver,
+        );
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
         co2_mir::build_mir_for_body(&hir, ctx, def, self.file_id, self.wellknown_defs)
     }
