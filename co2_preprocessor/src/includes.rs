@@ -401,9 +401,9 @@ impl Preprocessor {
                             .insert(resolved_path.clone(), guard);
                     }
 
-                    // For math.h, redefine isinf after preprocessing to override
-                    // any definition from the system header that uses unsupported
-                    // __builtin_isinf_sign
+                    // For math.h, redefine isinf and isnan after preprocessing to override
+                    // any definitions from the system header that use unsupported builtins
+                    // like __builtin_isinf_sign and __builtin_isnan
                     if include_path == "math.h" {
                         self.macros.define(MacroDef {
                             name: "isinf".to_string(),
@@ -412,6 +412,14 @@ impl Preprocessor {
                             is_variadic: false,
                             has_named_variadic: false,
                             body: "((x) == __builtin_inf() || (x) == -__builtin_inf())".to_string(),
+                        });
+                        self.macros.define(MacroDef {
+                            name: "isnan".to_string(),
+                            is_function_like: true,
+                            params: vec!["x".to_string()],
+                            is_variadic: false,
+                            has_named_variadic: false,
+                            body: "((x) != (x))".to_string(),
                         });
                     }
 

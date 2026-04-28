@@ -15,5 +15,8 @@ int main() {
     assert(isinf(-1./0.));
     assert(!isinf(NAN));
     assert(!isinf(2.3));
+    assert(isnan(NAN));
+    assert(!isnan(INFINITY));
+    assert(!isnan(2.3));
     return 0;
 }
