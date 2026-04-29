@@ -1277,17 +1277,16 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             });
             return MirOperand::Copy(place(dst_tmp));
         }
-        if (src_is_int || src_is_ptr) && dst_mu_fn_ptr.is_some() {
+        if src_is_ptr && dst_mu_fn_ptr.is_some() {
+            return self.write_value_into_maybe_uninit_storage(dst_ty, inner_op, src_ty, span);
+        }
+        if src_is_int && dst_mu_fn_ptr.is_some() {
             let usize_ty = Ty::usize_ty();
             let usize_op = if src_ty == usize_ty {
                 inner_op
             } else {
                 let usize_tmp = self.new_temp(usize_ty, Mutability::Mut, span);
-                let cast_kind = if src_is_ptr {
-                    CastKind::PointerExposeAddress
-                } else {
-                    CastKind::IntToInt
-                };
+                let cast_kind = CastKind::IntToInt;
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         place(usize_tmp),

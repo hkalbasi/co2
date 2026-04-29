@@ -22,8 +22,6 @@ fn def(macros: &mut MacroTable, name: &str, body: &str) {
 pub fn define_builtin_macros(macros: &mut MacroTable) {
     define_limits_macros(macros);
     define_stdint_macros(macros);
-    define_stddef_macros(macros);
-    define_stdbool_macros(macros);
     define_stdatomic_macros(macros);
     define_float_macros(macros);
     define_inttypes_macros(macros);
@@ -190,29 +188,6 @@ fn define_stdint_macros(macros: &mut MacroTable) {
         has_named_variadic: false,
         body: "x ## ULL".to_string(),
     });
-}
-
-/// <stddef.h> macros
-fn define_stddef_macros(macros: &mut MacroTable) {
-    // NULL macro
-    def(macros, "NULL", "((void *)0)");
-
-    // offsetof macro
-    macros.define(MacroDef {
-        name: "offsetof".to_string(),
-        is_function_like: true,
-        params: vec!["type".to_string(), "member".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "__builtin_offsetof(type, member)".to_string(),
-    });
-}
-
-/// <stdbool.h> macros - in C11, bool/true/false are only defined by <stdbool.h>.
-/// We no longer predefine `bool` as a builtin macro because it breaks code like
-/// `typedef _Bool bool;` that doesn't include <stdbool.h>.
-fn define_stdbool_macros(_macros: &mut MacroTable) {
-    // Nothing predefined - all stdbool macros are defined on #include <stdbool.h>
 }
 
 /// Define all stdbool.h macros (called on #include <stdbool.h>).
