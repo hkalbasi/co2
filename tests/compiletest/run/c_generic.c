@@ -1,6 +1,7 @@
 //@ mode: c
 //@ run-status: 0
 //@ run-stdout: 20\n10\n20\n123\n2\n0\n5\n1\n2\n3\n4\nlong\n1\n3\n3\n2\n
+//@ compile-warning: `extern` block uses type `__co2_c_adt__IO_marker_6`, which is not FFI-safe
 
 #include <stdio.h>
 

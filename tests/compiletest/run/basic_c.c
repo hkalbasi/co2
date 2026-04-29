@@ -1244,6 +1244,7 @@ int main43() {
 	signed int sint = -3;
 
     if (-uint < 0) {
+    //  ^^^^^ warning: this arithmetic operation will overflow
 		return 1;
 	}
 	if ((sint << uint) >= 0) {

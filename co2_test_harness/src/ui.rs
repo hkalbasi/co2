@@ -14,11 +14,30 @@ pub struct UiSpanExpectation {
     pub file_name: String,
     pub byte_start: usize,
     pub byte_end: usize,
+    pub level: Option<UiAnnotationLevel>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiAnnotationLevel {
+    Error,
+    Warning,
+    Help,
+}
+
+impl UiAnnotationLevel {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Help => "help",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct UiDiagnostic {
+    pub level: String,
     pub message: String,
     pub spans: Vec<UiDiagnosticSpan>,
 }
@@ -90,79 +109,101 @@ pub fn check_ui(
     let mut issues = Vec::new();
 
     for expected in span_expectations {
-        let message_matches = diagnostics.iter().any(|diagnostic| {
-            if let Some(message) = &expected.message
-                && diagnostic.message != *message
-            {
-                return false;
-            }
-
-            diagnostic.spans.iter().any(|span| {
-                span.is_primary
-                    && span.file_name.ends_with(&expected.file_name)
-                    && span.byte_start == expected.byte_start
-                    && span.byte_end == expected.byte_end
-            })
-        });
+        let message_matches = diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic_matches_expected(expected, diagnostic));
 
         if !message_matches {
-            let reason = if let Some(msg) = &expected.message {
-                let found = diagnostics.iter().any(|d| d.message == *msg);
-                if found {
-                    format!(
-                        "Missing diagnostic span in {} for: {}",
-                        expected.file_name, msg
-                    )
-                } else {
-                    format!("Missing diagnostic: {}", msg)
-                }
-            } else {
-                format!("missing UI span annotation in {}", expected.file_name)
-            };
-            issues.push(UiTestIssue {
-                span: Some(expected.clone()),
-                reason,
-            });
+            issues.push(missing_expected_issue(expected, &diagnostics));
         }
     }
 
     for diagnostic in &diagnostics {
-        if diagnostic.message.starts_with("aborting due to ") {
+        if is_summary_diagnostic(diagnostic) {
             continue;
         }
 
-        let matched = span_expectations.iter().any(|expected| {
-            if let Some(message) = &expected.message
-                && diagnostic.message != *message
-            {
-                return false;
-            }
-
-            diagnostic.spans.iter().any(|span| {
-                span.is_primary
-                    && span.file_name.ends_with(&expected.file_name)
-                    && span.byte_start == expected.byte_start
-                    && span.byte_end == expected.byte_end
-            })
-        });
+        let matched = span_expectations
+            .iter()
+            .any(|expected| diagnostic_matches_expected(expected, diagnostic));
 
         if !matched {
-            if let Some(primary_span) = diagnostic.spans.iter().find(|s| s.is_primary) {
-                issues.push(UiTestIssue {
-                    span: Some(UiSpanExpectation {
-                        file_name: primary_span.file_name.clone(),
-                        message: Some(diagnostic.message.clone()),
-                        byte_start: primary_span.byte_start,
-                        byte_end: primary_span.byte_end,
-                    }),
-                    reason: format!("Unexpected diagnostic: {}", diagnostic.message),
-                });
-            } else {
-                issues.push(UiTestIssue {
-                    span: None,
-                    reason: format!("Unexpected diagnostic: {}", diagnostic.message),
-                });
-            }
+            issues.push(unexpected_diagnostic_issue(diagnostic));
+        }
+    }
+
+    if !issues.is_empty() {
+        return Err(UiTestError {
+            path: test.path.clone(),
+            sources,
+            issues,
+        }
+        .into());
+    }
+
+    Ok(())
+}
+
+pub fn check_compile_warnings(
+    test: &TestCase,
+    output: &Output,
+    span_expectations: &[UiSpanExpectation],
+    directive_expectations: &[String],
+    sources: HashMap<String, String>,
+) -> Result<()> {
+    if !output.status.success() {
+        return Ok(());
+    }
+
+    let diagnostics = parse_compile_diagnostics(&String::from_utf8_lossy(&output.stderr))?;
+    let warning_expectations = span_expectations
+        .iter()
+        .filter(|expected| expected.level == Some(UiAnnotationLevel::Warning))
+        .collect::<Vec<_>>();
+    let warnings = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.level == UiAnnotationLevel::Warning.as_str()
+                && !is_summary_diagnostic(diagnostic)
+        })
+        .collect::<Vec<_>>();
+
+    if warning_expectations.is_empty() && warnings.is_empty() {
+        return Ok(());
+    }
+
+    let mut issues = Vec::new();
+
+    for expected in &warning_expectations {
+        if !warnings
+            .iter()
+            .any(|diagnostic| diagnostic_matches_expected(expected, diagnostic))
+        {
+            issues.push(missing_expected_issue(expected, &diagnostics));
+        }
+    }
+
+    for expected in directive_expectations {
+        if !warnings
+            .iter()
+            .any(|diagnostic| diagnostic.message == *expected)
+        {
+            issues.push(UiTestIssue {
+                span: None,
+                reason: format!("Missing warning: {expected}"),
+            });
+        }
+    }
+
+    for diagnostic in warnings {
+        if !warning_expectations
+            .iter()
+            .any(|expected| diagnostic_matches_expected(expected, diagnostic))
+            && !directive_expectations
+                .iter()
+                .any(|expected| diagnostic.message == *expected)
+        {
+            issues.push(unexpected_diagnostic_issue(diagnostic));
         }
     }
 
@@ -187,7 +228,8 @@ pub fn parse_ui_span_expectations(path: &Path, _mode: Mode) -> Result<Vec<UiSpan
     let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
 
     for (idx, line) in src.lines().enumerate() {
-        let Some((column_start, column_end, message)) = parse_ui_span_annotation(line) else {
+        let Some((column_start, column_end, level, message)) = parse_ui_span_annotation(line)
+        else {
             continue;
         };
         let line_no = idx + 1;
@@ -203,6 +245,7 @@ pub fn parse_ui_span_expectations(path: &Path, _mode: Mode) -> Result<Vec<UiSpan
             file_name: file_name.clone(),
             byte_start: line_start + (column_start - 1),
             byte_end: line_start + (column_end - 1),
+            level,
             message,
         });
     }
@@ -210,7 +253,9 @@ pub fn parse_ui_span_expectations(path: &Path, _mode: Mode) -> Result<Vec<UiSpan
     Ok(out)
 }
 
-fn parse_ui_span_annotation(line: &str) -> Option<(usize, usize, Option<String>)> {
+fn parse_ui_span_annotation(
+    line: &str,
+) -> Option<(usize, usize, Option<UiAnnotationLevel>, Option<String>)> {
     let comment_start = line.find("//")?;
     if !line[..comment_start].chars().all(char::is_whitespace) {
         return None;
@@ -233,19 +278,19 @@ fn parse_ui_span_annotation(line: &str) -> Option<(usize, usize, Option<String>)
     let column_start = line[..comment_start + 2 + caret_offset].chars().count() + 1;
     let column_end = column_start + caret_count;
     let trailing = body[caret_offset + caret_count..].trim();
-    let message = (!trailing.is_empty()).then(|| {
-        trailing
-            .strip_prefix("error:")
-            .or_else(|| trailing.strip_prefix("warning:"))
-            .or_else(|| trailing.strip_prefix("help:"))
-            .map(str::trim)
-            .unwrap_or(trailing)
-            .to_owned()
-    });
-    Some((column_start, column_end, message))
+    let (level, message) = parse_annotation_message(trailing);
+    Some((column_start, column_end, level, message))
 }
 
 pub fn parse_ui_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
+    let diagnostics = parse_json_diagnostics(stderr)?;
+    if diagnostics.is_empty() {
+        bail!("failed to find JSON diagnostics in stderr");
+    }
+    Ok(diagnostics)
+}
+
+pub fn parse_compile_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
     parse_json_diagnostics(stderr)
 }
 
@@ -262,6 +307,9 @@ fn parse_json_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
             continue;
         };
         let Some(spans) = value.get("spans").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let Some(level) = value.get("level").and_then(serde_json::Value::as_str) else {
             continue;
         };
         let Some(message) = value.get("message").and_then(serde_json::Value::as_str) else {
@@ -281,14 +329,109 @@ fn parse_json_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
             .collect::<Vec<_>>();
 
         diagnostics.push(UiDiagnostic {
+            level: level.to_owned(),
             message: message.to_owned(),
             spans,
         });
     }
 
-    if diagnostics.is_empty() {
-        bail!("failed to find JSON diagnostics in stderr");
+    Ok(diagnostics)
+}
+
+fn parse_annotation_message(trailing: &str) -> (Option<UiAnnotationLevel>, Option<String>) {
+    if trailing.is_empty() {
+        return (None, None);
     }
 
-    Ok(diagnostics)
+    for (prefix, level) in [
+        ("error:", UiAnnotationLevel::Error),
+        ("warning:", UiAnnotationLevel::Warning),
+        ("help:", UiAnnotationLevel::Help),
+    ] {
+        if let Some(message) = trailing.strip_prefix(prefix) {
+            return (Some(level), Some(message.trim().to_owned()));
+        }
+    }
+
+    (None, Some(trailing.to_owned()))
+}
+
+fn diagnostic_matches_expected(expected: &UiSpanExpectation, diagnostic: &UiDiagnostic) -> bool {
+    if let Some(level) = expected.level
+        && diagnostic.level != level.as_str()
+    {
+        return false;
+    }
+
+    if let Some(message) = &expected.message
+        && diagnostic.message != *message
+    {
+        return false;
+    }
+
+    diagnostic.spans.iter().any(|span| {
+        span.is_primary
+            && span.file_name.ends_with(&expected.file_name)
+            && span.byte_start == expected.byte_start
+            && span.byte_end == expected.byte_end
+    })
+}
+
+fn missing_expected_issue(
+    expected: &UiSpanExpectation,
+    diagnostics: &[UiDiagnostic],
+) -> UiTestIssue {
+    let diagnostic_kind = expected.level.map_or("diagnostic", |level| level.as_str());
+    let reason = if let Some(msg) = &expected.message {
+        let found = diagnostics.iter().any(|diagnostic| {
+            diagnostic.message == *msg
+                && expected
+                    .level
+                    .is_none_or(|level| diagnostic.level == level.as_str())
+        });
+        if found {
+            format!(
+                "Missing {diagnostic_kind} span in {} for: {}",
+                expected.file_name, msg
+            )
+        } else {
+            format!("Missing {diagnostic_kind}: {}", msg)
+        }
+    } else {
+        format!(
+            "missing {diagnostic_kind} span annotation in {}",
+            expected.file_name
+        )
+    };
+
+    UiTestIssue {
+        span: Some(expected.clone()),
+        reason,
+    }
+}
+
+fn unexpected_diagnostic_issue(diagnostic: &UiDiagnostic) -> UiTestIssue {
+    if let Some(primary_span) = diagnostic.spans.iter().find(|span| span.is_primary) {
+        UiTestIssue {
+            span: Some(UiSpanExpectation {
+                file_name: primary_span.file_name.clone(),
+                message: Some(diagnostic.message.clone()),
+                byte_start: primary_span.byte_start,
+                byte_end: primary_span.byte_end,
+                level: None,
+            }),
+            reason: format!("Unexpected {}: {}", diagnostic.level, diagnostic.message),
+        }
+    } else {
+        UiTestIssue {
+            span: None,
+            reason: format!("Unexpected {}: {}", diagnostic.level, diagnostic.message),
+        }
+    }
+}
+
+fn is_summary_diagnostic(diagnostic: &UiDiagnostic) -> bool {
+    diagnostic.message.starts_with("aborting due to ")
+        || diagnostic.message.ends_with(" warning emitted")
+        || diagnostic.message.ends_with(" warnings emitted")
 }

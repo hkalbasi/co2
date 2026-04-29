@@ -12,7 +12,7 @@ use crate::test_case::{
     Mode, TestCase, TestKind, TestOutcome, collect_tests, directive_args, directive_i32,
     directive_text,
 };
-use crate::ui::{check_ui, parse_ui_span_expectations};
+use crate::ui::{UiSpanExpectation, check_compile_warnings, check_ui, parse_ui_span_expectations};
 use crate::util::{copy_dir_all, normalize, unescape_text};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,52 +109,81 @@ fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
             .context("missing `//@ mode: c|co2|rust` directive")?,
     )?;
 
-    let mut ui_spans = Vec::new();
+    let (compile_annotations, sources) = collect_compile_annotations(test, mode)?;
+    let directive_warning_expectations = test
+        .directives
+        .get("compile-warning")
+        .cloned()
+        .unwrap_or_default();
+    let compile = compile_test(root, suite, mode, test, true)?;
+    match suite {
+        Suite::Ui => {
+            check_ui(test, mode, &compile.output, &compile_annotations, sources)?;
+            Ok(TestOutcome::Pass)
+        }
+        Suite::Run => {
+            check_compile_warnings(
+                test,
+                &compile.output,
+                &compile_annotations,
+                &directive_warning_expectations,
+                sources,
+            )?;
+            check_run(test, &compile)?;
+            Ok(TestOutcome::Pass)
+        }
+        Suite::Debuginfo => {
+            check_compile_warnings(
+                test,
+                &compile.output,
+                &compile_annotations,
+                &directive_warning_expectations,
+                sources,
+            )?;
+            check_debuginfo(test, &compile)
+        }
+    }
+}
+
+fn collect_compile_annotations(
+    test: &TestCase,
+    mode: Mode,
+) -> Result<(Vec<UiSpanExpectation>, HashMap<String, String>)> {
+    let mut annotations = Vec::new();
     let mut sources = HashMap::new();
-    if suite == Suite::Ui {
-        sources.insert(
-            test.path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned(),
-            test.source.clone(),
-        );
-        ui_spans.extend(parse_ui_span_expectations(&test.path, mode)?);
-        let test_dir = test.path.parent().context("test path has no parent")?;
-        let test_stem = test.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        for entry in std::fs::read_dir(test_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() && path != test.path {
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                if stem == test_stem {
-                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                        if matches!(ext, "c" | "h" | "co2" | "rs") {
-                            sources.insert(
-                                path.file_name().unwrap().to_string_lossy().into_owned(),
-                                std::fs::read_to_string(&path)?,
-                            );
-                            ui_spans.extend(parse_ui_span_expectations(&path, mode)?);
-                        }
-                    }
-                }
+    sources.insert(
+        test.path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        test.source.clone(),
+    );
+    annotations.extend(parse_ui_span_expectations(&test.path, mode)?);
+
+    let test_dir = test.path.parent().context("test path has no parent")?;
+    let test_stem = test.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    for entry in std::fs::read_dir(test_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() && path != test.path {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if stem != test_stem {
+                continue;
+            }
+            if let Some(ext) = path.extension().and_then(|s| s.to_str())
+                && matches!(ext, "c" | "h" | "co2" | "rs")
+            {
+                sources.insert(
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                    std::fs::read_to_string(&path)?,
+                );
+                annotations.extend(parse_ui_span_expectations(&path, mode)?);
             }
         }
     }
 
-    let compile = compile_test(root, suite, mode, test, !ui_spans.is_empty())?;
-    match suite {
-        Suite::Ui => {
-            check_ui(test, mode, &compile.output, &ui_spans, sources)?;
-            Ok(TestOutcome::Pass)
-        }
-        Suite::Run => {
-            check_run(test, &compile)?;
-            Ok(TestOutcome::Pass)
-        }
-        Suite::Debuginfo => check_debuginfo(test, &compile),
-    }
+    Ok((annotations, sources))
 }
 
 fn run_nu_dir_test(root: &Path, test: &TestCase) -> Result<()> {

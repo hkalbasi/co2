@@ -10,7 +10,10 @@ Supported suites:
 Common directives:
 - `//@ mode: c|co2|rust`
 - `//@ compile-flags: ...` (repeatable, shell-split)
+- `//@ compile-warning: <exact warning text>` (repeatable, for warnings that do not map to source spans)
 - `//@ skip: <reason>` (skip test unconditionally)
+- Inline span annotations like `//^^^^ error: ...` or `//^^^^ warning: ...` can be used in any file-based suite.
+- File-based suites fail on unexpected compiler warnings; annotate intentional warnings inline.
 
 UI directives:
 - `//@ compile-fail`
