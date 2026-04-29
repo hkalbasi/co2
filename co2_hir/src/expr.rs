@@ -791,10 +791,20 @@ impl HirCtx<'_> {
                 }
                 co2_crate_sig::DefOrLocal::Const(def_id) => {
                     let resolver = &self.decl_resolver;
-                    let value = resolver.dependency_const_value(def_id).ok_or_else(|| {
-                        format!("missing scalar constant value for def {def_id:?}")
-                    })?;
-                    Ok(lower_dependency_const(value, span))
+                    if resolver.has_local_const_value(def_id) {
+                        let value = resolver.local_const_int_value(def_id).map_err(|_| {
+                            format!("missing scalar constant value for def {def_id:?}")
+                        })?;
+                        Ok(HirExpr {
+                            kind: HirExprKind::ConstInt(value),
+                            ty: Ty::signed_ty(IntTy::I32),
+                            span,
+                        })
+                    } else if let Some(value) = resolver.dependency_const_value(def_id) {
+                        Ok(lower_dependency_const(value, span))
+                    } else {
+                        Err(format!("missing scalar constant value for def {def_id:?}"))
+                    }
                 }
                 co2_crate_sig::DefOrLocal::AssocMethod { .. } => self.terminate_with_error(
                     parser_span,
@@ -1849,6 +1859,18 @@ fn int_suffix_ty(suffix: IntegerSuffix, value: i128) -> Ty {
 pub(crate) fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Result<HirExpr, String> {
     if ty_matches_expected(expected_ty, expr.ty) {
         return Ok(expr);
+    }
+    if matches!(expr.kind, HirExprKind::ConstInt(0))
+        && matches!(
+            expected_ty.kind(),
+            TyKind::RigidTy(RigidTy::RawPtr(..) | RigidTy::FnPtr(..))
+        )
+    {
+        return Ok(HirExpr {
+            kind: HirExprKind::Zeroed,
+            ty: expected_ty,
+            span: expr.span,
+        });
     }
     if needs_implicit_cast(expected_ty, expr.ty) {
         return Ok(HirExpr {

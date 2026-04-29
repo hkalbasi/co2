@@ -136,6 +136,9 @@ impl<A: TypeResolver> DoTransform for Designator<A> {
     fn transform<B: Transformable<A>>(&self, b: &B) -> Designator<B> {
         match self {
             Designator::Subscript(x) => Designator::Subscript(x.transform(b)),
+            Designator::Range(start, end) => {
+                Designator::Range(start.transform(b), end.transform(b))
+            }
             Designator::Field(x) => Designator::Field(x.clone()),
         }
     }

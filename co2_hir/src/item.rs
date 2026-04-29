@@ -112,18 +112,30 @@ pub fn infer_array_len_from_initializer(
     elem_ty: Ty,
     hir_ctx: &HirCtx<'_>,
 ) -> Result<u64, String> {
+    let mut locals = Arena::new();
+    let mut local_map: HashMap<usize, LocalId> = HashMap::new();
+    infer_array_len_from_initializer_in_scope(
+        (initializer, parser_span),
+        elem_ty,
+        hir_ctx,
+        &mut locals,
+        &mut local_map,
+    )
+}
+
+pub(crate) fn infer_array_len_from_initializer_in_scope(
+    (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
+    elem_ty: Ty,
+    hir_ctx: &HirCtx<'_>,
+    locals: &mut Arena<HirLocal>,
+    local_map: &mut HashMap<usize, LocalId>,
+) -> Result<u64, String> {
     let fake_ty = Ty::from_rigid_kind(RigidTy::Array(
         elem_ty,
         TyConst::try_from_target_usize(567_567).unwrap(),
     ));
-    let mut locals = Arena::new();
-    let mut local_map: HashMap<usize, LocalId> = HashMap::new();
-    let tree = hir_ctx.lower_to_initializer_tree(
-        fake_ty,
-        (initializer, parser_span),
-        &mut locals,
-        &mut local_map,
-    );
+    let tree =
+        hir_ctx.lower_to_initializer_tree(fake_ty, (initializer, parser_span), locals, local_map);
     let InitializerTree::Middle { children } = tree else {
         return Err("invalid initializer for unsized array".to_owned());
     };

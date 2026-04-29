@@ -429,6 +429,14 @@ impl Preprocessor {
                             has_named_variadic: false,
                             body: "((x) != (x))".to_string(),
                         });
+                        self.macros.define(MacroDef {
+                            name: "signbit".to_string(),
+                            is_function_like: true,
+                            params: vec!["x".to_string()],
+                            is_variadic: false,
+                            has_named_variadic: false,
+                            body: "(((x) < 0) || ((x) == 0 && (1.0 / (x)) < 0))".to_string(),
+                        });
                     }
 
                     Some(result)
@@ -801,9 +809,35 @@ impl Preprocessor {
                 // __gnuc_va_list is also handled natively by the parser/sema/lowerer
                 // (see comment above about not injecting typedef text).
             }
+            "stddef.h" => {
+                self.macros.define(MacroDef {
+                    name: "offsetof".to_string(),
+                    is_function_like: true,
+                    params: vec!["type".to_string(), "member".to_string()],
+                    is_variadic: false,
+                    has_named_variadic: false,
+                    body: "__builtin_offsetof(type, member)".to_string(),
+                });
+            }
+            "signal.h" => {
+                self.pending_injections
+                    .push("typedef void (*sighandler_t)(int);\n".to_string());
+            }
+            "unistd.h" => {
+                self.pending_injections
+                    .push("extern char **environ;\n".to_string());
+            }
             "math.h" => {
                 // isinf will be re-defined after reading the system header
                 // to override any definition that uses unsupported __builtin_isinf_sign
+                self.macros.define(MacroDef {
+                    name: "signbit".to_string(),
+                    is_function_like: true,
+                    params: vec!["x".to_string()],
+                    is_variadic: false,
+                    has_named_variadic: false,
+                    body: "(((x) < 0) || ((x) == 0 && (1.0 / (x)) < 0))".to_string(),
+                });
             }
             _ => {}
         }

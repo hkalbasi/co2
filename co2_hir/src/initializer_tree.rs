@@ -37,7 +37,7 @@ impl InitializerCursor {
             base_ty,
             stack: vec![],
         };
-        for (designator, _) in designators {
+        for (designator, span) in designators {
             match designator {
                 Designator::Subscript(expr) => {
                     let idx = eval_const_expr_as_usize(&ctx.decl_resolver, expr)?;
@@ -46,6 +46,9 @@ impl InitializerCursor {
                     })?;
                     cursor.stack.push((idx, elem_ty));
                     current_ty = elem_ty;
+                }
+                Designator::Range(_, _) => {
+                    ctx.terminate_with_error(*span, "unsupported GNU range designator");
                 }
                 Designator::Field(name) => {
                     let (path, field_ty) = resolve_field_path_in_adt(current_ty, name.0.as_str())

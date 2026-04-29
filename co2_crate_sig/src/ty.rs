@@ -463,6 +463,15 @@ fn round_up(value: usize, align: usize) -> usize {
 }
 
 impl LocalResolverBase {
+    pub(crate) fn has_local_enum_const(&self, def_id: DefId) -> bool {
+        self.enum_const_values.contains_key(&def_id)
+            || self
+                .struct_manager
+                .pending_enum_consts
+                .iter()
+                .any(|pending| pending.def_id == def_id)
+    }
+
     fn hir_ty_of_rust_ty(
         &mut self,
         (ty, span): co2_ast::Spanned<co2_ast::RustTy<LocalResolver>>,
@@ -601,7 +610,9 @@ impl LocalResolverBase {
             Expression::Constant(Constant::Char(ch)) => Ok(*ch as i128),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Const(def_id) => {
-                    if let Some(val) = self.hir_ctx.dependency_const_value(*def_id) {
+                    if self.has_local_enum_const(*def_id) {
+                        self.eval_local_const(*def_id)
+                    } else if let Some(val) = self.hir_ctx.dependency_const_value(*def_id) {
                         match val {
                             rustc_public_generative::DependencyConstValue::Bool(b) => Ok(b as i128),
                             rustc_public_generative::DependencyConstValue::Char(c) => Ok(c as i128),
@@ -627,7 +638,10 @@ impl LocalResolverBase {
                             }
                         }
                     } else {
-                        self.eval_local_const(*def_id)
+                        Err(format!(
+                            "unsupported identifier in constant expression: {:?}",
+                            resolved
+                        ))
                     }
                 }
                 crate::DefOrLocal::Def { def_id, .. } => self.eval_local_const(*def_id),
@@ -708,7 +722,7 @@ impl LocalResolverBase {
         }
     }
 
-    fn eval_local_const(&mut self, def_id: DefId) -> Result<i128, String> {
+    pub(crate) fn eval_local_const(&mut self, def_id: DefId) -> Result<i128, String> {
         if let Some(val) = self.enum_const_values.get(&def_id) {
             return Ok(*val);
         }
@@ -800,13 +814,8 @@ impl LocalResolverBase {
         def_id: DefId,
         span: rustc_public_generative::rustc_public::ty::Span,
     ) -> Option<HirTy> {
-        (self.enum_const_values.contains_key(&def_id)
-            || self
-                .struct_manager
-                .pending_enum_consts
-                .iter()
-                .any(|pending| pending.def_id == def_id))
-        .then(|| HirTy::signed_ty(IntTy::I32, span))
+        self.has_local_enum_const(def_id)
+            .then(|| HirTy::signed_ty(IntTy::I32, span))
     }
 
     fn scalar_const_ty(

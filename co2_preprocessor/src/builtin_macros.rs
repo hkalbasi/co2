@@ -475,4 +475,12 @@ fn define_builtin_expect_macros(macros: &mut MacroTable) {
         // Return just the first argument, ignoring the hint
         body: "x".to_string(),
     });
+    macros.define(MacroDef {
+        name: "__atomic_fetch_add".to_string(),
+        is_function_like: true,
+        params: vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
+        is_variadic: false,
+        has_named_variadic: false,
+        body: "((*(obj)) += (arg), (*(obj)) - (arg))".to_string(),
+    });
 }

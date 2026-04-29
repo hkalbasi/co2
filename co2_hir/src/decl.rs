@@ -207,10 +207,12 @@ impl HirCtx<'_> {
                                     "Unsized array without initializer is invalid",
                                 );
                             };
-                            let real_len = crate::infer_array_len_from_initializer(
+                            let real_len = crate::infer_array_len_from_initializer_in_scope(
                                 initializer.clone(),
                                 elem,
                                 self,
+                                locals,
+                                local_map,
                             )
                             .unwrap_or_else(|err| self.terminate_with_error(parser_span, &err));
                             let real_ty = Ty::from_rigid_kind(RigidTy::Array(

@@ -992,6 +992,9 @@ fn infer_unsized_array_len(
                             Designator::Field(_) => {
                                 return Err("field designator is invalid for unsized array length inference".to_owned());
                             }
+                            Designator::Range(_, _) => {
+                                return Err("unsupported GNU range designator".to_owned());
+                            }
                         },
                     },
                 };

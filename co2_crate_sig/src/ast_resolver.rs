@@ -194,6 +194,14 @@ impl LocalResolver {
         self.base.borrow().hir_ctx.dependency_const_value(def_id)
     }
 
+    pub fn local_const_int_value(&self, def_id: DefId) -> Result<i128, String> {
+        self.base.borrow_mut().eval_local_const(def_id)
+    }
+
+    pub fn has_local_const_value(&self, def_id: DefId) -> bool {
+        self.base.borrow().has_local_enum_const(def_id)
+    }
+
     pub fn normalize_ty_for_current_owner(&self, ty: Ty) -> Ty {
         self.base
             .borrow()

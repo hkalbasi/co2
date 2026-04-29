@@ -84,6 +84,7 @@ pub fn lexer<'src>() -> impl Parser<
         .repeated()
         .at_least(1)
         .to_slice();
+    let hex_digits0 = one_of("0123456789abcdefABCDEF").repeated().to_slice();
 
     // Decimal integer
     let decimal_integer = text::int(10)
@@ -97,6 +98,24 @@ pub fn lexer<'src>() -> impl Parser<
         .to_slice()
         .then(integer_suffix_parser())
         .map(|(num, suffix)| Token::Integer(num.to_string(), suffix));
+
+    let hex_float = just("0x")
+        .or(just("0X"))
+        .then(choice((
+            hex_digits
+                .then(just('.').then(hex_digits0).or_not())
+                .to_slice(),
+            just('.').then(hex_digits).to_slice(),
+        )))
+        .then(
+            one_of("pP")
+                .then(just('+').or(just('-')).or_not())
+                .then(text::digits(10).to_slice())
+                .to_slice(),
+        )
+        .to_slice()
+        .then(float_suffix_parser())
+        .map(|(num, suffix)| Token::FloatLit(num.to_string(), suffix));
 
     // Octal integer (starting with 0)
     let octal_integer = just('0')
@@ -317,6 +336,7 @@ pub fn lexer<'src>() -> impl Parser<
     // ----- Combined token parser -----
     let token = choice((
         preprocessor,
+        hex_float,
         hex_integer,
         octal_integer,
         decimal_float,

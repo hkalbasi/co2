@@ -444,6 +444,7 @@ pub struct InitDeclarator<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub enum Designator<R: TypeResolver> {
     Subscript(Spanned<Expression<R>>),
+    Range(Spanned<Expression<R>>, Spanned<Expression<R>>),
     Field(Spanned<String>),
 }
 

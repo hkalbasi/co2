@@ -20,7 +20,7 @@ pub(crate) struct StructData {
     pub(crate) fields: Option<Vec<StructField>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PendingEnum {
     pub(crate) name: String,
     pub(crate) def_id: DefId,
@@ -107,13 +107,7 @@ impl LocalResolver {
 
         self.locals.borrow_mut().insert(
             enumerator.ident.0,
-            (
-                DefOrLocal::Def {
-                    def_id,
-                    generic_args: vec![],
-                },
-                TypeQueryResult::Expr,
-            ),
+            (DefOrLocal::Const(def_id), TypeQueryResult::Expr),
         );
         (def_id, fake_name, enumerator.value)
     }
@@ -185,8 +179,7 @@ impl LocalResolverBase {
     }
 
     pub(crate) fn emit_enums(&mut self) -> impl Iterator<Item = PendingEnum> + use<> {
-        let taken = std::mem::take(&mut self.struct_manager.pending_enum_consts);
-        taken.into_iter()
+        self.struct_manager.pending_enum_consts.clone().into_iter()
     }
 
     pub(crate) fn adt_layout_info(

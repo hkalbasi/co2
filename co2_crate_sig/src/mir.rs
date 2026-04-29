@@ -5,7 +5,7 @@ use rustc_public_generative::rustc_public::{
 
 use crate::LocalResolver;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MirOwnerInfo {
     CloneMethod(AdtDef),
     StaticZeroed,
