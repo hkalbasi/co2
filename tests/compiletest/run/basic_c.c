@@ -1679,6 +1679,37 @@ int main77() {
 	return 0;
 }
 
+typedef int (main78_fp)();
+
+static int main78_a() {
+	return 1;
+}
+
+static int main78_b() {
+	return 2;
+}
+
+int main78() {
+	main78_fp* a = main78_a;
+	main78_fp* b = main78_b;
+	return (a != a) || (a == b) || (a() != 1) || (b() != 2);
+}
+
+struct main79_s { int a; };
+typedef struct main79_s main79_st;
+
+typedef int (main79_fp)(int, char*, struct main79_s, int[], struct main79_s*, struct main79_s[5], main79_st);
+
+int main79_f(int a, char* b, struct main79_s c, int d[], struct main79_s* e, struct main79_s f[5], main79_st g) {
+	return a + c.a + g.a;
+}
+
+int main79() {
+	main79_fp f = main79_f;
+	return f(5, NULL, (struct main79_s) { 2 }, NULL, NULL, NULL, (struct main79_s) { 3 }) - 10;
+}
+
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1699,7 +1730,7 @@ int main() {
 		main61, main62, main63, main64, main65,
 		main66, main67, main68, main69, main70,
 		main71, main72, main73, main74, main75,
-		main76, main77,
+		main76, main77, main78, main79,
 	};
 	
 	int i;

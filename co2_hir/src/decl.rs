@@ -12,8 +12,8 @@ use rustc_public_generative::{
         CrateItem,
         mir::{Mutability, Safety},
         ty::{
-            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, IntTy, RegionKind, RigidTy,
-            Span as RustSpan, Ty, TyConst, TyKind,
+            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, IntTy, Region, RegionKind,
+            RigidTy, Span as RustSpan, Ty, TyConst, TyKind,
         },
     },
 };
@@ -193,7 +193,13 @@ impl HirCtx<'_> {
                         self.lower_value_decl_type(declaration_specifiers.clone(), declarator);
                     let ty = match ty {
                         CTy::Ty(ty) => ty,
-                        CTy::Function(_) => continue,
+                        CTy::Function(sig) => {
+                            // In C, function types in declarations are adjusted to function pointers
+                            // sig is FnSig from rustc_public
+                            let fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
+                            // In C mode, wrap function pointers in MaybeUninit
+                            self.maybe_uninit_of(fn_ptr_ty)
+                        }
                         CTy::UnsizedArray(elem) => {
                             let Some(initializer) = initializer else {
                                 self.terminate_with_error(
@@ -562,13 +568,88 @@ impl HirCtx<'_> {
     fn hir_ty_to_ty(&self, hir_ty: &HirTy) -> Ty {
         match &hir_ty.kind {
             rustc_public_generative::HirTyKind::Bool => Ty::bool_ty(),
-            rustc_public_generative::HirTyKind::Char => todo!(),
+            rustc_public_generative::HirTyKind::Char => Ty::from_rigid_kind(RigidTy::Char),
             &rustc_public_generative::HirTyKind::Int(int_ty) => Ty::signed_ty(int_ty),
             &rustc_public_generative::HirTyKind::Uint(uint_ty) => Ty::unsigned_ty(uint_ty),
             &rustc_public_generative::HirTyKind::Float(float_ty) => {
                 Ty::from_rigid_kind(RigidTy::Float(float_ty))
             }
-            _ => todo!(),
+            rustc_public_generative::HirTyKind::Tuple(items) => Ty::from_rigid_kind(
+                RigidTy::Tuple(items.iter().map(|item| self.hir_ty_to_ty(item)).collect()),
+            ),
+            rustc_public_generative::HirTyKind::RawPtr(mutability, inner) => {
+                Ty::from_rigid_kind(RigidTy::RawPtr(self.hir_ty_to_ty(inner), *mutability))
+            }
+            rustc_public_generative::HirTyKind::Array(len, inner) => {
+                let ty_const = match len {
+                    rustc_public_generative::HirTyConst::Literal(value) => {
+                        TyConst::try_from_target_usize((*value).try_into().unwrap()).unwrap()
+                    }
+                    rustc_public_generative::HirTyConst::ConstDef(_def_id) => {
+                        todo!()
+                    }
+                };
+                Ty::from_rigid_kind(RigidTy::Array(self.hir_ty_to_ty(inner), ty_const))
+            }
+            rustc_public_generative::HirTyKind::Adt(def_id, generic_args) => {
+                if generic_args.is_empty() {
+                    return CrateItem(*def_id).ty();
+                }
+                let args = generic_args
+                    .iter()
+                    .map(|arg| match arg {
+                        rustc_public_generative::HirGenericArg::Ty(ty) => {
+                            GenericArgKind::Type(self.hir_ty_to_ty(ty))
+                        }
+                        rustc_public_generative::HirGenericArg::Lifetime(_) => {
+                            GenericArgKind::Lifetime(Region {
+                                kind: RegionKind::ReStatic,
+                            })
+                        }
+                    })
+                    .collect();
+                Ty::from_rigid_kind(RigidTy::Adt(AdtDef(*def_id), GenericArgs(args)))
+            }
+            rustc_public_generative::HirTyKind::FnPtr(sig) => {
+                let sig = sig.as_ref();
+                let abi = match sig.abi {
+                    rustc_public_generative::FunctionAbi::Rust => Abi::Rust,
+                    rustc_public_generative::FunctionAbi::C => Abi::C { unwind: false },
+                };
+                let safety = if sig.is_unsafe {
+                    Safety::Unsafe
+                } else {
+                    Safety::Safe
+                };
+                let mut inputs_and_output: Vec<Ty> = sig
+                    .inputs
+                    .iter()
+                    .map(|hir_ty| self.hir_ty_to_ty(hir_ty))
+                    .collect();
+                inputs_and_output.push(self.hir_ty_to_ty(&sig.output));
+                Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(FnSig {
+                    inputs_and_output,
+                    c_variadic: sig.c_variadic,
+                    safety,
+                    abi,
+                })))
+            }
+            rustc_public_generative::HirTyKind::Ref(mutability, lifetime, inner) => {
+                let region = match lifetime {
+                    rustc_public_generative::HirLifetime::Static => Region {
+                        kind: RegionKind::ReStatic,
+                    },
+                    rustc_public_generative::HirLifetime::Param(_) => {
+                        // For parameter lifetimes, we use ReStatic as placeholder
+                        // In practice, this should be handled properly with the resolver
+                        Region {
+                            kind: RegionKind::ReStatic,
+                        }
+                    }
+                };
+                Ty::from_rigid_kind(RigidTy::Ref(region, self.hir_ty_to_ty(inner), *mutability))
+            }
+            rustc_public_generative::HirTyKind::Never => Ty::from_rigid_kind(RigidTy::Never),
         }
     }
 
@@ -657,7 +738,31 @@ impl HirCtx<'_> {
     fn sig_cty_to_cty(&self, sig_ty: &co2_crate_sig::CTy) -> CTy {
         match sig_ty {
             co2_crate_sig::CTy::Ty(hir_ty) => CTy::Ty(self.hir_ty_to_ty(hir_ty)),
-            co2_crate_sig::CTy::Function(_) => todo!(),
+            co2_crate_sig::CTy::Function(sig) => {
+                // Convert FunctionSignature to FnSig
+                let abi = match sig.abi {
+                    rustc_public_generative::FunctionAbi::Rust => Abi::Rust,
+                    rustc_public_generative::FunctionAbi::C => Abi::C { unwind: false },
+                };
+                let safety = if sig.is_unsafe {
+                    Safety::Unsafe
+                } else {
+                    Safety::Safe
+                };
+                // Convert inputs (HirTy) to Ty and add output at the end
+                let mut inputs_and_output: Vec<Ty> = sig
+                    .inputs
+                    .iter()
+                    .map(|hir_ty| self.hir_ty_to_ty(hir_ty))
+                    .collect();
+                inputs_and_output.push(self.hir_ty_to_ty(&sig.output));
+                CTy::Function(FnSig {
+                    inputs_and_output,
+                    c_variadic: sig.c_variadic,
+                    safety,
+                    abi,
+                })
+            }
             co2_crate_sig::CTy::UnsizedArray(hir_ty) => {
                 CTy::UnsizedArray(self.hir_ty_to_ty(hir_ty))
             }
