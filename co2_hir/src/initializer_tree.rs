@@ -9,7 +9,7 @@ use crate::{
     expr::{HirExpr, HirExprKind, coerce_expr_to_type},
     item::{HirLocal, LocalId},
     resolver::HirCtx,
-    ty::{adt_field_tys, array_elem_ty, is_array_ty, is_union_ty, resolve_field_path_in_adt},
+    ty::{adt_field_tys, array_elem_ty, is_array_ty, is_union_ty},
 };
 
 #[derive(Clone, Debug)]
@@ -51,16 +51,17 @@ impl InitializerCursor {
                     ctx.terminate_with_error(*span, "unsupported GNU range designator");
                 }
                 Designator::Field(name) => {
-                    let (path, field_ty) = resolve_field_path_in_adt(current_ty, name.0.as_str())
+                    let (path, field_ty) = ctx
+                        .resolve_logical_field_path(current_ty, name.0.as_str())
                         .ok_or_else(|| {
-                        format!(
-                            "field designator `{}` used on non-struct type: {:?}",
-                            name.0, current_ty
-                        )
-                    })?;
+                            format!(
+                                "field designator `{}` used on non-struct type: {:?}",
+                                name.0, current_ty
+                            )
+                        })?;
                     let mut cursor_ty = current_ty;
                     for index in path {
-                        let fields = adt_field_tys(cursor_ty).ok_or_else(|| {
+                        let fields = ctx.adt_logical_field_tys(cursor_ty).ok_or_else(|| {
                             format!("designator on non-adt type: {:?}", cursor_ty)
                         })?;
                         let next_ty = *fields.get(index).ok_or_else(|| {
@@ -87,14 +88,19 @@ impl InitializerCursor {
         self.stack.last().map(|(_, ty)| *ty).unwrap_or(self.base_ty)
     }
 
-    fn insert_to_tree(&self, result: &mut InitializerTree, value: InitializerTree) {
+    fn insert_to_tree(
+        &self,
+        ctx: &HirCtx<'_>,
+        result: &mut InitializerTree,
+        value: InitializerTree,
+    ) {
         if self.stack.is_empty() {
             return;
         }
         let mut current = result;
         let mut prev_ty = self.base_ty;
         for (index, ty) in &self.stack {
-            let children = current.children(prev_ty);
+            let children = current.children(ctx, prev_ty);
             while children.len() <= *index {
                 children.push(InitializerTree::Zeroed);
             }
@@ -104,12 +110,12 @@ impl InitializerCursor {
         *current = value;
     }
 
-    fn go_through(&mut self) -> bool {
+    fn go_through(&mut self, ctx: &HirCtx<'_>) -> bool {
         if self.stack.is_empty() {
             return false;
         }
         let ty = self.ty();
-        if let Some(fields) = adt_field_tys(ty) {
+        if let Some(fields) = ctx.adt_logical_field_tys(ty) {
             if fields.is_empty() {
                 todo!()
             }
@@ -125,6 +131,7 @@ impl InitializerCursor {
 
     fn go_next(
         &mut self,
+        ctx: &HirCtx<'_>,
         span: rustc_public_generative::rustc_public::ty::Span,
     ) -> Result<(), String> {
         if self.stack.is_empty() {
@@ -133,17 +140,17 @@ impl InitializerCursor {
         let (mut idx, _) = self.stack.pop().expect("stack not empty");
         let parent_ty = self.stack.last().map(|(_, ty)| *ty).unwrap_or(self.base_ty);
 
-        if let Some(fields) = adt_field_tys(parent_ty) {
+        if let Some(fields) = ctx.adt_logical_field_tys(parent_ty) {
             if is_union_ty(parent_ty) {
                 // A union consumes exactly one initializer slot.
-                self.go_next(span)?;
+                self.go_next(ctx, span)?;
                 return Ok(());
             }
             idx += 1;
             if idx < fields.len() {
                 self.stack.push((idx, fields[idx]));
             } else {
-                self.go_next(span)?;
+                self.go_next(ctx, span)?;
             }
             return Ok(());
         }
@@ -157,7 +164,7 @@ impl InitializerCursor {
             if idx < len {
                 self.stack.push((idx, elem_ty));
             } else {
-                self.go_next(span)?;
+                self.go_next(ctx, span)?;
             }
             return Ok(());
         }
@@ -169,12 +176,12 @@ impl InitializerCursor {
 }
 
 impl InitializerTree {
-    fn children(&mut self, ty: Ty) -> &mut Vec<InitializerTree> {
+    fn children(&mut self, ctx: &HirCtx<'_>, ty: Ty) -> &mut Vec<InitializerTree> {
         match self {
             InitializerTree::Middle { children } => children,
             InitializerTree::Leaf(_) => panic!("leaf does not have children"),
             InitializerTree::Zeroed => {
-                let count = children_count_of_ty(ty);
+                let count = children_count_of_ty(ctx, ty);
                 *self = InitializerTree::Middle {
                     children: vec![InitializerTree::Zeroed; count],
                 };
@@ -187,12 +194,15 @@ impl InitializerTree {
     }
 }
 
-fn children_count_of_ty(ty: Ty) -> usize {
+fn children_count_of_ty(ctx: &HirCtx<'_>, ty: Ty) -> usize {
     let count = match ty.kind() {
         TyKind::RigidTy(rigid_ty) => match rigid_ty {
             RigidTy::Array(_, ty_const) => ty_const.eval_target_usize().unwrap() as usize,
             RigidTy::Adt(def, _) => match def.kind() {
-                AdtKind::Struct => adt_field_tys(ty).unwrap().len(),
+                AdtKind::Struct => ctx
+                    .adt_logical_field_tys(ty)
+                    .unwrap_or_else(|| adt_field_tys(ty).unwrap())
+                    .len(),
                 _ => 1,
             },
             _ => panic!("Can't go through primitive ty {ty}"),
@@ -317,7 +327,7 @@ impl HirCtx<'_> {
                 Ok(InitializerTree::Leaf(coerced))
             }
             Initializer::List(items) => {
-                if adt_field_tys(expected_ty).is_none() && !is_array_ty(expected_ty) {
+                if self.adt_logical_field_tys(expected_ty).is_none() && !is_array_ty(expected_ty) {
                     let first = items
                         .into_iter()
                         .next()
@@ -334,15 +344,19 @@ impl HirCtx<'_> {
                 }
 
                 let mut result = InitializerTree::Middle {
-                    children: vec![InitializerTree::Zeroed; children_count_of_ty(expected_ty)],
+                    children: vec![
+                        InitializerTree::Zeroed;
+                        children_count_of_ty(self, expected_ty)
+                    ],
                 };
-                let mut cursor = if adt_field_tys(expected_ty).is_some() || is_array_ty(expected_ty)
+                let mut cursor = if self.adt_logical_field_tys(expected_ty).is_some()
+                    || is_array_ty(expected_ty)
                 {
                     let mut c = InitializerCursor {
                         base_ty: expected_ty,
                         stack: vec![],
                     };
-                    if let Some(fields) = adt_field_tys(expected_ty) {
+                    if let Some(fields) = self.adt_logical_field_tys(expected_ty) {
                         if !fields.is_empty() {
                             c.stack.push((0, fields[0]));
                         }
@@ -444,7 +458,7 @@ impl HirCtx<'_> {
                                         local_map,
                                     );
                                 }
-                                if !value_cursor.go_through() {
+                                if !value_cursor.go_through(self) {
                                     self.terminate_with_error(
                                         item_span,
                                         "failed to lower string literal as initializer tree",
@@ -460,7 +474,7 @@ impl HirCtx<'_> {
                                 {
                                     break InitializerTree::Leaf(coerced);
                                 }
-                                if !value_cursor.go_through() {
+                                if !value_cursor.go_through(self) {
                                     self.terminate_with_error(
                                         item_span,
                                         "failed to lower initializer tree",
@@ -480,13 +494,13 @@ impl HirCtx<'_> {
                         for idx in start_idx..=end_idx {
                             let mut range_cursor = cursor.clone();
                             range_cursor.stack.push((idx, elem_ty));
-                            range_cursor.insert_to_tree(&mut result, node.clone());
+                            range_cursor.insert_to_tree(self, &mut result, node.clone());
                         }
                         cursor.stack.push((end_idx, elem_ty));
                     } else {
-                        cursor.insert_to_tree(&mut result, node);
+                        cursor.insert_to_tree(self, &mut result, node);
                     }
-                    cursor.go_next(span)?;
+                    cursor.go_next(self, span)?;
                 }
                 Ok(result)
             }

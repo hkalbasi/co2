@@ -9,7 +9,7 @@ use rustc_public_generative::rustc_public::{
     },
     ty::{
         GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
-        Span as RustSpan, Ty, TyKind,
+        Span as RustSpan, Ty, TyKind, UintTy,
     },
 };
 
@@ -71,6 +71,269 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         } else {
             MirOperand::Move(place)
         }
+    }
+
+    fn const_int_expr(&self, value: i128, ty: Ty, span: RustSpan) -> HirExpr {
+        HirExpr {
+            kind: HirExprKind::ConstInt(value),
+            ty,
+            span,
+        }
+    }
+
+    fn emit_cast_expr(&self, expr: HirExpr, ty: Ty) -> HirExpr {
+        if expr.ty == ty {
+            expr
+        } else {
+            let span = expr.span;
+            HirExpr {
+                kind: HirExprKind::Cast(Box::new(expr)),
+                ty,
+                span,
+            }
+        }
+    }
+
+    fn bitfield_storage_bits(&self, ty: Ty) -> usize {
+        match ty.kind() {
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U8) | RigidTy::Int(IntTy::I8)) => 8,
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U16) | RigidTy::Int(IntTy::I16)) => 16,
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U32) | RigidTy::Int(IntTy::I32)) => 32,
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U64) | RigidTy::Int(IntTy::I64)) => 64,
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U128) | RigidTy::Int(IntTy::I128)) => 128,
+            TyKind::RigidTy(RigidTy::Uint(UintTy::Usize) | RigidTy::Int(IntTy::Isize)) => 64,
+            other => panic!("unsupported bitfield storage type: {other:?}"),
+        }
+    }
+
+    fn signed_ty_for_storage(&self, ty: Ty) -> Ty {
+        match ty.kind() {
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U8)) => Ty::signed_ty(IntTy::I8),
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U16)) => Ty::signed_ty(IntTy::I16),
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U32)) => Ty::signed_ty(IntTy::I32),
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U64)) => Ty::signed_ty(IntTy::I64),
+            TyKind::RigidTy(RigidTy::Uint(UintTy::U128)) => Ty::signed_ty(IntTy::I128),
+            TyKind::RigidTy(RigidTy::Uint(UintTy::Usize)) => Ty::signed_ty(IntTy::Isize),
+            _ => ty,
+        }
+    }
+
+    fn bitfield_mask_expr(&self, width: usize, storage_ty: Ty, span: RustSpan) -> HirExpr {
+        if width >= 128 {
+            self.emit_cast_expr(
+                self.const_int_expr(-1, Ty::signed_ty(IntTy::I32), span),
+                storage_ty,
+            )
+        } else {
+            self.emit_cast_expr(
+                self.const_int_expr(
+                    ((1u128 << width) - 1) as i128,
+                    Ty::signed_ty(IntTy::I32),
+                    span,
+                ),
+                storage_ty,
+            )
+        }
+    }
+
+    fn bitfield_storage_expr(
+        &self,
+        base: &HirExpr,
+        storage_index: usize,
+        storage_ty: Ty,
+        span: RustSpan,
+    ) -> HirExpr {
+        HirExpr {
+            kind: HirExprKind::Field {
+                base: Box::new(base.clone()),
+                index: storage_index,
+            },
+            ty: storage_ty,
+            span,
+        }
+    }
+
+    fn bitfield_read_expr(
+        &self,
+        base: &HirExpr,
+        storage_index: usize,
+        storage_ty: Ty,
+        bit_offset: usize,
+        bit_width: usize,
+        signed: bool,
+        result_ty: Ty,
+        span: RustSpan,
+    ) -> HirExpr {
+        let storage = self.bitfield_storage_expr(base, storage_index, storage_ty, span);
+        let shifted = if bit_offset == 0 {
+            storage
+        } else {
+            HirExpr {
+                kind: HirExprKind::Binary {
+                    op: co2_hir::HirBinOp::Shr,
+                    lhs: Box::new(storage),
+                    rhs: Box::new(self.emit_cast_expr(
+                        self.const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
+                        storage_ty,
+                    )),
+                },
+                ty: storage_ty,
+                span,
+            }
+        };
+        let masked = HirExpr {
+            kind: HirExprKind::Binary {
+                op: co2_hir::HirBinOp::BitAnd,
+                lhs: Box::new(shifted),
+                rhs: Box::new(self.bitfield_mask_expr(bit_width, storage_ty, span)),
+            },
+            ty: storage_ty,
+            span,
+        };
+        if signed {
+            let signed_storage_ty = self.signed_ty_for_storage(storage_ty);
+            let signed_value = self.emit_cast_expr(masked, signed_storage_ty);
+            let shift = self.bitfield_storage_bits(storage_ty) - bit_width;
+            let sign_extended = if shift == 0 {
+                signed_value
+            } else {
+                let shifted_left = HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: co2_hir::HirBinOp::Shl,
+                        lhs: Box::new(signed_value),
+                        rhs: Box::new(self.emit_cast_expr(
+                            self.const_int_expr(shift as i128, Ty::signed_ty(IntTy::I32), span),
+                            signed_storage_ty,
+                        )),
+                    },
+                    ty: signed_storage_ty,
+                    span,
+                };
+                HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: co2_hir::HirBinOp::Shr,
+                        lhs: Box::new(shifted_left),
+                        rhs: Box::new(self.emit_cast_expr(
+                            self.const_int_expr(shift as i128, Ty::signed_ty(IntTy::I32), span),
+                            signed_storage_ty,
+                        )),
+                    },
+                    ty: signed_storage_ty,
+                    span,
+                }
+            };
+            self.emit_cast_expr(sign_extended, result_ty)
+        } else {
+            self.emit_cast_expr(masked, result_ty)
+        }
+    }
+
+    fn bitfield_insert_expr(
+        &self,
+        current_storage: HirExpr,
+        value: HirExpr,
+        storage_ty: Ty,
+        bit_offset: usize,
+        bit_width: usize,
+        span: RustSpan,
+    ) -> HirExpr {
+        let value_mask = self.bitfield_mask_expr(bit_width, storage_ty, span);
+        let field_mask = if bit_offset == 0 {
+            value_mask.clone()
+        } else {
+            HirExpr {
+                kind: HirExprKind::Binary {
+                    op: co2_hir::HirBinOp::Shl,
+                    lhs: Box::new(value_mask.clone()),
+                    rhs: Box::new(self.emit_cast_expr(
+                        self.const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
+                        storage_ty,
+                    )),
+                },
+                ty: storage_ty,
+                span,
+            }
+        };
+        let cleared = HirExpr {
+            kind: HirExprKind::Binary {
+                op: co2_hir::HirBinOp::BitAnd,
+                lhs: Box::new(current_storage),
+                rhs: Box::new(HirExpr {
+                    kind: HirExprKind::BitNot(Box::new(field_mask.clone())),
+                    ty: storage_ty,
+                    span,
+                }),
+            },
+            ty: storage_ty,
+            span,
+        };
+        let masked_value = HirExpr {
+            kind: HirExprKind::Binary {
+                op: co2_hir::HirBinOp::BitAnd,
+                lhs: Box::new(self.emit_cast_expr(value, storage_ty)),
+                rhs: Box::new(value_mask),
+            },
+            ty: storage_ty,
+            span,
+        };
+        let shifted = if bit_offset == 0 {
+            masked_value
+        } else {
+            HirExpr {
+                kind: HirExprKind::Binary {
+                    op: co2_hir::HirBinOp::Shl,
+                    lhs: Box::new(masked_value),
+                    rhs: Box::new(self.emit_cast_expr(
+                        self.const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
+                        storage_ty,
+                    )),
+                },
+                ty: storage_ty,
+                span,
+            }
+        };
+        HirExpr {
+            kind: HirExprKind::Binary {
+                op: co2_hir::HirBinOp::BitOr,
+                lhs: Box::new(cleared),
+                rhs: Box::new(shifted),
+            },
+            ty: storage_ty,
+            span,
+        }
+    }
+
+    fn emit_bitfield_store(&mut self, lhs: &HirExpr, value: HirExpr, span: RustSpan) {
+        let HirExprKind::Bitfield {
+            base,
+            storage_index,
+            storage_ty,
+            bit_offset,
+            bit_width,
+            ..
+        } = &lhs.kind
+        else {
+            panic!("bitfield store requires bitfield lhs");
+        };
+        let storage_lhs = self.bitfield_storage_expr(base, *storage_index, *storage_ty, span);
+        let current_storage = self.bitfield_storage_expr(base, *storage_index, *storage_ty, span);
+        let rhs = self.bitfield_insert_expr(
+            current_storage,
+            value,
+            *storage_ty,
+            *bit_offset,
+            *bit_width,
+            span,
+        );
+        let assign_expr = HirExpr {
+            kind: HirExprKind::Assign {
+                lhs: Box::new(storage_lhs),
+                rhs: Box::new(rhs),
+            },
+            ty: *storage_ty,
+            span,
+        };
+        let _ = self.lower_expr_to_operand(&assign_expr);
     }
 
     fn emit_ptr_offset(
@@ -424,6 +687,26 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     .expect("field expression should be place-expressible");
                 MirOperand::Copy(place)
             }
+            HirExprKind::Bitfield {
+                base,
+                storage_index,
+                storage_ty,
+                bit_offset,
+                bit_width,
+                signed,
+            } => {
+                let read_expr = self.bitfield_read_expr(
+                    base,
+                    *storage_index,
+                    *storage_ty,
+                    *bit_offset,
+                    *bit_width,
+                    *signed,
+                    expr.ty,
+                    expr.span,
+                );
+                self.lower_expr_to_operand(&read_expr)
+            }
             HirExprKind::PtrOffset { base, index } => {
                 let base_op = self.lower_expr_to_operand(base);
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, mutability)) = base.ty.kind()
@@ -739,6 +1022,10 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 self.lower_call_expr(func, args, expr.span, expr.ty)
             }
             HirExprKind::Assign { lhs, rhs } => {
+                if matches!(lhs.kind, HirExprKind::Bitfield { .. }) {
+                    self.emit_bitfield_store(lhs, (**rhs).clone(), expr.span);
+                    return self.lower_expr_to_operand(lhs);
+                }
                 let lhs_place = self
                     .lower_expr_to_place(lhs)
                     .expect("assignment lhs should be place-expressible");
@@ -756,6 +1043,46 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 binop_ty,
                 return_semantic,
             } => {
+                if matches!(lhs.kind, HirExprKind::Bitfield { .. }) {
+                    let old_expr = if let HirExprKind::Bitfield {
+                        base,
+                        storage_index,
+                        storage_ty,
+                        bit_offset,
+                        bit_width,
+                        signed,
+                    } = &lhs.kind
+                    {
+                        self.bitfield_read_expr(
+                            base,
+                            *storage_index,
+                            *storage_ty,
+                            *bit_offset,
+                            *bit_width,
+                            *signed,
+                            lhs.ty,
+                            lhs.span,
+                        )
+                    } else {
+                        unreachable!()
+                    };
+                    let old_operand = matches!(return_semantic, ReturnSemantic::BeforeAssign)
+                        .then(|| self.lower_expr_to_operand(&old_expr));
+                    let bin_expr = HirExpr {
+                        kind: HirExprKind::Binary {
+                            op: *op,
+                            lhs: Box::new(self.emit_cast_expr(old_expr, *binop_ty)),
+                            rhs: Box::new(self.emit_cast_expr((**rhs).clone(), *binop_ty)),
+                        },
+                        ty: *binop_ty,
+                        span: expr.span,
+                    };
+                    self.emit_bitfield_store(lhs, self.emit_cast_expr(bin_expr, lhs.ty), expr.span);
+                    return match return_semantic {
+                        ReturnSemantic::AfterAssign => self.lower_expr_to_operand(lhs),
+                        ReturnSemantic::BeforeAssign => old_operand.unwrap(),
+                    };
+                }
                 let lhs_place = self
                     .lower_expr_to_place(lhs)
                     .expect("assignment lhs should be place-expressible");

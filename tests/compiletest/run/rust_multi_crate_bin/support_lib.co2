@@ -48,3 +48,19 @@ typedef struct {
 } ComplexStruct;
 
 long long int HUGE_LONG = 0xabcd00000000;
+
+typedef struct {
+    int a;
+    char b;
+    char c;
+    int d;
+} NormalReprCStruct;
+
+typedef struct {
+    int a;
+    int b : 1;
+    int c : 1;
+    int d : 1;
+    int e;
+} BitFieldReprCStruct;
+

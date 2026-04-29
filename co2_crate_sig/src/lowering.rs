@@ -823,7 +823,8 @@ pub fn lower_crate_sig(
         def_id: def,
         name,
         kind,
-        fields,
+        emitted_fields: fields,
+        logical_fields: _,
         span,
     } in structs
     {

@@ -1,4 +1,9 @@
-use support_lib::{Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG, ComplexStruct, inner_mod::inner_mod_fn};
+use support_lib::{
+    Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG, ComplexStruct, inner_mod::inner_mod_fn,
+    NormalReprCStruct, BitFieldReprCStruct,
+};
+
+use std::mem::offset_of;
 
 const _: () = {
     use std::ptr::null;
@@ -52,4 +57,12 @@ fn main() {
     assert_eq!(unsafe { HUGE_LONG }, 0xabcd00000000);
 
     assert_eq!(inner_mod_fn(), 5);
+
+    assert_eq!(offset_of!(NormalReprCStruct, a), 0);
+    assert_eq!(offset_of!(NormalReprCStruct, b), 4);
+    assert_eq!(offset_of!(NormalReprCStruct, c), 5);
+    assert_eq!(offset_of!(NormalReprCStruct, d), 8);
+
+    assert_eq!(offset_of!(BitFieldReprCStruct, a), 0);
+    assert_eq!(offset_of!(BitFieldReprCStruct, e), 8);
 }

@@ -4,7 +4,7 @@ use co2_ast::{
     BinOp as ParsedBinOp, Constant, Expression, GenericAssociation, IntegerSuffix, Spanned,
     Statement, StatementOrDeclaration, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
-use co2_crate_sig::{LocalResolver, MethodResolutionKind};
+use co2_crate_sig::{LocalResolver, LogicalAdtFieldKind, MethodResolutionKind};
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem,
@@ -15,6 +15,7 @@ use rustc_public_generative::rustc_public::{
     },
 };
 
+use crate::decl::hir_ty_to_ty;
 use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, ResolvedValue};
 use crate::stmt::HirStmt;
@@ -156,6 +157,14 @@ pub enum HirExprKind {
         base: Box<HirExpr>,
         index: usize,
     },
+    Bitfield {
+        base: Box<HirExpr>,
+        storage_index: usize,
+        storage_ty: Ty,
+        bit_offset: usize,
+        bit_width: usize,
+        signed: bool,
+    },
     PtrOffset {
         base: Box<HirExpr>,
         index: Box<HirExpr>,
@@ -230,6 +239,23 @@ pub enum ReturnSemantic {
     AfterAssign,
     /// For x++
     BeforeAssign,
+}
+
+#[derive(Clone, Debug)]
+enum ResolvedFieldAccess {
+    Direct {
+        path: Vec<usize>,
+        ty: Ty,
+    },
+    Bitfield {
+        container_path: Vec<usize>,
+        storage_index: usize,
+        storage_ty: Ty,
+        bit_offset: usize,
+        bit_width: usize,
+        signed: bool,
+        ty: Ty,
+    },
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -913,9 +939,39 @@ impl HirCtx<'_> {
             }
             Expression::Field(base, field) => {
                 let base = self.lower_expr(*base, locals, local_map)?;
-                let (path, field_ty) = resolve_field_path_in_adt(base.ty, &field.0)
-                    .ok_or_else(|| format!("unknown field `{}` on type {:?}", field.0, base.ty))?;
-                self.project_field_path(base, &path, field_ty, span)
+                match self
+                    .resolve_struct_field_access(base.ty, &field.0)
+                    .ok_or_else(|| format!("unknown field `{}` on type {:?}", field.0, base.ty))?
+                {
+                    ResolvedFieldAccess::Direct { path, ty } => {
+                        self.project_field_path(base, &path, ty, span)
+                    }
+                    ResolvedFieldAccess::Bitfield {
+                        container_path,
+                        storage_index,
+                        storage_ty,
+                        bit_offset,
+                        bit_width,
+                        signed,
+                        ty,
+                    } => {
+                        let container_ty = self.field_path_ty(base.ty, &container_path)?;
+                        let base =
+                            self.project_field_path(base, &container_path, container_ty, span)?;
+                        Ok(HirExpr {
+                            kind: HirExprKind::Bitfield {
+                                base: Box::new(base),
+                                storage_index,
+                                storage_ty,
+                                bit_offset,
+                                bit_width,
+                                signed,
+                            },
+                            ty,
+                            span,
+                        })
+                    }
+                }
             }
             Expression::Arrow(base, field) => {
                 let mut base = self.lower_expr(*base, locals, local_map)?;
@@ -931,11 +987,44 @@ impl HirCtx<'_> {
                     ty: pointee,
                     span,
                 };
-                let (path, field_ty) = resolve_field_path_in_adt(deref_base.ty, &field.0)
+                match self
+                    .resolve_struct_field_access(deref_base.ty, &field.0)
                     .ok_or_else(|| {
                         format!("unknown field `{}` on type {:?}", field.0, deref_base.ty)
-                    })?;
-                self.project_field_path(deref_base, &path, field_ty, span)
+                    })? {
+                    ResolvedFieldAccess::Direct { path, ty } => {
+                        self.project_field_path(deref_base, &path, ty, span)
+                    }
+                    ResolvedFieldAccess::Bitfield {
+                        container_path,
+                        storage_index,
+                        storage_ty,
+                        bit_offset,
+                        bit_width,
+                        signed,
+                        ty,
+                    } => {
+                        let container_ty = self.field_path_ty(deref_base.ty, &container_path)?;
+                        let deref_base = self.project_field_path(
+                            deref_base,
+                            &container_path,
+                            container_ty,
+                            span,
+                        )?;
+                        Ok(HirExpr {
+                            kind: HirExprKind::Bitfield {
+                                base: Box::new(deref_base),
+                                storage_index,
+                                storage_ty,
+                                bit_offset,
+                                bit_width,
+                                signed,
+                            },
+                            ty,
+                            span,
+                        })
+                    }
+                }
             }
             Expression::Subscript(base, index) => {
                 let mut base = self.lower_expr(*base, locals, local_map)?;
@@ -981,7 +1070,7 @@ impl HirCtx<'_> {
                 }
                 if matches!(op, ParsedBinOp::Assign) {
                     let lhs = self.lower_expr(*lhs, locals, local_map)?;
-                    if !is_place_expr(&lhs) {
+                    if !is_assignable_expr(&lhs) {
                         return Err("assignment target is not assignable".to_owned());
                     }
                     if is_array_ty(lhs.ty) {
@@ -1018,7 +1107,7 @@ impl HirCtx<'_> {
             }
             Expression::AssignWithOp { lhs, op, rhs } => {
                 let lhs = self.lower_expr(*lhs, locals, local_map)?;
-                if !is_place_expr(&lhs) {
+                if !is_assignable_expr(&lhs) {
                     return Err("assignment target is not assignable".to_owned());
                 }
                 let rhs = self.lower_expr(*rhs, locals, local_map)?;
@@ -1051,7 +1140,7 @@ impl HirCtx<'_> {
             } => {
                 let parser_span = expr.1;
                 let lhs = self.lower_expr(*expr, locals, local_map)?;
-                if !is_place_expr(&lhs) {
+                if !is_assignable_expr(&lhs) {
                     return Err("update target is not assignable".to_owned());
                 }
                 let ty = lhs.ty;
@@ -1192,38 +1281,63 @@ impl HirCtx<'_> {
                 field,
             } => {
                 let ty = self.lower_type_name(*type_name, parser_span)?;
-                let (indices, _field_ty) = resolve_field_path_in_adt(ty, &field)
-                    .ok_or_else(|| format!("offsetof: field '{field}' not found in type"))?;
+                let indices =
+                    match self
+                        .resolve_struct_field_access(ty, &field)
+                        .unwrap_or_else(|| {
+                            self.terminate_with_error(
+                                parser_span,
+                                &format!("offsetof: field '{field}' not found in type"),
+                            )
+                        }) {
+                        ResolvedFieldAccess::Direct { path, .. } => path,
+                        ResolvedFieldAccess::Bitfield { .. } => {
+                            self.terminate_with_error(
+                                parser_span,
+                                &format!("offsetof: field '{field}' is a bitfield"),
+                            );
+                        }
+                    };
                 // Walk the type hierarchy following `indices` to accumulate the byte offset.
                 let mut offset_bytes: u64 = 0;
                 let mut cur_ty = ty;
                 for &field_idx in &indices {
-                    let layout = cur_ty
-                        .layout()
-                        .map_err(|e| format!("offsetof: failed to compute layout: {e}"))?;
+                    let layout = cur_ty.layout().unwrap_or_else(|e| {
+                        self.terminate_with_error(
+                            parser_span,
+                            &format!("offsetof: failed to compute layout: {e}"),
+                        )
+                    });
                     let field_offset = match &layout.shape().fields {
                         FieldsShape::Arbitrary { offsets, .. } => {
                             let off = offsets
                                 .get(field_idx)
-                                .ok_or_else(|| {
-                                    format!("offsetof: field index {field_idx} out of bounds")
-                                })?
+                                .unwrap_or_else(|| {
+                                    self.terminate_with_error(
+                                        parser_span,
+                                        &format!("offsetof: field index {field_idx} out of bounds"),
+                                    )
+                                })
                                 .bytes();
                             off
                         }
                         other => {
-                            return Err(format!(
-                                "offsetof: unsupported layout kind for type: {other:?}"
-                            ));
+                            self.terminate_with_error(
+                                parser_span,
+                                &format!("offsetof: unsupported layout kind for type: {other:?}"),
+                            );
                         }
                     };
                     offset_bytes += field_offset as u64;
                     // Descend into the field type for next iteration.
                     cur_ty = adt_field_tys(cur_ty)
                         .and_then(|tys| tys.into_iter().nth(field_idx))
-                        .ok_or_else(|| {
-                            format!("offsetof: failed to get field type at index {field_idx}")
-                        })?;
+                        .unwrap_or_else(|| {
+                            self.terminate_with_error(
+                                parser_span,
+                                &format!("offsetof: failed to get field type at index {field_idx}"),
+                            )
+                        });
                 }
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(offset_bytes as i128),
@@ -1489,6 +1603,161 @@ impl HirCtx<'_> {
                 })
             }
         }
+    }
+
+    pub(crate) fn adt_logical_field_tys(&self, ty: Ty) -> Option<Vec<Ty>> {
+        let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else {
+            return None;
+        };
+        self.decl_resolver.adt_logical_fields(def.0).map(|fields| {
+            fields
+                .into_iter()
+                .map(|field| hir_ty_to_ty(&field.ty))
+                .collect()
+        })
+    }
+
+    pub(crate) fn resolve_logical_field_path(
+        &self,
+        ty: Ty,
+        field: &str,
+    ) -> Option<(Vec<usize>, Ty)> {
+        let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else {
+            return resolve_field_path_in_adt(ty, field);
+        };
+        self.resolve_logical_field_path_from_metadata(def.0, field)
+            .map(|(path, ty)| (path, hir_ty_to_ty(&ty)))
+            .or_else(|| resolve_field_path_in_adt(ty, field))
+    }
+
+    fn resolve_logical_field_path_from_metadata(
+        &self,
+        def: rustc_public_generative::rustc_public::DefId,
+        field: &str,
+    ) -> Option<(Vec<usize>, rustc_public_generative::HirTy)> {
+        let fields = self.decl_resolver.adt_logical_fields(def)?;
+        for (idx, logical_field) in fields.iter().enumerate() {
+            if logical_field.name == field && !logical_field.name.starts_with("__anon_field_") {
+                return Some((vec![idx], logical_field.ty.clone()));
+            }
+        }
+        for (idx, logical_field) in fields.into_iter().enumerate() {
+            if !logical_field.name.starts_with("__anon_field_") {
+                continue;
+            }
+            let rustc_public_generative::HirTyKind::Adt(nested_def, _) = logical_field.ty.kind
+            else {
+                continue;
+            };
+            if let Some((mut path, ty)) =
+                self.resolve_logical_field_path_from_metadata(nested_def, field)
+            {
+                path.insert(0, idx);
+                return Some((path, ty));
+            }
+        }
+        None
+    }
+
+    fn resolve_struct_field_access(&self, ty: Ty, field: &str) -> Option<ResolvedFieldAccess> {
+        let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else {
+            return resolve_field_path_in_adt(ty, field)
+                .map(|(path, ty)| ResolvedFieldAccess::Direct { path, ty });
+        };
+        self.resolve_struct_field_access_from_metadata(def.0, field)
+            .or_else(|| {
+                resolve_field_path_in_adt(ty, field)
+                    .map(|(path, ty)| ResolvedFieldAccess::Direct { path, ty })
+            })
+    }
+
+    fn resolve_struct_field_access_from_metadata(
+        &self,
+        def: rustc_public_generative::rustc_public::DefId,
+        field: &str,
+    ) -> Option<ResolvedFieldAccess> {
+        let fields = self.decl_resolver.adt_logical_fields(def)?;
+        for logical_field in &fields {
+            if logical_field.name != field || logical_field.name.starts_with("__anon_field_") {
+                continue;
+            }
+            return Some(match &logical_field.kind {
+                LogicalAdtFieldKind::Direct { physical_index } => ResolvedFieldAccess::Direct {
+                    path: vec![*physical_index],
+                    ty: hir_ty_to_ty(&logical_field.ty),
+                },
+                LogicalAdtFieldKind::Bitfield {
+                    storage_index,
+                    storage_ty,
+                    bit_offset,
+                    bit_width,
+                    is_signed,
+                } => ResolvedFieldAccess::Bitfield {
+                    container_path: vec![],
+                    storage_index: *storage_index,
+                    storage_ty: hir_ty_to_ty(storage_ty),
+                    bit_offset: *bit_offset,
+                    bit_width: *bit_width,
+                    signed: *is_signed,
+                    ty: hir_ty_to_ty(&logical_field.ty),
+                },
+            });
+        }
+        for logical_field in fields {
+            let LogicalAdtFieldKind::Direct { physical_index } = logical_field.kind else {
+                continue;
+            };
+            if !logical_field.name.starts_with("__anon_field_") {
+                continue;
+            }
+            let rustc_public_generative::HirTyKind::Adt(nested_def, _) = logical_field.ty.kind
+            else {
+                continue;
+            };
+            if let Some(resolved) =
+                self.resolve_struct_field_access_from_metadata(nested_def, field)
+            {
+                return Some(match resolved {
+                    ResolvedFieldAccess::Direct { mut path, ty } => {
+                        path.insert(0, physical_index);
+                        ResolvedFieldAccess::Direct { path, ty }
+                    }
+                    ResolvedFieldAccess::Bitfield {
+                        mut container_path,
+                        storage_index,
+                        storage_ty,
+                        bit_offset,
+                        bit_width,
+                        signed,
+                        ty,
+                    } => {
+                        container_path.insert(0, physical_index);
+                        ResolvedFieldAccess::Bitfield {
+                            container_path,
+                            storage_index,
+                            storage_ty,
+                            bit_offset,
+                            bit_width,
+                            signed,
+                            ty,
+                        }
+                    }
+                });
+            }
+        }
+        None
+    }
+
+    fn field_path_ty(&self, mut base_ty: Ty, path: &[usize]) -> Result<Ty, String> {
+        for index in path {
+            let Some(field_tys) = adt_field_tys(base_ty) else {
+                return Err(format!("field projection on non-adt type: {:?}", base_ty));
+            };
+            base_ty = *field_tys
+                .get(*index)
+                .ok_or_else(|| format!("field index out of bounds: {} for {:?}", index, base_ty))?;
+        }
+        Ok(base_ty)
     }
 
     fn project_field_path(
@@ -1778,6 +2047,111 @@ impl HirCtx<'_> {
         self.lower_binop_from_lowered(lhs, rhs, op, span, true)
     }
 
+    fn zeroed_expr(&self, ty: Ty, span: RustSpan) -> HirExpr {
+        HirExpr {
+            kind: HirExprKind::Zeroed,
+            ty,
+            span,
+        }
+    }
+
+    fn const_int_expr(&self, value: i128, ty: Ty, span: RustSpan) -> HirExpr {
+        HirExpr {
+            kind: HirExprKind::ConstInt(value),
+            ty,
+            span,
+        }
+    }
+
+    fn pack_bitfield_initializer(
+        &self,
+        current_storage: HirExpr,
+        value: HirExpr,
+        storage_ty: Ty,
+        bit_offset: usize,
+        bit_width: usize,
+        span: RustSpan,
+    ) -> HirExpr {
+        let value_mask = if bit_width >= 128 {
+            self.emit_cast(
+                self.const_int_expr(-1, Ty::signed_ty(IntTy::I32), span),
+                storage_ty,
+            )
+        } else {
+            self.emit_cast(
+                self.const_int_expr(
+                    ((1u128 << bit_width) - 1) as i128,
+                    Ty::signed_ty(IntTy::I32),
+                    span,
+                ),
+                storage_ty,
+            )
+        };
+        let field_mask = if bit_offset == 0 {
+            value_mask.clone()
+        } else {
+            HirExpr {
+                kind: HirExprKind::Binary {
+                    op: HirBinOp::Shl,
+                    lhs: Box::new(value_mask.clone()),
+                    rhs: Box::new(self.emit_cast(
+                        self.const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
+                        storage_ty,
+                    )),
+                },
+                ty: storage_ty,
+                span,
+            }
+        };
+        let cleared = HirExpr {
+            kind: HirExprKind::Binary {
+                op: HirBinOp::BitAnd,
+                lhs: Box::new(current_storage),
+                rhs: Box::new(HirExpr {
+                    kind: HirExprKind::BitNot(Box::new(field_mask.clone())),
+                    ty: storage_ty,
+                    span,
+                }),
+            },
+            ty: storage_ty,
+            span,
+        };
+        let masked_value = HirExpr {
+            kind: HirExprKind::Binary {
+                op: HirBinOp::BitAnd,
+                lhs: Box::new(self.emit_cast(value, storage_ty)),
+                rhs: Box::new(value_mask),
+            },
+            ty: storage_ty,
+            span,
+        };
+        let shifted_value = if bit_offset == 0 {
+            masked_value
+        } else {
+            HirExpr {
+                kind: HirExprKind::Binary {
+                    op: HirBinOp::Shl,
+                    lhs: Box::new(masked_value),
+                    rhs: Box::new(self.emit_cast(
+                        self.const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
+                        storage_ty,
+                    )),
+                },
+                ty: storage_ty,
+                span,
+            }
+        };
+        HirExpr {
+            kind: HirExprKind::Binary {
+                op: HirBinOp::BitOr,
+                lhs: Box::new(cleared),
+                rhs: Box::new(shifted_value),
+            },
+            ty: storage_ty,
+            span,
+        }
+    }
+
     pub(crate) fn initializer_tree_to_expr(
         &self,
         tree: &InitializerTree,
@@ -1805,6 +2179,71 @@ impl HirCtx<'_> {
                         span,
                     }
                 } else {
+                    if let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() {
+                        if let Some(logical_fields) = self.decl_resolver.adt_logical_fields(def.0)
+                            && logical_fields.iter().any(|field| {
+                                matches!(field.kind, LogicalAdtFieldKind::Bitfield { .. })
+                            })
+                        {
+                            let Some(physical_field_tys) = adt_field_tys(ty) else {
+                                self.terminate_with_error(parser_span, "Can't compute adt fields");
+                            };
+                            let mut physical_args = vec![None::<HirExpr>; physical_field_tys.len()];
+                            for (child, logical_field) in children.iter().zip(logical_fields.iter())
+                            {
+                                match &logical_field.kind {
+                                    LogicalAdtFieldKind::Direct { physical_index } => {
+                                        physical_args[*physical_index] =
+                                            Some(self.initializer_tree_to_expr(
+                                                child,
+                                                physical_field_tys[*physical_index],
+                                                parser_span,
+                                            ));
+                                    }
+                                    LogicalAdtFieldKind::Bitfield {
+                                        storage_index,
+                                        storage_ty,
+                                        bit_offset,
+                                        bit_width,
+                                        ..
+                                    } => {
+                                        let storage_ty = hir_ty_to_ty(storage_ty);
+                                        let current_storage = physical_args[*storage_index]
+                                            .take()
+                                            .unwrap_or_else(|| self.zeroed_expr(storage_ty, span));
+                                        let value = self.initializer_tree_to_expr(
+                                            child,
+                                            hir_ty_to_ty(&logical_field.ty),
+                                            parser_span,
+                                        );
+                                        physical_args[*storage_index] =
+                                            Some(self.pack_bitfield_initializer(
+                                                current_storage,
+                                                value,
+                                                storage_ty,
+                                                *bit_offset,
+                                                *bit_width,
+                                                span,
+                                            ));
+                                    }
+                                }
+                            }
+                            let args = physical_field_tys
+                                .into_iter()
+                                .enumerate()
+                                .map(|(idx, field_ty)| {
+                                    physical_args[idx]
+                                        .take()
+                                        .unwrap_or_else(|| self.zeroed_expr(field_ty, span))
+                                })
+                                .collect();
+                            return HirExpr {
+                                kind: HirExprKind::Aggregate { args },
+                                ty,
+                                span,
+                            };
+                        }
+                    }
                     let Some(field_tys) = adt_field_tys(ty) else {
                         self.terminate_with_error(parser_span, "Can't compute adt fields");
                     };
@@ -1861,6 +2300,10 @@ pub(crate) fn is_place_expr(expr: &HirExpr) -> bool {
         HirExprKind::Deref(_) => true,
         _ => false,
     }
+}
+
+fn is_assignable_expr(expr: &HirExpr) -> bool {
+    is_place_expr(expr) || matches!(expr.kind, HirExprKind::Bitfield { .. })
 }
 
 fn addr_of_mutability(expr: &HirExpr) -> Mutability {
