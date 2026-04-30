@@ -1,0 +1,2 @@
+#include "blob.h"
+int read_blob(void) { return blob[0] + blob_size; }

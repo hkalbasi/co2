@@ -399,6 +399,7 @@ fn lower_translation_unit_items(
             } => {
                 let mut is_typedef = false;
                 let mut is_extern = false;
+                let mut is_static = false;
                 let mut cleaned_specs = Vec::new();
                 for (spec, sp) in declaration_specifiers {
                     match spec {
@@ -413,6 +414,12 @@ fn lower_translation_unit_items(
                             _,
                         )) => {
                             is_extern = true;
+                        }
+                        DeclarationSpecifier::StorageSpecifier((
+                            StorageClassSpecifier::Static,
+                            _,
+                        )) => {
+                            is_static = true;
                         }
                         _ => cleaned_specs.push((spec, sp)),
                     }
@@ -505,6 +512,7 @@ fn lower_translation_unit_items(
                                     id,
                                     ty,
                                     mutable: true,
+                                    no_mangle: !is_static,
                                     span,
                                 });
                             }
@@ -534,6 +542,7 @@ fn lower_translation_unit_items(
                                     id,
                                     ty,
                                     mutable: true,
+                                    no_mangle: !is_static,
                                     span,
                                 });
                             } else if is_extern {
@@ -768,6 +777,7 @@ pub fn lower_crate_sig(
                     ty,
                     span,
                     mutable: true,
+                    no_mangle: false,
                 });
                 if let Some(initializer) = declarator.initializer {
                     ctx.mir_owners.insert(
@@ -803,6 +813,7 @@ pub fn lower_crate_sig(
                     ty: sized_ty,
                     span,
                     mutable: true,
+                    no_mangle: false,
                 });
                 ctx.mir_owners.insert(
                     id,
@@ -910,6 +921,7 @@ pub fn lower_crate_sig(
                 id: def_id,
                 ty: HirTy::signed_ty(IntTy::I32, span),
                 mutable: false,
+                no_mangle: false,
                 span,
             });
         ctx.mir_owners.insert(def_id, mir_info);

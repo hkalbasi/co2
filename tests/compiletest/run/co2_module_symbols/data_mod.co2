@@ -1,0 +1,3 @@
+#include <stdint.h>
+const uint8_t blob[] = { 7 };
+const uint32_t blob_size = 1;

@@ -228,6 +228,7 @@ impl ItemSignatureInfo {
                         span,
                         ty,
                         mutable,
+                        no_mangle: _,
                         name: _,
                     } => {
                         result.push(ItemSignatureInfo {
@@ -373,7 +374,7 @@ impl DefinedCrateInfo {
                     | DefinedItemKind::Struct(_, _)
                     | DefinedItemKind::Union(_, _)
                     | DefinedItemKind::TypeDef(_)
-                    | DefinedItemKind::Static(_)
+                    | DefinedItemKind::Static { .. }
                     | DefinedItemKind::Const(_)
                     | DefinedItemKind::Impl { .. }
                     | DefinedItemKind::Module(_)
@@ -1161,7 +1162,10 @@ impl DefinedCrateInfo {
                         });
                         DefinedItemKind::Const(id)
                     }
-                    crate::HirModuleItem::Static { id, .. } => DefinedItemKind::Static(id),
+                    crate::HirModuleItem::Static { id, no_mangle, .. } => DefinedItemKind::Static {
+                        def_id: id,
+                        no_mangle,
+                    },
                     crate::HirModuleItem::Adt {
                         name: _,
                         id,
@@ -1269,7 +1273,10 @@ impl DefinedCrateInfo {
                                     span: _,
                                 } => items.push(DefinedItemInfo {
                                     name,
-                                    kind: DefinedItemKind::Static(id),
+                                    kind: DefinedItemKind::Static {
+                                        def_id: id,
+                                        no_mangle: false,
+                                    },
                                     span: DUMMY_SP,
                                     parent: Some(foreign_mod_id),
                                 }),
@@ -1539,7 +1546,7 @@ impl DefinedCrateState {
             DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
             DefinedItemKind::Const(_) => DefKind::Const,
             DefinedItemKind::AnonConst(_) => DefKind::AnonConst,
-            DefinedItemKind::Static(_) => DefKind::Static {
+            DefinedItemKind::Static { .. } => DefKind::Static {
                 safety: hir::Safety::Safe,
                 mutability: rustc_ast::Mutability::Mut,
                 nested: false,
@@ -1602,7 +1609,7 @@ impl DefinedItemInfo {
             DefinedItemKind::ForeignMod(def_id)
             | DefinedItemKind::Module(def_id)
             | DefinedItemKind::TypeDef(def_id)
-            | DefinedItemKind::Static(def_id)
+            | DefinedItemKind::Static { def_id, .. }
             | DefinedItemKind::Const(def_id)
             | DefinedItemKind::AnonConst(def_id)
             | DefinedItemKind::Field(def_id)
@@ -1624,7 +1631,10 @@ pub enum DefinedItemKind {
     ForeignFunction(FnDef),
     Const(DefId),
     AnonConst(DefId),
-    Static(DefId),
+    Static {
+        def_id: DefId,
+        no_mangle: bool,
+    },
     Struct(AdtDef, AdtRepr),
     Union(AdtDef, AdtRepr),
     Field(DefId),
@@ -2383,7 +2393,7 @@ fn generated_resolutions<'tcx>(
             DefinedItemKind::Union(_, _) => Res::Def(DefKind::Union, local_def_id.to_def_id()),
             DefinedItemKind::TypeDef(_) => Res::Def(DefKind::TyAlias, local_def_id.to_def_id()),
             DefinedItemKind::Module(_) => Res::Def(DefKind::Mod, local_def_id.to_def_id()),
-            DefinedItemKind::Static(_) => Res::Def(
+            DefinedItemKind::Static { .. } => Res::Def(
                 DefKind::Static {
                     safety: rustc_hir::Safety::Safe,
                     mutability: ty::Mutability::Mut,
@@ -2480,6 +2490,9 @@ fn generated_item_attrs(kind: DefinedItemKind) -> Option<Vec<hir::Attribute>> {
             abi: FunctionAbi::C,
             no_mangle: true,
             ..
+        } => hir::attrs::AttributeKind::NoMangle(DUMMY_SP),
+        DefinedItemKind::Static {
+            no_mangle: true, ..
         } => hir::attrs::AttributeKind::NoMangle(DUMMY_SP),
         DefinedItemKind::Struct(_, repr) | DefinedItemKind::Union(_, repr) => {
             let repr = match repr {

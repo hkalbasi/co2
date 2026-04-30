@@ -41,6 +41,7 @@ pub enum HirModuleItem {
         id: DefId,
         ty: HirTy,
         mutable: bool,
+        no_mangle: bool,
         span: Span,
     },
     Const {

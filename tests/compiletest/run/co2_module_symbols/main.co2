@@ -1,0 +1,3 @@
+mod data_mod;
+mod use_mod;
+int main(void) { return use_mod::read_blob() != 8; }
