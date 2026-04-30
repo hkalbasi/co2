@@ -72,6 +72,16 @@ impl ModuleData {
             .ok_or_else(|| "path does not refer to a value or type".to_owned())
     }
 
+    fn resolve_path_or_unique_leaf<'a>(
+        &self,
+        path: impl Iterator<Item = &'a str>,
+    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+        let parts = path.collect::<Vec<_>>();
+        self.lookup_path_or_unique_leaf(&parts)?
+            .id
+            .ok_or_else(|| "path does not refer to a value or type".to_owned())
+    }
+
     fn lookup_path<'a>(&self, path: &[&'a str]) -> Result<&Self, String> {
         let Some((seg1, rest)) = path.split_first() else {
             return Ok(self);
@@ -83,6 +93,48 @@ impl ModuleData {
             )
         })?;
         part.lookup_path(rest)
+    }
+
+    fn lookup_path_or_unique_leaf<'a>(&'a self, path: &[&'a str]) -> Result<&'a Self, String> {
+        match self.lookup_path(path) {
+            Ok(found) => Ok(found),
+            Err(err) if path.len() == 1 => self.lookup_unique_leaf(path[0]).or(Err(err)),
+            Err(err) => Err(err),
+        }
+    }
+
+    // TODO: this function is super wrong. It's just a workaround for
+    // having `libc::puts` (not `libc::unix::puts`) without supporting
+    // `pub use` in dependencies properly.
+    fn lookup_unique_leaf<'a>(&'a self, leaf: &str) -> Result<&'a Self, String> {
+        let mut matches = Vec::new();
+        self.collect_leaf_matches(leaf, &mut matches);
+        match matches.as_slice() {
+            [] => Err(format!(
+                "Failed to lookup {leaf}.\nAvailable items are: {:?}",
+                self.items.keys()
+            )),
+            [single] => Ok(*single),
+            many => {
+                let first_id = many[0].id;
+                if first_id.is_some() && many.iter().all(|item| item.id == first_id) {
+                    Ok(many[0])
+                } else {
+                    Err(format!(
+                        "lookup for `{leaf}` is ambiguous in dependency tree"
+                    ))
+                }
+            }
+        }
+    }
+
+    fn collect_leaf_matches<'a>(&'a self, leaf: &str, out: &mut Vec<&'a Self>) {
+        if let Some(child) = self.items.get(leaf) {
+            out.push(child);
+        }
+        for child in self.items.values() {
+            child.collect_leaf_matches(leaf, out);
+        }
     }
 
     pub(crate) fn insert_alias(&mut self, alias: &str, item: ModuleData) {
@@ -376,7 +428,7 @@ impl Resolver {
         let mut crate_name = first;
         normalize_crate_name(&mut crate_name);
         if let Some(crate_data) = self.dependencies.get(crate_name) {
-            return crate_data.lookup_path(&parts[1..]).cloned();
+            return crate_data.lookup_path_or_unique_leaf(&parts[1..]).cloned();
         }
         self.current.lookup_path(&parts).cloned()
     }
@@ -557,7 +609,7 @@ impl Resolver {
             .dependencies
             .get(crate_name)
             .ok_or_else(|| format!("Crate {crate_name} not found"))?;
-        crate_data.resolve_path(path.into_iter())
+        crate_data.resolve_path_or_unique_leaf(path.into_iter())
     }
 
     pub(crate) fn resolve_in_current<'a>(

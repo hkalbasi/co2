@@ -12,7 +12,10 @@ use crate::test_case::{
     Mode, TestCase, TestKind, TestOutcome, collect_tests, directive_args, directive_i32,
     directive_text,
 };
-use crate::ui::{UiSpanExpectation, check_compile_warnings, check_ui, parse_ui_span_expectations};
+use crate::ui::{
+    UiSpanExpectation, check_compile_warnings, check_ui, format_named_output,
+    parse_ui_span_expectations,
+};
 use crate::util::{copy_dir_all, normalize, unescape_text};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -223,9 +226,9 @@ fn run_nu_dir_test(root: &Path, test: &TestCase) -> Result<()> {
     let got_status = output.status.code().unwrap_or(-1);
     if got_status != run_status {
         bail!(
-            "nushell test status mismatch: expected {run_status}, got {got_status}\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            "nushell test status mismatch: expected {run_status}, got {got_status}\n{}\n{}",
+            format_named_output("stdout", &String::from_utf8_lossy(&output.stdout)),
+            format_named_output("stderr", &String::from_utf8_lossy(&output.stderr)),
         );
     }
 
@@ -235,9 +238,9 @@ fn run_nu_dir_test(root: &Path, test: &TestCase) -> Result<()> {
 fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
     if !compile.output.status.success() {
         bail!(
-            "run test compilation failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&compile.output.stdout),
-            String::from_utf8_lossy(&compile.output.stderr)
+            "run test compilation failed\n{}\n{}",
+            format_named_output("stdout", &String::from_utf8_lossy(&compile.output.stdout)),
+            format_named_output("stderr", &String::from_utf8_lossy(&compile.output.stderr)),
         );
     }
 
@@ -336,9 +339,9 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
 fn check_debuginfo(test: &TestCase, compile: &CompileResult) -> Result<TestOutcome> {
     if !compile.output.status.success() {
         bail!(
-            "debuginfo test compilation failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&compile.output.stdout),
-            String::from_utf8_lossy(&compile.output.stderr)
+            "debuginfo test compilation failed\n{}\n{}",
+            format_named_output("stdout", &String::from_utf8_lossy(&compile.output.stdout)),
+            format_named_output("stderr", &String::from_utf8_lossy(&compile.output.stderr)),
         );
     }
 

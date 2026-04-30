@@ -40,6 +40,7 @@ pub struct UiDiagnostic {
     pub level: String,
     pub message: String,
     pub spans: Vec<UiDiagnosticSpan>,
+    pub rendered: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -294,48 +295,111 @@ pub fn parse_compile_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
     parse_json_diagnostics(stderr)
 }
 
+pub fn prettify_diagnostic_output(text: &str) -> String {
+    let mut out = String::new();
+    let mut changed = false;
+
+    for line in text.lines() {
+        let Some((prefix, diagnostic)) = parse_diagnostic_line(line) else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        changed = true;
+
+        if !prefix.trim_end().is_empty() {
+            out.push_str(prefix.trim_end());
+            out.push('\n');
+        }
+
+        if let Some(rendered) = diagnostic.rendered.as_deref() {
+            out.push_str(rendered.trim_end_matches('\n'));
+            out.push('\n');
+        } else {
+            out.push_str(&format!("{}: {}\n", diagnostic.level, diagnostic.message));
+        }
+    }
+
+    if !changed {
+        return text.to_owned();
+    }
+
+    out.trim_end_matches('\n').to_owned()
+}
+
+pub fn format_named_output(name: &str, text: &str) -> String {
+    let pretty = prettify_diagnostic_output(text);
+    format!("{name}:\n{pretty}")
+}
+
 fn parse_json_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
     let mut diagnostics = Vec::new();
 
     for line in stderr.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || !trimmed.starts_with('{') {
-            continue;
-        }
-
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        let Some((_, diagnostic)) = parse_diagnostic_line(line) else {
             continue;
         };
-        let Some(spans) = value.get("spans").and_then(serde_json::Value::as_array) else {
-            continue;
-        };
-        let Some(level) = value.get("level").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let Some(message) = value.get("message").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-
-        let spans = spans
-            .iter()
-            .filter_map(|span| {
-                Some(UiDiagnosticSpan {
-                    file_name: span.get("file_name")?.as_str()?.to_owned(),
-                    byte_start: span.get("byte_start")?.as_u64()? as usize,
-                    byte_end: span.get("byte_end")?.as_u64()? as usize,
-                    is_primary: span.get("is_primary")?.as_bool()?,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        diagnostics.push(UiDiagnostic {
-            level: level.to_owned(),
-            message: message.to_owned(),
-            spans,
-        });
+        diagnostics.push(diagnostic);
     }
 
     Ok(diagnostics)
+}
+
+fn parse_diagnostic_line(line: &str) -> Option<(&str, UiDiagnostic)> {
+    let json_start = line.find('{')?;
+    let prefix = &line[..json_start];
+    let trimmed = line[json_start..].trim();
+    if trimmed.is_empty() || !trimmed.starts_with('{') {
+        return None;
+    }
+
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return None;
+    };
+    if value
+        .get("$message_type")
+        .and_then(serde_json::Value::as_str)
+        != Some("diagnostic")
+    {
+        return None;
+    }
+    let Some(level) = value.get("level").and_then(serde_json::Value::as_str) else {
+        return None;
+    };
+    let Some(message) = value.get("message").and_then(serde_json::Value::as_str) else {
+        return None;
+    };
+
+    let spans = value
+        .get("spans")
+        .and_then(serde_json::Value::as_array)
+        .map(|spans| {
+            spans
+                .iter()
+                .filter_map(|span| {
+                    Some(UiDiagnosticSpan {
+                        file_name: span.get("file_name")?.as_str()?.to_owned(),
+                        byte_start: span.get("byte_start")?.as_u64()? as usize,
+                        byte_end: span.get("byte_end")?.as_u64()? as usize,
+                        is_primary: span.get("is_primary")?.as_bool()?,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Some((
+        prefix,
+        UiDiagnostic {
+            level: level.to_owned(),
+            message: message.to_owned(),
+            spans,
+            rendered: value
+                .get("rendered")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        },
+    ))
 }
 
 fn parse_annotation_message(trailing: &str) -> (Option<UiAnnotationLevel>, Option<String>) {
@@ -434,4 +498,31 @@ fn is_summary_diagnostic(diagnostic: &UiDiagnostic) -> bool {
     diagnostic.message.starts_with("aborting due to ")
         || diagnostic.message.ends_with(" warning emitted")
         || diagnostic.message.ends_with(" warnings emitted")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prettify_diagnostic_output;
+
+    #[test]
+    fn prettifies_rendered_json_diagnostics() {
+        let input = concat!(
+            "{\"$message_type\":\"diagnostic\",\"level\":\"error\",\"message\":\"boom\",\"spans\":[],\"rendered\":\"Error: boom\\n --> main.co2:1:1\\n\"}\n",
+            "co2rustc panic: non-string payload\n",
+        );
+
+        assert_eq!(
+            prettify_diagnostic_output(input),
+            "Error: boom\n --> main.co2:1:1\nco2rustc panic: non-string payload"
+        );
+    }
+
+    #[test]
+    fn prettifies_prefixed_json_diagnostics() {
+        let input = "compile failed: {\"$message_type\":\"diagnostic\",\"level\":\"error\",\"message\":\"boom\",\"spans\":[],\"rendered\":\"Error: boom\\n\"}";
+        assert_eq!(
+            prettify_diagnostic_output(input),
+            "compile failed:\nError: boom"
+        );
+    }
 }
