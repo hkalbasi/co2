@@ -20,7 +20,9 @@ pub(crate) fn place(local: usize) -> MirPlace {
 impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
     pub(crate) fn lower_expr_to_place(&mut self, expr: &HirExpr) -> Option<MirPlace> {
         match &expr.kind {
-            HirExprKind::Local(local) => Some(place(self.local_to_index(*local))),
+            HirExprKind::Local(local) | HirExprKind::LocalConst(local) => {
+                Some(place(self.local_to_index(*local)))
+            }
             HirExprKind::Field { base, index } => {
                 let mut base_place = self.lower_expr_to_place_or_temp(base);
                 base_place
@@ -33,7 +35,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 base_place.projection.push(MirProjection::Deref);
                 Some(base_place)
             }
-            HirExprKind::Path(ResolvedValue::Static(def)) => {
+            HirExprKind::Path(ResolvedValue::Static(def) | ResolvedValue::StaticConst(def)) => {
                 let value_ty = CrateItem(*def).ty();
                 let ptr_ty = Ty::new_ptr(value_ty, Mutability::Mut);
                 let tmp_ptr = self.new_temp(ptr_ty, Mutability::Mut, expr.span);

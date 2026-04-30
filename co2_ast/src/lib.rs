@@ -416,6 +416,7 @@ pub enum EnumSpecifier<R: TypeResolver> {
 #[derive(Debug, Clone, Copy)]
 pub enum TypeQualifier {
     Const,
+    Constexpr,
     Restrict,
     Volatile,
     Atomic,
@@ -473,6 +474,7 @@ pub enum Token {
     Case,
     Char,
     Const,
+    Constexpr,
     Continue,
     Default,
     Do,
@@ -609,6 +611,7 @@ impl Display for Token {
             Token::Case => write!(f, "case"),
             Token::Char => write!(f, "char"),
             Token::Const => write!(f, "const"),
+            Token::Constexpr => write!(f, "constexpr"),
             Token::Continue => write!(f, "continue"),
             Token::Default => write!(f, "default"),
             Token::Do => write!(f, "do"),
@@ -831,6 +834,7 @@ pub enum StorageClassSpecifier {
     Typedef,
     Extern,
     Static,
+    Constexpr,
     Atomic,
     ThreadLocal,
     Auto,
@@ -1007,6 +1011,17 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
             DeclarationSpecifier::TypeQualifier(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Static)
+            }
+            DeclarationSpecifier::FunctionSpecifier(_) => false,
+        }
+    }
+
+    pub fn is_constexpr(&self) -> bool {
+        match self {
+            DeclarationSpecifier::TypeSpecifier(_) => false,
+            DeclarationSpecifier::TypeQualifier(_) => false,
+            DeclarationSpecifier::StorageSpecifier(c) => {
+                matches!(c.0, StorageClassSpecifier::Constexpr)
             }
             DeclarationSpecifier::FunctionSpecifier(_) => false,
         }

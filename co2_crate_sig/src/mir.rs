@@ -8,6 +8,7 @@ use crate::LocalResolver;
 #[derive(Debug, Clone)]
 pub enum MirOwnerInfo {
     CloneMethod(AdtDef),
+    Const,
     StaticZeroed,
     EnumConstZeroed,
     EnumConstPrevPlus(DefId, Span),

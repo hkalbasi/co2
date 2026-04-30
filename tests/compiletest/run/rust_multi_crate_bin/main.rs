@@ -35,6 +35,8 @@ const _: () = {
             let _: *const *const *const ffi::c_char = &raw const (*dummy).const_const_char_star;
         }
     }
+
+    let _: *const [i32; support_lib::C23Const] = null::<[i32; 2]>();
 };
 
 fn main() {

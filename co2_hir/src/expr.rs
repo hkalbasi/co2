@@ -144,6 +144,7 @@ impl std::fmt::Debug for HirExpr {
 #[derive(Clone, Debug)]
 pub enum HirExprKind {
     Local(LocalId),
+    LocalConst(LocalId),
     ConstInt(i128),
     ConstFloat(f64),
     ConstStr(String),
@@ -813,6 +814,19 @@ impl HirCtx<'_> {
                     def_id,
                     generic_args,
                 } => {
+                    if self.function_name.is_none() && self.decl_resolver.is_constexpr_def(def_id) {
+                        let value =
+                            self.decl_resolver
+                                .local_const_int_value(def_id)
+                                .map_err(|_| {
+                                    format!("missing scalar constant value for def {def_id:?}")
+                                })?;
+                        return Ok(HirExpr {
+                            kind: HirExprKind::ConstInt(value),
+                            ty: Ty::signed_ty(IntTy::I32),
+                            span,
+                        });
+                    }
                     let resolved = self.resolve_value_with_generic_args(def_id, &generic_args);
                     Ok(HirExpr {
                         kind: HirExprKind::Path(resolved.clone()),
@@ -851,6 +865,25 @@ impl HirCtx<'_> {
                     let local_decl = &locals[local];
                     return Ok(HirExpr {
                         kind: HirExprKind::Local(local),
+                        ty: local_decl.ty,
+                        span,
+                    });
+                }
+                co2_crate_sig::DefOrLocal::LocalConst(l) => {
+                    let Some(&local) = local_map.get(&(l as usize)) else {
+                        let value = self
+                            .decl_resolver
+                            .local_constexpr_int_value(l)
+                            .map_err(|_| format!("missing scalar constant value for local {l}"))?;
+                        return Ok(HirExpr {
+                            kind: HirExprKind::ConstInt(value),
+                            ty: Ty::signed_ty(IntTy::I32),
+                            span,
+                        });
+                    };
+                    let local_decl = &locals[local];
+                    return Ok(HirExpr {
+                        kind: HirExprKind::LocalConst(local),
                         ty: local_decl.ty,
                         span,
                     });
@@ -1069,8 +1102,15 @@ impl HirCtx<'_> {
                     });
                 }
                 if matches!(op, ParsedBinOp::Assign) {
+                    let lhs_span = lhs.1;
                     let lhs = self.lower_expr(*lhs, locals, local_map)?;
                     if !is_assignable_expr(&lhs) {
+                        if let Some(name) = readonly_constexpr_name(&lhs, locals) {
+                            self.terminate_with_error(
+                                lhs_span,
+                                &format!("assignment of read-only constexpr variable `{name}`"),
+                            );
+                        }
                         return Err("assignment target is not assignable".to_owned());
                     }
                     if is_array_ty(lhs.ty) {
@@ -1106,8 +1146,15 @@ impl HirCtx<'_> {
                 self.lower_binop_from_lowered(lhs, rhs, op, span, false)
             }
             Expression::AssignWithOp { lhs, op, rhs } => {
+                let lhs_span = lhs.1;
                 let lhs = self.lower_expr(*lhs, locals, local_map)?;
                 if !is_assignable_expr(&lhs) {
+                    if let Some(name) = readonly_constexpr_name(&lhs, locals) {
+                        self.terminate_with_error(
+                            lhs_span,
+                            &format!("assignment of read-only constexpr variable `{name}`"),
+                        );
+                    }
                     return Err("assignment target is not assignable".to_owned());
                 }
                 let rhs = self.lower_expr(*rhs, locals, local_map)?;
@@ -1141,6 +1188,12 @@ impl HirCtx<'_> {
                 let parser_span = expr.1;
                 let lhs = self.lower_expr(*expr, locals, local_map)?;
                 if !is_assignable_expr(&lhs) {
+                    if let Some(name) = readonly_constexpr_name(&lhs, locals) {
+                        self.terminate_with_error(
+                            parser_span,
+                            &format!("update of read-only constexpr variable `{name}`"),
+                        );
+                    }
                     return Err("update target is not assignable".to_owned());
                 }
                 let ty = lhs.ty;
@@ -2289,9 +2342,9 @@ impl HirCtx<'_> {
 
 pub(crate) fn is_place_expr(expr: &HirExpr) -> bool {
     match &expr.kind {
-        HirExprKind::Local(_) => true,
+        HirExprKind::Local(_) | HirExprKind::LocalConst(_) => true,
         HirExprKind::Field { base, .. } => is_place_expr(base),
-        HirExprKind::Path(ResolvedValue::Static { .. }) => true,
+        HirExprKind::Path(ResolvedValue::Static { .. } | ResolvedValue::StaticConst(_)) => true,
         HirExprKind::PtrOffset { .. } => false,
         HirExprKind::PtrDiff { .. } => false,
         HirExprKind::Logical { .. } => false,
@@ -2303,7 +2356,17 @@ pub(crate) fn is_place_expr(expr: &HirExpr) -> bool {
 }
 
 fn is_assignable_expr(expr: &HirExpr) -> bool {
-    is_place_expr(expr) || matches!(expr.kind, HirExprKind::Bitfield { .. })
+    match &expr.kind {
+        HirExprKind::LocalConst(_) | HirExprKind::Path(ResolvedValue::StaticConst(_)) => false,
+        _ => is_place_expr(expr) || matches!(expr.kind, HirExprKind::Bitfield { .. }),
+    }
+}
+
+fn readonly_constexpr_name(expr: &HirExpr, locals: &Arena<HirLocal>) -> Option<String> {
+    match &expr.kind {
+        HirExprKind::LocalConst(local) => Some(locals[*local].name.clone()),
+        _ => None,
+    }
 }
 
 fn addr_of_mutability(expr: &HirExpr) -> Mutability {
@@ -2313,6 +2376,8 @@ fn addr_of_mutability(expr: &HirExpr) -> Mutability {
             _ => Mutability::Mut,
         },
         HirExprKind::Field { base, .. } => addr_of_mutability(base),
+        HirExprKind::LocalConst(_) => Mutability::Not,
+        HirExprKind::Path(ResolvedValue::StaticConst(_)) => Mutability::Not,
         _ => Mutability::Mut,
     }
 }

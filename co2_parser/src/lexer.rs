@@ -291,6 +291,7 @@ pub fn lexer<'src>() -> impl Parser<
             "case" => Token::Case,
             "char" => Token::Char,
             "const" | "__const__" => Token::Const,
+            "constexpr" => Token::Constexpr,
             "continue" => Token::Continue,
             "default" => Token::Default,
             "do" => Token::Do,

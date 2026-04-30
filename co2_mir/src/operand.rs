@@ -627,7 +627,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
                 MirOperand::Copy(place(temp))
             }
-            HirExprKind::Local(local) => {
+            HirExprKind::Local(local) | HirExprKind::LocalConst(local) => {
                 let local_index = self.local_to_index(*local);
                 self.place_operand_for_ty(place(local_index), self.locals[local_index].ty)
             }
@@ -1011,7 +1011,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                         MirOperand::Copy(place(tmp))
                     }
                 }
-                ResolvedValue::Static { .. } => {
+                ResolvedValue::Static(_) | ResolvedValue::StaticConst(_) => {
                     let place = self
                         .lower_expr_to_place(expr)
                         .expect("static path should be place-expressible");

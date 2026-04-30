@@ -33,6 +33,149 @@ pub enum CTy {
     UnsizedArray(Ty),
 }
 
+fn declarator_has_restrict_qualifier(decl: &Declarator<LocalResolver>) -> bool {
+    match decl {
+        Declarator::Abstract | Declarator::Identifier(_) => false,
+        Declarator::FunctionDeclarator { declarator, .. }
+        | Declarator::ArrayDeclarator { declarator, .. } => {
+            declarator_has_restrict_qualifier(&declarator.0)
+        }
+        Declarator::PointerDeclarator {
+            declarator,
+            qualifiers,
+        } => {
+            qualifiers
+                .iter()
+                .any(|(qualifier, _)| matches!(qualifier, TypeQualifier::Restrict))
+                || declarator_has_restrict_qualifier(&declarator.0)
+        }
+    }
+}
+
+fn is_null_pointer_constexpr_expr((expr, _): &Spanned<Expression<LocalResolver>>) -> bool {
+    match expr {
+        Expression::Constant(Constant::Int(0, _)) => true,
+        Expression::Cast { expr, .. } => is_null_pointer_constexpr_expr(expr),
+        _ => false,
+    }
+}
+
+fn is_scalar_ty(ctx: &HirCtx<'_>, ty: Ty, span: RustSpan) -> bool {
+    match ty.kind() {
+        TyKind::RigidTy(
+            RigidTy::Bool
+            | RigidTy::Char
+            | RigidTy::Int(_)
+            | RigidTy::Uint(_)
+            | RigidTy::Float(_)
+            | RigidTy::RawPtr(_, _),
+        ) => true,
+        TyKind::RigidTy(RigidTy::Adt(def, _)) => {
+            // Check if this is a typedef to a scalar type
+            // Create a HirTy for the Adt to check via peeling
+            let adt_hir_ty = HirTy {
+                kind: rustc_public_generative::HirTyKind::Adt(def.0, vec![]),
+                span,
+            };
+            let peeled = ctx.decl_resolver.peel_constexpr_typedef_hir(adt_hir_ty);
+            matches!(
+                peeled.kind,
+                rustc_public_generative::HirTyKind::Bool
+                    | rustc_public_generative::HirTyKind::Char
+                    | rustc_public_generative::HirTyKind::Int(_)
+                    | rustc_public_generative::HirTyKind::Uint(_)
+                    | rustc_public_generative::HirTyKind::Float(_)
+                    | rustc_public_generative::HirTyKind::RawPtr(_, _)
+            )
+        }
+        _ => false,
+    }
+}
+
+fn validate_local_constexpr_decl(
+    ctx: &HirCtx<'_>,
+    specifiers: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+    declarator: &Declarator<LocalResolver>,
+    ty: &CTy,
+    initializer: Option<&Spanned<Initializer<LocalResolver>>>,
+) -> Result<(), String> {
+    if !specifiers.iter().any(|spec| spec.0.is_constexpr()) {
+        return Ok(());
+    }
+
+    let Some(initializer) = initializer else {
+        return Err("`constexpr` requires an initializer".to_owned());
+    };
+    let Initializer::Expr(expr) = &initializer.0 else {
+        return Err("`constexpr` object type must be scalar".to_owned());
+    };
+
+    if specifiers.iter().any(|spec| {
+        matches!(
+            spec.0,
+            DeclarationSpecifier::TypeQualifier((TypeQualifier::Volatile, _))
+        )
+    }) {
+        return Err("`constexpr` object type cannot be volatile-qualified".to_owned());
+    }
+    if specifiers.iter().any(|spec| {
+        matches!(
+            spec.0,
+            DeclarationSpecifier::TypeQualifier((TypeQualifier::Atomic, _))
+        )
+    }) {
+        return Err("`constexpr` object type cannot be atomic".to_owned());
+    }
+    if declarator_has_restrict_qualifier(declarator) {
+        return Err("`constexpr` object type cannot be restrict-qualified".to_owned());
+    }
+
+    let span = specifiers
+        .first()
+        .map(|(_, sp)| ctx.to_rust_span(*sp))
+        .expect("should have at least one specifier");
+
+    match ty {
+        CTy::Ty(ty) => {
+            if !is_scalar_ty(ctx, *ty, span) {
+                return Err("`constexpr` object type must be scalar".to_owned());
+            }
+        }
+        CTy::Function(_) => {
+            return Err("`constexpr` object type must be scalar".to_owned());
+        }
+        CTy::UnsizedArray(elem_ty) => {
+            // Unsized arrays are allowed if they have initializers (they get sized from the initializer)
+            // The element type must be scalar
+            if !is_scalar_ty(ctx, *elem_ty, span) {
+                return Err("`constexpr` object type must be scalar".to_owned());
+            }
+        }
+    }
+
+    if matches!(ty, CTy::Ty(ty) if matches!(ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(_, _)))) {
+        if !is_null_pointer_constexpr_expr(expr) {
+            return Err("`constexpr` pointer initializer must be null".to_owned());
+        }
+    } else if !matches!(ty, CTy::UnsizedArray(_))
+        && ctx.decl_resolver.eval_const_expr(expr).is_err()
+    {
+        return Err("`constexpr` initializer must be a constant expression".to_owned());
+    }
+
+    Ok(())
+}
+
+fn constexpr_decl_span(
+    specifiers: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+    fallback: co2_ast::Span,
+) -> co2_ast::Span {
+    specifiers
+        .iter()
+        .find_map(|(spec, span)| spec.is_constexpr().then_some(*span))
+        .unwrap_or(fallback)
+}
+
 #[derive(Clone, Debug)]
 pub struct HirDecl {
     pub local: LocalId,
@@ -148,6 +291,9 @@ impl HirCtx<'_> {
                 panic!("Invalid associated method in type position")
             }
             co2_crate_sig::DefOrLocal::Local(_) => panic!("Invalid local in type position"),
+            co2_crate_sig::DefOrLocal::LocalConst(_) => {
+                panic!("Invalid local constexpr in type position")
+            }
             co2_crate_sig::DefOrLocal::FuncName => panic!("Invalid __func__ in type position"),
             co2_crate_sig::DefOrLocal::Prim(primitive_ty) => prim_ty_to_ty(*primitive_ty),
             co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
@@ -188,9 +334,26 @@ impl HirCtx<'_> {
                         declarator,
                         initializer,
                     } = init.0;
+                    let is_constexpr = declaration_specifiers
+                        .iter()
+                        .any(|spec| spec.0.is_constexpr());
                     let raw_initializer = initializer.clone();
+                    let declarator_for_checks = declarator.0.clone();
                     let ((name, parser_span), ty) =
                         self.lower_value_decl_type(declaration_specifiers.clone(), declarator);
+                    validate_local_constexpr_decl(
+                        self,
+                        &declaration_specifiers,
+                        &declarator_for_checks,
+                        &ty,
+                        raw_initializer.as_ref(),
+                    )
+                    .unwrap_or_else(|err| {
+                        self.terminate_with_error(
+                            constexpr_decl_span(&declaration_specifiers, parser_span),
+                            &err,
+                        )
+                    });
                     let ty = match ty {
                         CTy::Ty(ty) => ty,
                         CTy::Function(sig) => {
@@ -233,6 +396,7 @@ impl HirCtx<'_> {
                                 name: name.1.clone(),
                                 ty: real_ty,
                                 span,
+                                read_only: is_constexpr,
                             });
                             local_map.insert(name.0, local);
 
@@ -253,6 +417,7 @@ impl HirCtx<'_> {
                         name: name.1.clone(),
                         ty,
                         span,
+                        read_only: is_constexpr,
                     });
                     local_map.insert(name.0, local);
 

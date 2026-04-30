@@ -25,6 +25,7 @@ pub enum ResolvedValue {
     FnPtr(FnDef, Vec<GenericArgKind>),
     ConstInt(i128),
     Static(DefId),
+    StaticConst(DefId),
 }
 
 impl ResolvedValue {
@@ -49,7 +50,7 @@ impl ResolvedValue {
             ResolvedValue::ConstInt(_) => {
                 Ty::signed_ty(rustc_public_generative::rustc_public::ty::IntTy::I32)
             }
-            ResolvedValue::Static(def) => CrateItem(*def).ty(),
+            ResolvedValue::Static(def) | ResolvedValue::StaticConst(def) => CrateItem(*def).ty(),
         }
     }
 }
@@ -103,6 +104,8 @@ impl<'a> HirCtx<'a> {
         let ty = CrateItem(def_id).ty();
         if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnDef(..))) {
             ResolvedValue::Fn(FnDef(def_id), self.lower_generic_args(generic_args))
+        } else if self.decl_resolver.is_constexpr_def(def_id) {
+            ResolvedValue::StaticConst(def_id)
         } else {
             ResolvedValue::Static(def_id)
         }

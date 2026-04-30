@@ -2,8 +2,8 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, Expression,
-    InitDeclarator, RustPath, Spanned, StatelessResolver, StructOrUnionSpecifier, TypeQueryResult,
-    TypeResolver,
+    InitDeclarator, Initializer, RustPath, Spanned, StatelessResolver, StructOrUnionSpecifier,
+    TypeQueryResult, TypeResolver,
 };
 use co2_parser::parse_expression_tokens;
 use co2_preprocessor::PreprocessedSource;
@@ -126,6 +126,8 @@ pub struct LocalResolverBase {
     pub(crate) global_struct_tags: Rc<RefCell<StructAndEnumData>>,
     pub(crate) global_locals: Rc<RefCell<im::HashMap<String, (DefOrLocal, TypeQueryResult)>>>,
     pub(crate) enum_const_values: HashMap<DefId, i128>,
+    pub(crate) constexpr_def_exprs: HashMap<DefId, co2_ast::Spanned<Expression<LocalResolver>>>,
+    pub(crate) constexpr_local_exprs: HashMap<u32, co2_ast::Spanned<Expression<LocalResolver>>>,
 }
 
 impl std::fmt::Debug for LocalResolverBase {
@@ -268,7 +270,42 @@ impl LocalResolver {
     }
 
     pub fn has_local_const_value(&self, def_id: DefId) -> bool {
-        self.base.borrow().has_local_enum_const(def_id)
+        self.base.borrow().has_local_const_value(def_id)
+    }
+
+    pub fn local_constexpr_int_value(&self, local: u32) -> Result<i128, String> {
+        self.base.borrow_mut().eval_local_constexpr(local)
+    }
+
+    pub fn has_local_constexpr(&self, local: u32) -> bool {
+        self.base.borrow().has_local_constexpr(local)
+    }
+
+    pub fn is_constexpr_def(&self, def_id: DefId) -> bool {
+        self.base.borrow().is_constexpr_def(def_id)
+    }
+
+    pub fn peel_constexpr_typedef_hir(&self, ty: HirTy) -> HirTy {
+        self.base.borrow().peel_constexpr_typedef(ty)
+    }
+
+    pub fn validate_constexpr_decl(
+        &self,
+        specifiers: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+        declarator: &Declarator<LocalResolver>,
+        ty: &crate::CTy,
+        initializer: Option<&Spanned<Initializer<LocalResolver>>>,
+    ) -> Result<(), String> {
+        self.base
+            .borrow_mut()
+            .validate_constexpr_decl(specifiers, declarator, ty, initializer)
+    }
+
+    pub fn eval_const_expr(
+        &self,
+        expr: &Spanned<Expression<LocalResolver>>,
+    ) -> Result<i128, String> {
+        self.base.borrow_mut().eval_const_expr(expr)
     }
 
     pub fn normalize_ty_for_current_owner(&self, ty: Ty) -> Ty {
@@ -397,6 +434,7 @@ pub enum DefOrLocal {
         generic_args: Vec<Spanned<co2_ast::RustTy<LocalResolver>>>,
     },
     Const(DefId),
+    LocalConst(u32),
     AssocMethod {
         receiver: DefId,
         method: String,
@@ -558,6 +596,7 @@ impl co2_ast::TypeResolver for LocalResolver {
             } => {
                 let is_typedef = declaration_specifiers.iter().any(|d| d.0.is_typedef());
                 let is_static = declaration_specifiers.iter().any(|d| d.0.is_static());
+                let is_constexpr = declaration_specifiers.iter().any(|d| d.0.is_constexpr());
                 if is_typedef && is_static {
                     todo!("Emit good error");
                 }
@@ -596,6 +635,12 @@ impl co2_ast::TypeResolver for LocalResolver {
                         let mut base = next.base.borrow_mut();
                         let (def_id, fake_name) =
                             base.emit_fake_def(rustc_public_generative::DefData::ValueNs);
+                        if is_constexpr
+                            && let Some((co2_ast::Initializer::Expr(expr), _span)) =
+                                decl.0.initializer.clone()
+                        {
+                            base.constexpr_def_exprs.insert(def_id, expr);
+                        }
                         base.pending_static.push((
                             def_id,
                             fake_name,
@@ -616,9 +661,25 @@ impl co2_ast::TypeResolver for LocalResolver {
                     } else if decl.0.declarator.0.is_function() {
                         // TODO: detect if we need to emit an extern function here.
                     } else {
+                        if is_constexpr
+                            && let Some((co2_ast::Initializer::Expr(expr), _span)) =
+                                decl.0.initializer.clone()
+                        {
+                            next.base
+                                .borrow_mut()
+                                .constexpr_local_exprs
+                                .insert(name.0 as u32, expr);
+                        }
                         next.locals.borrow_mut().insert(
                             name.1,
-                            (DefOrLocal::Local(name.0 as u32), TypeQueryResult::Expr),
+                            (
+                                if is_constexpr {
+                                    DefOrLocal::LocalConst(name.0 as u32)
+                                } else {
+                                    DefOrLocal::Local(name.0 as u32)
+                                },
+                                TypeQueryResult::Expr,
+                            ),
                         );
                     }
                 }

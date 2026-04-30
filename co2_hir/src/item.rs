@@ -20,6 +20,7 @@ pub struct HirLocal {
     pub name: String,
     pub ty: Ty,
     pub span: RustSpan,
+    pub read_only: bool,
 }
 
 pub type LocalId = Idx<HirLocal>;
@@ -48,6 +49,7 @@ impl HirBody {
             name: "_ret".to_owned(),
             ty,
             span,
+            read_only: false,
         });
         Self {
             locals,
@@ -89,6 +91,7 @@ pub fn lower_static_body_for_ty(
         name: "_ret".to_owned(),
         ty: target_ty,
         span: body_span,
+        read_only: false,
     });
     let tree = hir_ctx.lower_to_initializer_tree(
         target_ty,
@@ -186,6 +189,7 @@ impl HirCtx<'_> {
             name: "_ret".to_owned(),
             ty: sig.output(),
             span: body_span,
+            read_only: false,
         });
 
         for (idx, ty) in sig.inputs().iter().enumerate() {
@@ -194,6 +198,7 @@ impl HirCtx<'_> {
                 name: name.1.clone(),
                 ty: *ty,
                 span: body_span,
+                read_only: false,
             });
             params.push(id);
             local_map.insert(name.0, id);
@@ -208,6 +213,7 @@ impl HirCtx<'_> {
                     })]),
                 )),
                 span: body_span,
+                read_only: false,
             });
             params.push(id);
             self.c_variadic_local = Some(id);

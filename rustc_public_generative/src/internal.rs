@@ -2402,7 +2402,10 @@ fn generated_resolutions<'tcx>(
                 local_def_id.to_def_id(),
             ),
             DefinedItemKind::ForeignFunction(_) => Res::Def(DefKind::Fn, local_def_id.to_def_id()),
-            DefinedItemKind::Impl { .. } | DefinedItemKind::ImplItemFn(_) => continue,
+            DefinedItemKind::Const(_) => Res::Def(DefKind::Const, local_def_id.to_def_id()),
+            DefinedItemKind::Impl { .. }
+            | DefinedItemKind::ImplItemFn(_)
+            | DefinedItemKind::AnonConst(_) => continue,
             _ => continue,
         };
         let child = rustc_middle::metadata::ModChild {
@@ -2869,7 +2872,33 @@ fn mir_rvalue_to_rustc<'tcx>(
         MirRvalue::Use(op) => rustc_middle::mir::Rvalue::Use(mir_operand_to_rustc(tcx, op)),
         MirRvalue::ThreadLocalRef(item) => {
             let def_id = internal(tcx, *item);
-            if tcx.is_thread_local_static(def_id) {
+            // Skip thread-local checks for Const DefKinds - they shouldn't have MIR bodies
+            let def_kind = tcx.def_kind(def_id);
+            if matches!(def_kind, DefKind::Const) {
+                // For Const items, just emit a placeholder - the actual value is in the AnonConst
+                let ty = tcx.type_of(def_id).instantiate_identity();
+                let ptr_ty = rustc_middle::ty::Ty::new_mut_ptr(tcx, ty);
+                let const_ = rustc_middle::mir::Const::Val(
+                    ConstValue::Scalar(Scalar::from_pointer(
+                        Pointer::new(
+                            CtfeProvenance::from(rustc_middle::mir::interpret::AllocId(
+                                std::num::NonZeroU64::MIN,
+                            )),
+                            rustc_abi::Size::ZERO,
+                        ),
+                        &tcx,
+                    )),
+                    ptr_ty,
+                );
+                let op = rustc_middle::mir::Operand::Constant(Box::new(
+                    rustc_middle::mir::ConstOperand {
+                        span: DUMMY_SP,
+                        user_ty: None,
+                        const_,
+                    },
+                ));
+                rustc_middle::mir::Rvalue::Use(op)
+            } else if tcx.is_thread_local_static(def_id) {
                 rustc_middle::mir::Rvalue::ThreadLocalRef(def_id)
             } else {
                 let alloc_id = tcx.reserve_and_set_static_alloc(def_id);

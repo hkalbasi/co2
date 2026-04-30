@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use co2_ast::{
-    BinOp, Constant, DeclarationSpecifier, Declarator, Expression, Span, Spanned,
-    StructOrUnionKind, TypeName, TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp,
+    BinOp, Constant, DeclarationSpecifier, Declarator, Expression, Initializer, Span, Spanned,
+    StorageClassSpecifier, StructOrUnionKind, TypeName, TypeQualifier, TypeResolver, TypeSpecifier,
+    UnaryOp,
 };
 use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst, HirTyKind};
 use rustc_public_generative::{
@@ -161,6 +162,50 @@ fn has_const_qualifier_in_decl_specs(
             DeclarationSpecifier::TypeQualifier((TypeQualifier::Const, _))
         )
     })
+}
+
+fn has_constexpr_storage_specifier(specs: &[Spanned<DeclarationSpecifier<LocalResolver>>]) -> bool {
+    specs.iter().any(|(spec, _)| spec.is_constexpr())
+}
+
+fn has_volatile_qualifier_in_decl_specs(
+    specs: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+) -> bool {
+    specs.iter().any(|(spec, _)| {
+        matches!(
+            spec,
+            DeclarationSpecifier::TypeQualifier((TypeQualifier::Volatile, _))
+        )
+    })
+}
+
+fn has_atomic_storage_specifier(specs: &[Spanned<DeclarationSpecifier<LocalResolver>>]) -> bool {
+    specs.iter().any(|(spec, _)| {
+        matches!(
+            spec,
+            DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Atomic, _))
+                | DeclarationSpecifier::TypeQualifier((TypeQualifier::Atomic, _))
+        )
+    })
+}
+
+fn declarator_has_restrict_qualifier(decl: &Declarator<LocalResolver>) -> bool {
+    match decl {
+        Declarator::Abstract | Declarator::Identifier(_) => false,
+        Declarator::FunctionDeclarator { declarator, .. }
+        | Declarator::ArrayDeclarator { declarator, .. } => {
+            declarator_has_restrict_qualifier(&declarator.0)
+        }
+        Declarator::PointerDeclarator {
+            declarator,
+            qualifiers,
+        } => {
+            qualifiers
+                .iter()
+                .any(|(qualifier, _)| matches!(qualifier, TypeQualifier::Restrict))
+                || declarator_has_restrict_qualifier(&declarator.0)
+        }
+    }
 }
 
 impl CrateSigCtx<'_> {
@@ -472,6 +517,130 @@ impl LocalResolverBase {
                 .any(|pending| pending.def_id == def_id)
     }
 
+    pub(crate) fn has_local_const_value(&self, def_id: DefId) -> bool {
+        self.has_local_enum_const(def_id) || self.constexpr_def_exprs.contains_key(&def_id)
+    }
+
+    pub(crate) fn has_local_constexpr(&self, local: u32) -> bool {
+        self.constexpr_local_exprs.contains_key(&local)
+    }
+
+    pub(crate) fn is_constexpr_def(&self, def_id: DefId) -> bool {
+        self.constexpr_def_exprs.contains_key(&def_id)
+    }
+
+    pub(crate) fn peel_constexpr_typedef(&self, mut ty: HirTy) -> HirTy {
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let HirTyKind::Adt(def, _) = ty.kind else {
+                return ty;
+            };
+            if !seen.insert(def) {
+                return ty;
+            }
+            let Some(next_ty) = self.typedef_tys.get(&def).cloned() else {
+                return ty;
+            };
+            ty = next_ty;
+        }
+    }
+
+    pub(crate) fn validate_constexpr_decl(
+        &mut self,
+        specifiers: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+        declarator: &Declarator<LocalResolver>,
+        ty: &CTy,
+        initializer: Option<&Spanned<Initializer<LocalResolver>>>,
+    ) -> Result<(), String> {
+        if !has_constexpr_storage_specifier(specifiers) {
+            return Ok(());
+        }
+
+        let Some(initializer) = initializer else {
+            return Err("`constexpr` requires an initializer".to_owned());
+        };
+        let Initializer::Expr(expr) = &initializer.0 else {
+            return Err("`constexpr` object type must be scalar".to_owned());
+        };
+
+        if has_volatile_qualifier_in_decl_specs(specifiers) {
+            return Err("`constexpr` object type cannot be volatile-qualified".to_owned());
+        }
+        if has_atomic_storage_specifier(specifiers) {
+            return Err("`constexpr` object type cannot be atomic".to_owned());
+        }
+        if declarator_has_restrict_qualifier(declarator) {
+            return Err("`constexpr` object type cannot be restrict-qualified".to_owned());
+        }
+
+        match ty {
+            CTy::Ty(ty) => {
+                let peeled = self.peel_constexpr_typedef(ty.clone());
+                match peeled.kind {
+                    HirTyKind::Bool
+                    | HirTyKind::Char
+                    | HirTyKind::Int(_)
+                    | HirTyKind::Uint(_)
+                    | HirTyKind::Float(_)
+                    | HirTyKind::RawPtr(_, _) => {}
+                    _ => return Err("`constexpr` object type must be scalar".to_owned()),
+                }
+            }
+            CTy::Function(_) => {
+                return Err("`constexpr` object type must be scalar".to_owned());
+            }
+            CTy::UnsizedArray(elem_ty) => {
+                // Unsized arrays are allowed if they have initializers (they get sized from the initializer)
+                // The element type must be scalar or a typedef to a scalar
+                let peeled = self.peel_constexpr_typedef(elem_ty.clone());
+                match peeled.kind {
+                    HirTyKind::Bool
+                    | HirTyKind::Char
+                    | HirTyKind::Int(_)
+                    | HirTyKind::Uint(_)
+                    | HirTyKind::Float(_) => {}
+                    _ => return Err("`constexpr` object type must be scalar".to_owned()),
+                }
+            }
+        }
+
+        if matches!(
+            ty,
+            CTy::Ty(HirTy {
+                kind: HirTyKind::RawPtr(_, _),
+                ..
+            })
+        ) && !self.is_null_pointer_constexpr_expr(expr)
+        {
+            return Err("`constexpr` pointer initializer must be null".to_owned());
+        }
+
+        if !matches!(
+            ty,
+            CTy::Ty(HirTy {
+                kind: HirTyKind::RawPtr(_, _),
+                ..
+            })
+        ) && !matches!(ty, CTy::UnsizedArray(_))
+            && self.eval_const_expr(expr).is_err()
+        {
+            return Err("`constexpr` initializer must be a constant expression".to_owned());
+        }
+
+        Ok(())
+    }
+
+    fn is_null_pointer_constexpr_expr(
+        &mut self,
+        (expr, _): &Spanned<Expression<LocalResolver>>,
+    ) -> bool {
+        match expr {
+            Expression::Constant(Constant::Int(0, _)) => true,
+            Expression::Cast { expr, .. } => self.is_null_pointer_constexpr_expr(expr),
+            _ => false,
+        }
+    }
+
     fn hir_ty_of_rust_ty(
         &mut self,
         (ty, span): co2_ast::Spanned<co2_ast::RustTy<LocalResolver>>,
@@ -581,6 +750,7 @@ impl LocalResolverBase {
                 panic!("invalid associated method in type position")
             }
             crate::DefOrLocal::Local(_) => panic!("invalid parsing"),
+            crate::DefOrLocal::LocalConst(_) => panic!("invalid parsing"),
             crate::DefOrLocal::FuncName => panic!("invalid __func__ in type position"),
             crate::DefOrLocal::Prim(primitive_ty) => self.hir_ty_of_prim(*primitive_ty, span),
             crate::DefOrLocal::UnrepresentableType(ty) => match ty {
@@ -610,7 +780,7 @@ impl LocalResolverBase {
             Expression::Constant(Constant::Char(ch)) => Ok(*ch as i128),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Const(def_id) => {
-                    if self.has_local_enum_const(*def_id) {
+                    if self.has_local_const_value(*def_id) {
                         self.eval_local_const(*def_id)
                     } else if let Some(val) = self.hir_ctx.dependency_const_value(*def_id) {
                         match val {
@@ -645,6 +815,7 @@ impl LocalResolverBase {
                     }
                 }
                 crate::DefOrLocal::Def { def_id, .. } => self.eval_local_const(*def_id),
+                crate::DefOrLocal::LocalConst(local) => self.eval_local_constexpr(*local),
                 _ => Err(format!(
                     "unsupported identifier in constant expression: {:?}",
                     resolved
@@ -723,6 +894,10 @@ impl LocalResolverBase {
     }
 
     pub(crate) fn eval_local_const(&mut self, def_id: DefId) -> Result<i128, String> {
+        if let Some(expr) = self.constexpr_def_exprs.get(&def_id).cloned() {
+            return self.eval_const_expr(&expr);
+        }
+
         if let Some(val) = self.enum_const_values.get(&def_id) {
             return Ok(*val);
         }
@@ -749,6 +924,15 @@ impl LocalResolverBase {
 
         self.enum_const_values.insert(def_id, value);
         Ok(value)
+    }
+
+    pub(crate) fn eval_local_constexpr(&mut self, local: u32) -> Result<i128, String> {
+        let expr = self
+            .constexpr_local_exprs
+            .get(&local)
+            .cloned()
+            .ok_or_else(|| format!("missing constexpr initializer for local {local}"))?;
+        self.eval_const_expr(&expr)
     }
 
     fn hir_ty_of_dependency_const_value(
@@ -882,6 +1066,11 @@ impl LocalResolverBase {
             )),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Local(local) => self
+                    .local_tys
+                    .get(local)
+                    .cloned()
+                    .ok_or_else(|| format!("missing local type for local {local}")),
+                crate::DefOrLocal::LocalConst(local) => self
                     .local_tys
                     .get(local)
                     .cloned()
@@ -1024,6 +1213,13 @@ impl LocalResolverBase {
                         return self.scalar_const_ty(*def_id, rust_span).ok_or_else(|| {
                             format!("missing scalar constant value for def {def_id:?}")
                         });
+                    }
+                    crate::DefOrLocal::LocalConst(local) => {
+                        return self
+                            .local_tys
+                            .get(local)
+                            .cloned()
+                            .ok_or_else(|| format!("missing local type for local {local}"));
                     }
                     _ => {}
                 }

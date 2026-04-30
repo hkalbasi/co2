@@ -123,6 +123,14 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             MirOwnerInfo::CloneMethod(adt) => {
                 build_clone_method_body(adt, ctx.span_in_file(self.file_id, 0, 0))
             }
+            MirOwnerInfo::Const => {
+                // Const items don't have bodies; return a placeholder
+                build_zeroed_static_initializer_body(
+                    &self.wellknown_defs,
+                    CrateItem(def).ty(),
+                    ctx.span_in_file(self.file_id, 0, 0),
+                )
+            }
             MirOwnerInfo::EnumConstPrevPlus(prev, span) => {
                 self.build_enum_prev_plus_body(prev, span, &ctx)
             }
@@ -177,7 +185,12 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 );
 
                 let hir = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    co2_hir::lower_function_body(body, def, &param_names, &mut hir_ctx).unwrap()
+                    co2_hir::lower_function_body(body.clone(), def, &param_names, &mut hir_ctx)
+                        .unwrap_or_else(|err| {
+                            co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(
+                                body.1, err,
+                            )])
+                        })
                 })) {
                     Ok(hir) => hir,
                     Err(payload) => {
@@ -444,6 +457,7 @@ fn build_error_fn_body(
         name: "_ret".to_owned(),
         ty: sig.output(),
         span,
+        read_only: false,
     });
 
     let mut params = Vec::new();
@@ -452,6 +466,7 @@ fn build_error_fn_body(
             name: format!("_arg{idx}"),
             ty: *ty,
             span,
+            read_only: false,
         });
         params.push(id);
     }
@@ -467,6 +482,7 @@ fn build_error_fn_body(
                 })]),
             )),
             span,
+            read_only: false,
         });
         params.push(id);
         c_variadic_local = Some(id);

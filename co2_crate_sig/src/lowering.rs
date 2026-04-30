@@ -17,7 +17,7 @@ use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind,
     HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
-    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst,
+    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind,
     rustc_public::{
         DefId,
         ty::{AdtDef, FnDef, IntTy},
@@ -57,6 +57,27 @@ fn has_const_qualifier_in_decl_specs(
             DeclarationSpecifier::TypeQualifier((TypeQualifier::Const, _))
         )
     })
+}
+
+fn constexpr_decl_span(
+    specs: &[co2_ast::Spanned<DeclarationSpecifier<LocalResolver>>],
+    fallback: co2_ast::Span,
+) -> co2_ast::Span {
+    specs
+        .iter()
+        .find_map(|(spec, span)| spec.is_constexpr().then_some(*span))
+        .unwrap_or(fallback)
+}
+
+fn is_scalar_type(ty: &HirTy) -> bool {
+    matches!(
+        &ty.kind,
+        HirTyKind::Bool
+            | HirTyKind::Char
+            | HirTyKind::Int(..)
+            | HirTyKind::Uint(..)
+            | HirTyKind::Float(..)
+    )
 }
 
 fn deduplicate_tu_items(
@@ -397,9 +418,11 @@ fn lower_translation_unit_items(
                 declaration_specifiers,
                 declarators,
             } => {
+                let original_specs = declaration_specifiers.clone();
                 let mut is_typedef = false;
                 let mut is_extern = false;
                 let mut is_static = false;
+                let mut is_constexpr = false;
                 let mut cleaned_specs = Vec::new();
                 for (spec, sp) in declaration_specifiers {
                     match spec {
@@ -421,8 +444,21 @@ fn lower_translation_unit_items(
                         )) => {
                             is_static = true;
                         }
+                        DeclarationSpecifier::StorageSpecifier((
+                            StorageClassSpecifier::Constexpr,
+                            _,
+                        )) => {
+                            is_constexpr = true;
+                        }
                         _ => cleaned_specs.push((spec, sp)),
                     }
+                }
+
+                if is_constexpr && is_extern {
+                    ctx.terminate_with_error(
+                        constexpr_decl_span(&original_specs, parser_span),
+                        "`constexpr` cannot be combined with `extern`",
+                    );
                 }
 
                 let transformed_specs = cleaned_specs;
@@ -434,6 +470,7 @@ fn lower_translation_unit_items(
                         declarator,
                         initializer,
                     } = init.0;
+                    let declarator_for_checks = declarator.clone();
 
                     let (name, ty, array_len) =
                         ctx.lower_value_decl_ctype(base.clone(), base_const, declarator, &resolver);
@@ -480,23 +517,29 @@ fn lower_translation_unit_items(
                     match ty {
                         CTy::Ty(ty) => {
                             let (id, _) = resolve_in_module(ctx, module_path, &name);
-                            if let Some(initializer) = initializer {
-                                ctx.mir_owners.insert(
-                                    id,
-                                    match array_len {
-                                        Some(array_len) => MirOwnerInfo::StaticWithArrayLen {
-                                            resolver: resolver.clone(),
-                                            initializer,
-                                            array_len,
-                                        },
-                                        None => MirOwnerInfo::Static {
-                                            resolver: resolver.clone(),
-                                            initializer,
-                                        },
-                                    },
-                                );
-                            } else {
-                                ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+                            if is_constexpr {
+                                ctx.resolver
+                                    .borrow_mut()
+                                    .validate_constexpr_decl(
+                                        &original_specs,
+                                        &declarator_for_checks.0,
+                                        &CTy::Ty(ty.clone()),
+                                        initializer.as_ref(),
+                                    )
+                                    .unwrap_or_else(|err| {
+                                        ctx.terminate_with_error(
+                                            constexpr_decl_span(&original_specs, parser_span),
+                                            &err,
+                                        )
+                                    });
+                                if let Some((co2_ast::Initializer::Expr(expr), _span)) =
+                                    initializer.clone()
+                                {
+                                    ctx.resolver
+                                        .borrow_mut()
+                                        .constexpr_def_exprs
+                                        .insert(id, expr);
+                                }
                             }
                             if is_extern {
                                 foreign_items.push(ForeignModItem::ForeignStatic {
@@ -506,12 +549,61 @@ fn lower_translation_unit_items(
                                     mutable: true,
                                     span,
                                 });
+                            } else if is_constexpr && is_scalar_type(&ty) {
+                                // For non-pointer constexpr, create an AnonConst DefId for the initializer
+                                let rhs = ctx.allocate_def_id(id, DefData::AnonConst);
+                                if let Some(init) = initializer {
+                                    ctx.mir_owners.insert(
+                                        rhs,
+                                        match array_len {
+                                            Some(array_len) => MirOwnerInfo::StaticWithArrayLen {
+                                                resolver: resolver.clone(),
+                                                initializer: init,
+                                                array_len,
+                                            },
+                                            None => MirOwnerInfo::Static {
+                                                resolver: resolver.clone(),
+                                                initializer: init,
+                                            },
+                                        },
+                                    );
+                                } else {
+                                    ctx.mir_owners.insert(rhs, MirOwnerInfo::StaticZeroed);
+                                }
+                                // Register MirOwnerInfo for the Const item - needed for rustc's MIR query
+                                ctx.mir_owners.insert(id, MirOwnerInfo::Const);
+                                hir_items.push(HirModuleItem::Const {
+                                    name,
+                                    id,
+                                    ty,
+                                    rhs,
+                                    span,
+                                });
                             } else {
+                                // Regular non-const static, or pointer constexpr (emit as static)
+                                if let Some(init) = initializer {
+                                    ctx.mir_owners.insert(
+                                        id,
+                                        match array_len {
+                                            Some(array_len) => MirOwnerInfo::StaticWithArrayLen {
+                                                resolver: resolver.clone(),
+                                                initializer: init,
+                                                array_len,
+                                            },
+                                            None => MirOwnerInfo::Static {
+                                                resolver: resolver.clone(),
+                                                initializer: init,
+                                            },
+                                        },
+                                    );
+                                } else {
+                                    ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+                                }
                                 hir_items.push(HirModuleItem::Static {
                                     name,
                                     id,
                                     ty,
-                                    mutable: true,
+                                    mutable: false,
                                     no_mangle: !is_static,
                                     span,
                                 });
@@ -519,14 +611,23 @@ fn lower_translation_unit_items(
                         }
                         CTy::UnsizedArray(elem_ty) => {
                             let (id, _) = resolve_in_module(ctx, module_path, &name);
+                            if is_constexpr {
+                                ctx.resolver
+                                    .borrow_mut()
+                                    .validate_constexpr_decl(
+                                        &original_specs,
+                                        &declarator_for_checks.0,
+                                        &CTy::UnsizedArray(elem_ty.clone()),
+                                        initializer.as_ref(),
+                                    )
+                                    .unwrap_or_else(|err| {
+                                        ctx.terminate_with_error(
+                                            constexpr_decl_span(&original_specs, parser_span),
+                                            &err,
+                                        )
+                                    });
+                            }
                             if let Some(initializer) = initializer {
-                                ctx.mir_owners.insert(
-                                    id,
-                                    MirOwnerInfo::Static {
-                                        resolver: resolver.clone(),
-                                        initializer: initializer.clone(),
-                                    },
-                                );
                                 let len =
                                     infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
                                         .unwrap_or_else(|err| {
@@ -537,11 +638,18 @@ fn lower_translation_unit_items(
                                     .borrow_mut()
                                     .global_value_tys
                                     .insert(id, ty.clone());
+                                ctx.mir_owners.insert(
+                                    id,
+                                    MirOwnerInfo::Static {
+                                        resolver: resolver.clone(),
+                                        initializer: initializer.clone(),
+                                    },
+                                );
                                 hir_items.push(HirModuleItem::Static {
                                     name,
                                     id,
                                     ty,
-                                    mutable: true,
+                                    mutable: false,
                                     no_mangle: !is_static,
                                     span,
                                 });
@@ -566,6 +674,12 @@ fn lower_translation_unit_items(
                             }
                         }
                         CTy::Function(sig) => {
+                            if is_constexpr {
+                                ctx.terminate_with_error(
+                                    constexpr_decl_span(&original_specs, parser_span),
+                                    "`constexpr` object type must be scalar",
+                                );
+                            }
                             let def_id = resolve_in_module(ctx, module_path, &name).0;
                             let span = ctx.co2_span_to_rustc(init.1);
                             foreign_items.push(ForeignModItem::ForeignFunction {
@@ -690,6 +804,8 @@ pub fn lower_crate_sig(
             global_struct_tags: Rc::new(RefCell::new(StructAndEnumData::default())),
             global_locals: Rc::new(RefCell::new(im::HashMap::new())),
             enum_const_values: HashMap::new(),
+            constexpr_def_exprs: HashMap::new(),
+            constexpr_local_exprs: HashMap::new(),
         })),
         hir_ctx: ctx,
         file_ids,
@@ -758,9 +874,12 @@ pub fn lower_crate_sig(
     let pending_static = std::mem::take(&mut ctx.resolver.borrow_mut().pending_static);
     for (id, name, specifiers, declarator, parser_span) in pending_static {
         let span = ctx.co2_span_to_rustc(parser_span);
+        let original_specs = specifiers.clone();
+        let is_constexpr = specifiers.iter().any(|spec| spec.0.is_constexpr());
         let base_const = has_const_qualifier_in_decl_specs(&specifiers);
         let base_ty = ctx.base_ty_of_decl(specifiers, parser_span);
         let resolver = LocalResolver::new(ctx.resolver.clone());
+        let declarator_for_checks = declarator.declarator.clone();
         let (_, ty, _) =
             ctx.lower_value_decl_ctype(base_ty, base_const, declarator.declarator, &resolver);
         if let CTy::Ty(ty) = &ty {
@@ -771,12 +890,36 @@ pub fn lower_crate_sig(
         }
         match ty {
             CTy::Ty(ty) => {
+                if is_constexpr {
+                    ctx.resolver
+                        .borrow_mut()
+                        .validate_constexpr_decl(
+                            &original_specs,
+                            &declarator_for_checks.0,
+                            &CTy::Ty(ty.clone()),
+                            declarator.initializer.as_ref(),
+                        )
+                        .unwrap_or_else(|err| {
+                            ctx.terminate_with_error(
+                                constexpr_decl_span(&original_specs, parser_span),
+                                &err,
+                            )
+                        });
+                    if let Some((co2_ast::Initializer::Expr(expr), _span)) =
+                        declarator.initializer.clone()
+                    {
+                        ctx.resolver
+                            .borrow_mut()
+                            .constexpr_def_exprs
+                            .insert(id, expr);
+                    }
+                }
                 ctx.hir_items.push(HirModuleItem::Static {
                     name,
                     id,
                     ty,
                     span,
-                    mutable: true,
+                    mutable: !is_constexpr,
                     no_mangle: false,
                 });
                 if let Some(initializer) = declarator.initializer {
@@ -792,6 +935,22 @@ pub fn lower_crate_sig(
                 }
             }
             CTy::UnsizedArray(elem_ty) => {
+                if is_constexpr {
+                    ctx.resolver
+                        .borrow_mut()
+                        .validate_constexpr_decl(
+                            &original_specs,
+                            &declarator_for_checks.0,
+                            &CTy::UnsizedArray(elem_ty.clone()),
+                            declarator.initializer.as_ref(),
+                        )
+                        .unwrap_or_else(|err| {
+                            ctx.terminate_with_error(
+                                constexpr_decl_span(&original_specs, parser_span),
+                                &err,
+                            )
+                        });
+                }
                 let initializer = if let Some((initializer, init_span)) = declarator.initializer {
                     (initializer, init_span)
                 } else {
@@ -812,7 +971,7 @@ pub fn lower_crate_sig(
                     id,
                     ty: sized_ty,
                     span,
-                    mutable: true,
+                    mutable: !is_constexpr,
                     no_mangle: false,
                 });
                 ctx.mir_owners.insert(

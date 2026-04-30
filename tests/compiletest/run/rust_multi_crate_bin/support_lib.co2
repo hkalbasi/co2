@@ -64,3 +64,5 @@ typedef struct {
     int e;
 } BitFieldReprCStruct;
 
+constexpr usize C23Const = 2;
+

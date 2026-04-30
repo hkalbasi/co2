@@ -180,6 +180,7 @@ where
                 Token::Typedef
                 | Token::Extern
                 | Token::Static
+                | Token::Constexpr
                 | Token::Atomic
                 | Token::Auto
                 | Token::Register
@@ -1480,6 +1481,7 @@ where
         just(Token::Typedef).to(StorageClassSpecifier::Typedef),
         just(Token::Extern).to(StorageClassSpecifier::Extern),
         just(Token::Static).to(StorageClassSpecifier::Static),
+        just(Token::Constexpr).to(StorageClassSpecifier::Constexpr),
         just(Token::Atomic).to(StorageClassSpecifier::Atomic),
         // just(Token::ThreadLocal).to(StorageClassSpecifier::ThreadLocal),
         just(Token::Auto).to(StorageClassSpecifier::Auto),
@@ -2297,5 +2299,5 @@ where
 fn parser_is_constructible() {
     use chumsky::input::Input;
     let parser = translation_unit(crate::StatelessResolver::new());
-    parser.parse((&[]).map(Span::new(0, 1..2), |_| unreachable!()));
+    parser.parse((&[]).map(Span::new(FileId::from(0), 1..2), |_| unreachable!()));
 }

@@ -349,6 +349,7 @@ impl HirCtx<'_> {
                     name: format!("__switch_discr{}", locals.len()),
                     ty: discr_ty,
                     span,
+                    read_only: false,
                 });
                 out.push(HirStmt::Decl(HirDecl {
                     local: discr_local,
