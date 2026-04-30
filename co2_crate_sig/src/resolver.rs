@@ -460,7 +460,10 @@ impl Resolver {
                 };
 
                 for (name, child_item) in item.items {
-                    self.module_mut(module_path).insert_alias(&name, child_item);
+                    self.module_mut(module_path)
+                        .items
+                        .entry(name)
+                        .or_insert(child_item);
                 }
                 continue;
             }

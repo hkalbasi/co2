@@ -1,0 +1,7 @@
+[package]
+name = "co2_wildcard_import_panic"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = []
