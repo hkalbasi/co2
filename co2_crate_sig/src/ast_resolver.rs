@@ -590,6 +590,7 @@ impl co2_ast::TypeResolver for LocalResolver {
 
         match decl {
             Declaration::FunctionDefinition { .. } => next,
+            Declaration::RustTypeAlias { .. } => next,
             Declaration::Declaration {
                 declaration_specifiers,
                 declarators,

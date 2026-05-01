@@ -1610,6 +1610,14 @@ where
     select! { Token::Ident(s) if s == "fn" => () }.labelled("fn")
 }
 
+fn type_token<'src, I>() -> impl Parser<'src, I, (), extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    select! { Token::Ident(s) if s == "type" => () }.labelled("type")
+}
+
 fn mut_token<'src, I>() -> impl Parser<'src, I, (), extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -1765,6 +1773,32 @@ where
 
         choice((path, ptr, reference, never, tuple, slice_or_array))
     })
+}
+
+fn rust_style_type_definition<'src, I, R: TypeResolver>(
+    resolver: R,
+) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    let pub_token = just(Token::Ident("pub".to_string()))
+        .or_not()
+        .map(|opt| opt.is_some());
+
+    pub_token
+        .then(type_token())
+        .map(|(is_pub, _)| is_pub)
+        .then(identifier())
+        .then_ignore(just(Token::Assign))
+        .then(rust_ty(resolver.clone()))
+        .map({
+            let resolver = resolver.clone();
+            move |((is_pub, name), ty)| {
+                let name_span = name.1;
+                Declaration::RustTypeAlias { ident: (resolver.register_ident(name.0), name_span), ty, is_pub }
+            }
+        })
 }
 
 fn rust_style_function_definition<'src, I, R: TypeResolver>(
@@ -2120,6 +2154,7 @@ where
     let parser = if resolver.rust_style_syntax_enabled() {
         choice((
             rust_style_function_definition(resolver.clone()),
+            rust_style_type_definition(resolver.clone()),
             simple,
             function,
         ))

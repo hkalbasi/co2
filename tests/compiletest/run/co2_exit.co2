@@ -1,6 +1,6 @@
 //@ mode: co2
 //@ run-status: 0
-//@ run-stdout: co2\n
+//@ run-stdout: CO2\n
 
 int write(int fd, char* buf, int len);
 
@@ -20,12 +20,26 @@ pub fn fill_buf(buf: *mut u8) {
     buf[1] = 'o';
     buf[2] = '2';
     buf[3] = END_LINE;
+    buf[4] = 0;
+}
+
+type BufPtr = *mut u8;
+
+void capitalize_buf(BufPtr buf) {
+    int i = 0;
+    while (buf[i] != '\0') {
+        if (buf[i] >= 'a' && buf[i] <= 'z') {
+            buf[i] -= 'a' - 'A';
+        }
+        i += 1;
+    }
 }
 
 fn main() {
     if (fibo(6) == 13) {
         u8 ar[10] = {};
         fill_buf(ar);
+        capitalize_buf(ar);
         write(1, ar, 4);
     }
 }

@@ -317,6 +317,9 @@ impl HirCtx<'_> {
             Declaration::FunctionDefinition { .. } => {
                 return Err("nested function declaration is not supported".to_owned());
             }
+            Declaration::RustTypeAlias { .. } => {
+                return Err("nested rust style type declaration is not supported".to_owned());
+            }
             Declaration::Declaration {
                 declaration_specifiers,
                 declarators,

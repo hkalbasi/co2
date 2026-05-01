@@ -93,6 +93,11 @@ fn deduplicate_tu_items(
                 name_to_important_def.insert(name, (tu_item_id, 3));
                 tu_item_id += 1;
             }
+            Declaration::RustTypeAlias { ident, .. } => {
+                let name = ident.0.clone();
+                name_to_important_def.insert(name, (tu_item_id, 3));
+                tu_item_id += 1;
+            }
             Declaration::Declaration {
                 declaration_specifiers,
                 declarators,
@@ -131,6 +136,10 @@ fn deduplicate_tu_items(
             let is_needed = name_to_important_def[&name].0 == tu_item_id;
             tu_item_id += 1;
             is_needed
+        }
+        Declaration::RustTypeAlias { .. } => {
+            tu_item_id += 1;
+            true
         }
         Declaration::Declaration {
             declaration_specifiers: _,
@@ -339,6 +348,16 @@ fn lower_translation_unit_items(
             LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
         let item = item.transform(&resolver);
         match item {
+            Declaration::RustTypeAlias { ident, ty, is_pub: _ } => {
+                let name = ident.0.1;
+                let id = resolve_in_module(ctx, module_path, &name).0;
+                hir_items.push(HirModuleItem::TypeDef {
+                    name,
+                    id,
+                    ty: ctx.lower_rust_ty(ty),
+                    span,
+                });
+            }
             Declaration::FunctionDefinition { signature, body } => {
                 let (name, sig, param_names, no_mangle) = match signature {
                     FunctionDefinitionSignature::C {

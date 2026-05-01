@@ -752,6 +752,11 @@ pub enum Declaration<R: TypeResolver> {
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<R>>>,
         declarators: Vec<Spanned<InitDeclarator<R>>>,
     },
+    RustTypeAlias {
+        ident: Spanned<R::DeclarationIdent>,
+        ty: Spanned<RustTy<R>>,
+        is_pub: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
