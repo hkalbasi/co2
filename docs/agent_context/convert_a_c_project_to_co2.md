@@ -103,3 +103,18 @@ This will:
 ### 4. Building and Running
 - Build the project: `co2cargo build`
 - Run the project: `co2cargo run`
+
+## FAQ
+
+* Q: Can I use `build.rs` and invoke gcc for compiling some of the C sources?
+* A: No, that is considered cheating. CO2 should compile everything.
+  `build.rs` is only allowed for linking external dependencies, but prefer using crates even then.
+* Q: Can I reuse `#define` between modules?
+* A: No, and that's by design. You have some alternatives:
+  * For `#define CONST value`, use C23 `constexpr type CONST = value;` instead.
+  * You can use `#include` for sharing complex macros (but prefer modules for anything else).
+* Q: I'm hitting `warning: "extern function" redeclared with a different signature`
+* A: You are defining a type in multiple modules (maybe by `#include`ing it). Define type in one module
+  and `use` it in others to fix this warning.
+* Q: In replacing stdlib includes with `use libc::{item1, item2}`, what to do with macros?
+* A: Use Rust std conterparts, e.g. `std::ptr::null_mut::<()>()` instead of `NULL`.
