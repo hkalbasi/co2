@@ -139,6 +139,11 @@ pub enum HirImplItemKind {
 
 #[derive(Debug, Clone)]
 pub enum ForeignModItem {
+    ForeignType {
+        name: String,
+        id: DefId,
+        span: Span,
+    },
     ForeignFunction {
         name: String,
         id: FnDef,

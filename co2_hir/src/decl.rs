@@ -640,7 +640,9 @@ impl HirCtx<'_> {
                             CTy::UnsizedArray(elem) => Ty::new_ptr(elem, Mutability::Mut),
                         };
                         // Function arguments are always decayed to pointer in C.
-                        if let Some(elem) = array_elem_ty(param_ty) {
+                        if let Some(elem) =
+                            self.peel_typedef_array_elem(param_ty, self.to_rust_span(span))
+                        {
                             param_ty = Ty::new_ptr(elem, Mutability::Mut);
                         }
                         inputs.push(param_ty);
@@ -739,6 +741,24 @@ impl HirCtx<'_> {
         hir_ty_to_ty(hir_ty)
     }
 
+    fn peel_typedef_array_elem(&self, ty: Ty, span: RustSpan) -> Option<Ty> {
+        if let Some(elem) = array_elem_ty(ty) {
+            return Some(elem);
+        }
+        if let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() {
+            let hir_ty = HirTy {
+                kind: rustc_public_generative::HirTyKind::Adt(def.0, vec![]),
+                span,
+            };
+            let peeled = self.decl_resolver.peel_constexpr_typedef_hir(hir_ty);
+            if let rustc_public_generative::HirTyKind::Array(_, _) = &peeled.kind {
+                let peeled_ty = self.hir_ty_to_ty(&peeled);
+                return array_elem_ty(peeled_ty);
+            }
+        }
+        None
+    }
+
     fn ty_to_hir_ty(&self, ty: Ty, span: RustSpan) -> HirTy {
         match ty.kind() {
             TyKind::RigidTy(RigidTy::Bool) => HirTy {
@@ -773,6 +793,7 @@ impl HirCtx<'_> {
                     span,
                 )
             }
+            TyKind::RigidTy(RigidTy::Foreign(def)) => HirTy::adt(def.0, vec![], span),
             TyKind::RigidTy(RigidTy::Adt(def, args)) => HirTy::adt(
                 def.0,
                 args.0

@@ -164,6 +164,28 @@ fn has_const_qualifier_in_decl_specs(
     })
 }
 
+fn type_specifier_span(specs: &[Spanned<DeclarationSpecifier<LocalResolver>>]) -> Option<Span> {
+    let mut spans = specs.iter().filter_map(|(spec, _)| match spec {
+        DeclarationSpecifier::TypeSpecifier((_, span)) => Some(*span),
+        _ => None,
+    });
+    let first = spans.next()?;
+    let mut start = first.start;
+    let mut end = first.end;
+    for span in spans {
+        if span.context != first.context {
+            continue;
+        }
+        start = start.min(span.start);
+        end = end.max(span.end);
+    }
+    Some(Span {
+        context: first.context,
+        start,
+        end,
+    })
+}
+
 fn has_constexpr_storage_specifier(specs: &[Spanned<DeclarationSpecifier<LocalResolver>>]) -> bool {
     specs.iter().any(|(spec, _)| spec.is_constexpr())
 }
@@ -281,16 +303,21 @@ impl CrateSigCtx<'_> {
                 let c_variadic = param_list.effective_ellipsis();
                 if !param_list.empty_params() {
                     for param in param_list.parameters {
+                        let param_decl = param.1;
                         let param_base_const = has_const_qualifier_in_decl_specs(&param.0);
-                        let param_base = self.base_ty_of_decl(param.0, span);
+                        let param_base = self.base_ty_of_decl(param.0, param_decl.1);
                         let (param_decl_ty, _) = self.resolver.borrow_mut().extract_decl_type(
                             param_base,
                             param_base_const,
-                            param.1,
+                            param_decl,
                         )?;
                         let param_ty = match param_decl_ty {
                             CTy::Ty(ty) => {
-                                if let HirTyKind::Array(_, inner) = ty.kind {
+                                let peeled_ty =
+                                    self.resolver.borrow().peel_constexpr_typedef(ty.clone());
+                                if let HirTyKind::Array(_, inner) = peeled_ty.kind {
+                                    HirTy::new_ptr(*inner, Mutability::Mut, ty.span)
+                                } else if let HirTyKind::Array(_, inner) = ty.kind {
                                     HirTy::new_ptr(*inner, Mutability::Mut, ty.span)
                                 } else {
                                     ty
@@ -1395,7 +1422,8 @@ impl LocalResolverBase {
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         parser_span: Span,
     ) -> CTy {
-        let span = self.co2_span_to_rustc(parser_span);
+        let type_span = type_specifier_span(&specifiers).unwrap_or(parser_span);
+        let span = self.co2_span_to_rustc(type_span);
         let specifier = match CompressedTypeSpecifier::build(specifiers) {
             Ok(s) => s,
             Err(e) => self.terminate_with_error(parser_span, &e),
@@ -1435,13 +1463,17 @@ impl LocalResolverBase {
                 let c_variadic = param_list.effective_ellipsis();
                 if !param_list.empty_params() {
                     for param in param_list.parameters {
+                        let param_decl = param.1;
                         let param_base_const = has_const_qualifier_in_decl_specs(&param.0);
-                        let param_base = self.base_ty_of_decl(param.0, span);
+                        let param_base = self.base_ty_of_decl(param.0, param_decl.1);
                         let (param_decl_ty, _) =
-                            self.extract_decl_type(param_base, param_base_const, param.1)?;
+                            self.extract_decl_type(param_base, param_base_const, param_decl)?;
                         let param_ty = match param_decl_ty {
                             CTy::Ty(ty) => {
-                                if let HirTyKind::Array(_, inner) = ty.kind {
+                                let peeled_ty = self.peel_constexpr_typedef(ty.clone());
+                                if let HirTyKind::Array(_, inner) = peeled_ty.kind {
+                                    HirTy::new_ptr(*inner, Mutability::Mut, ty.span)
+                                } else if let HirTyKind::Array(_, inner) = ty.kind {
                                     HirTy::new_ptr(*inner, Mutability::Mut, ty.span)
                                 } else {
                                     ty

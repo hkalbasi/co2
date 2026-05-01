@@ -1796,7 +1796,11 @@ where
             let resolver = resolver.clone();
             move |((is_pub, name), ty)| {
                 let name_span = name.1;
-                Declaration::RustTypeAlias { ident: (resolver.register_ident(name.0), name_span), ty, is_pub }
+                Declaration::RustTypeAlias {
+                    ident: (resolver.register_ident(name.0), name_span),
+                    ty,
+                    is_pub,
+                }
             }
         })
 }

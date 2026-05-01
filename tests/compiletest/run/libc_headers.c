@@ -1,8 +1,5 @@
 //@ mode: c
 //@ run-status: 0
-//@ compile-warning: `extern` block uses type `__co2_c_adt___locale_data_1`, which is not FFI-safe
-//@ compile-warning: `extern` block uses type `[__co2_c_adt___jmp_buf_tag_7; 1]`, which is not FFI-safe
-//@ compile-warning: `extern` block uses type `__co2_c_adt__IO_marker_66`, which is not FFI-safe
 
 #include <assert.h>
 #include <complex.h>

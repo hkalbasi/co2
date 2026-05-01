@@ -282,6 +282,13 @@ impl ItemSignatureInfo {
                                         span: *span,
                                     });
                                 }
+                                crate::ForeignModItem::ForeignType { name: _, id, span } => {
+                                    result.push(ItemSignatureInfo {
+                                        id: *id,
+                                        kind: ItemSignatureKind::ForeignType,
+                                        span: *span,
+                                    });
+                                }
                                 crate::ForeignModItem::ForeignStatic {
                                     name: _,
                                     id,
@@ -315,6 +322,7 @@ pub enum ItemSignatureKind {
     Module,
     Function(FunctionSignature),
     ForeignFunction(FunctionSignature),
+    ForeignType,
     Struct(Vec<StructField>),
     Union(Vec<StructField>),
     TypeDef(HirTy),
@@ -422,23 +430,6 @@ impl DefinedCrateInfo {
             item_allocator.set_root_node(hir::Node::ForeignItem(leak(foreign_item)));
             foreign_items_hir.push((def_id, item_allocator));
         }
-
-        let foreign_items = leak(foreign_item_ids.clone().into_boxed_slice());
-
-        let foreign_mod_item = hir::Item {
-            owner_id: OwnerId {
-                def_id: foreign_mod_def,
-            },
-            kind: hir::ItemKind::ForeignMod {
-                abi: ExternAbi::C { unwind: false },
-                items: foreign_items,
-            },
-            span: DUMMY_SP,
-            vis_span: DUMMY_SP,
-            has_delayed_lints: false,
-            eii: false,
-        };
-        let foreign_mod_item = leak(foreign_mod_item);
 
         let mut adt_items_hir = Vec::new();
         for (my_def_id, is_union, strukt, span) in
@@ -918,6 +909,11 @@ impl DefinedCrateInfo {
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
 
+            let foreign_item_id = hir::ForeignItemId {
+                owner_id: OwnerId { def_id },
+            };
+            foreign_item_ids.push(foreign_item_id);
+
             let foreign_item = hir::ForeignItem {
                 ident: Ident::from_str(name),
                 kind: hir::ForeignItemKind::Static(
@@ -937,6 +933,53 @@ impl DefinedCrateInfo {
             item_allocator.set_root_node(hir::Node::ForeignItem(leak(foreign_item)));
             foreign_items_hir.push((def_id, item_allocator));
         }
+
+        for (my_def_id, span) in signatures.iter().filter_map(|item| match item.kind {
+            ItemSignatureKind::ForeignType => Some((item.id, item.span)),
+            _ => None,
+        }) {
+            let name = &self
+                .items
+                .iter()
+                .find(|item| item.def_id() == my_def_id)
+                .unwrap()
+                .name;
+            let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+            let mut item_allocator = HirItemAllocator::new(def_id);
+
+            let foreign_item_id = hir::ForeignItemId {
+                owner_id: OwnerId { def_id },
+            };
+            foreign_item_ids.push(foreign_item_id);
+
+            let foreign_item = hir::ForeignItem {
+                ident: Ident::from_str(name),
+                kind: hir::ForeignItemKind::Type,
+                owner_id: OwnerId { def_id },
+                span: internal(tcx, span),
+                vis_span: DUMMY_SP,
+                has_delayed_lints: false,
+            };
+            item_allocator.set_root_node(hir::Node::ForeignItem(leak(foreign_item)));
+            foreign_items_hir.push((def_id, item_allocator));
+        }
+
+        let foreign_items = leak(foreign_item_ids.clone().into_boxed_slice());
+
+        let foreign_mod_item = hir::Item {
+            owner_id: OwnerId {
+                def_id: foreign_mod_def,
+            },
+            kind: hir::ItemKind::ForeignMod {
+                abi: ExternAbi::C { unwind: false },
+                items: foreign_items,
+            },
+            span: DUMMY_SP,
+            vis_span: DUMMY_SP,
+            has_delayed_lints: false,
+            eii: false,
+        };
+        let foreign_mod_item = leak(foreign_mod_item);
 
         for (my_def_id, const_ty, rhs) in signatures.iter().filter_map(|item| match &item.kind {
             ItemSignatureKind::Const { ty, rhs } => Some((item.id, ty, *rhs)),
@@ -1265,6 +1308,16 @@ impl DefinedCrateInfo {
                                     span: DUMMY_SP,
                                     parent: Some(foreign_mod_id),
                                 }),
+                                crate::hir_structure::ForeignModItem::ForeignType {
+                                    name,
+                                    id,
+                                    span: _,
+                                } => items.push(DefinedItemInfo {
+                                    name,
+                                    kind: DefinedItemKind::ForeignType(id),
+                                    span: DUMMY_SP,
+                                    parent: Some(foreign_mod_id),
+                                }),
                                 crate::hir_structure::ForeignModItem::ForeignStatic {
                                     name,
                                     id,
@@ -1544,6 +1597,7 @@ impl DefinedCrateState {
             DefinedItemKind::Module(_) => DefKind::Mod,
             DefinedItemKind::Function { .. } => DefKind::Fn,
             DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
+            DefinedItemKind::ForeignType(_) => DefKind::ForeignTy,
             DefinedItemKind::Const(_) => DefKind::Const,
             DefinedItemKind::AnonConst(_) => DefKind::AnonConst,
             DefinedItemKind::Static { .. } => DefKind::Static {
@@ -1607,6 +1661,7 @@ impl DefinedItemInfo {
             }
             DefinedItemKind::Struct(adt_def, _) | DefinedItemKind::Union(adt_def, _) => adt_def.0,
             DefinedItemKind::ForeignMod(def_id)
+            | DefinedItemKind::ForeignType(def_id)
             | DefinedItemKind::Module(def_id)
             | DefinedItemKind::TypeDef(def_id)
             | DefinedItemKind::Static { def_id, .. }
@@ -1629,6 +1684,7 @@ pub enum DefinedItemKind {
         no_mangle: bool,
     },
     ForeignFunction(FnDef),
+    ForeignType(DefId),
     Const(DefId),
     AnonConst(DefId),
     Static {
@@ -1867,44 +1923,46 @@ impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
             krate.items.clear();
         }
 
-        krate.attrs.push(Attribute {
-            kind: rustc_ast::AttrKind::Normal(Box::new(rustc_ast::NormalAttr {
-                item: rustc_ast::AttrItem {
-                    unsafety: rustc_ast::Safety::Default,
-                    path: rustc_ast::Path {
-                        span: DUMMY_SP,
-                        segments: [rustc_ast::PathSegment {
-                            ident: Ident::from_str("feature"),
-                            id: rustc_ast::NodeId::from_usize(666666),
-                            args: None,
-                        }]
-                        .into(),
+        for (idx, feature) in ["c_variadic", "extern_types"].into_iter().enumerate() {
+            krate.attrs.push(Attribute {
+                kind: rustc_ast::AttrKind::Normal(Box::new(rustc_ast::NormalAttr {
+                    item: rustc_ast::AttrItem {
+                        unsafety: rustc_ast::Safety::Default,
+                        path: rustc_ast::Path {
+                            span: DUMMY_SP,
+                            segments: [rustc_ast::PathSegment {
+                                ident: Ident::from_str("feature"),
+                                id: rustc_ast::NodeId::from_usize(666666 + idx),
+                                args: None,
+                            }]
+                            .into(),
+                            tokens: None,
+                        },
+                        args: rustc_ast::AttrItemKind::Unparsed(rustc_ast::AttrArgs::Delimited(
+                            rustc_ast::DelimArgs {
+                                dspan: DelimSpan::dummy(),
+                                delim: rustc_ast::token::Delimiter::Parenthesis,
+                                tokens: TokenStream::new(vec![TokenTree::Token(
+                                    Token {
+                                        kind: rustc_ast::token::TokenKind::Ident(
+                                            Symbol::intern(feature),
+                                            rustc_ast::token::IdentIsRaw::No,
+                                        ),
+                                        span: DUMMY_SP,
+                                    },
+                                    rustc_ast::tokenstream::Spacing::Alone,
+                                )]),
+                            },
+                        )),
                         tokens: None,
                     },
-                    args: rustc_ast::AttrItemKind::Unparsed(rustc_ast::AttrArgs::Delimited(
-                        rustc_ast::DelimArgs {
-                            dspan: DelimSpan::dummy(),
-                            delim: rustc_ast::token::Delimiter::Parenthesis,
-                            tokens: TokenStream::new(vec![TokenTree::Token(
-                                Token {
-                                    kind: rustc_ast::token::TokenKind::Ident(
-                                        Symbol::intern("c_variadic"),
-                                        rustc_ast::token::IdentIsRaw::No,
-                                    ),
-                                    span: DUMMY_SP,
-                                },
-                                rustc_ast::tokenstream::Spacing::Alone,
-                            )]),
-                        },
-                    )),
                     tokens: None,
-                },
-                tokens: None,
-            })),
-            id: rustc_span::AttrId::from_usize(666),
-            style: rustc_ast::AttrStyle::Inner,
-            span: DUMMY_SP,
-        });
+                })),
+                id: rustc_span::AttrId::from_usize(666 + idx),
+                style: rustc_ast::AttrStyle::Inner,
+                span: DUMMY_SP,
+            });
+        }
         rustc_driver::Compilation::Continue
     }
 
@@ -3215,18 +3273,18 @@ fn insert_owner(
     insert_non_owner(owners, def_id, hir::MaybeOwner::Owner(info));
 }
 
-fn make_prim_ty(owner: LocalDefId, prim: hir::PrimTy) -> hir::Ty<'static> {
+fn make_prim_ty(owner: LocalDefId, prim: hir::PrimTy, span: RustcSpan) -> hir::Ty<'static> {
     let ident = Ident::from_str(prim.name_str());
     let segment = hir::PathSegment::new(ident, HirId::make_owner(owner), Res::PrimTy(prim));
     let segments = leak(vec![segment].into_boxed_slice());
     let path = leak(hir::Path {
-        span: DUMMY_SP,
+        span,
         res: Res::PrimTy(prim),
         segments,
     });
     hir::Ty {
         hir_id: HirId::make_owner(owner),
-        span: DUMMY_SP,
+        span,
         kind: hir::TyKind::Path(hir::QPath::Resolved(None, path)),
     }
 }
@@ -3236,15 +3294,16 @@ fn make_array_ty<'tcx>(
     owner: LocalDefId,
     pointee: &'static hir::Ty<'static>,
     len: HirTyConst,
+    span: RustcSpan,
 ) -> hir::Ty<'static> {
     hir::Ty {
         hir_id: HirId::make_owner(owner),
-        span: DUMMY_SP,
+        span,
         kind: hir::TyKind::Array(
             pointee,
             leak(hir::ConstArg {
                 hir_id: HirId::make_owner(owner),
-                span: DUMMY_SP,
+                span,
                 kind: match len {
                     HirTyConst::Literal(len) => hir::ConstArgKind::Literal {
                         lit: rustc_ast::LitKind::Int(
@@ -3268,10 +3327,11 @@ fn make_ptr_ty(
     owner: LocalDefId,
     pointee: &'static hir::Ty<'static>,
     mutability: hir::Mutability,
+    span: RustcSpan,
 ) -> hir::Ty<'static> {
     hir::Ty {
         hir_id: HirId::make_owner(owner),
-        span: DUMMY_SP,
+        span,
         kind: hir::TyKind::Ptr(hir::MutTy {
             ty: pointee,
             mutbl: mutability,
@@ -3402,11 +3462,23 @@ fn build_fn_generics<'tcx>(
     leak(generics)
 }
 
-fn make_unit_ty(owner: LocalDefId) -> hir::Ty<'static> {
-    let empty: &'static [hir::Ty<'static>] = leak(Vec::new().into_boxed_slice());
+fn make_tuple_ty<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: LocalDefId,
+    elems: &[HirTy],
+    item_allocator: &mut HirItemAllocator,
+    span: RustcSpan,
+) -> hir::Ty<'static> {
+    let empty: &'static [hir::Ty<'static>] = leak(
+        elems
+            .iter()
+            .map(|ty| hir_ty_to_rustc(tcx, owner, ty, item_allocator))
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
     hir::Ty {
         hir_id: HirId::make_owner(owner),
-        span: DUMMY_SP,
+        span,
         kind: hir::TyKind::Tup(empty),
     }
 }
@@ -3434,6 +3506,7 @@ fn make_adt_ty<'tcx>(
     adt: DefId,
     args: &[crate::HirGenericArg],
     item_allocator: &mut HirItemAllocator,
+    span: RustcSpan,
 ) -> hir::Ty<'static> {
     let def_id = my_def_id_to_rustc_def_id(tcx, adt);
     let kind = tcx.def_kind(def_id);
@@ -3464,20 +3537,20 @@ fn make_adt_ty<'tcx>(
             args: leak(hir_args.into_boxed_slice()),
             constraints: &[],
             parenthesized: hir::GenericArgsParentheses::No,
-            span_ext: DUMMY_SP,
+            span_ext: span,
         });
         segment.args = Some(generic_args);
         segment.infer_args = false;
     }
     let segments = leak(vec![segment].into_boxed_slice());
     let path = leak(hir::Path {
-        span: DUMMY_SP,
+        span,
         res: Res::Def(kind, def_id),
         segments,
     });
     hir::Ty {
         hir_id: HirId::make_owner(owner),
-        span: DUMMY_SP,
+        span,
         kind: hir::TyKind::Path(hir::QPath::Resolved(None, path)),
     }
 }
@@ -3488,6 +3561,7 @@ fn hir_ty_to_rustc<'tcx>(
     ty: &HirTy,
     item_allocator: &mut HirItemAllocator,
 ) -> hir::Ty<'static> {
+    let span = internal(tcx, ty.span);
     match &ty.kind {
         HirTyKind::Int(int_ty) => {
             let int_ty = match int_ty {
@@ -3498,7 +3572,7 @@ fn hir_ty_to_rustc<'tcx>(
                 rustc_public::ty::IntTy::I64 => IntTy::I64,
                 rustc_public::ty::IntTy::I128 => IntTy::I128,
             };
-            make_prim_ty(owner, hir::PrimTy::Int(int_ty))
+            make_prim_ty(owner, hir::PrimTy::Int(int_ty), span)
         }
         HirTyKind::Uint(int_ty) => {
             let int_ty = match int_ty {
@@ -3509,10 +3583,10 @@ fn hir_ty_to_rustc<'tcx>(
                 rustc_public::ty::UintTy::U64 => UintTy::U64,
                 rustc_public::ty::UintTy::U128 => UintTy::U128,
             };
-            make_prim_ty(owner, hir::PrimTy::Uint(int_ty))
+            make_prim_ty(owner, hir::PrimTy::Uint(int_ty), span)
         }
-        HirTyKind::Bool => make_prim_ty(owner, hir::PrimTy::Bool),
-        HirTyKind::Char => make_prim_ty(owner, hir::PrimTy::Char),
+        HirTyKind::Bool => make_prim_ty(owner, hir::PrimTy::Bool, span),
+        HirTyKind::Char => make_prim_ty(owner, hir::PrimTy::Char, span),
         HirTyKind::Float(float_ty) => {
             let float_ty = match float_ty {
                 rustc_public::ty::FloatTy::F16 => FloatTy::F16,
@@ -3520,7 +3594,7 @@ fn hir_ty_to_rustc<'tcx>(
                 rustc_public::ty::FloatTy::F64 => FloatTy::F64,
                 rustc_public::ty::FloatTy::F128 => FloatTy::F128,
             };
-            make_prim_ty(owner, hir::PrimTy::Float(float_ty))
+            make_prim_ty(owner, hir::PrimTy::Float(float_ty), span)
         }
         HirTyKind::RawPtr(mutability, to) => {
             let pointee = leak(hir_ty_to_rustc(tcx, owner, &to, item_allocator));
@@ -3531,18 +3605,19 @@ fn hir_ty_to_rustc<'tcx>(
                     rustc_public::mir::Mutability::Not => hir::Mutability::Not,
                     rustc_public::mir::Mutability::Mut => hir::Mutability::Mut,
                 },
+                span,
             )
         }
         HirTyKind::Array(len, to) => {
             let pointee = leak(hir_ty_to_rustc(tcx, owner, &to, item_allocator));
-            make_array_ty(tcx, owner, pointee, *len)
+            make_array_ty(tcx, owner, pointee, *len, span)
         }
         HirTyKind::Ref(mutability, lifetime, to) => {
             let pointee = leak(hir_ty_to_rustc(tcx, owner, &to, item_allocator));
             let lifetime = make_lifetime(tcx, lifetime, item_allocator);
             hir::Ty {
                 hir_id: HirId::make_owner(owner),
-                span: DUMMY_SP,
+                span,
                 kind: hir::TyKind::Ref(
                     lifetime,
                     hir::MutTy {
@@ -3555,14 +3630,8 @@ fn hir_ty_to_rustc<'tcx>(
                 ),
             }
         }
-        HirTyKind::Adt(adt, args) => make_adt_ty(tcx, owner, *adt, args, item_allocator),
-        HirTyKind::Tuple(elems) => {
-            if elems.is_empty() {
-                make_unit_ty(owner)
-            } else {
-                todo!()
-            }
-        }
+        HirTyKind::Adt(adt, args) => make_adt_ty(tcx, owner, *adt, args, item_allocator, span),
+        HirTyKind::Tuple(elems) => make_tuple_ty(tcx, owner, elems, item_allocator, span),
         HirTyKind::FnPtr(sig) => {
             let hir_id = item_allocator.new_item();
             let fn_decl = leak(hir::FnDecl {
@@ -3602,7 +3671,7 @@ fn hir_ty_to_rustc<'tcx>(
             let ty = leak(hir::Ty {
                 hir_id,
                 kind: hir::TyKind::FnPtr(fn_ptr),
-                span: DUMMY_SP,
+                span,
             });
             item_allocator.set_node(hir_id.local_id, hir::Node::Ty(ty), ItemLocalId::ZERO);
             *ty
@@ -3611,7 +3680,7 @@ fn hir_ty_to_rustc<'tcx>(
             let hir_id = item_allocator.new_item();
             let ty = leak(hir::Ty {
                 kind: hir::TyKind::Never,
-                span: DUMMY_SP,
+                span,
                 hir_id,
             });
             item_allocator.set_node(hir_id.local_id, hir::Node::Ty(ty), ItemLocalId::ZERO);

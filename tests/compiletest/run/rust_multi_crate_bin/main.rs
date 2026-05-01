@@ -1,6 +1,9 @@
+#![feature(const_cmp)]
+#![feature(const_trait_impl)]
+
 use support_lib::{
     Point, PointPtr, add, hypot, Union1, S7Type, S7, HUGE_LONG, ComplexStruct, inner_mod::inner_mod_fn,
-    NormalReprCStruct, BitFieldReprCStruct,
+    NormalReprCStruct, BitFieldReprCStruct, ExternType1, ExternType1Again, ExternType2,
 };
 
 use std::mem::offset_of;
@@ -37,6 +40,17 @@ const _: () = {
     }
 
     let _: *const [i32; support_lib::C23Const] = null::<[i32; 2]>();
+
+    assert!(size_of::<*mut ExternType1>() == size_of::<*mut ()>());
+    assert!(size_of::<*mut ExternType1Again>() == size_of::<*mut ()>());
+    assert!(size_of::<*mut ExternType2>() == size_of::<*mut ()>());
+
+    let _: *const ExternType1 = null::<ExternType1Again>();
+    
+    use std::any::TypeId;
+
+    assert!(TypeId::of::<*mut ExternType1>() == TypeId::of::<*mut ExternType1Again>());
+    assert!(TypeId::of::<*mut ExternType1>() != TypeId::of::<*mut ExternType2>());
 };
 
 fn main() {

@@ -348,7 +348,11 @@ fn lower_translation_unit_items(
             LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
         let item = item.transform(&resolver);
         match item {
-            Declaration::RustTypeAlias { ident, ty, is_pub: _ } => {
+            Declaration::RustTypeAlias {
+                ident,
+                ty,
+                is_pub: _,
+            } => {
                 let name = ident.0.1;
                 let id = resolve_in_module(ctx, module_path, &name).0;
                 hir_items.push(HirModuleItem::TypeDef {
@@ -865,11 +869,6 @@ pub fn lower_crate_sig(
     );
     ctx.hir_items.extend(root_items);
 
-    ctx.hir_items.push(HirModuleItem::ForeignMod {
-        id: foreign_mod,
-        items: foreign_items,
-    });
-
     let clone_trait = ctx.resolve("core::clone::Clone").unwrap().0;
     let copy_trait = ctx.resolve("core::marker::Copy").unwrap().0;
     let clone_trait_fn = ctx.resolve("core::clone::Clone::clone").unwrap().0;
@@ -1018,12 +1017,17 @@ pub fn lower_crate_sig(
     } in structs
     {
         let Some(fields) = fields else {
-            // TODO: lower to extern types
-            ctx.hir_items.push(HirModuleItem::Adt {
+            let foreign_name = format!("{name}__foreign");
+            let foreign_def = ctx.allocate_def_id(foreign_mod, DefData::TypeNs(foreign_name));
+            foreign_items.push(ForeignModItem::ForeignType {
+                name: format!("{name}__foreign"),
+                id: foreign_def,
+                span,
+            });
+            ctx.hir_items.push(HirModuleItem::TypeDef {
                 name,
-                id: AdtDef(def),
-                kind: HirAdtKind::Struct { fields: vec![] },
-                repr: AdtRepr::C,
+                id: def,
+                ty: HirTy::adt(foreign_def, vec![], span),
                 span,
             });
             continue;
@@ -1085,6 +1089,11 @@ pub fn lower_crate_sig(
             span,
         });
     }
+
+    ctx.hir_items.push(HirModuleItem::ForeignMod {
+        id: foreign_mod,
+        items: foreign_items,
+    });
 
     let enums = ctx.resolver.borrow_mut().emit_enums().collect::<Vec<_>>();
     for PendingEnum {

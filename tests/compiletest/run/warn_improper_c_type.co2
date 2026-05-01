@@ -1,0 +1,27 @@
+//@ mode: co2
+//@ run-status: 0
+
+type ImproperCType = (i32, i64);
+
+void bad1(ImproperCType inp) {}
+        //^^^^^^^^^^^^^ warning: `extern` fn uses type `(i32, i64)`, which is not FFI-safe
+
+  ImproperCType bad2() {}
+//^^^^^^^^^^^^^ warning: `extern` fn uses type `(i32, i64)`, which is not FFI-safe
+
+typedef struct {} EmptyStruct;
+
+type ImproperCType2 = EmptyStruct;
+
+void bad3(ImproperCType2 inp) {}
+        //^^^^^^^^^^^^^^ warning: `extern` fn uses type `__co2_c_adt__0`, which is not FFI-safe
+
+void bad4(int good_input1, struct Empty2 {} bad_input, int good_input2) {}
+                         //^^^^^^^^^^^^^^^^ warning: `extern` fn uses type `__co2_c_adt_Empty2_1`, which is not FFI-safe
+
+fn good(inp: ImproperCType) -> ImproperCType {
+    return inp;
+}
+
+fn main() {
+}

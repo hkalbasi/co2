@@ -1710,6 +1710,17 @@ int main79() {
 	return f(5, NULL, (struct main79_s) { 2 }, NULL, NULL, NULL, (struct main79_s) { 3 }) - 10;
 }
 
+typedef int main80_t1[3];
+typedef int main80_t2[];
+
+int main80_aux(int ar1[5], int ar2[static 5], int ar3[1 + 2], main80_t1 ar4, main80_t2 ar5, int ar6[]) {
+	return ar1[1] + ar2[2] + ar3[3] + ar4[4] + ar5[5] + ar6[6];
+}
+
+int main80() {
+	int ar[] = {0, 1, 2, 3, 4, 5, 6};
+	return main80_aux(ar, ar, ar, ar, ar, ar) != 21;
+}
 
 typedef int (*main_ty)();
 
@@ -1731,7 +1742,7 @@ int main() {
 		main61, main62, main63, main64, main65,
 		main66, main67, main68, main69, main70,
 		main71, main72, main73, main74, main75,
-		main76, main77, main78, main79,
+		main76, main77, main78, main79, main80,
 	};
 	
 	int i;

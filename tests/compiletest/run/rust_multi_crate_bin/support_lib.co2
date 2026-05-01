@@ -66,3 +66,6 @@ typedef struct {
 
 constexpr usize C23Const = 2;
 
+typedef struct Unknown1 ExternType1;
+typedef struct Unknown1 ExternType1Again;
+typedef struct Unknown2 ExternType2;
