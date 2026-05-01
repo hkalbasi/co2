@@ -257,6 +257,18 @@ int main10()
 	if (*p - 30)
 		return 1;
 
+	q = --p;
+	if (*q - 20)
+		return 1;
+	if (*p - 20)
+		return 1;
+
+	q = p--;
+	if (*q - 20)
+		return 1;
+	if (*p - 10)
+		return 1;
+
 	x = 4;
 	y = ++x;
 	if (x - 5 || y - 5)

@@ -1207,7 +1207,9 @@ impl HirCtx<'_> {
                                 Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
                                 HirExprKind::ConstFloat(1.),
                             ),
-                            RigidTy::RawPtr(..) => (Ty::usize_ty(), HirExprKind::ConstInt(1)),
+                            RigidTy::RawPtr(..) => {
+                                (Ty::signed_ty(IntTy::Isize), HirExprKind::ConstInt(1))
+                            }
                             _ => {
                                 self.terminate_with_error(parser_span, "Invalid type for ++ and --")
                             }
