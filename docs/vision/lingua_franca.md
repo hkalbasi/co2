@@ -58,8 +58,35 @@ can talk C.
 
 ## C++ as a Cargo lang
 
-C++ as a Cargo language would be a more ambitious undertaking.
+C++ as a Cargo language would be a more ambitious undertaking. While I definitely think a CO2++ language is feasible,
+there are some challanges relative to CO2 since there was support for C features in Rust/Cargo lang,
+even obscure features like C-variadics, but it isn't the case for C++. Some notable challanges:
+* Overloaded functions
+* Templates, which are not compatible with Rust generics completely
+* Inheritance
+
+The CO2++ can easily get these working in a single crate (by doing what a normal C++ compiler does) but the problem
+is that we need to somehow encode these things in the crate API, so that at least C++ libraries become able to
+get splitted into multiple crates.
 
 ## Empowering new system languages with crates ecosystem
 
+Decades from now, there will probably be a new revolutionary language which solves a problem that Rust
+can't solve in a backward compatible way, like how Rust iself solved the safe memory management without GC.
+Having Cargo lang as the new lingua franca, it can make that language able to seamlessly reuse Rust crates,
+maybe reducing the need of Rewrite-it-in-that-language projects.
+
+Cargo langs can enable playing with new ideas without the ecosystem penalty that usually dooms experimental languages.
+A researcher with a novel approach to memory management doesn't need to implement a standard library,
+write HTTP and JSON crates from scratch, or build a package manager before anyone writes a real program in the language.
+They write a frontend that targets MIR, plug it into Cargo, and immediately their users can import `serde`, `tokio`, and `clap`.
+In this way, they can get some real world usage on the language and see its limitations and drawbacks in action.
+
+Some of these ideas can find their way into the Rust itself. A Cargo language can serve as a testbed.
+If the experiment succeeds, the Rust project gains a working prototype and real-world usage data to inform language evolution.
+That Cargo language should already interact with Rust crates and use Rust type system as the base,
+so it might be easy to introduce its progress in Rust itself.
+
 ## Official cargo langs
+
+## Rust editions as independent Cargo langs
