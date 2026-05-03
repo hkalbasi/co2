@@ -13,7 +13,7 @@
     <div class="install-section">
         <div class="install-label">Install with:</div>
         <div class="install-command">
-            <code>curl --proto '=https' --tlsv1.2 -sSf https://hkalbasi.github.io/co2/install.sh | sh</code>
+            <code>curl -sSf https://hkalbasi.github.io/co2/install.sh | sh</code>
             <button class="copy-btn" onclick="copyInstall()">Copy</button>
         </div>
     </div>
@@ -25,11 +25,14 @@
 
     <script>
         function copyInstall() {
-            const cmd = 'curl https://foo.bar/';
+            const cmd = document.querySelector('.install-command code').textContent;
             navigator.clipboard.writeText(cmd).then(() => {
                 const btn = document.querySelector('.copy-btn');
                 btn.textContent = 'Copied!';
                 setTimeout(() => btn.textContent = 'Copy', 2000);
+            }).catch(() => {
+                // Fallback for non-HTTPS or older browsers
+                alert('Copy this command: ' + cmd);
             });
         }
     </script>

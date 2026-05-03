@@ -31,10 +31,12 @@ body {
     align-items: center;
     gap: 1rem;
     background-color: rgba(0,0,0,0.2);
-    padding: 1rem 1.5rem;
+    padding: 1.5rem 2rem;
     border-radius: 0.75rem;
     font-family: monospace;
-    font-size: 1.25rem;
+    font-size: 1rem;
+    max-width: 90vw;
+    overflow-x: auto;
 }
 .copy-btn {
     background-color: white;
@@ -47,14 +49,14 @@ body {
     transition: opacity 0.2s;
 }
 .copy-btn:hover { opacity: 0.9; }
-.links { display: flex; gap: 1.5rem; flex-wrap: wrap; justify-content: center; }
+.links { display: flex; gap: 2rem; flex-wrap: nowrap; justify-content: center; }
 .link {
     color: white;
     text-decoration: none;
-    padding: 0.8rem 2rem;
+    padding: 1rem 3rem;
     background-color: rgba(255,255,255,0.1);
     border-radius: 0.75rem;
-    font-size: 1.1rem;
+    font-size: 0.9rem;
     font-weight: 500;
     transition: background-color 0.2s;
 }
