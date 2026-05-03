@@ -103,7 +103,14 @@ confirm_install() {
     echo "========================================"
     echo ""
     printf "Continue? [y/N] "
-    read -r answer
+
+    # Read from terminal directly (needed when piped via curl | sh)
+    if [ -t 0 ]; then
+        read -r answer
+    else
+        read -r answer < /dev/tty
+    fi
+
     case "$answer" in
         [Yy]|[Yy][Ee][Ss]) return 0 ;;
         *) echo "Installation cancelled."; exit 0 ;;
