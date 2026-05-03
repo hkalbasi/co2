@@ -1,0 +1,65 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background-color: #1e40af;
+    color: white;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, -apple-system, sans-serif;
+    padding: 2rem;
+    text-align: center;
+}
+.title {
+    font-size: 12rem;
+    font-weight: 900;
+    letter-spacing: -0.1rem;
+    margin-bottom: 0.5rem;
+    line-height: 1;
+}
+.motto {
+    font-size: 1.5rem;
+    margin-bottom: 3rem;
+    opacity: 0.9;
+    font-weight: 300;
+}
+.install-section { margin-bottom: 4rem; max-width: 800px; width: 100%; }
+.install-label { font-size: 1.5rem; margin-bottom: 1rem; opacity: 0.9; }
+.install-command {
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+    background-color: rgba(0,0,0,0.2);
+    padding: 1rem 1.5rem;
+    border-radius: 0.75rem;
+    font-family: monospace;
+    font-size: 1.25rem;
+}
+.copy-btn {
+    background-color: white;
+    color: #1e40af;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+.copy-btn:hover { opacity: 0.9; }
+.links { display: flex; gap: 1.5rem; flex-wrap: wrap; justify-content: center; }
+.link {
+    color: white;
+    text-decoration: none;
+    padding: 0.8rem 2rem;
+    background-color: rgba(255,255,255,0.1);
+    border-radius: 0.75rem;
+    font-size: 1.1rem;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+.link:hover { background-color: rgba(255,255,255,0.2); }
+@media (max-width: 768px) {
+    .title { font-size: 6rem; }
+    .install-command { flex-direction: column; padding: 1rem; }
+}

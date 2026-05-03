@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CO2</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1 class="title">CO2</h1>
+    <p class="motto">C with Rust powers</p>
+
+    <div class="install-section">
+        <div class="install-label">Install with:</div>
+        <div class="install-command">
+            <code>curl https://foo.bar/</code>
+            <button class="copy-btn" onclick="copyInstall()">Copy</button>
+        </div>
+    </div>
+
+    <div class="links">
+        <a href="https://github.com/hkalbasi/co2" class="link">Github</a>
+        <a href="https://github.com/hkalbasi/co2/tree/main/docs" class="link">Documentation</a>
+    </div>
+
+    <script>
+        function copyInstall() {
+            const cmd = 'curl https://foo.bar/';
+            navigator.clipboard.writeText(cmd).then(() => {
+                const btn = document.querySelector('.copy-btn');
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = 'Copy', 2000);
+            });
+        }
+    </script>
+</body>
+</html>
