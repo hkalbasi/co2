@@ -1,6 +1,7 @@
 name: Build Self-Extracting Binary
 
 on:
+  workflow_call:
   workflow_dispatch:
   pull_request:
     paths:
