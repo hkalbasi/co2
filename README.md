@@ -10,7 +10,7 @@ with no FFI boundaries or extra tooling required.
 Install the CO2:
 
 ```
-curl http://foo | bash
+curl --proto '=https' --tlsv1.2 -sSf https://hkalbasi.github.io/co2/install.sh | sh
 ```
 
 You can use CO2 in two ways:
