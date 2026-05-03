@@ -5,3 +5,8 @@
 /mir_dump
 rustc-ice*
 synthetic
+.gavcode
+.opencode
+opencode.json
+gavcode.json
+AGENTS.md
