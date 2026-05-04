@@ -5,6 +5,35 @@ C (See [incompatibilities](./docs/known_incompatibilties_with_c.md)) but with
 direct access to the Rust ecosystem. CO2 and Rust can use each other crates seamlessly,
 with no FFI boundaries or extra tooling required. 
 
+## Why another language?
+
+C has served systems programming for decades, but its lack of memory safety, minimal type system,
+and absence of a standard package manager are increasingly making people look for alternatives.
+Rust has emerged as one of the leading candidate to fill this role,
+offering memory safety without a garbage collector, a rich type system, and a modern build system / package manager.
+
+But Rust has a not great story in integrating with C:
+* C libraries are second class citizens
+  * The API becomes an unsafe and unidiomatic Rust, which probably needs a wrapper
+  * They are not distributed by Cargo, and often distributed in binary form, limiting things like LTO or cross compilation
+* Rust libraries are not usable in C, needing an special C wrapper
+  * Losing Rust types and fallbacking to things like `void*`
+  * Some things (like `HashMap`) are impossible to use in C without performance loss
+  * Time consuming to develop
+
+These issues lead to a trend of RIIR (Rewrite It In Rust) which is taking an existing C or C++ project and rewriting it entirely
+in Rust to gain safety and modern tooling. This may work for small projects or organizations with massive resources,
+but there are billions of lines of C code which is not going to be rewritten, any time soon (unless AI advances massively).
+
+CO2 fixes these issues. Instead of rewriting your project in Rust, you can rewrite it in CO2.
+A CO2 rewrite is an easy and feasible task, since CO2 is backward compatible with C,
+so it is not like a full rewrite, its more like changing a build system. See [co2-quickjs](https://github.com/HKalbasi/co2-quickjs/)
+as an example of a non trivial project ported to CO2.
+
+After that, your CO2 code is a crate like any other Rust crates.  You can import Rust crates without any change,
+use all of their API (even generic types and functions), split your code into multiple CO2 crates,
+and rewriting some of them or incrementally all of them to Rust for safety gains.
+
 ## Getting started
 
 Install the CO2:

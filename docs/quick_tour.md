@@ -2,9 +2,13 @@
 
 ## Installation
 
-The CO2 tools are currently packaged as a single busybox style multicall binary. For installing it,
-add symlinks named `co2cc`, `co2rustc` and `co2cargo` to it in your PATH.
-Running `./co2-multicall install /usr/local/bin` will do this for you.
+Install the CO2:
+
+```
+curl --proto '=https' --tlsv1.2 -sSf https://hkalbasi.github.io/co2/install.sh | sh
+```
+
+It installs `co2cc`, `co2rustc` and `co2cargo` in your PATH. See [installation page](./installation.md) for other installation methods.
 
 ## CO2 as a C compiler
 
