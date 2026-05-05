@@ -47,6 +47,47 @@ Benefits of CO2 over C2Rust:
 Benefits of C2Rust over CO2:
 * CO2 does not support all Rust tooling currently, specially third party ones.
 
+## CO2 vs bindge, cbindge, Zngur, CXX, Crubit, ...
+
+There are other family of tools for interoperability between C/C++ and Rust.
+These tools are binding generators: They generate some code in both language to bridge things.
+Some of these tools are C++ only, which we compare against the [imaginary CO2++](./vision/lingua_franca.md)
+language instead of CO2 itself.
+
+Benefits of CO2 over bindgen and cbindgen:
+* Unlike CO2, they limit Rust side to a narrow C-like API, so the Rust side needs a wrapper.
+* C side is always unsafe to call in those tools, but CO2 gives the C author the control to declare their functions as either safe or unsafe. 
+  CO2 functions can also receive things like references and smart pointers to ensure the API is safe to call.
+* Miri works with CO2 and can detect UB in the mixed code.
+* A CO2 code is probably faster than a bindgen bridged code:
+  * Lack of wrapper overhead
+  * Better optimizations. There is a cross language LTO, but is hard to setup and limited.
+Benefits of bindgen and cbindgen over CO2:
+* With these tools, the C side remains almost untouched.
+* You have more options on C compiler and build systems.
+* CO2 has a higher upfront adoption cost.
+
+For C++, binding generator tools do more job. Unlike C, Rust doesn't natively handle C++ types.
+So C++ binding generators generate more code to handle more C++ and Rust types, including templates/generics and smart pointers.
+CO2++ currently doesn't exist, but we can expect it to have these pros and cons:
+
+Benefits of CO2++ over Zngur, CXX, Crubit, ...:
+* These tools either giveup on templates/generics, or require the user to specify monomorphizations they want.
+  CO2++ (like CO2 itself) can use generics of other crates without any problem.
+* Some of these tools require heavy and complex integration with the build system. CO2++ wants Cargo as the build system,
+  but it makes very simple Cargo projects with no build scripts or complex build pipeline.
+* Some of these tools require declaring the boundary in something similar to a C header file.
+  CO2++ crates does not need any interface declaration, and can export items directly from the crate.
+* Miri works with CO2++ and can detect UB in the mixed code.
+* A CO2 code is probably faster than a bindgen bridged code:
+  * Lack of wrapper overhead. These C++ binding generators specially generate some invisible code (unlike C ones)
+    which may have non trivial performance impact. Frequent cross language calls are discouraged in those tools due this reason.
+  * Better optimizations. There is a cross language LTO, but is hard to setup and limited.
+Benefits of Zngur, CXX, Crubit, ... over CO2++:
+* You have more options on C++ compiler and build systems.
+* CO2++ has a higher upfront adoption cost.
+
+
 ## Network effect for programming languages
 
 A network effect occurs when a product or system becomes more valuable as more people use it.
