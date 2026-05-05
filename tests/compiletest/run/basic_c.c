@@ -1738,6 +1738,51 @@ int main80() {
 	return main80_aux(ar, ar, ar, ar, ar, ar, ar) != 28;
 }
 
+int main81_aux() { return 0; }
+
+int main81() {
+	int v = 5;
+	int *a = &v;
+	int *b = &v;
+	int *c = 0;
+
+	if (!(a && b)) {
+		return 1;
+	}
+
+	if (a && c) {
+		return 2;
+	}
+
+	if (!(a || c)) {
+		return 3;
+	}
+
+	if (!(a && !c)) {
+		return 4;
+	}
+
+	int (*f)() = main81_aux;
+	int (*g)() = 0;
+
+	if (!main81_aux) {
+		return 5;
+	}
+	if (!(f && main81_aux)) {
+		return 6;
+	}
+	if (g && f) {
+		return 7;
+	}
+	if (main81_aux != f) {
+		return 8;
+	}
+	if (main81_aux == g) {
+		return 9;
+	}
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1759,6 +1804,7 @@ int main() {
 		main66, main67, main68, main69, main70,
 		main71, main72, main73, main74, main75,
 		main76, main77, main78, main79, main80,
+		main81,
 	};
 	
 	int i;

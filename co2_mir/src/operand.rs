@@ -106,6 +106,22 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         }
     }
 
+    fn condition_discriminant_expr(&self, expr: &HirExpr) -> HirExpr {
+        if matches!(
+            expr.ty.kind(),
+            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
+        ) || maybe_uninit_fn_ptr_inner(expr.ty).is_some()
+        {
+            HirExpr {
+                kind: HirExprKind::Cast(Box::new(expr.clone())),
+                ty: Ty::usize_ty(),
+                span: expr.span,
+            }
+        } else {
+            expr.clone()
+        }
+    }
+
     fn bitfield_storage_bits(&self, ty: Ty) -> usize {
         match ty.kind() {
             TyKind::RigidTy(RigidTy::Uint(UintTy::U8) | RigidTy::Int(IntTy::I8)) => 8,
@@ -1796,25 +1812,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             span,
         });
 
-        let lhs_is_maybe_uninit_fn_ptr = matches!(
-            lhs.ty.kind(),
-            TyKind::RigidTy(RigidTy::Adt(_, args))
-                if args.0.len() == 1
-                    && matches!(args.0[0], GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))))
-        );
-        let lhs_expr = if matches!(
-            lhs.ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
-        ) || lhs_is_maybe_uninit_fn_ptr
-        {
-            HirExpr {
-                kind: HirExprKind::Cast(Box::new(lhs.clone())),
-                ty: Ty::usize_ty(),
-                span: lhs.span,
-            }
-        } else {
-            lhs.clone()
-        };
+        let lhs_expr = self.condition_discriminant_expr(lhs);
         let lhs_op = self.lower_expr_to_operand(&lhs_expr);
         let entry_bb = self.blocks.len();
         self.blocks
@@ -1847,25 +1845,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
         debug_assert_eq!(rhs_eval_bb, self.blocks.len());
-        let rhs_is_maybe_uninit_fn_ptr = matches!(
-            rhs.ty.kind(),
-            TyKind::RigidTy(RigidTy::Adt(_, args))
-                if args.0.len() == 1
-                    && matches!(args.0[0], GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))))
-        );
-        let rhs_expr = if matches!(
-            rhs.ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
-        ) || rhs_is_maybe_uninit_fn_ptr
-        {
-            HirExpr {
-                kind: HirExprKind::Cast(Box::new(rhs.clone())),
-                ty: Ty::usize_ty(),
-                span: rhs.span,
-            }
-        } else {
-            rhs.clone()
-        };
+        let rhs_expr = self.condition_discriminant_expr(rhs);
         let rhs_op = self.lower_expr_to_operand(&rhs_expr);
         let rhs_switch_bb = self.blocks.len();
         self.blocks
@@ -1934,25 +1914,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero_init)),
             span,
         });
-        let inner_is_maybe_uninit_fn_ptr = matches!(
-            inner.ty.kind(),
-            TyKind::RigidTy(RigidTy::Adt(_, args))
-                if args.0.len() == 1
-                    && matches!(args.0[0], GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))))
-        );
-        let inner_expr = if matches!(
-            inner.ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
-        ) || inner_is_maybe_uninit_fn_ptr
-        {
-            HirExpr {
-                kind: HirExprKind::Cast(Box::new(inner.clone())),
-                ty: Ty::usize_ty(),
-                span: inner.span,
-            }
-        } else {
-            inner.clone()
-        };
+        let inner_expr = self.condition_discriminant_expr(inner);
         let inner_op = self.lower_expr_to_operand(&inner_expr);
         let entry_bb = self.blocks.len();
         self.blocks
@@ -2008,25 +1970,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         ty: Ty,
     ) -> MirOperand {
         let result_local = self.new_temp(ty, Mutability::Mut, span);
-        let cond_is_maybe_uninit_fn_ptr = matches!(
-            cond.ty.kind(),
-            TyKind::RigidTy(RigidTy::Adt(_, args))
-                if args.0.len() == 1
-                    && matches!(args.0[0], GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))))
-        );
-        let cond_expr = if matches!(
-            cond.ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
-        ) || cond_is_maybe_uninit_fn_ptr
-        {
-            HirExpr {
-                kind: HirExprKind::Cast(Box::new(cond.clone())),
-                ty: Ty::usize_ty(),
-                span: cond.span,
-            }
-        } else {
-            cond.clone()
-        };
+        let cond_expr = self.condition_discriminant_expr(cond);
         let cond_op = self.lower_expr_to_operand(&cond_expr);
         let entry_bb = self.blocks.len();
         self.blocks
