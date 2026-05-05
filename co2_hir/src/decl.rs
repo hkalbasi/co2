@@ -709,7 +709,9 @@ impl HirCtx<'_> {
                                 Ty::try_new_array(inner, size as u64)
                                     .map_err(|e| format!("failed to build array type: {e}"))?,
                             )
-                        } else if subscription.0.raw.is_unsized() {
+                        } else if subscription.0.raw.is_unsized()
+                            || subscription.0.raw.is_unspecified_vla()
+                        {
                             CTy::UnsizedArray(inner)
                         } else {
                             let len = subscription

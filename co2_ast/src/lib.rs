@@ -857,6 +857,26 @@ impl LazySubscription {
         self.tokens.len() == 2
     }
 
+    pub fn is_unspecified_vla(&self) -> bool {
+        let [_, inner @ .., _] = &self.tokens[..] else {
+            return false;
+        };
+        let inner = inner
+            .iter()
+            .skip_while(|(token, _)| {
+                matches!(
+                    token,
+                    Token::Static
+                        | Token::Const
+                        | Token::Restrict
+                        | Token::Volatile
+                        | Token::Atomic
+                )
+            })
+            .collect::<Vec<_>>();
+        matches!(inner.as_slice(), [(Token::Star, _)])
+    }
+
     pub fn constant_len(&self) -> Option<u128> {
         let [_, inner @ .., _] = &self.tokens[..] else {
             return None;

@@ -522,6 +522,10 @@ int main15()
 		return 1;
 	}
 
+	if (L'\0') {
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -1725,13 +1729,13 @@ int main79() {
 typedef int main80_t1[3];
 typedef int main80_t2[];
 
-int main80_aux(int ar1[5], int ar2[static 5], int ar3[1 + 2], main80_t1 ar4, main80_t2 ar5, int ar6[]) {
-	return ar1[1] + ar2[2] + ar3[3] + ar4[4] + ar5[5] + ar6[6];
+int main80_aux(int ar1[5], int ar2[static 5], int ar3[1 + 2], main80_t1 ar4, main80_t2 ar5, int ar6[], int ar7[const *]) {
+	return ar1[1] + ar2[2] + ar3[3] + ar4[4] + ar5[5] + ar6[6] + ar7[7];
 }
 
 int main80() {
-	int ar[] = {0, 1, 2, 3, 4, 5, 6};
-	return main80_aux(ar, ar, ar, ar, ar, ar) != 21;
+	int ar[] = {0, 1, 2, 3, 4, 5, 6, 7};
+	return main80_aux(ar, ar, ar, ar, ar, ar, ar) != 28;
 }
 
 typedef int (*main_ty)();

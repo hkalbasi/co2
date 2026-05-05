@@ -210,7 +210,12 @@ pub fn lexer<'src>() -> impl Parser<
         .at_least(1)
         .collect::<String>();
 
-    let char_literal = just('\'')
+    let literal_prefix = choice((just("u8"), just("u"), just("U"), just("L")))
+        .ignored()
+        .or_not();
+
+    let char_literal = literal_prefix
+        .ignore_then(just('\''))
         .ignore_then(char_content)
         .then_ignore(just('\''))
         .map(Token::CharLit);
@@ -220,7 +225,8 @@ pub fn lexer<'src>() -> impl Parser<
         .repeated()
         .collect::<String>();
 
-    let string_literal = just('"')
+    let string_literal = literal_prefix
+        .ignore_then(just('"'))
         .ignore_then(string_content)
         .then_ignore(just('"'))
         .map(Token::StringLit);

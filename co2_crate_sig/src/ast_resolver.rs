@@ -388,7 +388,10 @@ impl LocalResolver {
         &self,
         subscription: Spanned<co2_ast::LazySubscription>,
     ) -> Option<RegisteredArrayLenConst> {
-        if subscription.0.is_unsized() || subscription.0.constant_len().is_some() {
+        if subscription.0.is_unsized()
+            || subscription.0.is_unspecified_vla()
+            || subscription.0.constant_len().is_some()
+        {
             return None;
         }
         let key = (subscription.1.start, subscription.1.end);

@@ -400,7 +400,8 @@ impl CrateSigCtx<'_> {
                 };
                 let len = if let Some(len) = subscription.0.raw.constant_len() {
                     (HirTyConst::Literal(len as usize), None)
-                } else if subscription.0.raw.is_unsized() {
+                } else if subscription.0.raw.is_unsized() || subscription.0.raw.is_unspecified_vla()
+                {
                     return self.extract_decl_type_with_consts(
                         CTy::UnsizedArray(inner),
                         current_const,
@@ -1563,7 +1564,8 @@ impl LocalResolverBase {
                 };
                 let len = if let Some(len) = subscription.0.raw.constant_len() {
                     HirTyConst::Literal(len as usize)
-                } else if subscription.0.raw.is_unsized() {
+                } else if subscription.0.raw.is_unsized() || subscription.0.raw.is_unspecified_vla()
+                {
                     return self.extract_decl_type(
                         CTy::UnsizedArray(inner),
                         current_const,
