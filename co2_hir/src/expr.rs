@@ -20,9 +20,9 @@ use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, ResolvedValue};
 use crate::stmt::HirStmt;
 use crate::ty::{
-    adt_field_tys, array_elem_ty, callable_sig, common_numeric_ty, is_array_ty, is_condition_ty,
-    is_maybe_uninit_fn_ptr_ty, is_numeric_ty, needs_implicit_cast, resolve_field_path_in_adt,
-    ty_matches_expected,
+    adt_field_tys, array_elem_ty, callable_sig, common_numeric_ty, enum_payload_ty, is_array_ty,
+    is_condition_ty, is_maybe_uninit_fn_ptr_ty, is_numeric_ty, needs_implicit_cast,
+    resolve_field_path_in_adt, ty_matches_expected,
 };
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
@@ -487,7 +487,7 @@ impl HirCtx<'_> {
             let expected = match sig.inputs().get(idx) {
                 Some(ty) => *ty,
                 None => {
-                    if actual.ty.kind().is_adt() {
+                    if actual.ty.kind().is_adt() && enum_payload_ty(actual.ty).is_none() {
                         *actual = HirExpr {
                             kind: HirExprKind::AddrOf(Box::new(actual.clone())),
                             ty: Ty::new_ptr(actual.ty, Mutability::Mut),
@@ -1852,6 +1852,9 @@ impl HirCtx<'_> {
 }
 
 fn ty_passed_to_variadic(ty: Ty) -> Ty {
+    if let Some(inner) = enum_payload_ty(ty) {
+        return ty_passed_to_variadic(inner);
+    }
     match ty.kind() {
         TyKind::RigidTy(rigid_ty) => {
             let rigid_ty = match rigid_ty {
@@ -1879,7 +1882,7 @@ fn ty_passed_to_variadic(ty: Ty) -> Ty {
 }
 
 impl HirCtx<'_> {
-    fn lower_binop_from_lowered(
+    pub(crate) fn lower_binop_from_lowered(
         &self,
         mut lhs: HirExpr,
         mut rhs: HirExpr,
@@ -1931,19 +1934,23 @@ impl HirCtx<'_> {
         self.array_to_pointer_decay_if_array(&mut rhs);
 
         if matches!(op, HirBinOp::Shl | HirBinOp::Shr) {
-            let common_ty = match lhs.ty.kind() {
-                TyKind::RigidTy(rigid_ty) => match rigid_ty {
-                    RigidTy::Int(int_ty) => Ty::signed_ty(match int_ty {
-                        IntTy::I8 | IntTy::I16 => IntTy::I32,
-                        _ => int_ty,
-                    }),
-                    RigidTy::Uint(uint_ty) => Ty::unsigned_ty(match uint_ty {
-                        UintTy::U8 | UintTy::U16 => UintTy::U32,
-                        _ => uint_ty,
-                    }),
-                    _ => return Err("Invalid type for shift".to_owned()),
-                },
-                _ => unreachable!(),
+            let common_ty = if let Some(inner) = enum_payload_ty(lhs.ty) {
+                inner
+            } else {
+                match lhs.ty.kind() {
+                    TyKind::RigidTy(rigid_ty) => match rigid_ty {
+                        RigidTy::Int(int_ty) => Ty::signed_ty(match int_ty {
+                            IntTy::I8 | IntTy::I16 => IntTy::I32,
+                            _ => int_ty,
+                        }),
+                        RigidTy::Uint(uint_ty) => Ty::unsigned_ty(match uint_ty {
+                            UintTy::U8 | UintTy::U16 => UintTy::U32,
+                            _ => uint_ty,
+                        }),
+                        _ => return Err("Invalid type for shift".to_owned()),
+                    },
+                    _ => unreachable!(),
+                }
             };
             if !is_assignment {
                 lhs = HirExpr {
@@ -2037,7 +2044,10 @@ impl HirCtx<'_> {
         if is_numeric_ty(lhs.ty)
             && is_numeric_ty(rhs.ty)
             && !matches!(op, HirBinOp::Shl | HirBinOp::Shr)
-            && (lhs.ty != rhs.ty || lhs.ty.kind().is_bool())
+            && (lhs.ty != rhs.ty
+                || lhs.ty.kind().is_bool()
+                || enum_payload_ty(lhs.ty).is_some()
+                || enum_payload_ty(rhs.ty).is_some())
         {
             let Some(mut common_ty) = common_numeric_ty(lhs.ty, rhs.ty) else {
                 return Err("failed to find common ty in binop".to_owned());

@@ -3,8 +3,24 @@ use rustc_public_generative::rustc_public::ty::{
 };
 
 const ANON_FIELD_PREFIX: &str = "__anon_field_";
+const ENUM_FIELD_NAME: &str = "__co2_enum_value";
+
+pub(crate) fn enum_payload_ty(ty: Ty) -> Option<Ty> {
+    let TyKind::RigidTy(RigidTy::Adt(adt, args)) = ty.kind() else {
+        return None;
+    };
+    let variant = adt.variant(variant_idx(0))?;
+    let fields = variant.fields();
+    if fields.len() != 1 || fields[0].name.to_string() != ENUM_FIELD_NAME {
+        return None;
+    }
+    Some(fields[0].ty_with_args(&args))
+}
 
 pub(crate) fn is_numeric_ty(ty: Ty) -> bool {
+    if enum_payload_ty(ty).is_some() {
+        return true;
+    }
     matches!(
         ty.kind(),
         TyKind::RigidTy(RigidTy::Bool)
@@ -15,6 +31,9 @@ pub(crate) fn is_numeric_ty(ty: Ty) -> bool {
 }
 
 fn numeric_rank(ty: Ty) -> Option<(u8, bool)> {
+    if let Some(inner) = enum_payload_ty(ty) {
+        return numeric_rank(inner);
+    }
     match ty.kind() {
         TyKind::RigidTy(RigidTy::Bool) => Some((0, false)),
         TyKind::RigidTy(RigidTy::Int(int_ty)) => {
@@ -155,6 +174,9 @@ pub(crate) fn is_array_ty(ty: Ty) -> bool {
 }
 
 pub(crate) fn is_condition_ty(ty: Ty) -> bool {
+    if enum_payload_ty(ty).is_some() {
+        return true;
+    }
     matches!(
         ty.kind(),
         TyKind::RigidTy(RigidTy::Bool)

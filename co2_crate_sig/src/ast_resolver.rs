@@ -289,6 +289,10 @@ impl LocalResolver {
         self.base.borrow().peel_constexpr_typedef(ty)
     }
 
+    pub fn is_enum_def(&self, def_id: DefId) -> bool {
+        self.base.borrow().is_enum_def(def_id)
+    }
+
     pub fn validate_constexpr_decl(
         &self,
         specifiers: &[Spanned<DeclarationSpecifier<LocalResolver>>],
@@ -450,7 +454,7 @@ impl co2_ast::TypeResolver for LocalResolver {
     type ResolvedRustPath = DefOrLocal;
     type DeclarationIdent = (usize, String);
     type StructOrUnionIdentifier = DefId;
-    type EnumIdentifier = ();
+    type EnumIdentifier = DefId;
     type EnumeratorIdentifier = (DefId, String, Option<Spanned<Expression<Self>>>);
     type SubscriptionIdentifier = RegisteredSubscription;
 
@@ -708,7 +712,7 @@ impl co2_ast::TypeResolver for LocalResolver {
         &self,
         (specifier, span): co2_ast::Spanned<co2_ast::EnumSpecifier<Self>>,
     ) -> Self::EnumIdentifier {
-        self.collect_enum_constants(specifier, span);
+        self.collect_enum_constants(specifier, span)
     }
 
     fn register_subscription(

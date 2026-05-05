@@ -12,8 +12,8 @@ use rustc_public_generative::{
         CrateItem,
         mir::{Mutability, Safety},
         ty::{
-            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, IntTy, Region, RegionKind,
-            RigidTy, Span as RustSpan, Ty, TyConst, TyKind,
+            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, Region, RegionKind, RigidTy,
+            Span as RustSpan, Ty, TyConst, TyKind,
         },
     },
 };
@@ -21,7 +21,7 @@ use rustc_public_generative::{
 use crate::expr::{HirExpr, HirExprKind};
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
-use crate::ty::{array_elem_ty, is_array_ty, ty_matches_expected};
+use crate::ty::{array_elem_ty, enum_payload_ty, is_array_ty, ty_matches_expected};
 use crate::{
     expr::coerce_expr_to_type,
     item::{HirLocal, LocalId},
@@ -61,6 +61,9 @@ fn is_null_pointer_constexpr_expr((expr, _): &Spanned<Expression<LocalResolver>>
 }
 
 fn is_scalar_ty(ctx: &HirCtx<'_>, ty: Ty, span: RustSpan) -> bool {
+    if enum_payload_ty(ty).is_some() {
+        return true;
+    }
     match ty.kind() {
         TyKind::RigidTy(
             RigidTy::Bool
@@ -593,7 +596,9 @@ impl HirCtx<'_> {
             CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
                 Ty::from_rigid_kind(RigidTy::Adt(AdtDef(specifier.0), GenericArgs(vec![])))
             }
-            CompressedTypeSpecifier::Enum(_) => Ty::signed_ty(IntTy::I32),
+            CompressedTypeSpecifier::Enum(specifier) => {
+                Ty::from_rigid_kind(RigidTy::Adt(AdtDef(specifier.0), GenericArgs(vec![])))
+            }
             CompressedTypeSpecifier::TypedefName(path) => {
                 return match &path.0 {
                     co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {

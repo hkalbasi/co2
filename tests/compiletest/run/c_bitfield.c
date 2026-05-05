@@ -1,7 +1,6 @@
 //@ mode: c
 //@ run-status: 0
 //@ run-stdout: sizeof=24 off_class=6 off_prev=8 off_next=16
-//@ compile-warning: `extern` block uses type `__co2_c_adt__IO_marker_6`, which is not FFI-safe
 
 #include <stdio.h>
 #include <stddef.h>

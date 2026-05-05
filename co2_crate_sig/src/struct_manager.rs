@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use co2_ast::{
     DeclarationSpecifier, Declarator, EnumSpecifier, Enumerator, Expression, Spanned,
@@ -53,10 +53,12 @@ pub(crate) struct PendingEnum {
 #[derive(Debug, Default)]
 pub(crate) struct StructManager {
     pub(crate) definitions: HashMap<DefId, StructData>,
+    pub(crate) enum_defs: HashSet<DefId>,
     pub(crate) pending_enum_consts: Vec<PendingEnum>,
 }
 
 const ANON_FIELD_PREFIX: &str = "__anon_field_";
+pub(crate) const ENUM_FIELD_NAME: &str = "__co2_enum_value";
 
 fn has_const_qualifier_in_decl_specs(
     specs: &[Spanned<DeclarationSpecifier<LocalResolver>>],
@@ -88,6 +90,19 @@ impl LocalResolver {
         }
 
         let def_id = self.base.borrow_mut().allocate_undef(kind, span, name);
+        self.struct_tags
+            .borrow_mut()
+            .struct_tags
+            .insert(name.to_owned(), def_id);
+        def_id
+    }
+
+    fn def_id_of_enum(&self, name: &str, span: Span, _redefine: bool) -> DefId {
+        if let Some(def) = self.struct_tags.borrow().struct_tags.get(name) {
+            return *def;
+        }
+
+        let def_id = self.base.borrow_mut().allocate_enum(span, name);
         self.struct_tags
             .borrow_mut()
             .struct_tags
@@ -139,15 +154,12 @@ impl LocalResolver {
         &self,
         specifier: EnumSpecifier<LocalResolver>,
         span: co2_ast::Span,
-    ) {
+    ) -> DefId {
+        let rust_span = self.base.borrow().co2_span_to_rustc(span);
         match specifier {
-            EnumSpecifier::Declared { ident: _ } => (),
-            EnumSpecifier::Defined {
-                ident: _,
-                enumerators,
-            }
-            | EnumSpecifier::Anonymous { enumerators } => {
-                let span = self.base.borrow().co2_span_to_rustc(span);
+            EnumSpecifier::Declared { ident } => self.def_id_of_enum(&ident.0, rust_span, false),
+            EnumSpecifier::Defined { ident, enumerators } => {
+                let def = self.def_id_of_enum(&ident.0, rust_span, true);
                 let mut prev = None;
                 for ((def_id, fake_name, value), _) in enumerators {
                     let mut base = self.base.borrow_mut();
@@ -160,7 +172,7 @@ impl LocalResolver {
                             }
                         }
                         None => match prev {
-                            Some(prev) => MirOwnerInfo::EnumConstPrevPlus(prev, span),
+                            Some(prev) => MirOwnerInfo::EnumConstPrevPlus(prev, rust_span),
                             None => MirOwnerInfo::EnumConstZeroed,
                         },
                     };
@@ -171,6 +183,34 @@ impl LocalResolver {
                     });
                     prev = Some(def_id);
                 }
+                def
+            }
+            EnumSpecifier::Anonymous { enumerators } => {
+                let def = self.base.borrow_mut().allocate_enum(rust_span, "");
+                let mut prev = None;
+                for ((def_id, fake_name, value), _) in enumerators {
+                    let mut base = self.base.borrow_mut();
+                    let mir_info = match value {
+                        Some((initializer, span)) => {
+                            let initializer = (initializer, span);
+                            MirOwnerInfo::EnumConstExplicit {
+                                resolver: self.clone(),
+                                initializer,
+                            }
+                        }
+                        None => match prev {
+                            Some(prev) => MirOwnerInfo::EnumConstPrevPlus(prev, rust_span),
+                            None => MirOwnerInfo::EnumConstZeroed,
+                        },
+                    };
+                    base.struct_manager.pending_enum_consts.push(PendingEnum {
+                        name: fake_name,
+                        def_id,
+                        mir_info,
+                    });
+                    prev = Some(def_id);
+                }
+                def
             }
         }
     }
@@ -181,6 +221,37 @@ impl LocalResolver {
 }
 
 impl LocalResolverBase {
+    fn allocate_enum(&mut self, span: Span, hint: &str) -> DefId {
+        let name = format!(
+            "__co2_c_enum_{hint}_{}",
+            self.struct_manager.definitions.len()
+        );
+        let def_id = self.hir_ctx.allocate_def_id(
+            self.hir_ctx.root_crate_def_id(),
+            DefData::TypeNs(name.clone()),
+        );
+        let field_id = self
+            .hir_ctx
+            .allocate_def_id(def_id, DefData::ValueNs(ENUM_FIELD_NAME.to_owned()));
+        let field_ty = HirTy::signed_ty(IntTy::I32, span);
+        let data = StructData {
+            def_id,
+            name,
+            kind: StructOrUnionKind::Struct,
+            span,
+            emitted_fields: Some(vec![StructField {
+                id: field_id,
+                name: ENUM_FIELD_NAME.to_owned(),
+                ty: field_ty,
+                span,
+            }]),
+            logical_fields: None,
+        };
+        self.struct_manager.definitions.insert(def_id, data);
+        self.struct_manager.enum_defs.insert(def_id);
+        def_id
+    }
+
     fn allocate_undef(&mut self, kind: StructOrUnionKind, span: Span, hint: &str) -> DefId {
         let name = format!(
             "__co2_c_adt_{hint}_{}",
@@ -200,6 +271,10 @@ impl LocalResolverBase {
         };
         self.struct_manager.definitions.insert(def_id, data);
         def_id
+    }
+
+    pub(crate) fn is_enum_def(&self, def_id: DefId) -> bool {
+        self.struct_manager.enum_defs.contains(&def_id)
     }
 
     pub(crate) fn emit_structs(&mut self) -> impl Iterator<Item = StructData> + use<> {
@@ -471,6 +546,9 @@ fn bitfield_storage_ty(resolver: &LocalResolverBase, ty: &HirTy) -> Option<(HirT
         HirTyKind::Int(IntTy::Isize) => (HirTyKind::Uint(UintTy::Usize), true, 64),
         HirTyKind::Uint(UintTy::Usize) => (HirTyKind::Uint(UintTy::Usize), false, 64),
         HirTyKind::Adt(def, _) => {
+            if resolver.is_enum_def(def) {
+                return Some((HirTy::unsigned_ty(UintTy::U32, ty.span), false, 32));
+            }
             let underlying = resolver.typedef_tys.get(&def)?;
             return bitfield_storage_ty(resolver, underlying);
         }

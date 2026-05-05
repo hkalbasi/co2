@@ -48,6 +48,18 @@ fn maybe_uninit_fn_ptr_inner(ty: Ty) -> Option<Ty> {
     }
 }
 
+fn enum_payload_ty(ty: Ty) -> Option<Ty> {
+    let TyKind::RigidTy(RigidTy::Adt(adt, args)) = ty.kind() else {
+        return None;
+    };
+    let variant = adt.variant(variant_idx(0))?;
+    let fields = variant.fields();
+    if fields.len() != 1 || fields[0].name.to_string() != "__co2_enum_value" {
+        return None;
+    }
+    Some(fields[0].ty_with_args(&args))
+}
+
 fn callable_sig(
     ty: Ty,
 ) -> Option<
@@ -116,6 +128,51 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             TyKind::RigidTy(RigidTy::Uint(UintTy::Usize)) => Ty::signed_ty(IntTy::Isize),
             _ => ty,
         }
+    }
+
+    fn read_enum_payload_operand(
+        &mut self,
+        enum_op: MirOperand,
+        enum_ty: Ty,
+        payload_ty: Ty,
+        span: RustSpan,
+    ) -> MirOperand {
+        let tmp = self.new_temp(enum_ty, Mutability::Mut, span);
+        let mut payload_place = place(tmp);
+        payload_place
+            .projection
+            .push(MirProjection::Field(0, payload_ty));
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(enum_op)),
+            span,
+        });
+        self.place_operand_for_ty(payload_place, payload_ty)
+    }
+
+    fn wrap_enum_payload_operand(
+        &mut self,
+        payload_op: MirOperand,
+        _payload_ty: Ty,
+        enum_ty: Ty,
+        span: RustSpan,
+    ) -> MirOperand {
+        let tmp = self.new_temp(enum_ty, Mutability::Mut, span);
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(
+                place(tmp),
+                Rvalue::Aggregate(
+                    match enum_ty.kind() {
+                        TyKind::RigidTy(RigidTy::Adt(adt, adt_args)) => {
+                            AggregateKind::Adt(adt, variant_idx(0), adt_args, None, None)
+                        }
+                        _ => unreachable!("enum wrapper must be an adt"),
+                    },
+                    vec![payload_op],
+                ),
+            ),
+            span,
+        });
+        MirOperand::Copy(place(tmp))
     }
 
     fn bitfield_mask_expr(&self, width: usize, storage_ty: Ty, span: RustSpan) -> HirExpr {
@@ -1222,6 +1279,21 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
     ) -> MirOperand {
         if src_ty == dst_ty {
             return inner_op;
+        }
+        let src_enum_payload = enum_payload_ty(src_ty);
+        let dst_enum_payload = enum_payload_ty(dst_ty);
+        if let Some(dst_payload_ty) = dst_enum_payload {
+            let payload_op = if let Some(src_payload_ty) = src_enum_payload {
+                let inner = self.read_enum_payload_operand(inner_op, src_ty, src_payload_ty, span);
+                self.lower_cast(inner, src_payload_ty, dst_payload_ty, span)
+            } else {
+                self.lower_cast(inner_op, src_ty, dst_payload_ty, span)
+            };
+            return self.wrap_enum_payload_operand(payload_op, dst_payload_ty, dst_ty, span);
+        }
+        if let Some(src_payload_ty) = src_enum_payload {
+            let inner = self.read_enum_payload_operand(inner_op, src_ty, src_payload_ty, span);
+            return self.lower_cast(inner, src_payload_ty, dst_ty, span);
         }
         let src_is_bool = matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::Bool));
         let src_is_int = matches!(

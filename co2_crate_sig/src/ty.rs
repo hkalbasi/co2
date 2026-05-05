@@ -610,6 +610,7 @@ impl LocalResolverBase {
                     | HirTyKind::Uint(_)
                     | HirTyKind::Float(_)
                     | HirTyKind::RawPtr(_, _) => {}
+                    HirTyKind::Adt(def, _) if self.is_enum_def(def) => {}
                     _ => return Err("`constexpr` object type must be scalar".to_owned()),
                 }
             }
@@ -626,6 +627,7 @@ impl LocalResolverBase {
                     | HirTyKind::Int(_)
                     | HirTyKind::Uint(_)
                     | HirTyKind::Float(_) => {}
+                    HirTyKind::Adt(def, _) if self.is_enum_def(def) => {}
                     _ => return Err("`constexpr` object type must be scalar".to_owned()),
                 }
             }
@@ -1052,6 +1054,11 @@ impl LocalResolverBase {
     }
 
     fn cast_const_int(&self, value: i128, target_ty: &HirTy) -> Result<i128, String> {
+        if let HirTyKind::Adt(def, _) = target_ty.kind
+            && self.is_enum_def(def)
+        {
+            return self.cast_const_int(value, &HirTy::signed_ty(IntTy::I32, target_ty.span));
+        }
         match target_ty.kind {
             HirTyKind::Bool => Ok((value != 0) as i128),
             HirTyKind::Char => {
@@ -1431,7 +1438,7 @@ impl LocalResolverBase {
         let ty = match specifier {
             CompressedTypeSpecifier::Void => HirTy::new_tuple(vec![], span),
             CompressedTypeSpecifier::PrimitiveTy(ty) => self.hir_ty_of_prim(ty, span),
-            CompressedTypeSpecifier::Enum(_) => HirTy::signed_ty(IntTy::I32, span),
+            CompressedTypeSpecifier::Enum(specifier) => HirTy::adt(specifier.0, vec![], span),
             CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
                 HirTy::adt(specifier.0, vec![], span)
             }

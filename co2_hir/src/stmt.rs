@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use co2_ast::{CompoundStatement, ForInit, Statement, StatementOrDeclaration};
+use co2_ast::{
+    BinOp as ParsedBinOp, CompoundStatement, ForInit, Statement, StatementOrDeclaration,
+};
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{IntTy, Span as RustSpan, Ty};
@@ -114,15 +116,13 @@ impl HirCtx<'_> {
                     ty: discr_ty,
                     span,
                 };
-                let cond = HirExpr {
-                    kind: HirExprKind::Binary {
-                        op: crate::HirBinOp::Eq,
-                        lhs: Box::new(discr_expr),
-                        rhs: Box::new(case_expr),
-                    },
-                    ty: Ty::signed_ty(IntTy::I32),
+                let cond = self.lower_binop_from_lowered(
+                    discr_expr,
+                    case_expr,
+                    ParsedBinOp::Eq,
                     span,
-                };
+                    false,
+                )?;
                 self.register_case(cond, case_label);
                 out.push(HirStmt::Label(case_label, span));
                 self.lower_stmt(statement.0, statement.1, out, locals, local_map)?;
