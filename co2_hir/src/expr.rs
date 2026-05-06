@@ -2338,6 +2338,26 @@ impl HirCtx<'_> {
                                     }
                                 }
                             }
+                            if def.kind().is_union() {
+                                // For a union only one physical field can be active.
+                                // Find the first slot that was populated by the initializer.
+                                let active = physical_args.iter().position(|a| a.is_some());
+                                let Some(active_field) = active else {
+                                    return HirExpr {
+                                        kind: HirExprKind::Zeroed,
+                                        ty,
+                                        span,
+                                    };
+                                };
+                                return HirExpr {
+                                    kind: HirExprKind::UnionAggregate {
+                                        active_field,
+                                        arg: Box::new(physical_args[active_field].take().unwrap()),
+                                    },
+                                    ty,
+                                    span,
+                                };
+                            }
                             let args = physical_field_tys
                                 .into_iter()
                                 .enumerate()

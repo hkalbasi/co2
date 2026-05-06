@@ -421,12 +421,6 @@ impl LocalResolverBase {
                 };
 
                 if let Some(bit_width) = width {
-                    if matches!(struct_kind, StructOrUnionKind::Union) {
-                        self.terminate_with_error(
-                            *parser_span,
-                            "bitfields in unions are not supported yet",
-                        );
-                    }
                     if is_unsized {
                         self.terminate_with_error(*parser_span, "bitfield type must be sized");
                     }
@@ -457,21 +451,43 @@ impl LocalResolverBase {
                         continue;
                     }
 
-                    let storage_index = ensure_bitfield_storage(
-                        &mut emitted_fields,
-                        &mut open_bitfield_storage,
-                        &storage_ty,
-                        def,
-                        self,
-                        rust_span,
-                        storage_bits,
-                        bit_width,
-                    );
-                    let bit_offset = open_bitfield_storage
-                        .as_ref()
-                        .expect("bitfield storage must be open")
-                        .bits_used
-                        - bit_width;
+                    let (storage_index, bit_offset) =
+                        if matches!(struct_kind, StructOrUnionKind::Union) {
+                            // In a union all fields overlap at byte 0, so every bitfield starts
+                            // at bit offset 0 and gets its own physical storage field (distinct
+                            // field index in the Rust union, same underlying memory).
+                            let storage_name =
+                                format!("__co2_bitfield_storage_{}", emitted_fields.len());
+                            let id = self
+                                .hir_ctx
+                                .allocate_def_id(def, DefData::ValueNs(storage_name.clone()));
+                            let index = emitted_fields.len();
+                            emitted_fields.push(StructField {
+                                id,
+                                name: storage_name,
+                                ty: storage_ty.clone(),
+                                span: rust_span,
+                            });
+                            (index, 0usize)
+                        } else {
+                            let storage_index = ensure_bitfield_storage(
+                                &mut emitted_fields,
+                                &mut open_bitfield_storage,
+                                &storage_ty,
+                                def,
+                                self,
+                                rust_span,
+                                storage_bits,
+                                bit_width,
+                            );
+                            let bit_offset = open_bitfield_storage
+                                .as_ref()
+                                .expect("bitfield storage must be open")
+                                .bits_used
+                                - bit_width;
+                            (storage_index, bit_offset)
+                        };
+
                     if !name.is_empty() {
                         logical_fields.push(LogicalAdtFieldInfo {
                             name,
