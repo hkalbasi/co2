@@ -964,7 +964,11 @@ impl MacroTable {
                         result.push(PASTE_PROTECT_END as char);
                     }
                 } else if i < len {
-                    let c = std::str::from_utf8(&bytes[i..]).unwrap().chars().next().unwrap();
+                    let c = std::str::from_utf8(&bytes[i..])
+                        .unwrap()
+                        .chars()
+                        .next()
+                        .unwrap();
                     result.push(c);
                     i += c.len_utf8();
                 }

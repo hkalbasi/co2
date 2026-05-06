@@ -2113,6 +2113,23 @@ fn declarator_has_name<R: TypeResolver>(decl: &Declarator<R>) -> bool {
     }
 }
 
+// In C, a function cannot return a function (only a pointer to one). A valid
+// function-definition declarator therefore never has a FunctionDeclarator
+// immediately wrapping another FunctionDeclarator. When a typedef name such as
+// `int8_t` is also a valid identifier token, the declarator parser can greedily
+// misparse `static int8_t (fn_name)(params) { ... }` as a function named
+// `int8_t` whose parameter list is `(fn_name)`. Rejecting the doubly-nested
+// FunctionDeclarator avoids that ambiguity and forces the left-recursion loop
+// to consume `int8_t` as a declaration specifier before trying the declarator.
+fn function_decl_direct_inner_is_not_function<R: TypeResolver>(decl: &Declarator<R>) -> bool {
+    match decl {
+        Declarator::FunctionDeclarator { declarator, .. } => {
+            !matches!(&declarator.0, Declarator::FunctionDeclarator { .. })
+        }
+        _ => true,
+    }
+}
+
 fn declaration<'src, I, R: TypeResolver>(
     resolver: R,
     stmt_rec: impl Parser<'src, I, Spanned<Statement<R>>, extra::Err<Rich<'src, Token, Span>>>
@@ -2130,6 +2147,7 @@ where
             .clone()
             .filter(|decl| declarator_has_name(&decl.0))
             .filter(|decl| decl.0.is_function())
+            .filter(|decl| function_decl_direct_inner_is_not_function(&decl.0))
             .then_ignore(look_ahead(Token::LBrace))
             .then(lazy_compound_statement()),
         declaration_specifier(declarator.clone(), expr.clone(), resolver.clone()),

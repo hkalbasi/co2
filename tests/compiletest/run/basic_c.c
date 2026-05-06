@@ -2,6 +2,7 @@
 //@ run-status: 0
 
 #include <stddef.h>
+#include <stdint.h>
 
 int main0() {
 	return 0;
@@ -1783,6 +1784,27 @@ int main81() {
 	return 0;
 }
 
+int (main82_aux1)(int n) { return n; }
+int (((((main82_aux2)))))() { return 0; }
+static int (main82_aux3)(int n) { return n; }
+static int8_t (main82_aux4)(int8_t n) { return n; }
+
+int main82() {
+	if (main82_aux1(0)) {
+		return 1;
+	}
+	if (main82_aux2()) {
+		return 1;
+	}
+	if (main82_aux3(0)) {
+		return 1;
+	}
+	if (main82_aux4(0)) {
+		return 1;
+	}
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1804,7 +1826,7 @@ int main() {
 		main66, main67, main68, main69, main70,
 		main71, main72, main73, main74, main75,
 		main76, main77, main78, main79, main80,
-		main81,
+		main81, main82,
 	};
 	
 	int i;
