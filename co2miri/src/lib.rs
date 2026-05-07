@@ -30,6 +30,24 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     }
 }
 
+fn split_program_args(args: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let mut rustc_args = Vec::new();
+    let mut program_args = Vec::new();
+    let mut after_dashdash = false;
+
+    for arg in args {
+        if after_dashdash {
+            program_args.push(arg);
+        } else if arg == "--" {
+            after_dashdash = true;
+        } else {
+            rustc_args.push(arg);
+        }
+    }
+
+    (rustc_args, program_args)
+}
+
 // Splice MIRI_DEFAULT_ARGS after argv[0].
 fn splice_miri_default_args(mut args: Vec<String>) -> Vec<String> {
     if !args.is_empty() {
@@ -58,12 +76,13 @@ fn be_rustc_mode(args: Vec<String>, target_crate: bool) -> std::process::ExitCod
 
 /// Interpreter mode: compile co2 source and run under miri.
 fn interpreter_mode(args: Vec<String>) -> std::process::ExitCode {
-    co2_ast::set_force_json_diagnostics(rustc_requests_json_diagnostics(&args));
+    let (rustc_args, program_args) = split_program_args(args);
+    co2_ast::set_force_json_diagnostics(rustc_requests_json_diagnostics(&rustc_args));
 
     // Detect whether this is a co2 source file.
     // detect_co2 runs rustc up to after_crate_root_parsing; for co2 files it stops early
     // and returns the .co2 path. For non-co2 files it runs rustc fully and returns Continue.
-    let co2_file = match detect_co2(&args) {
+    let co2_file = match detect_co2(&rustc_args) {
         DetectResult::Continue(exit_code) => {
             // Not a co2 file. This shouldn't happen for co2 projects but handle gracefully.
             return exit_code;
@@ -75,9 +94,10 @@ fn interpreter_mode(args: Vec<String>) -> std::process::ExitCode {
     let env_snapshot: Vec<_> = env::vars_os().collect();
     let mut miri_config = MiriConfig::default();
     miri_config.env = env_snapshot;
+    miri_config.args = program_args;
 
     // Splice MIRI_DEFAULT_ARGS and run co2 pipeline + miri interpretation.
-    let miri_args = splice_miri_default_args(args);
+    let miri_args = splice_miri_default_args(rustc_args);
 
     if let Err(payload) = std::panic::catch_unwind(|| {
         compile_co2_file_for_miri(
