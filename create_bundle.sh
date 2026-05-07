@@ -1,8 +1,27 @@
 #!/bin/bash
 set -e
 
+checkpoint() {
+    local now
+    now=$(date +%s.%N)
+
+    if [[ -n "${__checkpoint_last:-}" ]]; then
+        local delta
+        delta=$(awk "BEGIN { printf \"%.3f\", $now - $__checkpoint_last }")
+        printf '[+%ss] %s\n' "$delta" "$*"
+    else
+        printf '[start] %s\n' "$*"
+    fi
+
+    __checkpoint_last=$now
+}
+
+checkpoint Starting
+
 # 1. Build co2-multicall
 cargo build -p co2-multicall --release
+
+checkpoint Build successfully
 
 # 2. Prepare payload directory
 PAYLOAD_DIR=$(mktemp -d)
@@ -11,11 +30,15 @@ mkdir -p "$PAYLOAD_DIR/lib"
 
 cp target/release/co2-multicall "$PAYLOAD_DIR/bin/"
 
+checkpoint Prepared payload dir
+
 # 3. Collect libs
 SYSROOT=$(rustc --print sysroot)
 mkdir -p "$PAYLOAD_DIR/lib"
 cp "$SYSROOT"/lib/librustc_driver-*.so "$PAYLOAD_DIR/lib/"
 cp "$SYSROOT"/lib/libLLVM*.so* "$PAYLOAD_DIR/lib/"
+
+checkpoint Collected libs
 
 # Include ONLY stdlib for compilation in a way that rustc recognizes as sysroot
 TARGET_LIB_DIR="$PAYLOAD_DIR/lib/rustlib/x86_64-unknown-linux-gnu/lib"
@@ -41,10 +64,25 @@ if [ -d "$SYSROOT/lib/rustlib/src/rust/library" ]; then
     cp -r "$SYSROOT/lib/rustlib/src/rust/library" "$PAYLOAD_DIR/lib/rustlib/src/rust/"
 fi
 
-# 4. Create tarball
+checkpoint Finished payload dir
+
+# 4. Create tarball (use --zstd flag to enable zstd compression)
+COMPRESS_FLAG="-z"
+if [ "${1:-}" = "--zstd" ]; then
+    COMPRESS_FLAG="--zstd"
+    echo "Using zstd compression"
+else
+    echo "Using gzip compression"
+fi
+
 TARBALL=$(mktemp)
-tar -C "$PAYLOAD_DIR" -czf "$TARBALL" .
+tar -C "$PAYLOAD_DIR" -c "$COMPRESS_FLAG" -f "$TARBALL" .
+
+checkpoint Created tarball
+
 HASH=$(sha256sum "$TARBALL" | cut -d' ' -f1)
+
+checkpoint Evaluated hash of tarball
 
 # 5. Create the self-extracting script
 OUT_FILE="target/co2-multicall.run"
@@ -62,7 +100,7 @@ if [ ! -d "\$CACHE_DIR" ]; then
     PAYLOAD_LINE=\$(grep -a -n "^__PAYLOAD_BELOW__" "\$0" | head -n 1 | cut -d: -f1)
     PAYLOAD_START=\$((PAYLOAD_LINE + 1))
     mkdir -p "\$CACHE_DIR"
-    tail -n +\$PAYLOAD_START "\$0" | tar -xz -C "\$CACHE_DIR"
+    tail -n +\$PAYLOAD_START "\$0" | tar -x $COMPRESS_FLAG -C "\$CACHE_DIR"
 fi
 
 # Multicall dispatch: use the name this script was called as
@@ -82,6 +120,8 @@ fi
 exec -a "\$ARG0" "\$CACHE_DIR/bin/co2-multicall" "\$@"
 EOF
 
+checkpoint Created self extracting script
+
 # Append the binary data
 echo "__PAYLOAD_BELOW__" >> "$OUT_FILE"
 cat "$TARBALL" >> "$OUT_FILE"
@@ -91,5 +131,7 @@ chmod +x "$OUT_FILE"
 # Cleanup
 rm -rf "$PAYLOAD_DIR"
 rm "$TARBALL"
+
+checkpoint Finished
 
 echo "Created $OUT_FILE"
