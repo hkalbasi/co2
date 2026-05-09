@@ -788,6 +788,7 @@ impl LocalResolverBase {
                 CTy::Function(_) => panic!("function is invalid as a type name"),
                 CTy::UnsizedArray(_) => panic!("unsized array is invalid as a type name"),
             },
+            crate::DefOrLocal::InlineRustTy(ty) => self.hir_ty_of_rust_ty((*ty.clone(), parser_span)),
         }
     }
 

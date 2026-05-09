@@ -642,7 +642,7 @@ impl HirCtx<'_> {
                     def_id: receiver,
                     generic_args: parsed_receiver_generic_args.clone(),
                 },
-                self.to_rust_span(parser_span),
+                parser_span,
             )
         };
         let (method_def, class, resolution_kind) =
@@ -899,7 +899,8 @@ impl HirCtx<'_> {
                     span,
                 }),
                 co2_crate_sig::DefOrLocal::Prim(_)
-                | co2_crate_sig::DefOrLocal::UnrepresentableType(_) => {
+                | co2_crate_sig::DefOrLocal::UnrepresentableType(_)
+                | co2_crate_sig::DefOrLocal::InlineRustTy(_) => {
                     panic!("Invalid type in expression")
                 }
             },

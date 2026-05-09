@@ -111,6 +111,37 @@ pub fn parse_items(
     parse_translation_unit(filename, src, pp, StatelessResolver::new())
 }
 
+/// Parse a translation unit from an already-tokenised slice.
+/// Used for inline modules whose tokens were captured during parent-file parsing.
+pub fn parse_translation_unit_from_tokens<R: TypeResolver>(
+    tokens: &[Spanned<Token>],
+    filename: String,
+    src: &'static str,
+    end_span: Span,
+    resolver: R,
+) -> Spanned<TranslationUnit<R>> {
+    let end_span = eoi_span_for_tokens(tokens, end_span);
+    let (ast, parse_errs) = parser::translation_unit(resolver)
+        .map_with(|ast, e| (ast, e.span()))
+        .parse(tokens.map(end_span, |(t, s)| (t, s)))
+        .into_output_errors();
+
+    if parse_errs.is_empty() {
+        if let Some(ast) = ast {
+            return ast.0;
+        }
+    } else {
+        co2_ast::emit_errors_and_terminate(
+            parse_errs
+                .into_iter()
+                .map(|err| err.map_token(|tok| tok.to_string()))
+                .collect(),
+        );
+    }
+
+    print_errors_and_terminate(filename, src, Vec::new());
+}
+
 pub fn parse_compound_statement<R: TypeResolver>(
     tokens: &[Spanned<Token>],
     filename: String,

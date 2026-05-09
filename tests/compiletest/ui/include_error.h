@@ -7,7 +7,6 @@ int f() {
 }
 
 int f2() {
-    int x = 5;
     return x(2);
-         //^^^^ Type is not callable
+         //^ error: Unresolved name x
 }

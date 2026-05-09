@@ -1,9 +1,9 @@
 use crate::{
     Declaration, DeclarationSpecifier, Declarator, Designator, EnumSpecifier, Enumerator,
     Expression, FunctionDefinitionSignature, GenericAssociation, InitDeclarator, Initializer,
-    InitializerItem, ParameterList, RustFunctionParam, RustFunctionSignature, RustTy, Spanned,
-    SpecifierQualifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
-    StructOrUnionSpecifier, TypeName, TypeResolver, TypeSpecifier,
+    InitializerItem, ParameterList, RustFunctionParam, RustFunctionSignature, RustPath,
+    RustPathSegment, RustTy, Spanned, SpecifierQualifier, StructDeclarator, StructOrUnionField,
+    StructOrUnionKind, StructOrUnionSpecifier, TypeName, TypeResolver, TypeSpecifier,
 };
 
 pub trait Transformable<F: TypeResolver>: TypeResolver {
@@ -489,6 +489,29 @@ impl<A: TypeResolver> DoTransform for RustFunctionParam<A> {
         RustFunctionParam {
             name: (B::transform_decl_ident(&self.name.0), self.name.1),
             ty: self.ty.transform(b),
+        }
+    }
+}
+
+impl<A: TypeResolver> DoTransform for RustPathSegment<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = RustPathSegment<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> RustPathSegment<B> {
+        match self {
+            RustPathSegment::Ident(s) => RustPathSegment::Ident(s.clone()),
+            RustPathSegment::Generics(tys) => RustPathSegment::Generics(tys.transform(b)),
+        }
+    }
+}
+
+impl<A: TypeResolver> DoTransform for RustPath<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = RustPath<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> RustPath<B> {
+        RustPath {
+            segments: self.segments.transform(b),
         }
     }
 }

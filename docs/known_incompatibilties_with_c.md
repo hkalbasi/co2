@@ -14,3 +14,7 @@ cases when CO2 miscompiles or reject valid C code.
 ## Incompatibilities which seems doesn't worth the effort to fix
 
 * non-UTF8 source files are not supported (not required by the C standard).
+
+## Semantic difference between C and CO2
+
+* Reading uninitialized memory in C gives you undereminate value, but in CO2 it is UB.

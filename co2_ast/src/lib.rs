@@ -235,24 +235,24 @@ pub enum IntegerSuffix {
 }
 
 #[derive(Debug, Clone)]
-pub struct RustPath {
-    pub segments: Vec<Spanned<RustPathSegment>>,
+pub struct RustPath<R: TypeResolver> {
+    pub segments: Vec<Spanned<RustPathSegment<R>>>,
 }
 
 #[derive(Debug, Clone)]
-pub enum RustPathSegment {
+pub enum RustPathSegment<R: TypeResolver> {
     Ident(String),
-    Generics(Vec<Spanned<RustTy<StatelessResolver>>>),
+    Generics(Vec<Spanned<RustTy<R>>>),
 }
 
-impl RustPath {
-    pub fn from_ident((ident, span): Spanned<String>) -> RustPath {
+impl<R: TypeResolver> RustPath<R> {
+    pub fn from_ident((ident, span): Spanned<String>) -> Self {
         RustPath {
             segments: vec![(RustPathSegment::Ident(ident), span)],
         }
     }
 
-    pub fn decompose(&self) -> (RustPath, Vec<Spanned<RustTy<StatelessResolver>>>) {
+    pub fn decompose(&self) -> (Self, Vec<Spanned<RustTy<R>>>) {
         let mut base = self.clone();
         if let Some((RustPathSegment::Generics(_), _)) = base.segments.last() {
             let Some((RustPathSegment::Generics(last), _)) = base.segments.pop() else {
@@ -283,7 +283,7 @@ impl RustPath {
     }
 }
 
-impl Display for RustPath {
+impl<R: TypeResolver> Display for RustPath<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(
             &self
@@ -1091,6 +1091,9 @@ pub struct UseItem {
 #[derive(Debug, Clone)]
 pub struct ModItem {
     pub name: Spanned<String>,
+    /// For inline modules (`mod foo { ... }`), the inner tokens (without braces).
+    /// `None` means this is a file-based module (`mod foo;`).
+    pub inline_content: Option<Spanned<Vec<Spanned<Token>>>>,
 }
 
 pub fn parse_unsigned_integer_constant(text: &str) -> Result<u128, String> {

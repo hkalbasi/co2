@@ -205,9 +205,8 @@ impl HirCtx<'_> {
     }
 
     pub(crate) fn lower_rust_ty(&self, (ty, span): Spanned<RustTy<LocalResolver>>) -> Ty {
-        let rust_span = self.to_rust_span(span);
         match ty {
-            RustTy::Path((path, _)) => self.ty_of_resolved_path(&path, rust_span),
+            RustTy::Path((path, path_span)) => self.ty_of_resolved_path(&path, path_span),
             RustTy::Ptr { mutable, inner } => Ty::new_ptr(
                 self.lower_rust_ty(*inner),
                 if mutable {
@@ -275,7 +274,7 @@ impl HirCtx<'_> {
     pub(crate) fn ty_of_resolved_path(
         &self,
         path: &co2_crate_sig::DefOrLocal,
-        _span: RustSpan,
+        span: co2_ast::Span,
     ) -> Ty {
         match path {
             co2_crate_sig::DefOrLocal::Def {
@@ -305,6 +304,9 @@ impl HirCtx<'_> {
                     CTy::Function(_) => panic!("Function is invalid as a type name"),
                     CTy::UnsizedArray(_) => panic!("Unsized array is invalid as a type name"),
                 }
+            }
+            co2_crate_sig::DefOrLocal::InlineRustTy(ty) => {
+                self.lower_rust_ty((*ty.clone(), span))
             }
         }
     }
@@ -606,7 +608,7 @@ impl HirCtx<'_> {
                         (self.sig_cty_to_cty(sig_ty), specifiers)
                     }
                     _ => (
-                        CTy::Ty(self.ty_of_resolved_path(&path.0, self.to_rust_span(span))),
+                        CTy::Ty(self.ty_of_resolved_path(&path.0, span)),
                         specifiers,
                     ),
                 };

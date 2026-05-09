@@ -29,7 +29,7 @@ fn slice_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
         .unwrap_or(fallback)
 }
 
-fn rust_path_span(path: &RustPath, fallback: Span) -> Span {
+fn rust_path_span<R: TypeResolver>(path: &RustPath<R>, fallback: Span) -> Span {
     path.segments
         .first()
         .zip(path.segments.last())
@@ -211,6 +211,19 @@ where
                     .and_then(|path| resolver.classify_path(&path.0))
                     .is_some_and(|(result, _)| {
                         matches!(result, TypeQueryResult::Unsure | TypeQueryResult::Type)
+                    });
+                inp.rewind(checkpoint.clone());
+                prefer
+            }
+            Some(Token::ColonColon) => {
+                inp.rewind(checkpoint.clone());
+                let prefer = inp
+                    .parse(rust_path())
+                    .ok()
+                    .as_ref()
+                    .and_then(|path| resolver.classify_path(&path.0))
+                    .is_some_and(|(result, _)| {
+                        matches!(result, TypeQueryResult::Type)
                     });
                 inp.rewind(checkpoint.clone());
                 prefer
@@ -1170,15 +1183,15 @@ where
     })
 }
 
-fn rust_path_with_generic_args<'src, I>(
+fn rust_path_with_generic_args<'src, I, R: TypeResolver>(
     generic_ty: impl Parser<
         'src,
         I,
-        Spanned<RustTy<StatelessResolver>>,
+        Spanned<RustTy<R>>,
         extra::Err<Rich<'src, Token, Span>>,
     > + Clone
     + 'src,
-) -> impl Parser<'src, I, Spanned<RustPath>, extra::Err<Rich<'src, Token, Span>>> + Clone
+) -> impl Parser<'src, I, Spanned<RustPath<R>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
@@ -1190,7 +1203,7 @@ where
         .delimited_by(just(Token::Lt), just(Token::Gt))
         .map_with(|r, e| (r, e.span()));
 
-    choice((
+    just(Token::ColonColon).or_not().ignore_then(choice((
         identifier()
             .then(generics.clone().or_not())
             .map(|(ident, generics)| {
@@ -1204,12 +1217,12 @@ where
     ))
     .separated_by(just(Token::ColonColon))
     .at_least(1)
-    .collect::<Vec<Vec<Spanned<RustPathSegment>>>>()
+    .collect::<Vec<Vec<Spanned<RustPathSegment<R>>>>>()
     .map(|parts| {
         let segments = parts
             .into_iter()
             .flatten()
-            .collect::<Vec<Spanned<RustPathSegment>>>();
+            .collect::<Vec<Spanned<RustPathSegment<R>>>>();
         let span = segments
             .first()
             .zip(segments.last())
@@ -1220,11 +1233,11 @@ where
                 context: FileId::INVALID,
             });
         (RustPath { segments }, span)
-    })
+    }))
 }
 
 fn rust_path<'src, I>()
--> impl Parser<'src, I, Spanned<RustPath>, extra::Err<Rich<'src, Token, Span>>> + Clone
+-> impl Parser<'src, I, Spanned<RustPath<StatelessResolver>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
@@ -2279,6 +2292,7 @@ where
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     just(Token::Ident("use".to_owned()))
+        .ignore_then(just(Token::ColonColon).or_not())
         .ignore_then(use_tree())
         .then_ignore(just(Token::Semicolon))
         .map_with(|items, e| {
@@ -2289,17 +2303,60 @@ where
         })
 }
 
+fn inline_mod_body<'src, I>()
+-> impl Parser<'src, I, Spanned<Vec<Spanned<Token>>>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    recursive(|block| {
+        let content = choice((
+            any()
+                .filter(|t| !matches!(t, Token::LBrace | Token::RBrace))
+                .ignored(),
+            block.ignored(),
+        ))
+        .repeated()
+        .ignored();
+
+        content.delimited_by(just(Token::LBrace), just(Token::RBrace))
+    })
+    .map_with(|_, e| {
+        let slice: &[Spanned<Token>] = e.slice();
+        // slice includes the surrounding { }, strip them to get inner tokens
+        let inner: Vec<Spanned<Token>> = if slice.len() >= 2 {
+            slice[1..slice.len() - 1].to_vec()
+        } else {
+            Vec::new()
+        };
+        let span = slice_span(slice, e.span());
+        (inner, span)
+    })
+}
+
 fn mod_item<'src, I>()
 -> impl Parser<'src, I, Spanned<ModItem>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    just(Token::Ident("mod".to_owned()))
+    let mod_kw = just(Token::Ident("mod".to_owned()));
+
+    let file_mod = mod_kw
+        .clone()
         .ignore_then(identifier())
         .then_ignore(just(Token::Semicolon))
-        .map(|name| ModItem { name })
-        .map_with(|r, e| (r, e.span()))
+        .map(|name| ModItem { name, inline_content: None });
+
+    let inline_mod = mod_kw
+        .ignore_then(identifier())
+        .then(inline_mod_body())
+        .map(|(name, content)| ModItem {
+            name,
+            inline_content: Some(content),
+        });
+
+    choice((file_mod, inline_mod)).map_with(|r, e| (r, e.span()))
 }
 
 fn pragma_pack_action(ident: &str) -> Option<co2_ast::PackAction> {

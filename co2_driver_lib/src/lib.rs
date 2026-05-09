@@ -109,6 +109,15 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             files: Arc::new(source_files),
         }));
 
+        // If co2 diagnostics were emitted during lowering, abort now before
+        // passing the (possibly broken) HIR to rustc.  This ensures a clean
+        // DiagnosticAbort (exit code 5) rather than a non-string rustc panic
+        // (exit code 101) that would otherwise occur when rustc encounters
+        // problems such as duplicate `no_mangle` symbols.
+        if co2_ast::diagnostics_were_emitted() {
+            co2_ast::panic_with_diagnostic_abort();
+        }
+
         let state = Co2GeneratorState {
             wellknown_defs,
             file_id,

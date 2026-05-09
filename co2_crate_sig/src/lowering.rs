@@ -12,7 +12,7 @@ use co2_ast::{
     InitDeclarator, ModItem, Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind,
     TranslationUnit, TypeQualifier, TypeResolver,
 };
-use co2_parser::{parse_compound_statement, parse_translation_unit};
+use co2_parser::{parse_compound_statement, parse_translation_unit, parse_translation_unit_from_tokens};
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind,
@@ -244,50 +244,91 @@ fn load_modules(
     let mut modules = Vec::with_capacity(rust_mod_items.len());
 
     for (mod_item, mod_span) in rust_mod_items {
-        let Some(module_path) = resolve_module_source(module_dir, &mod_item.name.0) else {
-            return Err(mod_item.clone());
-        };
-        if !loaded_paths.insert(module_path.clone()) {
-            panic!("module loaded multiple times: {}", module_path.display());
-        }
         let def_id = ctx.allocate_def_id(parent_def, DefData::Module(mod_item.name.0.clone()));
 
-        let preprocessed = co2_preprocessor::preprocess(&module_path, &Vec::new());
-        register_preprocessed_files(ctx, &preprocessed, rustc_file_ids, source_files);
-        co2_ast::set_source_map(Arc::new(SourceMapSnapshot {
-            files: Arc::new(source_files.clone()),
-        }));
+        if let Some((inline_tokens, end_span)) = &mod_item.inline_content {
+            // Inline module: parse from the already-captured tokens.
+            // The tokens' spans already reference the parent file, so no new
+            // preprocessed source needs to be registered.
+            let source_name = format!("<inline module '{}'>", mod_item.name.0);
+            let tu = parse_translation_unit_from_tokens(
+                inline_tokens,
+                source_name.clone(),
+                "",
+                *end_span,
+                StatelessResolver::new(),
+            )
+            .0;
+            let tu = deduplicate_tu_items(tu);
+            // Child file-based modules are resolved relative to the inline module's
+            // virtual directory (same convention as Rust: parent_dir/mod_name/).
+            let child_dir = module_dir.join(&mod_item.name.0);
+            let children = load_modules(
+                ctx,
+                def_id,
+                &child_dir,
+                &tu.rust_mod_items,
+                rustc_file_ids,
+                source_files,
+                loaded_paths,
+            )?;
 
-        let source_name = module_path.to_string_lossy().into_owned();
-        let source: &'static str = Box::leak(preprocessed.normalized.to_string().into_boxed_str());
-        let tu = parse_translation_unit(
-            source_name.clone(),
-            source,
-            Some(&preprocessed),
-            StatelessResolver::new(),
-        )
-        .expect("failed to parse co2 module")
-        .0;
-        let tu = deduplicate_tu_items(tu);
-        let children = load_modules(
-            ctx,
-            def_id,
-            &child_module_dir(&module_path),
-            &tu.rust_mod_items,
-            rustc_file_ids,
-            source_files,
-            loaded_paths,
-        )?;
+            modules.push(LoadedModule {
+                name: mod_item.name.0.clone(),
+                def_id,
+                decl_span: *mod_span,
+                source_name,
+                source: "",
+                tu,
+                children,
+            });
+        } else {
+            // File-based module: load from disk.
+            let Some(module_path) = resolve_module_source(module_dir, &mod_item.name.0) else {
+                return Err(mod_item.clone());
+            };
+            if !loaded_paths.insert(module_path.clone()) {
+                panic!("module loaded multiple times: {}", module_path.display());
+            }
 
-        modules.push(LoadedModule {
-            name: mod_item.name.0.clone(),
-            def_id,
-            decl_span: *mod_span,
-            source_name,
-            source,
-            tu,
-            children,
-        });
+            let preprocessed = co2_preprocessor::preprocess(&module_path, &Vec::new());
+            register_preprocessed_files(ctx, &preprocessed, rustc_file_ids, source_files);
+            co2_ast::set_source_map(Arc::new(SourceMapSnapshot {
+                files: Arc::new(source_files.clone()),
+            }));
+
+            let source_name = module_path.to_string_lossy().into_owned();
+            let source: &'static str =
+                Box::leak(preprocessed.normalized.to_string().into_boxed_str());
+            let tu = parse_translation_unit(
+                source_name.clone(),
+                source,
+                Some(&preprocessed),
+                StatelessResolver::new(),
+            )
+            .expect("failed to parse co2 module")
+            .0;
+            let tu = deduplicate_tu_items(tu);
+            let children = load_modules(
+                ctx,
+                def_id,
+                &child_module_dir(&module_path),
+                &tu.rust_mod_items,
+                rustc_file_ids,
+                source_files,
+                loaded_paths,
+            )?;
+
+            modules.push(LoadedModule {
+                name: mod_item.name.0.clone(),
+                def_id,
+                decl_span: *mod_span,
+                source_name,
+                source,
+                tu,
+                children,
+            });
+        }
     }
 
     Ok(modules)

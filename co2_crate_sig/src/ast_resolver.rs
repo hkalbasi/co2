@@ -453,6 +453,7 @@ pub enum DefOrLocal {
     FuncName,
     Prim(PrimitiveTy),
     UnrepresentableType(CTy),
+    InlineRustTy(Box<co2_ast::RustTy<LocalResolver>>),
 }
 
 impl co2_ast::TypeResolver for LocalResolver {
@@ -465,9 +466,9 @@ impl co2_ast::TypeResolver for LocalResolver {
 
     fn classify_path(
         &self,
-        path: &co2_ast::RustPath,
+        path: &co2_ast::RustPath<StatelessResolver>,
     ) -> Option<(TypeQueryResult, Self::ResolvedRustPath)> {
-        let stripped_path = co2_ast::RustPath {
+        let stripped_path: co2_ast::RustPath<StatelessResolver> = co2_ast::RustPath {
             segments: path
                 .segments
                 .iter()
@@ -566,6 +567,19 @@ impl co2_ast::TypeResolver for LocalResolver {
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                // Handle ::<T> syntax: a standalone generic type specifier with no leading ident.
+                // The single generic arg is the type itself (e.g., ::<*mut i32> declares *mut i32).
+                if path_pretty.is_empty() {
+                    if let [(ty, _)] = generic_args.as_slice() {
+                        return Some((
+                            DefOrLocal::InlineRustTy(Box::new(ty.clone())),
+                            TypeQueryResult::Type,
+                        ));
+                    }
+                }
+                None
             })?;
         Some((class, def))
     }
@@ -763,7 +777,7 @@ impl co2_ast::Transformable<StatelessResolver> for LocalResolver {
         )
     }
 
-    fn transform_path(&self, (path, span): &Spanned<RustPath>) -> Spanned<Self::ResolvedRustPath> {
+    fn transform_path(&self, (path, span): &Spanned<RustPath<StatelessResolver>>) -> Spanned<Self::ResolvedRustPath> {
         let Some(r) = self.classify_path(path) else {
             self.base
                 .borrow()

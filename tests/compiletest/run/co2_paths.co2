@@ -1,0 +1,30 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-stdout: Running\nChecking 2\nChecking 3\nChecking 4\nok 2\n
+
+mod checker {
+    use libc::printf;
+    
+    fn check(x: i32) {
+        printf("Checking %d\n", x);
+    }
+}
+
+mod runner {
+    use ::libc::puts;
+    use crate::checker::check;
+    
+    fn run(x: i32) {
+        puts("Running");
+        check(x);
+        crate::checker::check(x + 1);
+        ::<*mut i32> y = &x;
+        *y += 2;
+        super::checker::check(x);
+        ::libc::printf("ok %d\n", x - 2);
+    }
+}
+
+fn main() {
+    runner::run(2);
+}
