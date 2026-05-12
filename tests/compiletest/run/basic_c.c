@@ -1823,6 +1823,7 @@ int (main82_aux1)(int n) { return n; }
 int (((((main82_aux2)))))() { return 0; }
 static int (main82_aux3)(int n) { return n; }
 static int8_t (main82_aux4)(int8_t n) { return n; }
+static int8_t (main82_aux4)(int8_t n);
 
 int main82() {
 	if (main82_aux1(0)) {

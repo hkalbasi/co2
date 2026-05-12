@@ -9,6 +9,7 @@ int main() {
     assert(2 == 2);
     assert(INFINITY > 5.2);
     assert(INFINITY == INFINITY);
+    assert(INFINITY == HUGE_VAL);
     assert(NAN != NAN);
     assert(isinf(INFINITY));
     assert(isinf(1./0.));

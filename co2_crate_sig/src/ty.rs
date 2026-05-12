@@ -1325,7 +1325,7 @@ impl LocalResolverBase {
                 let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
                 Ok((elem_size * len, elem_align))
             }
-            HirTyKind::Adt(def, _) => {
+            HirTyKind::Adt(def, args) => {
                 if let Some((kind, fields)) = self.adt_layout_info(*def) {
                     let mut size = 0usize;
                     let mut align = 1usize;
@@ -1347,8 +1347,21 @@ impl LocalResolverBase {
                         }
                     }
                     Ok((round_up(size, align), align))
-                } else if let Some(ty) = self.typedef_tys.get(def) {
-                    self.sizeof_hir_ty(ty)
+                } else if let Some(ty) = self.typedef_tys.get(def).cloned() {
+                    self.sizeof_hir_ty(&ty)
+                } else if self
+                    .resolver
+                    .resolve("core::mem::MaybeUninit")
+                    .ok()
+                    .map(|(d, _)| d)
+                    == Some(*def)
+                {
+                    // MaybeUninit<T> has the same size and alignment as T.
+                    if let Some(HirGenericArg::Ty(inner)) = args.first() {
+                        self.sizeof_hir_ty(inner)
+                    } else {
+                        Err("unsupported ADT in sizeof(array size expr)".to_owned())
+                    }
                 } else {
                     Err("unsupported ADT in sizeof(array size expr)".to_owned())
                 }

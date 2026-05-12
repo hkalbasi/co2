@@ -2091,7 +2091,8 @@ where
                     current_resolver.clone(),
                     assignment_expression(current_resolver.clone(), stmt_rec.clone()),
                 )
-                .filter(|d| declarator_has_name(&d.0)),
+                .filter(|d| declarator_has_name(&d.0))
+                .filter(|d| function_decl_direct_inner_is_not_function(&d.0)),
             ) {
                 Ok(d) => d,
                 Err(_) => {

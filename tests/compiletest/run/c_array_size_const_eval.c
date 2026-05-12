@@ -42,6 +42,12 @@ int ar29[(12 + 3) * 2] = {};
 int ar30[(int)(unsigned char)300] = {};
 int ar31[sizeof(ar3) / sizeof(int) + 1] = {};
 int ar32[100 - Var5] = {};
+typedef int (*func_ptr)(int);
+typedef union {
+  func_ptr f;
+  int i;
+} U;
+int ar33[sizeof(U)] = {};
 
 int the_ar[] = {
     [12] = 1,
@@ -144,6 +150,8 @@ int main() {
     return 31;
   if (sizeof(ar32) / sizeof(int) != 93)
     return 32;
+  if (sizeof(ar33) / sizeof(int) != sizeof(func_ptr))
+    return 33;
 
   if (the_ar[12] == 1 && the_ar[12 + 3] == 2 && the_ar[12 / 3 + 4 * 5] == 3 &&
       the_ar[sizeof(ar3) + 3] == 5 && the_ar[Var1 * Var2] == 8 &&
