@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -47,30 +48,52 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
 }
 
 fn run_co2c(args: CcArgs) {
+    let temp_dir = make_temp_dir();
+    let mut has_stdin = false;
+
+    let mut resolve_stdin = |input: &Path| -> PathBuf {
+        if input == Path::new("-") {
+            has_stdin = true;
+            let stdin_path = temp_dir.join("stdin.c");
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .expect("failed to read stdin");
+            fs::write(&stdin_path, &buf).expect("failed to write stdin temp file");
+            stdin_path
+        } else {
+            input.to_path_buf()
+        }
+    };
+
     if args.emit_obj_only {
         let input = args
             .inputs
             .first()
             .cloned()
             .expect("missing C input file for object emission");
-        let preprocessed = Arc::new(co2_preprocessor::preprocess(&input, &args.cpp_args));
-        let rustc_args = build_rustc_object_args(&input, args.output.as_deref());
-        compile_co2_source(CompileMode::C, input, preprocessed, rustc_args);
+        let resolved = resolve_stdin(&input);
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, &args.cpp_args));
+        let rustc_args = build_rustc_object_args(&resolved, args.output.as_deref());
+        compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
+        if has_stdin {
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
         return;
     }
 
-    let temp_dir = make_temp_dir();
     let mut object_paths = Vec::with_capacity(args.inputs.len());
     for input in &args.inputs {
+        let resolved = resolve_stdin(input);
         let object_path = temp_dir.join(
-            input
+            resolved
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("co2c_object")
                 .replace('-', "_")
                 + ".o",
         );
-        compile_c_to_object(input, &object_path, &args.cpp_args);
+        compile_c_to_object(&resolved, &object_path, &args.cpp_args);
         object_paths.push(object_path);
     }
 
@@ -93,8 +116,12 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
     while i < args.len() {
         let arg = &args[i];
         match arg.as_str() {
-            "--co2c-emit-obj" => {
+            "-c" => {
                 emit_obj_only = true;
+            }
+            "-x" => {
+                i += 1;
+                let _lang = args.get(i).ok_or("missing argument after -x")?;
             }
             "-o" => {
                 i += 1;
@@ -138,6 +165,9 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
                 || arg == "-pthread" =>
             {
                 linker_args.push(arg.clone());
+            }
+            "-" => {
+                inputs.push(PathBuf::from(arg));
             }
             _ if arg.starts_with('-') => {}
             _ => {
@@ -255,7 +285,7 @@ fn compile_c_to_object(input: &Path, output: &Path, cpp_args: &[String]) {
         .or_else(|| std::env::current_exe().ok())
         .expect("failed to locate co2c executable");
     let mut cmd = Command::new(exe);
-    cmd.arg("--co2c-emit-obj").arg(input).arg("-o").arg(output);
+    cmd.arg("-c").arg(input).arg("-o").arg(output);
     for arg in cpp_args {
         cmd.arg(arg);
     }
