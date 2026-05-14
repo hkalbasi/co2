@@ -12,8 +12,8 @@ use rustc_public_generative::{
         CrateItem,
         mir::{Mutability, Safety},
         ty::{
-            Abi, AdtDef, Binder, FnSig, GenericArgKind, GenericArgs, Region, RegionKind, RigidTy,
-            Span as RustSpan, Ty, TyConst, TyKind,
+            Abi, AdtDef, Binder, FnSig, ForeignDef, GenericArgKind, GenericArgs, Region,
+            RegionKind, RigidTy, Span as RustSpan, Ty, TyConst, TyKind,
         },
     },
 };
@@ -597,7 +597,24 @@ impl HirCtx<'_> {
             CompressedTypeSpecifier::Void => Ty::new_tuple(&[]),
             CompressedTypeSpecifier::PrimitiveTy(primitive_ty) => prim_ty_to_ty(primitive_ty),
             CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
-                Ty::from_rigid_kind(RigidTy::Adt(AdtDef(specifier.0), GenericArgs(vec![])))
+                // For forward-declared (incomplete) structs, lowering.rs registers them in
+                // `typedef_tys` as `HirTy::adt(foreign_def, ...)` where `foreign_def` is a
+                // ForeignType. Using `RigidTy::Adt(typedef_def, ...)` would ICE because rustc
+                // calls `adt_def` on the TyAlias DefId.  Use `RigidTy::Foreign` instead.
+                let foreign = self
+                    .decl_resolver
+                    .get_typedef_hir_ty(specifier.0)
+                    .and_then(|hir_ty| match hir_ty.kind {
+                        rustc_public_generative::HirTyKind::Adt(foreign_def, _) => {
+                            Some(foreign_def)
+                        }
+                        _ => None,
+                    });
+                if let Some(foreign_def) = foreign {
+                    Ty::from_rigid_kind(RigidTy::Foreign(ForeignDef(foreign_def)))
+                } else {
+                    Ty::from_rigid_kind(RigidTy::Adt(AdtDef(specifier.0), GenericArgs(vec![])))
+                }
             }
             CompressedTypeSpecifier::Enum(specifier) => {
                 Ty::from_rigid_kind(RigidTy::Adt(AdtDef(specifier.0), GenericArgs(vec![])))

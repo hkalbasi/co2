@@ -1697,12 +1697,66 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    let single = left_recursion(
-        declarator_rec
-            .clone()
-            .then_ignore(look_ahead(Token::RParen).or(look_ahead(Token::Comma))),
-        declaration_specifier(declarator_rec, assign_expression_rec, resolver),
-    );
+    // Like `left_recursion`, but with a typedef-name disambiguation rule: when no
+    // type specifier has been accumulated yet and the next token is a typedef name,
+    // the token must be consumed as a type specifier rather than as a declarator
+    // identifier.  Without this check `const T[5]` (T a typedef) misparsed as
+    // declaration-specifier=["const"], declarator=T[5], leaving no type specifier.
+    let single = custom({
+        let resolver = resolver.clone();
+        let declarator_rec = declarator_rec.clone();
+        let assign_expression_rec = assign_expression_rec.clone();
+        move |inp| {
+            let make_spec = || {
+                declaration_specifier(
+                    declarator_rec.clone(),
+                    assign_expression_rec.clone(),
+                    resolver.clone(),
+                )
+            };
+            let try_decl = || {
+                declarator_rec
+                    .clone()
+                    .then_ignore(look_ahead(Token::RParen).or(look_ahead(Token::Comma)))
+            };
+
+            let mut specs = vec![inp.parse(make_spec())?];
+            loop {
+                let has_type_spec = specs
+                    .iter()
+                    .any(|(s, _)| matches!(s, DeclarationSpecifier::TypeSpecifier(_)));
+
+                // If we have no type specifier yet, peek at the next token.  If it is a
+                // typedef name it must become the type specifier, not a declarator ident.
+                let next_is_typedef_name = if !has_type_spec {
+                    let checkpoint = inp.save();
+                    let next = inp.next();
+                    inp.rewind(checkpoint);
+                    match next {
+                        Some(Token::Ident(s)) => matches!(
+                            resolver.classify_path(&RustPath::<StatelessResolver>::from_ident(
+                                (s, Span::new(FileId::INVALID, 0..0))
+                            )),
+                            Some((TypeQueryResult::Type | TypeQueryResult::Unsure, _))
+                        ),
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+
+                if !next_is_typedef_name {
+                    let checkpoint = inp.save();
+                    if let Ok(decl) = inp.parse(try_decl()) {
+                        return Ok((specs, decl));
+                    }
+                    inp.rewind(checkpoint);
+                }
+
+                specs.push(inp.parse(make_spec())?);
+            }
+        }
+    });
     single
         .separated_by(just(Token::Comma))
         .collect()

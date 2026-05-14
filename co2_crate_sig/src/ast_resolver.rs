@@ -287,6 +287,12 @@ impl LocalResolver {
         self.base.borrow().is_constexpr_def(def_id)
     }
 
+    /// Returns the underlying `HirTy` for the given `def_id` if it is a type alias
+    /// (e.g. an incomplete/forward-declared C struct lowered as TypeDef → ForeignType).
+    pub fn get_typedef_hir_ty(&self, def_id: DefId) -> Option<HirTy> {
+        self.base.borrow().typedef_tys.get(&def_id).cloned()
+    }
+
     pub fn peel_constexpr_typedef_hir(&self, ty: HirTy) -> HirTy {
         self.base.borrow().peel_constexpr_typedef(ty)
     }

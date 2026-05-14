@@ -1071,10 +1071,18 @@ pub fn lower_crate_sig(
                 id: foreign_def,
                 span,
             });
+            let typedef_hir_ty = HirTy::adt(foreign_def, vec![], span);
+            // Record the mapping so that uses of this incomplete struct type (via
+            // StructOrUnion specifier) can resolve to the ForeignDef rather than
+            // the TyAlias, which would ICE when rustc calls `adt_def` on it.
+            ctx.resolver
+                .borrow_mut()
+                .typedef_tys
+                .insert(def, typedef_hir_ty.clone());
             ctx.hir_items.push(HirModuleItem::TypeDef {
                 name,
                 id: def,
-                ty: HirTy::adt(foreign_def, vec![], span),
+                ty: typedef_hir_ty,
                 span,
             });
             continue;

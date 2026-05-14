@@ -1857,6 +1857,27 @@ int main83() {
     return props1[0].atom + props1[0].flags + props2[0].atom + props2[1].flags != 8;
 }
 
+/* x1 repro: typedef name in parameter-type-list with qualifier (const T[5]) */
+typedef int T_x1;
+int sum_array_x1(const T_x1[5]);
+int sum_array_x1(const T_x1 a[5]) {
+	return a[0] + a[1] + a[2] + a[3] + a[4];
+}
+int main84() {
+	T_x1 arr[5] = {1, 2, 3, 4, 5};
+	return sum_array_x1(arr) != 15;
+}
+
+/* x3 repro: forward-declared (incomplete) struct pointer cast in static inline function */
+struct opaque_x3;
+static inline struct opaque_x3 *cast_null_x3(void) {
+	return (struct opaque_x3 *)0;
+}
+int main85() {
+	(void)cast_null_x3;
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1878,7 +1899,7 @@ int main() {
 		main66, main67, main68, main69, main70,
 		main71, main72, main73, main74, main75,
 		main76, main77, main78, main79, main80,
-		main81, main82, main83,
+		main81, main82, main83, main84, main85,
 	};
 	
 	int i;
