@@ -222,9 +222,7 @@ where
                     .ok()
                     .as_ref()
                     .and_then(|path| resolver.classify_path(&path.0))
-                    .is_some_and(|(result, _)| {
-                        matches!(result, TypeQueryResult::Type)
-                    });
+                    .is_some_and(|(result, _)| matches!(result, TypeQueryResult::Type));
                 inp.rewind(checkpoint.clone());
                 prefer
             }
@@ -792,18 +790,17 @@ where
                     })
                     .map_with(|r, e| (r, e.span()));
 
-                let types_compatible_p_expression =
-                    just(Token::BuiltinTypesCompatibleP)
-                        .ignore_then(just(Token::LParen))
-                        .ignore_then(type_name(resolver.clone(), rec.clone()))
-                        .then_ignore(just(Token::Comma))
-                        .then(type_name(resolver.clone(), rec.clone()))
-                        .then_ignore(just(Token::RParen))
-                        .map(|(ty1, ty2)| Expression::BuiltinTypesCompatibleP {
-                            ty1: Box::new(ty1),
-                            ty2: Box::new(ty2),
-                        })
-                        .map_with(|r, e| (r, e.span()));
+                let types_compatible_p_expression = just(Token::BuiltinTypesCompatibleP)
+                    .ignore_then(just(Token::LParen))
+                    .ignore_then(type_name(resolver.clone(), rec.clone()))
+                    .then_ignore(just(Token::Comma))
+                    .then(type_name(resolver.clone(), rec.clone()))
+                    .then_ignore(just(Token::RParen))
+                    .map(|(ty1, ty2)| Expression::BuiltinTypesCompatibleP {
+                        ty1: Box::new(ty1),
+                        ty2: Box::new(ty2),
+                    })
+                    .map_with(|r, e| (r, e.span()));
 
                 let prefix_inc_expression = just(Token::Inc)
                     .ignore_then(unary.clone())
@@ -1198,12 +1195,8 @@ where
 }
 
 fn rust_path_with_generic_args<'src, I, R: TypeResolver>(
-    generic_ty: impl Parser<
-        'src,
-        I,
-        Spanned<RustTy<R>>,
-        extra::Err<Rich<'src, Token, Span>>,
-    > + Clone
+    generic_ty: impl Parser<'src, I, Spanned<RustTy<R>>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
     + 'src,
 ) -> impl Parser<'src, I, Spanned<RustPath<R>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -1217,41 +1210,44 @@ where
         .delimited_by(just(Token::Lt), just(Token::Gt))
         .map_with(|r, e| (r, e.span()));
 
-    just(Token::ColonColon).or_not().ignore_then(choice((
-        identifier()
-            .then(generics.clone().or_not())
-            .map(|(ident, generics)| {
-                let mut segments = vec![(RustPathSegment::Ident(ident.0), ident.1)];
-                if let Some(generics) = generics {
-                    segments.push(generics);
-                }
-                segments
-            }),
-        generics.map(|generics| vec![generics]),
-    ))
-    .separated_by(just(Token::ColonColon))
-    .at_least(1)
-    .collect::<Vec<Vec<Spanned<RustPathSegment<R>>>>>()
-    .map(|parts| {
-        let segments = parts
-            .into_iter()
-            .flatten()
-            .collect::<Vec<Spanned<RustPathSegment<R>>>>();
-        let span = segments
-            .first()
-            .zip(segments.last())
-            .map(|(first, last)| join_spans(first.1, last.1))
-            .unwrap_or(Span {
-                start: 0,
-                end: 0,
-                context: FileId::INVALID,
-            });
-        (RustPath { segments }, span)
-    }))
+    just(Token::ColonColon).or_not().ignore_then(
+        choice((
+            identifier()
+                .then(generics.clone().or_not())
+                .map(|(ident, generics)| {
+                    let mut segments = vec![(RustPathSegment::Ident(ident.0), ident.1)];
+                    if let Some(generics) = generics {
+                        segments.push(generics);
+                    }
+                    segments
+                }),
+            generics.map(|generics| vec![generics]),
+        ))
+        .separated_by(just(Token::ColonColon))
+        .at_least(1)
+        .collect::<Vec<Vec<Spanned<RustPathSegment<R>>>>>()
+        .map(|parts| {
+            let segments = parts
+                .into_iter()
+                .flatten()
+                .collect::<Vec<Spanned<RustPathSegment<R>>>>();
+            let span = segments
+                .first()
+                .zip(segments.last())
+                .map(|(first, last)| join_spans(first.1, last.1))
+                .unwrap_or(Span {
+                    start: 0,
+                    end: 0,
+                    context: FileId::INVALID,
+                });
+            (RustPath { segments }, span)
+        }),
+    )
 }
 
 fn rust_path<'src, I>()
--> impl Parser<'src, I, Spanned<RustPath<StatelessResolver>>, extra::Err<Rich<'src, Token, Span>>> + Clone
+-> impl Parser<'src, I, Spanned<RustPath<StatelessResolver>>, extra::Err<Rich<'src, Token, Span>>>
++ Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
@@ -1748,9 +1744,10 @@ where
                     inp.rewind(checkpoint);
                     match next {
                         Some(Token::Ident(s)) => matches!(
-                            resolver.classify_path(&RustPath::<StatelessResolver>::from_ident(
-                                (s, Span::new(FileId::INVALID, 0..0))
-                            )),
+                            resolver.classify_path(&RustPath::<StatelessResolver>::from_ident((
+                                s,
+                                Span::new(FileId::INVALID, 0..0)
+                            ))),
                             Some((TypeQueryResult::Type | TypeQueryResult::Unsure, _))
                         ),
                         _ => false,
@@ -2415,7 +2412,10 @@ where
         .clone()
         .ignore_then(identifier())
         .then_ignore(just(Token::Semicolon))
-        .map(|name| ModItem { name, inline_content: None });
+        .map(|name| ModItem {
+            name,
+            inline_content: None,
+        });
 
     let inline_mod = mod_kw
         .ignore_then(identifier())

@@ -15,15 +15,15 @@ use rustc_public_generative::rustc_public::{
     },
 };
 
-use crate::decl::hir_ty_to_ty;
 use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, ResolvedValue};
 use crate::stmt::HirStmt;
 use crate::ty::{
     adt_field_tys, array_elem_ty, callable_sig, common_numeric_ty, enum_payload_ty, is_array_ty,
-    is_condition_ty, is_maybe_uninit_fn_ptr_ty, is_numeric_ty, needs_implicit_cast,
-    resolve_field_path_in_adt, ty_matches_expected,
+    is_maybe_uninit_fn_ptr_ty, is_numeric_ty, needs_implicit_cast, resolve_field_path_in_adt,
+    ty_matches_expected,
 };
+use crate::{decl::hir_ty_to_ty, ty::is_condition_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
 fn lower_dependency_const(
@@ -1144,7 +1144,7 @@ impl HirCtx<'_> {
 
                 let lhs = self.lower_expr(*lhs, locals, local_map)?;
                 let rhs = self.lower_expr(*rhs, locals, local_map)?;
-                self.lower_binop_from_lowered(lhs, rhs, op, span, false)
+                self.lower_binop_from_lowered(lhs, rhs, op, span, parser_span, false)
             }
             Expression::AssignWithOp { lhs, op, rhs } => {
                 let lhs_span = lhs.1;
@@ -1160,7 +1160,8 @@ impl HirCtx<'_> {
                 }
                 let rhs = self.lower_expr(*rhs, locals, local_map)?;
                 let ty = lhs.ty;
-                let lowered = self.lower_binop_from_lowered(lhs.clone(), rhs, op, span, true)?;
+                let lowered =
+                    self.lower_binop_from_lowered(lhs.clone(), rhs, op, span, parser_span, true)?;
                 Ok(HirExpr {
                     kind: match lowered.kind {
                         HirExprKind::Binary { op, lhs, rhs } => HirExprKind::AssignWithBinOp {
@@ -1229,7 +1230,8 @@ impl HirCtx<'_> {
                     ParsedUpdateOp::Dec => ParsedBinOp::Sub,
                 };
 
-                let lowered = self.lower_update_binop(lhs.clone(), rhs, bin_op, span)?;
+                let lowered =
+                    self.lower_update_binop(lhs.clone(), rhs, bin_op, span, parser_span)?;
                 match lowered.kind {
                     HirExprKind::Binary { op, lhs, rhs } => Ok(HirExpr {
                         kind: HirExprKind::AssignWithBinOp {
@@ -1324,7 +1326,11 @@ impl HirCtx<'_> {
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
                 let t1 = self.lower_type_name(*ty1, parser_span)?;
                 let t2 = self.lower_type_name(*ty2, parser_span)?;
-                let compatible = if ty_matches_expected(t1, t2) { 1i128 } else { 0i128 };
+                let compatible = if ty_matches_expected(t1, t2) {
+                    1i128
+                } else {
+                    0i128
+                };
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(compatible),
                     ty: Ty::signed_ty(IntTy::I32),
@@ -1493,12 +1499,7 @@ impl HirCtx<'_> {
                     }
                     ParsedUnaryOp::Plus => Ok(inner),
                     ParsedUnaryOp::Not => {
-                        if !is_condition_ty(inner.ty) {
-                            return Err(format!(
-                                "unary `!` expects scalar-like expression, got {:?}",
-                                inner.ty
-                            ));
-                        }
+                        let inner = self.condition_to_bool(inner, parser_span);
                         Ok(HirExpr {
                             kind: HirExprKind::LogicalNot(Box::new(inner)),
                             ty: Ty::signed_ty(IntTy::I32),
@@ -1662,7 +1663,7 @@ impl HirCtx<'_> {
                 then_expr,
                 else_expr,
             } => {
-                let cond = self.lower_expr(*cond, locals, local_map)?;
+                let cond = self.lower_condition(*cond, locals, local_map)?;
                 let mut then_expr = self.lower_expr(*then_expr, locals, local_map)?;
                 let mut else_expr = self.lower_expr(*else_expr, locals, local_map)?;
 
@@ -1929,6 +1930,7 @@ impl HirCtx<'_> {
         mut rhs: HirExpr,
         op: ParsedBinOp,
         span: RustSpan,
+        parser_span: co2_ast::Span,
         is_assignment: bool,
     ) -> Result<HirExpr, String> {
         let op = match op {
@@ -1958,8 +1960,8 @@ impl HirCtx<'_> {
                 return Ok(HirExpr {
                     kind: HirExprKind::Logical {
                         op: logical_op,
-                        lhs: Box::new(lhs),
-                        rhs: Box::new(rhs),
+                        lhs: Box::new(self.condition_to_bool(lhs, parser_span)),
+                        rhs: Box::new(self.condition_to_bool(rhs, parser_span)),
                     },
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
@@ -2153,8 +2155,9 @@ impl HirCtx<'_> {
         rhs: HirExpr,
         op: ParsedBinOp,
         span: RustSpan,
+        parser_span: co2_ast::Span,
     ) -> Result<HirExpr, String> {
-        self.lower_binop_from_lowered(lhs, rhs, op, span, true)
+        self.lower_binop_from_lowered(lhs, rhs, op, span, parser_span, true)
     }
 
     fn zeroed_expr(&self, ty: Ty, span: RustSpan) -> HirExpr {
@@ -2423,6 +2426,36 @@ impl HirCtx<'_> {
                         span,
                     }
                 }
+            }
+        }
+    }
+
+    pub(crate) fn lower_condition(
+        &self,
+        expr: Spanned<Expression<LocalResolver>>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, la_arena::Idx<HirLocal>>,
+    ) -> Result<HirExpr, String> {
+        let parser_span = expr.1;
+        let expr = self.lower_expr(expr, locals, local_map)?;
+        Ok(self.condition_to_bool(expr, parser_span))
+    }
+
+    pub(crate) fn condition_to_bool(&self, expr: HirExpr, parser_span: co2_ast::Span) -> HirExpr {
+        if matches!(expr.ty.kind(), TyKind::RigidTy(RigidTy::Bool)) {
+            expr
+        } else {
+            let span = expr.span;
+            if !is_condition_ty(expr.ty) {
+                self.terminate_with_error(
+                    parser_span,
+                    "condition must be scalar-like, got <TODO emit ty>",
+                );
+            }
+            HirExpr {
+                kind: HirExprKind::Cast(Box::new(expr)),
+                ty: Ty::bool_ty(),
+                span,
             }
         }
     }

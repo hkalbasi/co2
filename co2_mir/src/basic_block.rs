@@ -4,7 +4,7 @@ use rustc_public_generative::rustc_public::{
         Rvalue, Statement as MirStatement, StatementKind as MirStatementKind, SwitchTargets,
         Terminator as MirTerminator, TerminatorKind, UnwindAction,
     },
-    ty::{GenericArgKind, RigidTy, Span as RustSpan, Ty, TyKind},
+    ty::{RigidTy, Span as RustSpan, Ty, TyKind},
 };
 
 use crate::{build::Builder, place::place};
@@ -101,26 +101,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         else_stmts: &[HirStmt],
         span: RustSpan,
     ) {
-        let cond_is_maybe_uninit_fn_ptr = matches!(
-            cond.ty.kind(),
-            TyKind::RigidTy(RigidTy::Adt(_, args))
-                if args.0.len() == 1
-                    && matches!(args.0[0], GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))))
-        );
-        let cond_expr = if matches!(
-            cond.ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
-        ) || cond_is_maybe_uninit_fn_ptr
-        {
-            HirExpr {
-                kind: HirExprKind::Cast(Box::new(cond.clone())),
-                ty: Ty::usize_ty(),
-                span: cond.span,
-            }
-        } else {
-            cond.clone()
-        };
-        let cond_op = self.lower_expr_to_operand(&cond_expr);
+        debug_assert!(matches!(cond.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
+        let cond_op = self.lower_expr_to_operand(cond);
         let entry_span = span;
         let entry_idx = self.blocks.len();
         self.blocks

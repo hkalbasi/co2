@@ -546,7 +546,10 @@ int main16()
 
 	int ar[] = { [WHITE] = 2 };
 
-	c = BLUE;
+	c = GREEN;
+	if (c) {
+		c = BLUE;
+	}
 	if (c - 6)
 		return 1;
 	if (RED)
@@ -1857,25 +1860,41 @@ int main83() {
     return props1[0].atom + props1[0].flags + props2[0].atom + props2[1].flags != 8;
 }
 
-/* x1 repro: typedef name in parameter-type-list with qualifier (const T[5]) */
-typedef int T_x1;
-int sum_array_x1(const T_x1[5]);
-int sum_array_x1(const T_x1 a[5]) {
+typedef int T_84;
+int sum_array_84(const T_84[5]);
+int sum_array_84(const T_84 a[5]) {
 	return a[0] + a[1] + a[2] + a[3] + a[4];
 }
 int main84() {
-	T_x1 arr[5] = {1, 2, 3, 4, 5};
-	return sum_array_x1(arr) != 15;
+	T_84 arr[5] = {1, 2, 3, 4, 5};
+	return sum_array_84(arr) != 15;
 }
 
-/* x3 repro: forward-declared (incomplete) struct pointer cast in static inline function */
-struct opaque_x3;
-static inline struct opaque_x3 *cast_null_x3(void) {
-	return (struct opaque_x3 *)0;
+struct opaque_85;
+static inline struct opaque_85 *cast_null_85(void) {
+	return (struct opaque_85 *)0;
 }
 int main85() {
-	(void)cast_null_x3;
+	(void)cast_null_85;
 	return 0;
+}
+
+int main86() {
+	int x = 0;
+	int y = 0;
+	for (;;) {
+		switch (x) {
+		case 0:
+			y = 10;
+			break;
+		case 1:
+			y += 5;
+			break;
+		default:
+			return (y != 15);
+		}
+		x += 1;
+	}
 }
 
 typedef int (*main_ty)();
@@ -1900,6 +1919,7 @@ int main() {
 		main71, main72, main73, main74, main75,
 		main76, main77, main78, main79, main80,
 		main81, main82, main83, main84, main85,
+		main86,
 	};
 	
 	int i;

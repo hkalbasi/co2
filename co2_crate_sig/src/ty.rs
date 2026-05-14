@@ -788,7 +788,9 @@ impl LocalResolverBase {
                 CTy::Function(_) => panic!("function is invalid as a type name"),
                 CTy::UnsizedArray(_) => panic!("unsized array is invalid as a type name"),
             },
-            crate::DefOrLocal::InlineRustTy(ty) => self.hir_ty_of_rust_ty((*ty.clone(), parser_span)),
+            crate::DefOrLocal::InlineRustTy(ty) => {
+                self.hir_ty_of_rust_ty((*ty.clone(), parser_span))
+            }
         }
     }
 
@@ -1150,11 +1152,12 @@ impl LocalResolverBase {
                     IntegerSuffix::UnsignedLong => HirTyKind::Uint(UintTy::U64),
                     IntegerSuffix::UnsignedLongLong => HirTyKind::Uint(UintTy::U128),
                 };
-                Ok(HirTy { kind, span: rust_span })
+                Ok(HirTy {
+                    kind,
+                    span: rust_span,
+                })
             }
-            Expression::Constant(Constant::Char(_)) => {
-                Ok(HirTy::signed_ty(IntTy::I8, rust_span))
-            }
+            Expression::Constant(Constant::Char(_)) => Ok(HirTy::signed_ty(IntTy::I8, rust_span)),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Local(local) => self
                     .local_tys
@@ -1734,7 +1737,11 @@ fn hir_tys_compatible(a: &HirTy, b: &HirTy) -> bool {
             ma == mb && hir_tys_compatible(ia, ib)
         }
         (HirTyKind::Tuple(va), HirTyKind::Tuple(vb)) => {
-            va.len() == vb.len() && va.iter().zip(vb.iter()).all(|(a, b)| hir_tys_compatible(a, b))
+            va.len() == vb.len()
+                && va
+                    .iter()
+                    .zip(vb.iter())
+                    .all(|(a, b)| hir_tys_compatible(a, b))
         }
         _ => false,
     }

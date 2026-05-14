@@ -5,7 +5,7 @@ use co2_ast::{
 };
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
-use rustc_public_generative::rustc_public::ty::{IntTy, Span as RustSpan, Ty};
+use rustc_public_generative::rustc_public::ty::{Span as RustSpan, Ty};
 
 use crate::HirDecl;
 use crate::expr::{HirExpr, HirExprKind, coerce_expr_to_type};
@@ -121,6 +121,7 @@ impl HirCtx<'_> {
                     case_expr,
                     ParsedBinOp::Eq,
                     span,
+                    parser_span,
                     false,
                 )?;
                 self.register_case(cond, case_label);
@@ -179,14 +180,7 @@ impl HirCtx<'_> {
                 then_branch,
                 else_branch,
             } => {
-                let cond = self.lower_expr(cond, locals, local_map)?;
-                if !is_condition_ty(cond.ty) {
-                    return Err(format!(
-                        "if condition must be scalar-like, got {:?}",
-                        cond.ty
-                    ));
-                }
-
+                let cond = self.lower_condition(cond, locals, local_map)?;
                 let mut then_map = local_map.clone();
                 let mut then_stmts = Vec::new();
                 self.lower_stmt(
@@ -217,13 +211,7 @@ impl HirCtx<'_> {
                 });
             }
             Statement::While { cond, body } => {
-                let cond = self.lower_expr(cond, locals, local_map)?;
-                if !is_condition_ty(cond.ty) {
-                    return Err(format!(
-                        "while condition must be scalar-like, got {:?}",
-                        cond.ty
-                    ));
-                }
+                let cond = self.lower_condition(cond, locals, local_map)?;
                 let cond_label = self.fresh_label();
                 let body_label = self.fresh_label();
                 let end_label = self.fresh_label();
@@ -246,13 +234,7 @@ impl HirCtx<'_> {
                 out.push(HirStmt::Label(end_label, span));
             }
             Statement::DoWhile { body, cond } => {
-                let cond = self.lower_expr(cond, locals, local_map)?;
-                if !is_condition_ty(cond.ty) {
-                    return Err(format!(
-                        "do-while condition must be scalar-like, got {:?}",
-                        cond.ty
-                    ));
-                }
+                let cond = self.lower_condition(cond, locals, local_map)?;
                 let body_label = self.fresh_label();
                 let cond_label = self.fresh_label();
                 let end_label = self.fresh_label();
@@ -292,18 +274,11 @@ impl HirCtx<'_> {
                     }
                 }
                 let cond = if let Some(cond) = cond {
-                    let cond = self.lower_expr(cond, locals, &mut loop_map)?;
-                    if !is_condition_ty(cond.ty) {
-                        return Err(format!(
-                            "for condition must be scalar-like, got {:?}",
-                            cond.ty
-                        ));
-                    }
-                    cond
+                    self.lower_condition(cond, locals, &mut loop_map)?
                 } else {
                     HirExpr {
                         kind: HirExprKind::ConstInt(1),
-                        ty: Ty::signed_ty(IntTy::I32),
+                        ty: Ty::bool_ty(),
                         span,
                     }
                 };
@@ -367,7 +342,7 @@ impl HirCtx<'_> {
 
                 for (cond, label) in scope.case_labels {
                     out.push(HirStmt::If {
-                        cond,
+                        cond: self.condition_to_bool(cond, parser_span),
                         then_stmts: vec![HirStmt::Goto(label, span)],
                         else_stmts: vec![],
                         span,

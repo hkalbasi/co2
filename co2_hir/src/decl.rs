@@ -305,9 +305,7 @@ impl HirCtx<'_> {
                     CTy::UnsizedArray(_) => panic!("Unsized array is invalid as a type name"),
                 }
             }
-            co2_crate_sig::DefOrLocal::InlineRustTy(ty) => {
-                self.lower_rust_ty((*ty.clone(), span))
-            }
+            co2_crate_sig::DefOrLocal::InlineRustTy(ty) => self.lower_rust_ty((*ty.clone(), span)),
         }
     }
 
@@ -601,15 +599,15 @@ impl HirCtx<'_> {
                 // `typedef_tys` as `HirTy::adt(foreign_def, ...)` where `foreign_def` is a
                 // ForeignType. Using `RigidTy::Adt(typedef_def, ...)` would ICE because rustc
                 // calls `adt_def` on the TyAlias DefId.  Use `RigidTy::Foreign` instead.
-                let foreign = self
-                    .decl_resolver
-                    .get_typedef_hir_ty(specifier.0)
-                    .and_then(|hir_ty| match hir_ty.kind {
-                        rustc_public_generative::HirTyKind::Adt(foreign_def, _) => {
-                            Some(foreign_def)
-                        }
-                        _ => None,
-                    });
+                let foreign =
+                    self.decl_resolver
+                        .get_typedef_hir_ty(specifier.0)
+                        .and_then(|hir_ty| match hir_ty.kind {
+                            rustc_public_generative::HirTyKind::Adt(foreign_def, _) => {
+                                Some(foreign_def)
+                            }
+                            _ => None,
+                        });
                 if let Some(foreign_def) = foreign {
                     Ty::from_rigid_kind(RigidTy::Foreign(ForeignDef(foreign_def)))
                 } else {
@@ -624,10 +622,7 @@ impl HirCtx<'_> {
                     co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
                         (self.sig_cty_to_cty(sig_ty), specifiers)
                     }
-                    _ => (
-                        CTy::Ty(self.ty_of_resolved_path(&path.0, span)),
-                        specifiers,
-                    ),
+                    _ => (CTy::Ty(self.ty_of_resolved_path(&path.0, span)), specifiers),
                 };
             }
         };

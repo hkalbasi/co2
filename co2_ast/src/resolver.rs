@@ -13,7 +13,10 @@ pub trait TypeResolver: Clone + 'static {
     type EnumeratorIdentifier: Debug + Clone;
     type SubscriptionIdentifier: Debug + Clone;
 
-    fn classify_path(&self, path: &RustPath<StatelessResolver>) -> Option<(TypeQueryResult, Self::ResolvedRustPath)>;
+    fn classify_path(
+        &self,
+        path: &RustPath<StatelessResolver>,
+    ) -> Option<(TypeQueryResult, Self::ResolvedRustPath)>;
     fn register_ident(&self, name: String) -> Self::DeclarationIdent;
     /// Per C11 6.2.1p7, the scope of a declared identifier begins at the end of its declarator,
     /// before its initializer. This registers a single already-parsed declarator identifier as a
@@ -71,7 +74,10 @@ impl TypeResolver for StatelessResolver {
     type EnumeratorIdentifier = Enumerator<Self>;
     type SubscriptionIdentifier = LazySubscription;
 
-    fn classify_path(&self, path: &RustPath<StatelessResolver>) -> Option<(TypeQueryResult, RustPath<StatelessResolver>)> {
+    fn classify_path(
+        &self,
+        path: &RustPath<StatelessResolver>,
+    ) -> Option<(TypeQueryResult, RustPath<StatelessResolver>)> {
         Some((TypeQueryResult::Unsure, path.clone()))
     }
 

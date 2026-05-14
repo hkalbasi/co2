@@ -106,22 +106,6 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         }
     }
 
-    fn condition_discriminant_expr(&self, expr: &HirExpr) -> HirExpr {
-        if matches!(
-            expr.ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
-        ) || maybe_uninit_fn_ptr_inner(expr.ty).is_some()
-        {
-            HirExpr {
-                kind: HirExprKind::Cast(Box::new(expr.clone())),
-                ty: Ty::usize_ty(),
-                span: expr.span,
-            }
-        } else {
-            expr.clone()
-        }
-    }
-
     fn bitfield_storage_bits(&self, ty: Ty) -> usize {
         match ty.kind() {
             TyKind::RigidTy(RigidTy::Uint(UintTy::U8) | RigidTy::Int(IntTy::I8)) => 8,
@@ -719,19 +703,11 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     const_: c,
                 });
 
-                if matches!(expr.ty.kind(), TyKind::RigidTy(RigidTy::Uint(_))) {
+                let src_ty = Ty::unsigned_ty(uint_ty);
+                if src_ty == expr.ty {
                     return const_op;
                 }
-
-                let tmp = self.new_temp(expr.ty, Mutability::Mut, span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(tmp),
-                        Rvalue::Cast(CastKind::IntToInt, const_op, expr.ty),
-                    ),
-                    span,
-                });
-                MirOperand::Copy(place(tmp))
+                self.lower_cast(const_op, src_ty, expr.ty, span)
             }
             HirExprKind::ConstFloat(v) => {
                 let span = expr.span;
@@ -1064,18 +1040,11 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                         user_ty: None,
                         const_: c,
                     });
-                    if matches!(expr.ty.kind(), TyKind::RigidTy(RigidTy::Uint(_))) {
+                    let src_ty = Ty::unsigned_ty(uint_ty);
+                    if src_ty == expr.ty {
                         const_op
                     } else {
-                        let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                        self.stmts.push(MirStatement {
-                            kind: MirStatementKind::Assign(
-                                place(tmp),
-                                Rvalue::Cast(CastKind::IntToInt, const_op, expr.ty),
-                            ),
-                            span: expr.span,
-                        });
-                        MirOperand::Copy(place(tmp))
+                        self.lower_cast(const_op, src_ty, expr.ty, expr.span)
                     }
                 }
                 ResolvedValue::Static(_) | ResolvedValue::StaticConst(_) => {
@@ -1306,6 +1275,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             return self.lower_cast(inner, src_payload_ty, dst_ty, span);
         }
         let src_is_bool = matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::Bool));
+        let dst_is_bool = matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::Bool));
         let src_is_int = matches!(
             src_ty.kind(),
             TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
@@ -1325,7 +1295,6 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         let src_is_fn_def = matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
         let src_mu_fn_ptr = maybe_uninit_fn_ptr_inner(src_ty);
         let dst_mu_fn_ptr = maybe_uninit_fn_ptr_inner(dst_ty);
-        let dst_is_bool = matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::Bool));
         let dst_is_void =
             matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
         if dst_is_void {
@@ -1819,8 +1788,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             span,
         });
 
-        let lhs_expr = self.condition_discriminant_expr(lhs);
-        let lhs_op = self.lower_expr_to_operand(&lhs_expr);
+        debug_assert!(matches!(lhs.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
+        let lhs_op = self.lower_expr_to_operand(lhs);
         let entry_bb = self.blocks.len();
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
@@ -1852,8 +1821,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
         debug_assert_eq!(rhs_eval_bb, self.blocks.len());
-        let rhs_expr = self.condition_discriminant_expr(rhs);
-        let rhs_op = self.lower_expr_to_operand(&rhs_expr);
+        debug_assert!(matches!(rhs.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
+        let rhs_op = self.lower_expr_to_operand(rhs);
         let rhs_switch_bb = self.blocks.len();
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
@@ -1921,8 +1890,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero_init)),
             span,
         });
-        let inner_expr = self.condition_discriminant_expr(inner);
-        let inner_op = self.lower_expr_to_operand(&inner_expr);
+        debug_assert!(matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
+        let inner_op = self.lower_expr_to_operand(inner);
         let entry_bb = self.blocks.len();
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
@@ -1977,8 +1946,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         ty: Ty,
     ) -> MirOperand {
         let result_local = self.new_temp(ty, Mutability::Mut, span);
-        let cond_expr = self.condition_discriminant_expr(cond);
-        let cond_op = self.lower_expr_to_operand(&cond_expr);
+        debug_assert!(matches!(cond.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
+        let cond_op = self.lower_expr_to_operand(cond);
         let entry_bb = self.blocks.len();
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {

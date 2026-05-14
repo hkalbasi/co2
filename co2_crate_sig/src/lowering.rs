@@ -12,7 +12,9 @@ use co2_ast::{
     InitDeclarator, ModItem, Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind,
     TranslationUnit, TypeQualifier, TypeResolver,
 };
-use co2_parser::{parse_compound_statement, parse_translation_unit, parse_translation_unit_from_tokens};
+use co2_parser::{
+    parse_compound_statement, parse_translation_unit, parse_translation_unit_from_tokens,
+};
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind,

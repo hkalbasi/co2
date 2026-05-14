@@ -784,7 +784,10 @@ impl co2_ast::Transformable<StatelessResolver> for LocalResolver {
         )
     }
 
-    fn transform_path(&self, (path, span): &Spanned<RustPath<StatelessResolver>>) -> Spanned<Self::ResolvedRustPath> {
+    fn transform_path(
+        &self,
+        (path, span): &Spanned<RustPath<StatelessResolver>>,
+    ) -> Spanned<Self::ResolvedRustPath> {
         let Some(r) = self.classify_path(path) else {
             self.base
                 .borrow()

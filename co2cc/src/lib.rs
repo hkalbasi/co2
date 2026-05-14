@@ -76,7 +76,12 @@ fn run_co2c(args: CcArgs) {
             .expect("missing C input file for object emission");
         let resolved = resolve_stdin(&input);
         let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, &args.cpp_args));
-        let rustc_args = build_rustc_object_args(&resolved, args.output.as_deref(), args.opt_level.as_deref(), args.debuginfo);
+        let rustc_args = build_rustc_object_args(
+            &resolved,
+            args.output.as_deref(),
+            args.opt_level.as_deref(),
+            args.debuginfo,
+        );
         compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
         if has_stdin {
             let _ = fs::remove_dir_all(&temp_dir);
@@ -99,11 +104,23 @@ fn run_co2c(args: CcArgs) {
                 .replace('-', "_")
                 + ".o",
         );
-        compile_c_to_object(&resolved, &object_path, &args.cpp_args, args.opt_level.as_deref(), args.debuginfo);
+        compile_c_to_object(
+            &resolved,
+            &object_path,
+            &args.cpp_args,
+            args.opt_level.as_deref(),
+            args.debuginfo,
+        );
         object_paths.push(object_path);
     }
 
-    link_objects(&object_paths, &args.linker_args, args.output.as_deref(), args.opt_level.as_deref(), args.debuginfo);
+    link_objects(
+        &object_paths,
+        &args.linker_args,
+        args.output.as_deref(),
+        args.opt_level.as_deref(),
+        args.debuginfo,
+    );
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
@@ -222,7 +239,12 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
     })
 }
 
-fn build_rustc_object_args(input: &Path, output: Option<&Path>, opt_level: Option<&str>, debuginfo: Option<u8>) -> Vec<String> {
+fn build_rustc_object_args(
+    input: &Path,
+    output: Option<&Path>,
+    opt_level: Option<&str>,
+    debuginfo: Option<u8>,
+) -> Vec<String> {
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
@@ -325,7 +347,13 @@ fn shared_rust_flags() -> Vec<String> {
     flags
 }
 
-fn compile_c_to_object(input: &Path, output: &Path, cpp_args: &[String], opt_level: Option<&str>, debuginfo: Option<u8>) {
+fn compile_c_to_object(
+    input: &Path,
+    output: &Path,
+    cpp_args: &[String],
+    opt_level: Option<&str>,
+    debuginfo: Option<u8>,
+) {
     let exe = current_invocation_path()
         .or_else(|| std::env::current_exe().ok())
         .expect("failed to locate co2c executable");
@@ -354,12 +382,25 @@ fn current_invocation_path() -> Option<PathBuf> {
     std::env::args_os().next().map(PathBuf::from)
 }
 
-fn link_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Path>, opt_level: Option<&str>, debuginfo: Option<u8>) {
+fn link_objects(
+    objects: &[PathBuf],
+    linker_args: &[String],
+    output: Option<&Path>,
+    opt_level: Option<&str>,
+    debuginfo: Option<u8>,
+) {
     let temp_dir = make_temp_dir();
     let link_stub = temp_dir.join("co2c_link.rs");
     fs::write(&link_stub, "#![no_main]\n").expect("failed to write linker stub");
 
-    let rustc_args = build_link_rustc_args(&link_stub, objects, linker_args, output, opt_level, debuginfo);
+    let rustc_args = build_link_rustc_args(
+        &link_stub,
+        objects,
+        linker_args,
+        output,
+        opt_level,
+        debuginfo,
+    );
     let exe = std::env::var_os("CO2_RUN_SCRIPT")
         .map(PathBuf::from)
         .or_else(|| current_invocation_path())
