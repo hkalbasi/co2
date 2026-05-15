@@ -358,6 +358,22 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
                 && extra_adt_args_are_concrete(&exp_args.0[shared_len..])
                 && extra_adt_args_are_concrete(&act_args.0[shared_len..])
         }
+        // Function pointer types may differ only in lifetime parameters (e.g. VaList<'erased> vs
+        // VaList<'static>) because SMIR erases lifetimes inside fn ptrs. Compare structurally
+        // while recursing into parameter/return types with ty_matches_expected.
+        (TyKind::RigidTy(RigidTy::FnPtr(exp_binder)), TyKind::RigidTy(RigidTy::FnPtr(act_binder))) => {
+            let exp_sig = exp_binder.value;
+            let act_sig = act_binder.value;
+            exp_sig.c_variadic == act_sig.c_variadic
+                && exp_sig.safety == act_sig.safety
+                && exp_sig.abi == act_sig.abi
+                && exp_sig.inputs_and_output.len() == act_sig.inputs_and_output.len()
+                && exp_sig
+                    .inputs_and_output
+                    .iter()
+                    .zip(act_sig.inputs_and_output.iter())
+                    .all(|(et, at)| ty_matches_expected(*et, *at))
+        }
         _ => false,
     }
 }

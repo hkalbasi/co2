@@ -1883,7 +1883,7 @@ impl HirCtx<'_> {
                 span,
             };
         }
-        if base.ty != field_ty {
+        if !ty_matches_expected(field_ty, base.ty) {
             return Err(format!(
                 "resolved field type mismatch: projected {:?}, expected {:?}",
                 base.ty, field_ty

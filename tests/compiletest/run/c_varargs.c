@@ -81,6 +81,11 @@ int reuse(int n, ...) {
 	return 0;
 }
 
+struct VarargHolder { void (*f)(char *, va_list); };
+void f1(char *s, va_list ap) {}
+int fill_vararg_holder(struct VarargHolder *p) { p->f = f1; return 0; }
+
+
 int main() {
     if (simple_varargs(5, 2, "salam") != 5) {
         return 1;
@@ -97,6 +102,12 @@ int main() {
     }
     if (reuse(2, 1, 2)) {
         return 50 + reuse(2, 1, 2);
+    }
+
+    struct VarargHolder va_holder = { .f = 0 };
+    fill_vararg_holder(&va_holder);
+    if (va_holder.f != f1) {
+        return 5;
     }
 
     return 0;
