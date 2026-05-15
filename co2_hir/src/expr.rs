@@ -1381,6 +1381,7 @@ impl HirCtx<'_> {
             Expression::Offsetof {
                 ty: type_name,
                 field,
+                field_span,
             } => {
                 let ty = self.lower_type_name(*type_name, parser_span)?;
                 let indices =
@@ -1388,14 +1389,14 @@ impl HirCtx<'_> {
                         .resolve_struct_field_access(ty, &field)
                         .unwrap_or_else(|| {
                             self.terminate_with_error(
-                                parser_span,
+                                field_span,
                                 &format!("offsetof: field '{field}' not found in type"),
                             )
                         }) {
                         ResolvedFieldAccess::Direct { path, .. } => path,
                         ResolvedFieldAccess::Bitfield { .. } => {
                             self.terminate_with_error(
-                                parser_span,
+                                field_span,
                                 &format!("offsetof: field '{field}' is a bitfield"),
                             );
                         }

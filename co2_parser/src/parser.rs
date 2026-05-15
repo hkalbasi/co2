@@ -782,11 +782,12 @@ where
                     .ignore_then(just(Token::LParen))
                     .ignore_then(type_name(resolver.clone(), rec.clone()))
                     .then_ignore(just(Token::Comma))
-                    .then(select! { Token::Ident(s) => s })
+                    .then(select! { Token::Ident(s) => s }.map_with(|s, e| (s, e.span())))
                     .then_ignore(just(Token::RParen))
-                    .map(|(ty, field)| Expression::Offsetof {
+                    .map(|(ty, (field, field_span))| Expression::Offsetof {
                         ty: Box::new(ty),
                         field,
+                        field_span,
                     })
                     .map_with(|r, e| (r, e.span()));
 

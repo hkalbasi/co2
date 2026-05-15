@@ -201,7 +201,7 @@ fn include_body_lazy_span_uses_header_context() {
     assert_eq!(body_file.path.file_name().unwrap(), "include_error.h");
     assert_eq!(
         &body_file.source[body.1.start..body.1.end],
-        "{\n    return missing;\n    //     ^^^^^^^ error: Unresolved name\n}",
+        "{\n    return missing;\n    //     ^^^^^^^ error: Unresolved name missing\n}",
     );
 }
 

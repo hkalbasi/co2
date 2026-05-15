@@ -127,6 +127,7 @@ pub enum Expression<R: TypeResolver> {
     Offsetof {
         ty: Box<TypeName<R>>,
         field: String,
+        field_span: Span,
     },
     UnaryOp(UnaryOp, Box<Spanned<Expression<R>>>),
     BinOp(

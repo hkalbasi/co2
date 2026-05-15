@@ -926,6 +926,7 @@ impl LocalResolverBase {
             Expression::Offsetof {
                 ty: type_name,
                 field: _,
+                field_span: _,
             } => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)

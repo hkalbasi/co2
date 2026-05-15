@@ -724,10 +724,77 @@ fn map_text_range(
         }
     }
 
+    // When the exact needle isn't in the source (e.g. it was synthesised by a
+    // token-pasting macro like `field_##x`), try progressively shorter
+    // `_`-split suffix components.  If a suffix appears exactly once in the
+    // source text and is surrounded by non-identifier characters (so it really
+    // is a whole identifier), expand the match to include any enclosing macro
+    // call of the form `IDENT(...)`.
+    if needle.bytes().all(|b| is_ident_continue(b)) {
+        if let Some(first_under) = needle.find('_') {
+            let mut suffix_start = first_under + 1;
+            while suffix_start < needle.len() {
+                let suffix = &needle[suffix_start..];
+                let is_whole_ident = |pos: usize| {
+                    let bytes = source_text.as_bytes();
+                    let before_ok =
+                        pos == 0 || !is_ident_continue(bytes[pos - 1]);
+                    let after_ok = pos + suffix.len() >= source_text.len()
+                        || !is_ident_continue(bytes[pos + suffix.len()]);
+                    before_ok && after_ok
+                };
+                let mut it = source_text
+                    .match_indices(suffix)
+                    .filter(|&(pos, _)| is_whole_ident(pos));
+                if let Some((idx, _)) = it.next() {
+                    if it.next().is_none() {
+                        return expand_to_macro_call(source_text, idx..idx + suffix.len());
+                    }
+                }
+                match suffix.find('_') {
+                    Some(next) => suffix_start += next + 1,
+                    None => break,
+                }
+            }
+        }
+    }
+
     source_token_range(source_text, output_start, output_end)
 }
 
-fn source_token_range(source_text: &str, output_start: usize, output_end: usize) -> Range<usize> {
+/// Given a range covering an identifier in `source_text`, expand it to cover
+/// the enclosing `MACRO_NAME(...)` call if the identifier is immediately
+/// preceded by `(` which is itself preceded by an identifier.
+fn expand_to_macro_call(source_text: &str, range: Range<usize>) -> Range<usize> {
+    let bytes = source_text.as_bytes();
+    let start = range.start;
+
+    if start > 0 && bytes[start - 1] == b'(' {
+        let paren_pos = start - 1;
+        if paren_pos > 0 && is_ident_continue(bytes[paren_pos - 1]) {
+            let mut macro_start = paren_pos;
+            while macro_start > 0 && is_ident_continue(bytes[macro_start - 1]) {
+                macro_start -= 1;
+            }
+            // Find the matching ')' for the '(' at paren_pos.
+            let mut depth = 1usize;
+            let mut pos = start;
+            while pos < bytes.len() && depth > 0 {
+                match bytes[pos] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                pos += 1;
+            }
+            return macro_start..pos;
+        }
+    }
+
+    range
+}
+
+fn source_token_range(source_text: &str, output_start: usize, _output_end: usize) -> Range<usize> {
     let bytes = source_text.as_bytes();
     if bytes.is_empty() {
         return 0..0;
@@ -738,7 +805,12 @@ fn source_token_range(source_text: &str, output_start: usize, output_end: usize)
         anchor -= 1;
     }
     if !is_ident_continue(bytes[anchor]) {
-        return output_start.min(bytes.len())..output_end.min(bytes.len());
+        // No identifier at the anchor position — we can't reliably map this token to a
+        // source location. Return an empty range at the end of the source text so that
+        // any correctly-mapped tokens in the same expression keep their positions and the
+        // span union computed by chumsky stays valid (start ≤ end).
+        let end = bytes.len();
+        return end..end;
     }
 
     let mut start = anchor;
