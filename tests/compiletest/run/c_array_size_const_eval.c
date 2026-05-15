@@ -50,6 +50,11 @@ typedef union {
 int ar33[sizeof(U)] = {};
 int ar34[__builtin_types_compatible_p(int, int) * 2 + __builtin_types_compatible_p(int, double) * 5] = {};
 int ar35[_Generic(16, int: 5, double: 2)] = {};
+int ar36[sizeof(1 + 2)] = {};
+int ar37[sizeof(ar36[0])] = {};
+
+int ar38_aux = 2;
+int ar38[sizeof(ar38_aux = 3)] = {};
 
 int the_ar[] = {
     [12] = 1,
@@ -158,6 +163,14 @@ int main() {
     return 34;
   if (sizeof(ar35) / sizeof(int) != 5)
     return 35;
+  if (sizeof(ar36) / sizeof(int) != sizeof(1 + 2))
+    return 36;
+  if (sizeof(ar37) / sizeof(int) != sizeof(ar36[0]))
+    return 37;
+  if (sizeof(ar38) / sizeof(int) != sizeof(ar38_aux = 7))
+    return 38;
+  if (ar38_aux != 2)
+    return 38;
 
   if (the_ar[12] == 1 && the_ar[12 + 3] == 2 && the_ar[12 / 3 + 4 * 5] == 3 &&
       the_ar[sizeof(ar3) + 3] == 5 && the_ar[Var1 * Var2] == 8 &&
