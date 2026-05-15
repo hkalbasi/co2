@@ -919,11 +919,17 @@ impl HirCtx<'_> {
                 ty: int_suffix_ty(suffix, v),
                 span,
             }),
-            Expression::Constant(Constant::Float(v)) => Ok(HirExpr {
-                kind: HirExprKind::ConstFloat(v),
-                ty: Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
-                span,
-            }),
+            Expression::Constant(Constant::Float(v, suffix)) => {
+                let float_ty = match suffix {
+                    co2_ast::FloatSuffix::Float => FloatTy::F32,
+                    co2_ast::FloatSuffix::None | co2_ast::FloatSuffix::Long => FloatTy::F64,
+                };
+                Ok(HirExpr {
+                    kind: HirExprKind::ConstFloat(v),
+                    ty: Ty::from_rigid_kind(RigidTy::Float(float_ty)),
+                    span,
+                })
+            }
             Expression::Constant(Constant::Char(ch)) => Ok(HirExpr {
                 kind: HirExprKind::ConstInt(ch as i128),
                 ty: Ty::signed_ty(IntTy::I32),

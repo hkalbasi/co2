@@ -88,7 +88,7 @@ pub enum ForInit<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub enum Constant {
     Int(i128, IntegerSuffix),
-    Float(f64),
+    Float(f64, FloatSuffix),
     Char(char),
     String(String),
 }

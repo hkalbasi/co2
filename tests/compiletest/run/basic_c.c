@@ -1495,6 +1495,14 @@ int main56() {
 	if (-x < -1.6f) {
 		return 2;
 	}
+	double y = 1.2f;
+	if (y == 1.2) {
+		return 3;
+	}
+	y = 1.5f;
+	if (y != 1.5) {
+		return 4;
+	}
 	return 0;
 }
 
@@ -1765,7 +1773,7 @@ int main79_f(int a, char* b, struct main79_s c, int d[], struct main79_s* e, str
 }
 
 int main79() {
-	main79_fp f = main79_f;
+	main79_fp *f = main79_f;
 	return f(5, NULL, (struct main79_s) { 2 }, NULL, NULL, NULL, (struct main79_s) { 3 }) - 10;
 }
 

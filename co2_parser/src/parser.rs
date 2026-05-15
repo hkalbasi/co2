@@ -640,7 +640,7 @@ where
             just(Token::BuiltinInf)
                 .then_ignore(just(Token::LParen))
                 .then_ignore(just(Token::RParen))
-                .to(Expression::Constant(Constant::Float(f64::INFINITY))),
+                .to(Expression::Constant(Constant::Float(f64::INFINITY, co2_ast::FloatSuffix::None))),
             just(Token::BuiltinNan)
                 .then_ignore(just(Token::LParen))
                 .then_ignore(
@@ -653,7 +653,7 @@ where
                     .or_not(),
                 )
                 .then_ignore(just(Token::RParen))
-                .to(Expression::Constant(Constant::Float(f64::NAN))),
+                .to(Expression::Constant(Constant::Float(f64::NAN, co2_ast::FloatSuffix::None))),
             just(Token::And)
                 .ignore_then(identifier())
                 .map(Expression::LabelAddress),
@@ -690,7 +690,7 @@ where
             .map(|parts| Expression::Constant(Constant::String(parts.concat()))),
             select! {
                 Token::Integer(i, suffix) => Expression::Constant(Constant::Int(parse_integer_constant(&i), suffix)),
-                Token::FloatLit(i, _) => Expression::Constant(Constant::Float(parse_float_constant(&i))),
+                Token::FloatLit(i, suffix) => Expression::Constant(Constant::Float(parse_float_constant(&i), suffix)),
                 Token::CharLit(s) => {
                     let ch = s.chars().next().expect("empty char literal");
                     Expression::Constant(Constant::Char(ch))
