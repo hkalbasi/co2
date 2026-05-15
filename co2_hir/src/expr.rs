@@ -1530,7 +1530,7 @@ impl HirCtx<'_> {
                                             HirExprKind::ConstInt(0)
                                         }
                                         TyKind::RigidTy(RigidTy::Float(_)) => {
-                                            HirExprKind::ConstFloat(0.)
+                                            HirExprKind::ConstFloat(-0.0)
                                         }
                                         _ => unreachable!(),
                                     },

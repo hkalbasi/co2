@@ -737,8 +737,7 @@ fn map_text_range(
                 let suffix = &needle[suffix_start..];
                 let is_whole_ident = |pos: usize| {
                     let bytes = source_text.as_bytes();
-                    let before_ok =
-                        pos == 0 || !is_ident_continue(bytes[pos - 1]);
+                    let before_ok = pos == 0 || !is_ident_continue(bytes[pos - 1]);
                     let after_ok = pos + suffix.len() >= source_text.len()
                         || !is_ident_continue(bytes[pos + suffix.len()]);
                     before_ok && after_ok

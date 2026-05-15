@@ -26,5 +26,9 @@ int main() {
     assert(isnan(NAN));
     assert(!isnan(INFINITY));
     assert(!isnan(2.3));
+    
+    assert(!signbit(0.0));
+    assert(signbit(-0.0));
+    assert(!signbit(-(-0.0)));
     return 0;
 }

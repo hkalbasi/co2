@@ -8,7 +8,7 @@ use rustc_public_generative::rustc_public::{
         SwitchTargets, TerminatorKind,
     },
     ty::{
-        GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
+        FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
         Span as RustSpan, Ty, TyKind, UintTy,
     },
 };
@@ -711,18 +711,23 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             }
             HirExprKind::ConstFloat(v) => {
                 let span = expr.span;
-                let TyKind::RigidTy(RigidTy::Float(float_ty)) = expr.ty.kind() else {
+                let TyKind::RigidTy(RigidTy::Float(_)) = expr.ty.kind() else {
                     panic!("float const must have float type, got {:?}", expr.ty);
                 };
-                let c =
-                    MirConst::try_from_float(*v, float_ty).expect("failed to build float const");
+                let c = MirConst::try_from_float(*v, FloatTy::F64)
+                    .expect("failed to build float const");
                 let const_op = MirOperand::Constant(ConstOperand {
                     span,
                     user_ty: None,
                     const_: c,
                 });
 
-                const_op
+                self.lower_cast(
+                    const_op,
+                    Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
+                    expr.ty,
+                    span,
+                )
             }
             HirExprKind::Field { .. } => {
                 let place = self

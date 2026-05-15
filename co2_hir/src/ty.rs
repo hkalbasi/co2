@@ -361,7 +361,10 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
         // Function pointer types may differ only in lifetime parameters (e.g. VaList<'erased> vs
         // VaList<'static>) because SMIR erases lifetimes inside fn ptrs. Compare structurally
         // while recursing into parameter/return types with ty_matches_expected.
-        (TyKind::RigidTy(RigidTy::FnPtr(exp_binder)), TyKind::RigidTy(RigidTy::FnPtr(act_binder))) => {
+        (
+            TyKind::RigidTy(RigidTy::FnPtr(exp_binder)),
+            TyKind::RigidTy(RigidTy::FnPtr(act_binder)),
+        ) => {
             let exp_sig = exp_binder.value;
             let act_sig = act_binder.value;
             exp_sig.c_variadic == act_sig.c_variadic

@@ -1238,10 +1238,17 @@ impl LocalResolverBase {
                 }
             }
             Expression::BinOp(lhs, op, rhs) => match op {
-                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-                | BinOp::And | BinOp::Or => {
-                    Ok(HirTy { kind: HirTyKind::Int(IntTy::I32), span: rust_span })
-                }
+                BinOp::Eq
+                | BinOp::Ne
+                | BinOp::Lt
+                | BinOp::Le
+                | BinOp::Gt
+                | BinOp::Ge
+                | BinOp::And
+                | BinOp::Or => Ok(HirTy {
+                    kind: HirTyKind::Int(IntTy::I32),
+                    span: rust_span,
+                }),
                 BinOp::Comma => self.type_of_expr_for_sizeof(rhs),
                 BinOp::Assign => self.type_of_expr_for_sizeof(lhs),
                 _ => self.type_of_expr_for_sizeof(lhs),
