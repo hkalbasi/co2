@@ -1258,13 +1258,17 @@ impl HirCtx<'_> {
             }
             Expression::Sizeof(expr) => {
                 let inner = self.lower_expr(*expr, locals, local_map)?;
-                let size = inner
-                    .ty
-                    .layout()
-                    .map_err(|e| format!("failed to compute layout for sizeof: {e}"))?
-                    .shape()
-                    .size
-                    .bytes();
+                let size = if let HirExprKind::ConstStr(s) = &inner.kind {
+                    (s.len() + 1) as u64
+                } else {
+                    inner
+                        .ty
+                        .layout()
+                        .map_err(|e| format!("failed to compute layout for sizeof: {e}"))?
+                        .shape()
+                        .size
+                        .bytes() as u64
+                };
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(size as i128),
                     ty: Ty::signed_ty(IntTy::I32),

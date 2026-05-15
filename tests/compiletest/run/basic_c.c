@@ -1046,6 +1046,10 @@ int main29()
 		return 10;
 	}
 
+	if (sizeof("hello") != 6) {
+		return 11;
+	}
+
 	return 0;
 }
 
