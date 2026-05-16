@@ -1,11 +1,11 @@
 use co2_hir::HirBinOp;
 use rustc_public_generative::rustc_public::{
     mir::{
-        AggregateKind, BinOp as MirBinOp, CastKind, ConstOperand, Mutability,
-        Operand as MirOperand, RawPtrKind, Rvalue, Statement as MirStatement,
-        StatementKind as MirStatementKind,
+        BinOp as MirBinOp, CastKind, ConstOperand, Mutability,
+        Operand as MirOperand, Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind,
+        Rvalue, Statement as MirStatement, StatementKind as MirStatementKind,
     },
-    ty::{IntTy, MirConst, Span as RustSpan, Ty, TyKind, UintTy},
+    ty::{IntTy, MirConst, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
 };
 
 use crate::{build::Builder, place::place};
@@ -84,39 +84,46 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             bytes.push(0);
         }
 
-        let elem_ty = Ty::unsigned_ty(UintTy::U8);
-        let array_ty = Ty::try_new_array(elem_ty, bytes.len() as u64)
-            .expect("failed to build array type for string literal");
-        let array_local = self.new_temp(array_ty, Mutability::Mut, span);
-        let operands = bytes
-            .iter()
-            .map(|&byte| {
-                MirOperand::Constant(ConstOperand {
+        // Allocate string bytes in static (rodata) memory via a &'static str constant.
+        // TODO: This unsafe is super invalid. C allow arbitrary string literal, not just utf8.
+        //       The whole code here is nonsense.
+        let str_const = MirConst::from_str(unsafe { std::str::from_utf8_unchecked(&bytes) });
+        let str_ref_ty = str_const.ty(); // &'static str
+        // Use Mutability::Mut so that if this assignment is inside a loop body
+        // (a basic block executed multiple times), rustc does not emit E0384.
+        let str_ref_local = self.new_temp(str_ref_ty, Mutability::Mut, span);
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(
+                place(str_ref_local),
+                Rvalue::Use(MirOperand::Constant(ConstOperand {
                     span,
                     user_ty: None,
-                    const_: MirConst::try_from_uint(byte as u128, UintTy::U8)
-                        .expect("failed to build string literal byte constant"),
-                })
-            })
-            .collect();
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(array_local),
-                Rvalue::Aggregate(AggregateKind::Array(elem_ty), operands),
+                    const_: str_const,
+                })),
             ),
             span,
         });
 
-        let ptr_array_ty = Ty::new_ptr(array_ty, Mutability::Not);
-        let ptr_array_local = self.new_temp(ptr_array_ty, Mutability::Mut, span);
+        // Deref the &str reference to produce a `str` DST place, then take its raw
+        // address.  This yields `*const str` — a fat pointer whose data component
+        // is the address of the bytes in the static allocation.
+        let str_ty = Ty::from_rigid_kind(RigidTy::Str);
+        let ptr_str_ty = Ty::new_ptr(str_ty, Mutability::Not); // *const str (fat)
+        let ptr_str_local = self.new_temp(ptr_str_ty, Mutability::Mut, span);
+        let deref_place = MirPlace {
+            local: str_ref_local,
+            projection: vec![MirProjection::Deref],
+        };
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(
-                place(ptr_array_local),
-                Rvalue::AddressOf(RawPtrKind::Const, place(array_local)),
+                place(ptr_str_local),
+                Rvalue::AddressOf(RawPtrKind::Const, deref_place),
             ),
             span,
         });
 
+        // Cast *const str (fat) → *const u8 (thin, data component only).
+        let elem_ty = Ty::unsigned_ty(UintTy::U8);
         let ptr_u8_ty = Ty::new_ptr(elem_ty, Mutability::Not);
         let ptr_u8_local = self.new_temp(ptr_u8_ty, Mutability::Mut, span);
         self.stmts.push(MirStatement {
@@ -124,13 +131,14 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 place(ptr_u8_local),
                 Rvalue::Cast(
                     CastKind::PtrToPtr,
-                    MirOperand::Copy(place(ptr_array_local)),
+                    MirOperand::Copy(place(ptr_str_local)),
                     ptr_u8_ty,
                 ),
             ),
             span,
         });
 
+        // Cast *const u8 → *const i8 (C char pointer convention).
         let ptr_i8_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut);
         let ptr_i8_local = self.new_temp(ptr_i8_ty, Mutability::Mut, span);
         self.stmts.push(MirStatement {

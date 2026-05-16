@@ -1921,6 +1921,32 @@ int main86() {
 	}
 }
 
+int fill_with_hello(char** out) {
+	*out = "hello";
+}
+
+static void clobber_stack() {
+  char buf[256];
+  for (int i = 0; i < 256; i++)
+    buf[i] = 'X';
+}
+
+int main87() {
+	char* s = 0;
+	if (s) {
+		return 1;
+	}
+	fill_with_hello(&s);
+	clobber_stack();
+	if (!s) {
+		return 1;
+	}
+	if (s[0] != 'h' || s[4] != 'o' || s[5] != 0) {
+		return 1;
+	}
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1943,7 +1969,7 @@ int main() {
 		main71, main72, main73, main74, main75,
 		main76, main77, main78, main79, main80,
 		main81, main82, main83, main84, main85,
-		main86,
+		main86, main87,
 	};
 	
 	int i;
