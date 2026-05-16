@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use co2_ast::{Designator, Expression, Initializer, InitializerItem, Spanned};
 use co2_crate_sig::{LocalResolver, eval_const_expr_as_usize};
 use la_arena::Arena;
-use rustc_public_generative::rustc_public::ty::{AdtKind, RigidTy, Ty, TyKind};
+use rustc_public_generative::rustc_public::ty::{AdtKind, IntTy, RigidTy, Ty, TyKind, UintTy};
 
 use crate::{
     expr::{HirExpr, HirExprKind, coerce_expr_to_type},
@@ -394,9 +394,7 @@ impl HirCtx<'_> {
                         if !fields.is_empty() {
                             c.stack.push((0, fields[0]));
                             if is_union_ty(expected_ty) {
-                                if let Some(sub_fields) =
-                                    self.adt_logical_field_tys(fields[0])
-                                {
+                                if let Some(sub_fields) = self.adt_logical_field_tys(fields[0]) {
                                     if !sub_fields.is_empty() {
                                         c.stack.push((0, sub_fields[0]));
                                     }
@@ -560,28 +558,59 @@ impl HirCtx<'_> {
             return vec![];
         };
         let span = expr.1;
-        let items = s
-            .chars()
-            .chain(['\0'])
-            .map(|ch| {
-                (
-                    InitializerItem {
-                        designators: None,
-                        initializer: (
-                            Initializer::Expr((
-                                Expression::Constant(co2_ast::Constant::Int(
-                                    ch as i128,
-                                    co2_ast::IntegerSuffix::None,
+        let is_byte_string = matches!(
+            array_elem_ty(expected_ty).map(|ty| ty.kind()),
+            Some(TyKind::RigidTy(
+                RigidTy::Int(IntTy::I8) | RigidTy::Uint(UintTy::U8)
+            ))
+        );
+        let items = if is_byte_string {
+            s.iter()
+                .copied()
+                .chain([0u8])
+                .map(|byte| {
+                    (
+                        InitializerItem {
+                            designators: None,
+                            initializer: (
+                                Initializer::Expr((
+                                    Expression::Constant(co2_ast::Constant::Int(
+                                        byte as i128,
+                                        co2_ast::IntegerSuffix::None,
+                                    )),
+                                    span,
                                 )),
                                 span,
-                            )),
-                            span,
-                        ),
-                    },
-                    span,
-                )
-            })
-            .collect::<Vec<_>>();
+                            ),
+                        },
+                        span,
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            String::from_utf8_lossy(&s)
+                .chars()
+                .chain(['\0'])
+                .map(|ch| {
+                    (
+                        InitializerItem {
+                            designators: None,
+                            initializer: (
+                                Initializer::Expr((
+                                    Expression::Constant(co2_ast::Constant::Int(
+                                        ch as i128,
+                                        co2_ast::IntegerSuffix::None,
+                                    )),
+                                    span,
+                                )),
+                                span,
+                            ),
+                        },
+                        span,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
         let _ = expected_ty;
         items
     }

@@ -687,13 +687,13 @@ where
             .repeated()
             .at_least(1)
             .collect::<Vec<_>>()
-            .map(|parts| Expression::Constant(Constant::String(parts.concat()))),
+            .map(|parts| Expression::Constant(Constant::String(parts.into_iter().flatten().collect::<Vec<u8>>()))),
             select! {
                 Token::Integer(i, suffix) => Expression::Constant(Constant::Int(parse_integer_constant(&i), suffix)),
                 Token::FloatLit(i, suffix) => Expression::Constant(Constant::Float(parse_float_constant(&i), suffix)),
                 Token::CharLit(s) => {
-                    let ch = s.chars().next().expect("empty char literal");
-                    Expression::Constant(Constant::Char(ch))
+                    let ch = s.first().copied().expect("empty char literal");
+                    Expression::Constant(Constant::Char(ch as u32))
                 },
             },
         ))

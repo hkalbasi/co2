@@ -612,6 +612,9 @@ int main17()
 	a = '\'';
 	if (a - 39)
 		return 1;
+	a = '\x93';
+	if (a + 109)
+		return 1;
 
 	a = 2.5;
 	if (a - 2)
@@ -644,6 +647,11 @@ int main17()
 		return u[0] + 5;
 	if (u[6])
 		return u[0];
+
+	u = "\x93";
+	if (u[0] - '\x93' || u[1]) {
+		return 1;
+	}
 
 	return 0;
 }
@@ -972,7 +980,7 @@ int main28()
 
 typedef int unsized_int_array[];
 unsized_int_array static_ar1 = {10, 20, 3, 15, 1000, 60, 16};
-char static_ar2[] = "foo bar foobar";
+char static_ar2[] = "foo bar foobar\x93";
 int static_ar3[(1 + 2) * 2] = {0, 1, 2, 3, 4, 5};
 typedef struct {
 	char field1[2];
@@ -996,8 +1004,8 @@ int main29()
 		return 2;
 	}
 
-	char ar3[] = "Hello world";
-	if (ar3[0] != 'H' || ar3[10] != 'd' || sizeof(ar3) != 12) {
+	char ar3[] = "Hello world\x94";
+	if (ar3[0] != 'H' || ar3[10] != 'd' || ar3[11] != '\x94' || sizeof(ar3) != 13) {
 		return 3;
 	}
 
@@ -1011,12 +1019,12 @@ int main29()
 		return 4;
 	}
 
-	if (static_ar2[0] != 'f' || static_ar2[14] != 0 || sizeof(static_ar2) != 15) {
+	if (static_ar2[0] != 'f' || static_ar2[14] != '\x93' || static_ar2[15] != 0 || sizeof(static_ar2) != 16) {
 		return 5;
 	}
 
 	char* local_ar2 = static_ar2;
-	if (local_ar2[0] != 'f' || local_ar2[14] != 0 || sizeof(local_ar2) != sizeof(char*)) {
+	if (local_ar2[0] != 'f' || local_ar2[15] != 0 || sizeof(local_ar2) != sizeof(char*)) {
 		return 5;
 	}
 
@@ -1048,6 +1056,10 @@ int main29()
 
 	if (sizeof("hello") != 6) {
 		return 11;
+	}
+
+	if (sizeof("\x93") != 2) {
+		return 12;
 	}
 
 	return 0;
@@ -1780,7 +1792,7 @@ int main79() {
 typedef int main80_t1[3];
 typedef int main80_t2[];
 
-int main80_aux(int ar1[5], int ar2[static 5], int ar3[1 + 2], main80_t1 ar4, main80_t2 ar5, int ar6[], int ar7[const *]) {
+int main80_aux(int ar1[5], int ar2[static 5], int ar3[1 + 2], main80_t1 ar4, main80_t2 ar5, int ar6[], int ar7[const]) {
 	return ar1[1] + ar2[2] + ar3[3] + ar4[4] + ar5[5] + ar6[6] + ar7[7];
 }
 

@@ -810,7 +810,7 @@ impl LocalResolverBase {
     ) -> Result<i128, String> {
         match expr {
             Expression::Constant(Constant::Int(v, _)) => Ok(*v),
-            Expression::Constant(Constant::Char(ch)) => Ok(*ch as i128),
+            Expression::Constant(Constant::Char(ch)) => Ok((*ch as u8 as i8) as i128),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Const(def_id) => {
                     if self.has_local_const_value(*def_id) {
@@ -1141,7 +1141,7 @@ impl LocalResolverBase {
         match expr {
             Expression::Constant(Constant::String(s)) => Ok(HirTy::new_array(
                 HirTy::signed_ty(IntTy::I8, rust_span),
-                HirTyConst::Literal(s.chars().count() + 1),
+                HirTyConst::Literal(s.len() + 1),
                 rust_span,
             )),
             Expression::Constant(Constant::Int(_, suffix)) => {

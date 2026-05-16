@@ -147,7 +147,7 @@ pub enum HirExprKind {
     LocalConst(LocalId),
     ConstInt(i128),
     ConstFloat(f64),
-    ConstStr(String),
+    ConstStr(Vec<u8>),
     LabelAddress(crate::LabelId),
     Zeroed,
     UnionAggregate {
@@ -889,12 +889,17 @@ impl HirCtx<'_> {
                     });
                 }
                 co2_crate_sig::DefOrLocal::FuncName => Ok(HirExpr {
-                    kind: HirExprKind::ConstStr(self.function_name.clone().unwrap_or_else(|| {
-                        self.terminate_with_error(
-                            parser_span,
-                            "__func__ is only available inside function bodies",
-                        )
-                    })),
+                    kind: HirExprKind::ConstStr(
+                        self.function_name
+                            .clone()
+                            .unwrap_or_else(|| {
+                                self.terminate_with_error(
+                                    parser_span,
+                                    "__func__ is only available inside function bodies",
+                                )
+                            })
+                            .into_bytes(),
+                    ),
                     ty: Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut),
                     span,
                 }),
@@ -931,7 +936,7 @@ impl HirCtx<'_> {
                 })
             }
             Expression::Constant(Constant::Char(ch)) => Ok(HirExpr {
-                kind: HirExprKind::ConstInt(ch as i128),
+                kind: HirExprKind::ConstInt((ch as u8 as i8) as i128),
                 ty: Ty::signed_ty(IntTy::I32),
                 span,
             }),

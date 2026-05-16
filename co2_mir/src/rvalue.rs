@@ -1,8 +1,9 @@
 use co2_hir::HirBinOp;
 use rustc_public_generative::rustc_public::{
     mir::{
-        BinOp as MirBinOp, CastKind, ConstOperand, Mutability, Operand as MirOperand, Rvalue,
-        Statement as MirStatement, StatementKind as MirStatementKind,
+        AggregateKind, BinOp as MirBinOp, CastKind, ConstOperand, Mutability,
+        Operand as MirOperand, RawPtrKind, Rvalue, Statement as MirStatement,
+        StatementKind as MirStatementKind,
     },
     ty::{IntTy, MirConst, Span as RustSpan, Ty, TyKind, UintTy},
 };
@@ -77,25 +78,58 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         }
     }
 
-    pub(crate) fn lower_const_string(&mut self, s: &str, span: RustSpan) -> MirOperand {
-        let mut value = s.to_owned();
-        if !value.ends_with('\0') {
-            value.push('\0');
+    pub(crate) fn lower_const_string(&mut self, s: &[u8], span: RustSpan) -> MirOperand {
+        let mut bytes = s.to_vec();
+        if bytes.last().copied() != Some(0) {
+            bytes.push(0);
         }
 
-        let as_ptr = self.wellknown_defs.str_as_ptr;
-        let ptr_u8_ty = Ty::new_ptr(Ty::unsigned_ty(UintTy::U8), Mutability::Not);
-        let ptr_u8_local = self.new_temp(ptr_u8_ty, Mutability::Mut, span);
-        self.emit_call_block(
-            crate::build::fn_const_operand(as_ptr, vec![], span),
-            vec![MirOperand::Constant(ConstOperand {
-                span,
-                user_ty: None,
-                const_: MirConst::from_str(&value),
-            })],
-            place(ptr_u8_local),
+        let elem_ty = Ty::unsigned_ty(UintTy::U8);
+        let array_ty = Ty::try_new_array(elem_ty, bytes.len() as u64)
+            .expect("failed to build array type for string literal");
+        let array_local = self.new_temp(array_ty, Mutability::Mut, span);
+        let operands = bytes
+            .iter()
+            .map(|&byte| {
+                MirOperand::Constant(ConstOperand {
+                    span,
+                    user_ty: None,
+                    const_: MirConst::try_from_uint(byte as u128, UintTy::U8)
+                        .expect("failed to build string literal byte constant"),
+                })
+            })
+            .collect();
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(
+                place(array_local),
+                Rvalue::Aggregate(AggregateKind::Array(elem_ty), operands),
+            ),
             span,
-        );
+        });
+
+        let ptr_array_ty = Ty::new_ptr(array_ty, Mutability::Not);
+        let ptr_array_local = self.new_temp(ptr_array_ty, Mutability::Mut, span);
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(
+                place(ptr_array_local),
+                Rvalue::AddressOf(RawPtrKind::Const, place(array_local)),
+            ),
+            span,
+        });
+
+        let ptr_u8_ty = Ty::new_ptr(elem_ty, Mutability::Not);
+        let ptr_u8_local = self.new_temp(ptr_u8_ty, Mutability::Mut, span);
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(
+                place(ptr_u8_local),
+                Rvalue::Cast(
+                    CastKind::PtrToPtr,
+                    MirOperand::Copy(place(ptr_array_local)),
+                    ptr_u8_ty,
+                ),
+            ),
+            span,
+        });
 
         let ptr_i8_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut);
         let ptr_i8_local = self.new_temp(ptr_i8_ty, Mutability::Mut, span);

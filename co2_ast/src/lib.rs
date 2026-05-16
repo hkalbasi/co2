@@ -1,4 +1,8 @@
-use std::{fmt::Display, u32};
+use std::{
+    ascii::escape_default,
+    fmt::{self, Display},
+    u32,
+};
 
 use itertools::Itertools;
 
@@ -89,8 +93,8 @@ pub enum ForInit<R: TypeResolver> {
 pub enum Constant {
     Int(i128, IntegerSuffix),
     Float(f64, FloatSuffix),
-    Char(char),
-    String(String),
+    Char(u32),
+    String(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
@@ -522,8 +526,8 @@ pub enum Token {
     // Constants
     Integer(String, IntegerSuffix),
     FloatLit(String, FloatSuffix),
-    CharLit(String),
-    StringLit(String),
+    CharLit(Vec<u8>),
+    StringLit(Vec<u8>),
 
     // Operators
     Plus,       // +
@@ -613,6 +617,38 @@ pub enum FloatSuffix {
     Long,  // l or L
 }
 
+fn fmt_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
+    for &byte in bytes {
+        for escaped in escape_default(byte) {
+            write!(f, "{}", escaped as char)?;
+        }
+    }
+    Ok(())
+}
+
+impl Display for Constant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Constant::Int(v, _) => write!(f, "{v}"),
+            Constant::Float(v, _) => write!(f, "{v}"),
+            Constant::Char(value) => {
+                write!(f, "'")?;
+                if let Ok(byte) = u8::try_from(*value) {
+                    fmt_bytes(f, &[byte])?;
+                } else {
+                    write!(f, "\\x{value:x}")?;
+                }
+                write!(f, "'")
+            }
+            Constant::String(bytes) => {
+                write!(f, "\"")?;
+                fmt_bytes(f, bytes)?;
+                write!(f, "\"")
+            }
+        }
+    }
+}
+
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -685,8 +721,16 @@ impl Display for Token {
                     FloatSuffix::Long => write!(f, "l"),
                 }
             }
-            Token::CharLit(s) => write!(f, "'{}'", s),
-            Token::StringLit(s) => write!(f, "\"{}\"", s),
+            Token::CharLit(bytes) => {
+                write!(f, "'")?;
+                fmt_bytes(f, bytes)?;
+                write!(f, "'")
+            }
+            Token::StringLit(bytes) => {
+                write!(f, "\"")?;
+                fmt_bytes(f, bytes)?;
+                write!(f, "\"")
+            }
 
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
@@ -884,7 +928,20 @@ pub struct LazySubscription {
 
 impl LazySubscription {
     pub fn is_unsized(&self) -> bool {
-        self.tokens.len() == 2
+        if self.tokens.len() == 2 {
+            return true;
+        }
+        // `[qualifier...]` with no size expression (e.g. `[const]`) is also unsized;
+        // it means the parameter is a qualified pointer with no specified array length.
+        let [_, inner @ .., _] = &self.tokens[..] else {
+            return false;
+        };
+        inner.iter().all(|(token, _)| {
+            matches!(
+                token,
+                Token::Const | Token::Restrict | Token::Volatile | Token::Atomic
+            )
+        })
     }
 
     pub fn is_unspecified_vla(&self) -> bool {

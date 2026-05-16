@@ -168,27 +168,25 @@ pub fn lexer<'src>() -> impl Parser<
 
     // ----- Character and string literals -----
     let escape_sequence = just('\\').ignore_then(choice((
-        just('a').to('\x07'),
-        just('b').to('\x08'),
-        just('f').to('\x0c'),
-        just('n').to('\n'),
-        just('r').to('\r'),
-        just('t').to('\t'),
-        just('v').to('\x0b'),
-        just('\\').to('\\'),
-        just('\'').to('\''),
-        just('"').to('"'),
-        just('?').to('?'),
+        just('a').to(b'\x07'),
+        just('b').to(b'\x08'),
+        just('f').to(b'\x0c'),
+        just('n').to(b'\n'),
+        just('r').to(b'\r'),
+        just('t').to(b'\t'),
+        just('v').to(b'\x0b'),
+        just('\\').to(b'\\'),
+        just('\'').to(b'\''),
+        just('"').to(b'"'),
+        just('?').to(b'?'),
         one_of("01234567")
             .repeated()
             .at_least(1)
             .at_most(3)
             .to_slice()
             .try_map(|s: &str, span| {
-                u32::from_str_radix(s, 8)
-                    .ok()
-                    .and_then(char::from_u32)
-                    .ok_or(Rich::custom(span, "invalid octal escape sequence"))
+                u8::from_str_radix(s, 8)
+                    .map_err(|_| Rich::custom(span, "invalid octal escape sequence"))
             }),
         just('x').ignore_then(
             one_of("0123456789abcdefABCDEF")
@@ -196,19 +194,23 @@ pub fn lexer<'src>() -> impl Parser<
                 .at_least(1)
                 .to_slice()
                 .try_map(|s: &str, span| {
-                    u32::from_str_radix(s, 16)
-                        .ok()
-                        .and_then(char::from_u32)
-                        .ok_or(Rich::custom(span, "invalid hex escape sequence"))
+                    u8::from_str_radix(s, 16)
+                        .map_err(|_| Rich::custom(span, "invalid hex escape sequence"))
                 }),
         ),
     )));
 
-    let char_content = escape_sequence
-        .or(none_of("'\\"))
-        .repeated()
-        .at_least(1)
-        .collect::<String>();
+    let char_content = choice((
+        escape_sequence.map(|byte| vec![byte]),
+        none_of("'\\").map(|ch: char| {
+            let mut buf = [0u8; 4];
+            ch.encode_utf8(&mut buf).as_bytes().to_vec()
+        }),
+    ))
+    .repeated()
+    .at_least(1)
+    .collect::<Vec<_>>()
+    .map(|parts| parts.into_iter().flatten().collect::<Vec<u8>>());
 
     let literal_prefix = choice((just("u8"), just("u"), just("U"), just("L")))
         .ignored()
@@ -220,10 +222,16 @@ pub fn lexer<'src>() -> impl Parser<
         .then_ignore(just('\''))
         .map(Token::CharLit);
 
-    let string_content = escape_sequence
-        .or(none_of("\"\\"))
-        .repeated()
-        .collect::<String>();
+    let string_content = choice((
+        escape_sequence.map(|byte| vec![byte]),
+        none_of("\"\\").map(|ch: char| {
+            let mut buf = [0u8; 4];
+            ch.encode_utf8(&mut buf).as_bytes().to_vec()
+        }),
+    ))
+    .repeated()
+    .collect::<Vec<_>>()
+    .map(|parts| parts.into_iter().flatten().collect::<Vec<u8>>());
 
     let string_literal = literal_prefix
         .ignore_then(just('"'))
