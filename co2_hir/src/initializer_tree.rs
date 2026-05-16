@@ -393,6 +393,15 @@ impl HirCtx<'_> {
                     if let Some(fields) = self.adt_logical_field_tys(expected_ty) {
                         if !fields.is_empty() {
                             c.stack.push((0, fields[0]));
+                            if is_union_ty(expected_ty) {
+                                if let Some(sub_fields) =
+                                    self.adt_logical_field_tys(fields[0])
+                                {
+                                    if !sub_fields.is_empty() {
+                                        c.stack.push((0, sub_fields[0]));
+                                    }
+                                }
+                            }
                         }
                     } else if is_array_ty(expected_ty) {
                         let elem = array_elem_ty(expected_ty).expect("array elem");

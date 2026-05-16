@@ -9,5 +9,5 @@ struct Bits {
 
 int main(void) {
     return __builtin_offsetof(struct Bits, a);
-//         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ error: offsetof: field 'a' is a bitfield
+//                                         ^ error: offsetof: field 'a' is a bitfield
 }
