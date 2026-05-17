@@ -326,6 +326,7 @@ pub fn lexer<'src>() -> impl Parser<
             "short" => Token::Short,
             "signed" | "__signed__" => Token::Signed,
             "sizeof" => Token::Sizeof,
+            "typeof" | "__typeof" | "__typeof__" => Token::Typeof,
             "_Alignof" => Token::Alignof,
             "__builtin_offsetof" => Token::Offsetof,
             "static" => Token::Static,

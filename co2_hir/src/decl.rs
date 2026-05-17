@@ -374,8 +374,12 @@ impl HirCtx<'_> {
                         .any(|spec| spec.0.is_constexpr());
                     let raw_initializer = initializer.clone();
                     let declarator_for_checks = declarator.0.clone();
-                    let ((name, parser_span), ty) =
-                        self.lower_value_decl_type(declaration_specifiers.clone(), declarator);
+                    let ((name, parser_span), ty) = self.lower_value_decl_type(
+                        declaration_specifiers.clone(),
+                        declarator,
+                        locals,
+                        local_map,
+                    );
                     validate_local_constexpr_decl(
                         self,
                         &declaration_specifiers,
@@ -544,8 +548,11 @@ impl HirCtx<'_> {
         &self,
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         declarator: Spanned<Declarator<LocalResolver>>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<(Spanned<(usize, String)>, CTy), String> {
-        let base = self.base_ty_of_decl(declaration_specifiers, declarator.1);
+        let base =
+            self.base_ty_of_decl_in_scope(declaration_specifiers, declarator.1, locals, local_map);
         let base_const = has_const_qualifier_in_decl_specs(&base.1);
         let (decl_ty, name) = self.extract_decl_type(base.0, base_const, declarator)?;
         let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
@@ -556,9 +563,12 @@ impl HirCtx<'_> {
         &self,
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         declarator: Spanned<Declarator<LocalResolver>>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
     ) -> (Spanned<(usize, String)>, CTy) {
         let span = declarator.1;
-        match self.try_lower_value_decl_type(declaration_specifiers, declarator) {
+        match self.try_lower_value_decl_type(declaration_specifiers, declarator, locals, local_map)
+        {
             Ok(x) => x,
             Err(e) => self.terminate_with_error(span, &e),
         }
@@ -629,10 +639,50 @@ impl HirCtx<'_> {
         Ok(ty)
     }
 
+    fn lower_typeof_expr(
+        &self,
+        expr: &Spanned<Expression<LocalResolver>>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<CTy, String> {
+        let hir_expr = self.lower_expr(expr.clone(), locals, local_map)?;
+        match hir_expr.ty.kind() {
+            TyKind::RigidTy(RigidTy::FnDef(_, _)) => {
+                let sig = hir_expr
+                    .ty
+                    .kind()
+                    .fn_sig()
+                    .expect("FnDef should have fn signature")
+                    .skip_binder();
+                Ok(CTy::Function(sig))
+            }
+            _ => Ok(CTy::Ty(hir_expr.ty)),
+        }
+    }
+
     fn base_ty_of_decl(
         &self,
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
         span: co2_ast::Span,
+    ) -> (CTy, Vec<Spanned<DeclarationSpecifier<LocalResolver>>>) {
+        self.base_ty_of_decl_with_scope(specifiers, span, None)
+    }
+
+    fn base_ty_of_decl_in_scope(
+        &self,
+        specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
+        span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> (CTy, Vec<Spanned<DeclarationSpecifier<LocalResolver>>>) {
+        self.base_ty_of_decl_with_scope(specifiers, span, Some((locals, local_map)))
+    }
+
+    fn base_ty_of_decl_with_scope(
+        &self,
+        specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
+        span: co2_ast::Span,
+        mut typeof_scope: Option<(&mut Arena<HirLocal>, &mut HashMap<usize, LocalId>)>,
     ) -> (CTy, Vec<Spanned<DeclarationSpecifier<LocalResolver>>>) {
         let specifier = match CompressedTypeSpecifier::build(specifiers.clone()) {
             Ok(s) => s,
@@ -672,6 +722,23 @@ impl HirCtx<'_> {
                     }
                     _ => (CTy::Ty(self.ty_of_resolved_path(&path.0, span)), specifiers),
                 };
+            }
+            CompressedTypeSpecifier::TypeofType(type_name) => {
+                return (
+                    self.lower_type_name_cty(type_name, span)
+                        .unwrap_or_else(|err| self.terminate_with_error(span, &err)),
+                    specifiers,
+                );
+            }
+            CompressedTypeSpecifier::TypeofExpr(expr) => {
+                let Some((locals, local_map)) = typeof_scope.as_mut() else {
+                    self.terminate_with_error(span, "typeof expression is not supported here");
+                };
+                return (
+                    self.lower_typeof_expr(&expr, locals, local_map)
+                        .unwrap_or_else(|err| self.terminate_with_error(span, &err)),
+                    specifiers,
+                );
             }
         };
 

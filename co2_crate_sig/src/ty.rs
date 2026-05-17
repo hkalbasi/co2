@@ -33,6 +33,8 @@ pub enum CompressedTypeSpecifier {
     },
     Enum(Spanned<<LocalResolver as TypeResolver>::EnumIdentifier>),
     TypedefName(Spanned<<LocalResolver as TypeResolver>::ResolvedRustPath>),
+    TypeofType(TypeName<LocalResolver>),
+    TypeofExpr(Spanned<Expression<LocalResolver>>),
 }
 
 impl CompressedTypeSpecifier {
@@ -71,6 +73,12 @@ impl CompressedTypeSpecifier {
                     TypeSpecifier::TypedefName(t) => {
                         CompressedTypeSpecifier::TypedefName(t.clone())
                     }
+                    TypeSpecifier::TypeofType(type_name) => {
+                        CompressedTypeSpecifier::TypeofType((**type_name).clone())
+                    }
+                    TypeSpecifier::TypeofExpr(expr) => {
+                        CompressedTypeSpecifier::TypeofExpr((**expr).clone())
+                    }
                     _ => break 'b,
                 });
             }
@@ -105,7 +113,9 @@ impl CompressedTypeSpecifier {
                 | TypeSpecifier::Float
                 | TypeSpecifier::StructOrUnion { .. }
                 | TypeSpecifier::Enum(_)
-                | TypeSpecifier::TypedefName(_) => {
+                | TypeSpecifier::TypedefName(_)
+                | TypeSpecifier::TypeofType(_)
+                | TypeSpecifier::TypeofExpr(_) => {
                     return Err("This specifier should be used alone".to_owned());
                 }
             }
@@ -1531,6 +1541,15 @@ impl LocalResolverBase {
                 }
                 _ => self.hir_ty_of_resolved_path(&path, path_span),
             },
+            CompressedTypeSpecifier::TypeofType(type_name) => {
+                return CTy::Ty(
+                    self.lower_type_name_for_const(type_name, parser_span)
+                        .unwrap_or_else(|err| self.terminate_with_error(parser_span, &err)),
+                );
+            }
+            CompressedTypeSpecifier::TypeofExpr(_) => {
+                self.terminate_with_error(parser_span, "typeof expression is not supported here");
+            }
         };
         CTy::Ty(ty)
     }

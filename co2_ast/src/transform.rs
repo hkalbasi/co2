@@ -187,6 +187,10 @@ impl<A: TypeResolver> DoTransform for TypeSpecifier<A> {
                 TypeSpecifier::Enum(b.transform_enum_specifier(enum_specifier))
             }
             TypeSpecifier::TypedefName(path) => TypeSpecifier::TypedefName(b.transform_path(path)),
+            TypeSpecifier::TypeofType(type_name) => {
+                TypeSpecifier::TypeofType(type_name.transform(b))
+            }
+            TypeSpecifier::TypeofExpr(expr) => TypeSpecifier::TypeofExpr(expr.transform(b)),
         }
     }
 }

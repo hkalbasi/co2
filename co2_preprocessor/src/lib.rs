@@ -658,7 +658,6 @@ fn normalize_preprocessed_chunk(chunk: &str) -> MappedText {
     let chunk = strip_balanced_call_mapped(chunk, "__we_dont_need_this_just_create_a_new_mapped__");
     let chunk = strip_gnu_attributes_mapped(&chunk);
     let chunk = strip_gnu_asm_annotations_mapped(&chunk);
-    let chunk = replace_gnu_typeof_with_usize_mapped(&chunk);
     strip_extension_keywords_mapped(&chunk)
 }
 
@@ -937,65 +936,6 @@ fn compose_boundaries(mapped: MappedText, prior: &[usize]) -> MappedText {
             })
             .collect(),
     }
-}
-
-fn replace_gnu_typeof_with_usize_mapped(src: &MappedText) -> MappedText {
-    let bytes = src.text.as_bytes();
-    let mut out = String::with_capacity(src.text.len());
-    let mut boundaries = vec![0];
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let kw_len = if matches_keyword(&src.text, i, "__typeof__") {
-            Some("__typeof__".len())
-        } else if matches_keyword(&src.text, i, "__typeof") {
-            Some("__typeof".len())
-        } else if matches_keyword(&src.text, i, "typeof") {
-            Some("typeof".len())
-        } else {
-            None
-        };
-        if let Some(kw_len) = kw_len {
-            let mut j = i + kw_len;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if j < bytes.len() && bytes[j] == b'(' {
-                let mut depth = 0usize;
-                while j < bytes.len() {
-                    match bytes[j] {
-                        b'(' => depth += 1,
-                        b')' => {
-                            depth = depth.saturating_sub(1);
-                            if depth == 0 {
-                                j += 1;
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                    j += 1;
-                }
-                out.push_str("usize");
-                boundaries.extend(std::iter::repeat_n(j, "usize".len()));
-                i = j;
-                continue;
-            }
-        }
-        let c = src.text[i..].chars().next().unwrap();
-        let consumed = c.len_utf8();
-        out.push(c);
-        i += consumed;
-        for _ in 0..consumed {
-            boundaries.push(i);
-        }
-    }
-    compose_boundaries(
-        MappedText {
-            text: out,
-            boundaries,
-        },
-        &src.boundaries,
-    )
 }
 
 fn matches_keyword(src: &str, start: usize, kw: &str) -> bool {

@@ -208,7 +208,8 @@ where
                 | Token::Float
                 | Token::Double
                 | Token::Signed
-                | Token::Unsigned,
+                | Token::Unsigned
+                | Token::Typeof,
             ) => true,
             Some(Token::Ident(_)) => {
                 inp.rewind(checkpoint.clone());
@@ -1418,7 +1419,7 @@ where
                 identifier()
                     .then(struct_or_union_fields(rec.clone(), declarator_rec.clone()))
                     .map(|(ident, fields)| StructOrUnionSpecifier::Defined { ident, fields }),
-                struct_or_union_fields(rec, declarator_rec)
+                struct_or_union_fields(rec.clone(), declarator_rec)
                     .map(|fields| StructOrUnionSpecifier::Anonymous { fields }),
                 identifier().map(|ident| StructOrUnionSpecifier::Declared { ident }),
             ))
@@ -1438,7 +1439,7 @@ where
         let enumerator = identifier()
             .then(
                 just(Token::Assign)
-                    .ignore_then(assign_expression_rec)
+                    .ignore_then(assign_expression_rec.clone())
                     .or_not(),
             )
             .map(|(ident, value)| Enumerator { ident, value })
@@ -1476,6 +1477,38 @@ where
             })
             .boxed();
 
+        let typeof_declarator = declarator(resolver.clone(), assign_expression_rec.clone());
+        let typeof_specifier_qualifier = choice((
+            rec.clone().map(SpecifierQualifier::TypeSpecifier),
+            type_qualifier().map(SpecifierQualifier::TypeQualifier),
+        ))
+        .map_with(|r, e| (r, e.span()));
+        let typeof_type_name = typeof_specifier_qualifier
+            .repeated()
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .then(typeof_declarator.or_not())
+            .map(|(specifier_qualifier_list, abstract_declarator)| TypeName {
+                specifier_qualifier_list,
+                abstract_declarator: abstract_declarator.and_then(|decl| {
+                    if matches!(decl.0, Declarator::Abstract) {
+                        None
+                    } else {
+                        Some(decl)
+                    }
+                }),
+            });
+
+        let typeof_type_specifier = just(Token::Typeof)
+            .ignore_then(just(Token::LParen))
+            .ignore_then(choice((
+                typeof_type_name.map(|type_name| TypeSpecifier::TypeofType(Box::new(type_name))),
+                assign_expression_rec
+                    .clone()
+                    .map(|expr| TypeSpecifier::TypeofExpr(Box::new(expr))),
+            )))
+            .then_ignore(just(Token::RParen));
+
         choice([
             just(Token::Int).to(TypeSpecifier::Int),
             just(Token::Bool).to(TypeSpecifier::Bool),
@@ -1490,6 +1523,7 @@ where
         ])
         .or(struct_or_union_specifier)
         .or(enum_specifier)
+        .or(typeof_type_specifier)
         .or(rust_path().try_map({
             let resolver = resolver.clone();
             move |path, _| {
