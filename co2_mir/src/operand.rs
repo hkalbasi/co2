@@ -666,6 +666,53 @@ impl Builder<'_, '_> {
                 }
                 MirOperand::Copy(ret_place)
             }
+            HirExprKind::VaCopy { dest, src } => {
+                let dest_ty = dest.ty;
+                let src_ty = src.ty;
+                let Some(dest) = self.lower_expr_to_place(dest) else {
+                    panic!("VaCopy destination operand was not lvalue");
+                };
+                let Some(src) = self.lower_expr_to_place(src) else {
+                    panic!("VaCopy source operand was not lvalue");
+                };
+
+                let reg = Region {
+                    kind: RegionKind::ReErased,
+                };
+                let src_ref_ty = Ty::new_ref(reg.clone(), src_ty, Mutability::Not);
+                let src_ref_local = self.new_temp(src_ref_ty, Mutability::Not, expr.span);
+                self.stmts.push(MirStatement {
+                    kind: MirStatementKind::Assign(
+                        place(src_ref_local),
+                        Rvalue::Ref(reg, BorrowKind::Shared, src),
+                    ),
+                    span: expr.span,
+                });
+
+                let clone_local = self.new_temp(src_ty, Mutability::Mut, expr.span);
+                self.emit_call_block(
+                    fn_const_operand(
+                        self.wellknown_defs.clone,
+                        vec![GenericArgKind::Type(src_ty)],
+                        expr.span,
+                    ),
+                    vec![MirOperand::Copy(place(src_ref_local))],
+                    place(clone_local),
+                    expr.span,
+                );
+
+                let generic_args =
+                    vec![GenericArgKind::Type(src_ty), GenericArgKind::Type(dest_ty)];
+                self.emit_call_block(
+                    fn_const_operand(self.wellknown_defs.transmute, generic_args, expr.span),
+                    vec![MirOperand::Move(place(clone_local))],
+                    dest,
+                    expr.span,
+                );
+                let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
+                MirOperand::Copy(place(temp))
+            }
             HirExprKind::VaEnd(args) => {
                 let Some(_args) = self.lower_expr_to_place(args) else {
                     panic!("VaEnd operand was not lvalue");

@@ -604,6 +604,17 @@ where
                         Expression::VaArg { args, type_name }
                     }),
             ),
+            just(Token::VaCopy).ignore_then(
+                rec.clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(rec.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .map(|(dest, src)| {
+                        let dest = Box::new(dest);
+                        let src = Box::new(src);
+                        Expression::VaCopy { dest, src }
+                    }),
+            ),
             just(Token::VaEnd).ignore_then(
                 rec.clone()
                     .delimited_by(just(Token::LParen), just(Token::RParen))

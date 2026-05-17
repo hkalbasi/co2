@@ -158,6 +158,10 @@ pub enum Expression<R: TypeResolver> {
         args: Box<Spanned<Expression<R>>>,
         type_name: TypeName<R>,
     },
+    VaCopy {
+        dest: Box<Spanned<Expression<R>>>,
+        src: Box<Spanned<Expression<R>>>,
+    },
     VaEnd {
         args: Box<Spanned<Expression<R>>>,
     },
@@ -597,6 +601,7 @@ pub enum Token {
     // Vararg tokens
     VaStart,
     VaArg,
+    VaCopy,
     VaEnd,
 
     // GCC float constants
@@ -698,6 +703,7 @@ impl Display for Token {
 
             Token::VaStart => write!(f, "va_start"),
             Token::VaArg => write!(f, "va_arg"),
+            Token::VaCopy => write!(f, "va_copy"),
             Token::VaEnd => write!(f, "va_end"),
             Token::BuiltinInf => write!(f, "__builtin_inf"),
             Token::BuiltinNan => write!(f, "__builtin_nan"),

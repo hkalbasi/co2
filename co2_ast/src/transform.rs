@@ -470,6 +470,7 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
             },
             Expression::VaArg { .. }
             | Expression::VaStart { .. }
+            | Expression::VaCopy { .. }
             | Expression::VaEnd { .. }
             | Expression::GnuStatementExpr { .. } => todo!(),
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {

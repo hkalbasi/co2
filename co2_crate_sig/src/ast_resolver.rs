@@ -70,6 +70,9 @@ fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> bool {
         Expression::VaStart { args, .. } | Expression::VaEnd { args } => {
             expr_contains_label_address(&args.0)
         }
+        Expression::VaCopy { dest, src } => {
+            expr_contains_label_address(&dest.0) || expr_contains_label_address(&src.0)
+        }
         Expression::VaArg { args, .. } => expr_contains_label_address(&args.0),
         Expression::Identifier(_)
         | Expression::Empty

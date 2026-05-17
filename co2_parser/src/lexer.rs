@@ -343,6 +343,7 @@ pub fn lexer<'src>() -> impl Parser<
 
             "__builtin_va_start" | "__builtin_c23_va_start" => Token::VaStart,
             "__builtin_va_arg" | "__builtin_c23_va_arg" => Token::VaArg,
+            "__builtin_va_copy" | "__builtin_c23_va_copy" => Token::VaCopy,
             "__builtin_va_end" | "__builtin_c23_va_end" => Token::VaEnd,
             "__builtin_inf"
             | "__builtin_inff"

@@ -230,6 +230,10 @@ pub enum HirExprKind {
 
     VaStart(Box<HirExpr>),
     VaArg(Box<HirExpr>),
+    VaCopy {
+        dest: Box<HirExpr>,
+        src: Box<HirExpr>,
+    },
     VaEnd(Box<HirExpr>),
 }
 
@@ -1604,6 +1608,15 @@ impl HirCtx<'_> {
                 Ok(HirExpr {
                     kind: HirExprKind::VaArg(args),
                     ty,
+                    span,
+                })
+            }
+            Expression::VaCopy { dest, src } => {
+                let dest = Box::new(self.lower_expr(*dest, locals, local_map)?);
+                let src = Box::new(self.lower_expr(*src, locals, local_map)?);
+                Ok(HirExpr {
+                    kind: HirExprKind::VaCopy { dest, src },
+                    ty: Ty::new_tuple(&[]),
                     span,
                 })
             }

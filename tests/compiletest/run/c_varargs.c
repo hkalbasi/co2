@@ -81,6 +81,40 @@ int reuse(int n, ...) {
 	return 0;
 }
 
+int copy_after_one(int n, ...) {
+	va_list ap;
+	va_list copy;
+	va_start(ap, n);
+	if (va_arg(ap, int) != 1) {
+		va_end(ap);
+		return 1;
+	}
+	va_copy(copy, ap);
+	if (va_arg(ap, int) != 2) {
+		va_end(copy);
+		va_end(ap);
+		return 2;
+	}
+	if (va_arg(copy, int) != 2) {
+		va_end(copy);
+		va_end(ap);
+		return 3;
+	}
+	if (va_arg(ap, int) != 3) {
+		va_end(copy);
+		va_end(ap);
+		return 4;
+	}
+	if (va_arg(copy, int) != 3) {
+		va_end(copy);
+		va_end(ap);
+		return 5;
+	}
+	va_end(copy);
+	va_end(ap);
+	return 0;
+}
+
 struct VarargHolder { void (*f)(char *, va_list); };
 void f1(char *s, va_list ap) {}
 int fill_vararg_holder(struct VarargHolder *p) { p->f = f1; return 0; }
@@ -102,6 +136,9 @@ int main() {
     }
     if (reuse(2, 1, 2)) {
         return 50 + reuse(2, 1, 2);
+    }
+    if (copy_after_one(3, 1, 2, 3)) {
+        return 60 + copy_after_one(3, 1, 2, 3);
     }
 
     struct VarargHolder va_holder = { .f = 0 };
