@@ -945,6 +945,9 @@ impl LocalResolverBase {
                 let t2 = self.lower_type_name_for_const(*ty2.clone(), *span)?;
                 Ok(i128::from(hir_tys_compatible(&t1, &t2)))
             }
+            Expression::BuiltinConstantP { expr } => {
+                Ok(i128::from(self.eval_const_expr(expr).is_ok()))
+            }
             Expression::GenericSelection {
                 controlling,
                 associations,

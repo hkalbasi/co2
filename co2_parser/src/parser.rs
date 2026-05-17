@@ -821,6 +821,16 @@ where
                     })
                     .map_with(|r, e| (r, e.span()));
 
+                let constant_p_expression = just(Token::BuiltinConstantP)
+                    .ignore_then(
+                        rec.clone()
+                            .map(|expr| Expression::BuiltinConstantP {
+                                expr: Box::new(expr),
+                            })
+                            .delimited_by(just(Token::LParen), just(Token::RParen)),
+                    )
+                    .map_with(|r, e| (r, e.span()));
+
                 let prefix_inc_expression = just(Token::Inc)
                     .ignore_then(unary.clone())
                     .map(|expr| Expression::Update {
@@ -858,6 +868,7 @@ where
                     sizeof_type_expression,
                     alignof_type_expression,
                     offsetof_expression,
+                    constant_p_expression,
                     types_compatible_p_expression,
                     prefix_inc_expression,
                     prefix_dec_expression,

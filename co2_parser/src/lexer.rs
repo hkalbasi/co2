@@ -352,6 +352,7 @@ pub fn lexer<'src>() -> impl Parser<
             | "__builtin_huge_valf"
             | "__builtin_huge_vall" => Token::BuiltinInf,
             "__builtin_nan" | "__builtin_nanf" | "__builtin_nanl" => Token::BuiltinNan,
+            "__builtin_constant_p" => Token::BuiltinConstantP,
             "__builtin_types_compatible_p" => Token::BuiltinTypesCompatibleP,
 
             _ => Token::Ident(ident),

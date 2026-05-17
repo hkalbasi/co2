@@ -479,6 +479,9 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
                     ty2: ty2.transform(b),
                 }
             }
+            Expression::BuiltinConstantP { expr } => Expression::BuiltinConstantP {
+                expr: expr.transform(b),
+            },
         }
     }
 }

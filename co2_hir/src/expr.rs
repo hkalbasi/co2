@@ -1339,6 +1339,14 @@ impl HirCtx<'_> {
                     span,
                 })
             }
+            Expression::BuiltinConstantP { expr } => {
+                let is_constant = i128::from(self.decl_resolver.eval_const_expr(&expr).is_ok());
+                Ok(HirExpr {
+                    kind: HirExprKind::ConstInt(is_constant),
+                    ty: Ty::signed_ty(IntTy::I32),
+                    span,
+                })
+            }
             Expression::SizeofType(type_name) => {
                 let ty = self.lower_type_name(*type_name, parser_span)?;
                 let size = ty
