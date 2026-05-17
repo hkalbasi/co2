@@ -1,9 +1,9 @@
 use co2_hir::HirBinOp;
 use rustc_public_generative::rustc_public::{
     mir::{
-        BinOp as MirBinOp, CastKind, ConstOperand, Mutability,
-        Operand as MirOperand, Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind,
-        Rvalue, Statement as MirStatement, StatementKind as MirStatementKind,
+        BinOp as MirBinOp, CastKind, ConstOperand, Mutability, Operand as MirOperand,
+        Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind, Rvalue,
+        Statement as MirStatement, StatementKind as MirStatementKind,
     },
     ty::{IntTy, MirConst, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
 };

@@ -9,8 +9,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use co2_driver_lib::{CompileMode, compile_co2_source};
 
+#[derive(Clone, Copy)]
+enum LinkOutputKind {
+    Executable,
+    SharedLib,
+}
+
 struct CcArgs {
     emit_obj_only: bool,
+    link_kind: LinkOutputKind,
+    pic: bool,
     inputs: Vec<PathBuf>,
     output: Option<PathBuf>,
     opt_level: Option<String>,
@@ -52,6 +60,7 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
 fn run_co2c(args: CcArgs) {
     let temp_dir = make_temp_dir();
     let mut has_stdin = false;
+    let force_pic = args.pic || matches!(args.link_kind, LinkOutputKind::SharedLib);
 
     let mut resolve_stdin = |input: &Path| -> PathBuf {
         if input == Path::new("-") {
@@ -81,6 +90,7 @@ fn run_co2c(args: CcArgs) {
             args.output.as_deref(),
             args.opt_level.as_deref(),
             args.debuginfo,
+            force_pic,
         );
         compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
         if has_stdin {
@@ -110,6 +120,7 @@ fn run_co2c(args: CcArgs) {
             &args.cpp_args,
             args.opt_level.as_deref(),
             args.debuginfo,
+            force_pic,
         );
         object_paths.push(object_path);
     }
@@ -120,6 +131,7 @@ fn run_co2c(args: CcArgs) {
         args.output.as_deref(),
         args.opt_level.as_deref(),
         args.debuginfo,
+        args.link_kind,
     );
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -130,6 +142,8 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
     }
 
     let mut emit_obj_only = false;
+    let mut link_kind = LinkOutputKind::Executable;
+    let mut pic = false;
     let mut inputs = Vec::new();
     let mut output = None;
     let mut opt_level = None;
@@ -143,6 +157,9 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
         match arg.as_str() {
             "-c" => {
                 emit_obj_only = true;
+            }
+            "-shared" => {
+                link_kind = LinkOutputKind::SharedLib;
             }
             "-x" => {
                 i += 1;
@@ -191,6 +208,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
             {
                 linker_args.push(arg.clone());
             }
+            _ if arg == "-fPIC" || arg == "-fpic" => pic = true,
             _ if arg == "-g0" => debuginfo = Some(0),
             _ if arg == "-g1" => debuginfo = Some(1),
             _ if arg == "-g" || arg == "-g2" || arg == "-g3" => debuginfo = Some(2),
@@ -230,6 +248,8 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
     }
     Ok(CcArgs {
         emit_obj_only,
+        link_kind,
+        pic,
         inputs,
         output,
         opt_level,
@@ -244,6 +264,7 @@ fn build_rustc_object_args(
     output: Option<&Path>,
     opt_level: Option<&str>,
     debuginfo: Option<u8>,
+    pic: bool,
 ) -> Vec<String> {
     let stem = input
         .file_stem()
@@ -275,6 +296,11 @@ fn build_rustc_object_args(
     let dbg = debuginfo.unwrap_or(0);
     rustc_args.push("-C".to_owned());
     rustc_args.push(format!("debuginfo={dbg}"));
+
+    if pic {
+        rustc_args.push("-C".to_owned());
+        rustc_args.push("relocation-model=pic".to_owned());
+    }
 
     rustc_args.extend(shared_rust_flags());
 
@@ -353,6 +379,7 @@ fn compile_c_to_object(
     cpp_args: &[String],
     opt_level: Option<&str>,
     debuginfo: Option<u8>,
+    pic: bool,
 ) {
     let exe = current_invocation_path()
         .or_else(|| std::env::current_exe().ok())
@@ -364,6 +391,9 @@ fn compile_c_to_object(
     }
     if debuginfo.is_some() {
         cmd.arg("-g");
+    }
+    if pic {
+        cmd.arg("-fPIC");
     }
     for arg in cpp_args {
         cmd.arg(arg);
@@ -388,7 +418,13 @@ fn link_objects(
     output: Option<&Path>,
     opt_level: Option<&str>,
     debuginfo: Option<u8>,
+    link_kind: LinkOutputKind,
 ) {
+    if matches!(link_kind, LinkOutputKind::SharedLib) {
+        link_shared_objects(objects, linker_args, output);
+        return;
+    }
+
     let temp_dir = make_temp_dir();
     let link_stub = temp_dir.join("co2c_link.rs");
     fs::write(&link_stub, "#![no_main]\n").expect("failed to write linker stub");
@@ -417,6 +453,28 @@ fn link_objects(
     let _ = fs::remove_dir_all(&temp_dir);
     if !status.success() {
         panic!("rustc link failed with status {status}");
+    }
+}
+
+fn link_shared_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Path>) {
+    let mut cmd = Command::new("cc");
+    cmd.arg("-shared");
+
+    for object in objects {
+        cmd.arg(object);
+    }
+    for arg in linker_args {
+        cmd.arg(arg);
+    }
+
+    cmd.arg("-o");
+    cmd.arg(output.unwrap_or_else(|| Path::new("a.out")));
+
+    let status = cmd
+        .status()
+        .expect("failed to execute shared library link step");
+    if !status.success() {
+        panic!("shared library link failed with status {status}");
     }
 }
 
