@@ -12,51 +12,47 @@ use crate::{build::Builder, place::place};
 
 pub(crate) fn int_literal_bits(value: i128, target_ty: Ty) -> (UintTy, u128) {
     let TyKind::RigidTy(rigid) = target_ty.kind() else {
-        return (UintTy::U32, value as i32 as u32 as u128);
+        return (UintTy::U32, u128::from(value as i32 as u32));
     };
 
     match rigid {
         rustc_public_generative::rustc_public::ty::RigidTy::Int(IntTy::I8) => {
-            (UintTy::U8, value as i8 as u8 as u128)
+            (UintTy::U8, u128::from(value as i8 as u8))
         }
         rustc_public_generative::rustc_public::ty::RigidTy::Int(IntTy::I16) => {
-            (UintTy::U16, value as i16 as u16 as u128)
+            (UintTy::U16, u128::from(value as i16 as u16))
         }
         rustc_public_generative::rustc_public::ty::RigidTy::Int(IntTy::I32) => {
-            (UintTy::U32, value as i32 as u32 as u128)
+            (UintTy::U32, u128::from(value as i32 as u32))
         }
-        rustc_public_generative::rustc_public::ty::RigidTy::Int(IntTy::I64) => {
-            (UintTy::U64, value as u64 as u128)
+        rustc_public_generative::rustc_public::ty::RigidTy::Int(IntTy::I64)
+        | rustc_public_generative::rustc_public::ty::RigidTy::Uint(UintTy::U64) => {
+            (UintTy::U64, u128::from(value as u64))
         }
-        rustc_public_generative::rustc_public::ty::RigidTy::Int(IntTy::I128) => {
-            (UintTy::U128, value as i128 as u128)
+        rustc_public_generative::rustc_public::ty::RigidTy::Int(IntTy::I128)
+        | rustc_public_generative::rustc_public::ty::RigidTy::Uint(UintTy::U128) => {
+            (UintTy::U128, value as u128)
         }
         rustc_public_generative::rustc_public::ty::RigidTy::Int(IntTy::Isize) => {
             (UintTy::Usize, value as isize as usize as u128)
         }
         rustc_public_generative::rustc_public::ty::RigidTy::Uint(UintTy::U8) => {
-            (UintTy::U8, value as u8 as u128)
+            (UintTy::U8, u128::from(value as u8))
         }
         rustc_public_generative::rustc_public::ty::RigidTy::Uint(UintTy::U16) => {
-            (UintTy::U16, value as u16 as u128)
+            (UintTy::U16, u128::from(value as u16))
         }
         rustc_public_generative::rustc_public::ty::RigidTy::Uint(UintTy::U32) => {
-            (UintTy::U32, value as u32 as u128)
-        }
-        rustc_public_generative::rustc_public::ty::RigidTy::Uint(UintTy::U64) => {
-            (UintTy::U64, value as u64 as u128)
-        }
-        rustc_public_generative::rustc_public::ty::RigidTy::Uint(UintTy::U128) => {
-            (UintTy::U128, value as u128)
+            (UintTy::U32, u128::from(value as u32))
         }
         rustc_public_generative::rustc_public::ty::RigidTy::Uint(UintTy::Usize) => {
             (UintTy::Usize, value as usize as u128)
         }
-        _ => (UintTy::U32, value as i32 as u32 as u128),
+        _ => (UintTy::U32, u128::from(value as i32 as u32)),
     }
 }
 
-impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
+impl Builder<'_, '_> {
     pub(crate) fn lower_bin_op(&self, op: HirBinOp) -> MirBinOp {
         match op {
             HirBinOp::Add => MirBinOp::Add,

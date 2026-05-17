@@ -205,7 +205,10 @@ pub fn preprocess(input: &Path, cpp_args: &[String]) -> PreprocessedSource {
     configure_preprocessor(&mut preprocessor, &input, cpp_args);
 
     let Ok(input_bytes) = fs::read_to_string(&input) else {
-        panic!("Failed to read {input:?}. Ensure you have starting point file in your crate.");
+        panic!(
+            "Failed to read {}. Ensure you have starting point file in your crate.",
+            input.display()
+        );
     };
     let input_source = rewrite_main_source_for_preprocess(&input_bytes);
     let preprocessed = preprocessor.preprocess(&input_source.text);
@@ -383,8 +386,7 @@ fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_arg
                 preprocessor
                     .add_quote_include_path(cpp_args.get(i).expect("missing -iquote value"));
             }
-            "-nostdinc" => {}
-            "-undef" => {}
+            "-nostdinc" | "-undef" => {}
             _ if arg.starts_with("-I") && arg.len() > 2 => {
                 preprocessor.add_include_path(&arg[2..]);
             }
@@ -689,10 +691,10 @@ fn map_text_offset(source_text: &str, mapped_text: &str, output_offset: usize) -
     let needle = mapped_text.get(span_start..span_end).unwrap_or("").trim();
     if !needle.is_empty() {
         let mut matches = source_text.match_indices(needle);
-        if let Some((idx, _)) = matches.next() {
-            if matches.next().is_none() {
-                return idx + output_offset.saturating_sub(span_start);
-            }
+        if let Some((idx, _)) = matches.next()
+            && matches.next().is_none()
+        {
+            return idx + output_offset.saturating_sub(span_start);
         }
     }
     output_offset.min(source_text.len())
@@ -717,10 +719,10 @@ fn map_text_range(
         .trim();
     if !needle.is_empty() {
         let mut matches = source_text.match_indices(needle);
-        if let Some((idx, _)) = matches.next() {
-            if matches.next().is_none() {
-                return idx..(idx + needle.len());
-            }
+        if let Some((idx, _)) = matches.next()
+            && matches.next().is_none()
+        {
+            return idx..(idx + needle.len());
         }
     }
 
@@ -730,30 +732,30 @@ fn map_text_range(
     // source text and is surrounded by non-identifier characters (so it really
     // is a whole identifier), expand the match to include any enclosing macro
     // call of the form `IDENT(...)`.
-    if needle.bytes().all(|b| is_ident_continue(b)) {
-        if let Some(first_under) = needle.find('_') {
-            let mut suffix_start = first_under + 1;
-            while suffix_start < needle.len() {
-                let suffix = &needle[suffix_start..];
-                let is_whole_ident = |pos: usize| {
-                    let bytes = source_text.as_bytes();
-                    let before_ok = pos == 0 || !is_ident_continue(bytes[pos - 1]);
-                    let after_ok = pos + suffix.len() >= source_text.len()
-                        || !is_ident_continue(bytes[pos + suffix.len()]);
-                    before_ok && after_ok
-                };
-                let mut it = source_text
-                    .match_indices(suffix)
-                    .filter(|&(pos, _)| is_whole_ident(pos));
-                if let Some((idx, _)) = it.next() {
-                    if it.next().is_none() {
-                        return expand_to_macro_call(source_text, idx..idx + suffix.len());
-                    }
-                }
-                match suffix.find('_') {
-                    Some(next) => suffix_start += next + 1,
-                    None => break,
-                }
+    if needle.bytes().all(is_ident_continue)
+        && let Some(first_under) = needle.find('_')
+    {
+        let mut suffix_start = first_under + 1;
+        while suffix_start < needle.len() {
+            let suffix = &needle[suffix_start..];
+            let is_whole_ident = |pos: usize| {
+                let bytes = source_text.as_bytes();
+                let before_ok = pos == 0 || !is_ident_continue(bytes[pos - 1]);
+                let after_ok = pos + suffix.len() >= source_text.len()
+                    || !is_ident_continue(bytes[pos + suffix.len()]);
+                before_ok && after_ok
+            };
+            let mut it = source_text
+                .match_indices(suffix)
+                .filter(|&(pos, _)| is_whole_ident(pos));
+            if let Some((idx, _)) = it.next()
+                && it.next().is_none()
+            {
+                return expand_to_macro_call(source_text, idx..idx + suffix.len());
+            }
+            match suffix.find('_') {
+                Some(next) => suffix_start += next + 1,
+                None => break,
             }
         }
     }

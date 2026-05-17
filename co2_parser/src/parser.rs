@@ -3,7 +3,17 @@ use chumsky::{
     prelude::*,
 };
 use co2_ast::TypeResolver;
-use co2_ast::*;
+use co2_ast::{
+    BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier, Declarator, Designator,
+    EnumSpecifier, Enumerator, Expression, FileId, ForInit, FunctionDefinitionSignature,
+    FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
+    LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
+    RustFunctionParam, RustFunctionSignature, RustPath, RustPathSegment, RustTy, Span, Spanned,
+    SpecifierQualifier, StatelessResolver, Statement, StatementOrDeclaration,
+    StorageClassSpecifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
+    StructOrUnionSpecifier, Token, TranslationUnit, TypeName, TypeQualifier, TypeQueryResult,
+    TypeSpecifier, UnaryOp, UpdateOp, UseItem, parse_unsigned_integer_constant,
+};
 
 fn join_spans(start: Span, end: Span) -> Span {
     if start.context == end.context {
@@ -18,23 +28,21 @@ fn join_spans(start: Span, end: Span) -> Span {
 }
 
 fn single_token_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
-    slice.first().map(|(_, span)| *span).unwrap_or(fallback)
+    slice.first().map_or(fallback, |(_, span)| *span)
 }
 
 fn slice_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
     slice
         .first()
         .zip(slice.last())
-        .map(|(first, last)| join_spans(first.1, last.1))
-        .unwrap_or(fallback)
+        .map_or(fallback, |(first, last)| join_spans(first.1, last.1))
 }
 
 fn rust_path_span<R: TypeResolver>(path: &RustPath<R>, fallback: Span) -> Span {
     path.segments
         .first()
         .zip(path.segments.last())
-        .map(|(first, last)| join_spans(first.1, last.1))
-        .unwrap_or(fallback)
+        .map_or(fallback, |(first, last)| join_spans(first.1, last.1))
 }
 
 fn look_ahead<'src, I>(
@@ -84,7 +92,7 @@ where
 
         content.delimited_by(just(Token::LBrace), just(Token::RBrace))
     })
-    .map_with(|_, e| {
+    .map_with(|(), e| {
         let slice = e.slice();
         let span = slice_span(slice, e.span());
         (
@@ -478,7 +486,7 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    let comma = assignment
+    assignment
         .separated_by(just(Token::Comma))
         .at_least(1)
         .collect::<Vec<_>>()
@@ -493,9 +501,7 @@ where
                 );
             }
             r
-        });
-
-    comma
+        })
 }
 
 pub(crate) fn assignment_expression<'src, I, R: TypeResolver>(
@@ -693,7 +699,7 @@ where
                 Token::FloatLit(i, suffix) => Expression::Constant(Constant::Float(parse_float_constant(&i), suffix)),
                 Token::CharLit(s) => {
                     let ch = s.first().copied().expect("empty char literal");
-                    Expression::Constant(Constant::Char(ch as u32))
+                    Expression::Constant(Constant::Char(u32::from(ch)))
                 },
             },
         ))
@@ -1071,7 +1077,7 @@ where
             })
             .boxed();
 
-        let assignment = conditional_expr
+        conditional_expr
             .clone()
             .then(
                 choice((
@@ -1111,16 +1117,15 @@ where
                     lhs
                 }
             })
-            .map_with(|r, e| (r.0, e.span()));
-
-        assignment
+            .map_with(|r, e| (r.0, e.span()))
     })
 }
 
 fn parse_integer_constant(text: &str) -> i128 {
-    parse_unsigned_integer_constant(text)
-        .map(|v| v as i128)
-        .unwrap_or_else(|e| panic!("invalid integer literal `{text}`: {e}"))
+    parse_unsigned_integer_constant(text).map_or_else(
+        |e| panic!("invalid integer literal `{text}`: {e}"),
+        |v| v as i128,
+    )
 }
 
 fn parse_float_constant(text: &str) -> f64 {
@@ -1183,7 +1188,7 @@ where
 
         content.delimited_by(just(Token::LBracket), just(Token::RBracket))
     })
-    .map_with(|_, e| {
+    .map_with(|(), e| {
         let slice = e.slice();
         let span = slice_span(slice, e.span());
         (
@@ -1232,15 +1237,14 @@ where
                 .into_iter()
                 .flatten()
                 .collect::<Vec<Spanned<RustPathSegment<R>>>>();
-            let span = segments
-                .first()
-                .zip(segments.last())
-                .map(|(first, last)| join_spans(first.1, last.1))
-                .unwrap_or(Span {
+            let span = segments.first().zip(segments.last()).map_or(
+                Span {
                     start: 0,
                     end: 0,
                     context: FileId::INVALID,
-                });
+                },
+                |(first, last)| join_spans(first.1, last.1),
+            );
             (RustPath { segments }, span)
         }),
     )
@@ -1739,7 +1743,9 @@ where
 
                 // If we have no type specifier yet, peek at the next token.  If it is a
                 // typedef name it must become the type specifier, not a declarator ident.
-                let next_is_typedef_name = if !has_type_spec {
+                let next_is_typedef_name = if has_type_spec {
+                    false
+                } else {
                     let checkpoint = inp.save();
                     let next = inp.next();
                     inp.rewind(checkpoint);
@@ -1753,8 +1759,6 @@ where
                         ),
                         _ => false,
                     }
-                } else {
-                    false
                 };
 
                 if !next_is_typedef_name {
@@ -1810,7 +1814,7 @@ where
             .ignore_then(choice((just(Token::Const).to(false), mut_token().to(true))))
             .then(rec.clone())
             .map(|(mutable, inner)| RustTy::Ptr {
-                mutable: mutable,
+                mutable,
                 inner: Box::new(inner),
             })
             .map_with(|r, e| (r, e.span()));
@@ -1882,7 +1886,7 @@ where
 
     pub_token
         .then(type_token())
-        .map(|(is_pub, _)| is_pub)
+        .map(|(is_pub, ())| is_pub)
         .then(identifier())
         .then_ignore(just(Token::Assign))
         .then(rust_ty(resolver.clone()))
@@ -1934,7 +1938,7 @@ where
 
     pub_token
         .then(fn_token())
-        .map(|(is_pub, _)| is_pub)
+        .map(|(is_pub, ())| is_pub)
         .then(identifier())
         .then(params)
         .then(ret)
@@ -1979,7 +1983,7 @@ where
                     (Declarator::Identifier((ident, span)), span)
                 }
             })
-            .or(empty().map_with(|_, e| (Declarator::Abstract, e.span())));
+            .or(empty().map_with(|(), e| (Declarator::Abstract, e.span())));
         let grouped = rec
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
@@ -2035,7 +2039,7 @@ where
                 base
             });
 
-        let declarator = just(Token::Star)
+        just(Token::Star)
             .ignore_then(type_qualifier().repeated().collect())
             .repeated()
             .collect()
@@ -2048,9 +2052,7 @@ where
                     };
                 }
                 base
-            });
-
-        declarator
+            })
     })
 }
 
@@ -2152,19 +2154,16 @@ where
             let declarator_checkpoint = inp.save();
             let item_start = inp.cursor();
 
-            let decl = match inp.parse(
+            let Ok(decl) = inp.parse(
                 declarator(
                     current_resolver.clone(),
                     assignment_expression(current_resolver.clone(), stmt_rec.clone()),
                 )
                 .filter(|d| declarator_has_name(&d.0))
                 .filter(|d| function_decl_direct_inner_is_not_function(&d.0)),
-            ) {
-                Ok(d) => d,
-                Err(_) => {
-                    inp.rewind(declarator_checkpoint);
-                    break;
-                }
+            ) else {
+                inp.rewind(declarator_checkpoint);
+                break;
             };
 
             // Scope of identifier begins at the end of its declarator (C11 6.2.1p7).
@@ -2202,9 +2201,9 @@ fn declarator_has_name<R: TypeResolver>(decl: &Declarator<R>) -> bool {
     match decl {
         Declarator::Identifier(_) => true,
         Declarator::Abstract => false,
-        Declarator::FunctionDeclarator { declarator, .. } => declarator_has_name(&declarator.0),
-        Declarator::PointerDeclarator { declarator, .. } => declarator_has_name(&declarator.0),
-        Declarator::ArrayDeclarator { declarator, .. } => declarator_has_name(&declarator.0),
+        Declarator::FunctionDeclarator { declarator, .. }
+        | Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::ArrayDeclarator { declarator, .. } => declarator_has_name(&declarator.0),
     }
 }
 
@@ -2388,7 +2387,7 @@ where
 
         content.delimited_by(just(Token::LBrace), just(Token::RBrace))
     })
-    .map_with(|_, e| {
+    .map_with(|(), e| {
         let slice: &[Spanned<Token>] = e.slice();
         // slice includes the surrounding { }, strip them to get inner tokens
         let inner: Vec<Spanned<Token>> = if slice.len() >= 2 {
@@ -2440,15 +2439,15 @@ fn pragma_pack_action(ident: &str) -> Option<co2_ast::PackAction> {
     if ident == "__ccc_pack_push_only" {
         return Some(PackAction::PushOnly);
     }
-    if let Some(n_str) = ident.strip_prefix("__ccc_pack_push_") {
-        if let Ok(n) = n_str.parse::<u32>() {
-            return Some(PackAction::PushSet(n));
-        }
+    if let Some(n_str) = ident.strip_prefix("__ccc_pack_push_")
+        && let Ok(n) = n_str.parse::<u32>()
+    {
+        return Some(PackAction::PushSet(n));
     }
-    if let Some(n_str) = ident.strip_prefix("__ccc_pack_set_") {
-        if let Ok(n) = n_str.parse::<u32>() {
-            return Some(PackAction::Set(n));
-        }
+    if let Some(n_str) = ident.strip_prefix("__ccc_pack_set_")
+        && let Ok(n) = n_str.parse::<u32>()
+    {
+        return Some(PackAction::Set(n));
     }
     None
 }

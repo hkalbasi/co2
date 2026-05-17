@@ -171,7 +171,7 @@ impl HirCtx<'_> {
         param_names: &[(usize, String)],
     ) -> Result<HirBody, String> {
         self.reset_labels();
-        self.lower_compound_statement(parsed, &def.fn_sig().skip_binder(), &param_names)
+        self.lower_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names)
     }
 
     fn lower_compound_statement(

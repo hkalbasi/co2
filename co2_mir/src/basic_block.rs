@@ -9,7 +9,7 @@ use rustc_public_generative::rustc_public::{
 
 use crate::{build::Builder, place::place};
 
-impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
+impl Builder<'_, '_> {
     pub(crate) fn lower_stmt(&mut self, stmt: &HirStmt) {
         match stmt {
             HirStmt::Decl(HirDecl {
@@ -243,10 +243,10 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             })
             .collect::<Vec<_>>();
         branches.sort_by_key(|(discr, _)| *discr);
-        let otherwise = branches
-            .first()
-            .map(|(_, target)| *target)
-            .unwrap_or_else(|| panic!("indirect goto requires at least one named label"));
+        let otherwise = branches.first().map_or_else(
+            || panic!("indirect goto requires at least one named label"),
+            |(_, target)| *target,
+        );
         match &mut self.blocks[block_idx].terminator.kind {
             TerminatorKind::SwitchInt { targets, .. } => {
                 *targets = SwitchTargets::new(branches, otherwise);

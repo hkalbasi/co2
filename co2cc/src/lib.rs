@@ -28,11 +28,12 @@ struct CcArgs {
 }
 
 pub fn main() -> std::process::ExitCode {
-    main_with_args(std::env::args().collect())
+    let args: Vec<String> = std::env::args().collect();
+    main_with_args(&args)
 }
 
-pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
-    let cc_args = match parse_args(&args) {
+pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
+    let cc_args = match parse_args(args) {
         Ok(args) => args,
         Err(msg) => {
             eprintln!("co2cc: {msg}");
@@ -40,7 +41,7 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
         }
     };
 
-    if let Err(payload) = std::panic::catch_unwind(|| run_co2c(cc_args)) {
+    if let Err(payload) = std::panic::catch_unwind(|| run_co2c(&cc_args)) {
         if co2_ast::is_diagnostic_abort(payload.as_ref()) {
             return std::process::ExitCode::from(5);
         }
@@ -57,7 +58,7 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-fn run_co2c(args: CcArgs) {
+fn run_co2c(args: &CcArgs) {
     let temp_dir = make_temp_dir();
     let mut has_stdin = false;
     let force_pic = args.pic || matches!(args.link_kind, LinkOutputKind::SharedLib);
@@ -191,6 +192,19 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
                 linker_args.push(flag);
                 linker_args.push(val.clone());
             }
+            "-fPIC" | "-fpic" => pic = true,
+            "-g0" => debuginfo = Some(0),
+            "-g1" => debuginfo = Some(1),
+            "-g" | "-g2" | "-g3" => debuginfo = Some(2),
+            "-O0" | "-Og" => opt_level = Some("0".to_owned()),
+            "-O1" => opt_level = Some("1".to_owned()),
+            "-O2" => opt_level = Some("2".to_owned()),
+            "-O3" => opt_level = Some("3".to_owned()),
+            "-Os" => opt_level = Some("s".to_owned()),
+            "-Oz" => opt_level = Some("z".to_owned()),
+            "-" => {
+                inputs.push(PathBuf::from(arg));
+            }
             _ if arg.starts_with("-I")
                 || arg.starts_with("-D")
                 || arg.starts_with("-U")
@@ -207,20 +221,6 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
                 || arg == "-pthread" =>
             {
                 linker_args.push(arg.clone());
-            }
-            _ if arg == "-fPIC" || arg == "-fpic" => pic = true,
-            _ if arg == "-g0" => debuginfo = Some(0),
-            _ if arg == "-g1" => debuginfo = Some(1),
-            _ if arg == "-g" || arg == "-g2" || arg == "-g3" => debuginfo = Some(2),
-            _ if arg == "-O0" => opt_level = Some("0".to_owned()),
-            _ if arg == "-O1" => opt_level = Some("1".to_owned()),
-            _ if arg == "-O2" => opt_level = Some("2".to_owned()),
-            _ if arg == "-O3" => opt_level = Some("3".to_owned()),
-            _ if arg == "-Os" => opt_level = Some("s".to_owned()),
-            _ if arg == "-Oz" => opt_level = Some("z".to_owned()),
-            _ if arg == "-Og" => opt_level = Some("0".to_owned()),
-            "-" => {
-                inputs.push(PathBuf::from(arg));
             }
             _ if arg.starts_with('-') => {}
             _ => {
@@ -359,7 +359,7 @@ fn shared_rust_flags() -> Vec<String> {
         .map(|flags| {
             flags
                 .split_ascii_whitespace()
-                .map(|x| x.to_owned())
+                .map(std::borrow::ToOwned::to_owned)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -439,7 +439,7 @@ fn link_objects(
     );
     let exe = std::env::var_os("CO2_RUN_SCRIPT")
         .map(PathBuf::from)
-        .or_else(|| current_invocation_path())
+        .or_else(current_invocation_path)
         .or_else(|| std::env::current_exe().ok())
         .expect("failed to locate co2c executable");
 
@@ -451,9 +451,7 @@ fn link_objects(
     let status = cmd.status().expect("failed to execute co2rustc link step");
     let _ = fs::remove_file(&link_stub);
     let _ = fs::remove_dir_all(&temp_dir);
-    if !status.success() {
-        panic!("rustc link failed with status {status}");
-    }
+    assert!(status.success(), "rustc link failed with status {status}");
 }
 
 fn link_shared_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Path>) {
@@ -473,9 +471,10 @@ fn link_shared_objects(objects: &[PathBuf], linker_args: &[String], output: Opti
     let status = cmd
         .status()
         .expect("failed to execute shared library link step");
-    if !status.success() {
-        panic!("shared library link failed with status {status}");
-    }
+    assert!(
+        status.success(),
+        "shared library link failed with status {status}"
+    );
 }
 
 fn make_temp_dir() -> PathBuf {

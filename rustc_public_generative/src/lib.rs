@@ -122,7 +122,7 @@ pub struct HirStructureCtx<'tcx> {
     inner: internal::Context,
 }
 
-impl<'tcx> std::fmt::Debug for HirStructureCtx<'tcx> {
+impl std::fmt::Debug for HirStructureCtx<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HirStructureCtx").finish()
     }
@@ -147,7 +147,7 @@ impl HirStructureCtx<'_> {
         internal::root_crate_def_id(self.tcx)
     }
 
-    pub fn allocate_def_id(&self, parent: DefId, data: DefData) -> DefId {
+    pub fn allocate_def_id(&self, parent: DefId, data: &DefData) -> DefId {
         internal::allocate_def_id(self.tcx, parent, data)
     }
 
@@ -234,13 +234,13 @@ fn erase_bound_regions_in_ty(ty: rustc_public::ty::Ty) -> rustc_public::ty::Ty {
                         GenericArgKind::Lifetime(erase_region(region))
                     }
                     GenericArgKind::Type(ty) => GenericArgKind::Type(erase_bound_regions_in_ty(ty)),
-                    GenericArgKind::Const(c) => GenericArgKind::Const(erase_const(c)),
+                    GenericArgKind::Const(c) => GenericArgKind::Const(erase_const(&c)),
                 })
                 .collect(),
         )
     }
 
-    fn erase_const(c: TyConst) -> TyConst {
+    fn erase_const(c: &TyConst) -> TyConst {
         let kind = match c.kind().clone() {
             TyConstKind::Param(param) => TyConstKind::Param(param),
             TyConstKind::Bound(db, var) => TyConstKind::Bound(db, var),
@@ -265,7 +265,7 @@ fn erase_bound_regions_in_ty(ty: rustc_public::ty::Ty) -> rustc_public::ty::Ty {
                 RigidTy::Foreign(def) => RigidTy::Foreign(def),
                 RigidTy::Str => RigidTy::Str,
                 RigidTy::Array(elem, len) => {
-                    RigidTy::Array(erase_bound_regions_in_ty(elem), erase_const(len))
+                    RigidTy::Array(erase_bound_regions_in_ty(elem), erase_const(&len))
                 }
                 RigidTy::Pat(inner, pattern) => {
                     RigidTy::Pat(erase_bound_regions_in_ty(inner), pattern)
@@ -312,7 +312,7 @@ fn erase_bound_regions_in_ty(ty: rustc_public::ty::Ty) -> rustc_public::ty::Ty {
                                                 }
                                                 rustc_public::ty::TermKind::Const(c) => {
                                                     rustc_public::ty::TermKind::Const(erase_const(
-                                                        c,
+                                                        &c,
                                                     ))
                                                 }
                                             },

@@ -235,10 +235,10 @@ fn expand_condition_macros(expr: &str, macros: &MacroTable) -> String {
 
             // Expand macro if it exists
             if let Some(mac) = macros.get(ident) {
-                if !mac.is_function_like {
-                    result.push_str(&mac.body);
-                } else {
+                if mac.is_function_like {
                     result.push_str(ident);
+                } else {
+                    result.push_str(&mac.body);
                 }
             } else {
                 // Undefined identifiers become 0 in #if expressions
@@ -378,9 +378,9 @@ fn tokenize_expr(expr: &str) -> Vec<ExprToken> {
                 } else {
                     0
                 };
-                c as i64
+                i64::from(c)
             } else if i < len {
-                let c = bytes[i] as i64;
+                let c = i64::from(bytes[i]);
                 i += 1;
                 c
             } else {
@@ -561,7 +561,7 @@ impl<'a> ExprParser<'a> {
             self.advance();
             let right = self.parse_and();
             // Logical operators always produce signed int result
-            left = (if left.0 != 0 || right.0 != 0 { 1 } else { 0 }, false);
+            left = (i64::from(left.0 != 0 || right.0 != 0), false);
         }
         left
     }
@@ -571,7 +571,7 @@ impl<'a> ExprParser<'a> {
         while self.peek_op("&&") {
             self.advance();
             let right = self.parse_bitor();
-            left = (if left.0 != 0 && right.0 != 0 { 1 } else { 0 }, false);
+            left = (i64::from(left.0 != 0 && right.0 != 0), false);
         }
         left
     }
@@ -621,7 +621,7 @@ impl<'a> ExprParser<'a> {
                 } else {
                     left.0 == right.0
                 };
-                left = (if eq { 1 } else { 0 }, false);
+                left = (i64::from(eq), false);
             } else if self.peek_op("!=") {
                 self.advance();
                 let right = self.parse_relational();
@@ -631,7 +631,7 @@ impl<'a> ExprParser<'a> {
                 } else {
                     left.0 != right.0
                 };
-                left = (if ne { 1 } else { 0 }, false);
+                left = (i64::from(ne), false);
             } else {
                 break;
             }
@@ -651,7 +651,7 @@ impl<'a> ExprParser<'a> {
                 } else {
                     left.0 < right.0
                 };
-                left = (if cmp { 1 } else { 0 }, false);
+                left = (i64::from(cmp), false);
             } else if self.peek_op(">") {
                 self.advance();
                 let right = self.parse_shift();
@@ -661,7 +661,7 @@ impl<'a> ExprParser<'a> {
                 } else {
                     left.0 > right.0
                 };
-                left = (if cmp { 1 } else { 0 }, false);
+                left = (i64::from(cmp), false);
             } else if self.peek_op("<=") {
                 self.advance();
                 let right = self.parse_shift();
@@ -671,7 +671,7 @@ impl<'a> ExprParser<'a> {
                 } else {
                     left.0 <= right.0
                 };
-                left = (if cmp { 1 } else { 0 }, false);
+                left = (i64::from(cmp), false);
             } else if self.peek_op(">=") {
                 self.advance();
                 let right = self.parse_shift();
@@ -681,7 +681,7 @@ impl<'a> ExprParser<'a> {
                 } else {
                     left.0 >= right.0
                 };
-                left = (if cmp { 1 } else { 0 }, false);
+                left = (i64::from(cmp), false);
             } else {
                 break;
             }
@@ -794,7 +794,7 @@ impl<'a> ExprParser<'a> {
             self.advance();
             let val = self.parse_unary();
             // Logical NOT always produces signed int
-            return (if val.0 == 0 { 1 } else { 0 }, false);
+            return (i64::from(val.0 == 0), false);
         }
         if self.peek_op("-") {
             self.advance();
@@ -802,9 +802,8 @@ impl<'a> ExprParser<'a> {
             // Unary minus: if unsigned, the result is still unsigned (wrapping)
             if val.1 {
                 return ((val.0 as u64).wrapping_neg() as i64, true);
-            } else {
-                return (val.0.wrapping_neg(), false);
             }
+            return (val.0.wrapping_neg(), false);
         }
         if self.peek_op("+") {
             self.advance();
@@ -861,7 +860,6 @@ impl<'a> ExprParser<'a> {
                 // Special case: "true" and "false"
                 match name.as_str() {
                     "true" => (1, false),
-                    "false" => (0, false),
                     _ => (0, false),
                 }
             }

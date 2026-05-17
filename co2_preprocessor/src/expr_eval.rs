@@ -13,7 +13,7 @@ use super::utils::{bytes_to_str, is_ident_cont_byte, is_ident_start_byte};
 impl Preprocessor {
     /// Replace remaining identifiers (not keywords) with 0 in a #if expression.
     /// Per C standard, after macro expansion, undefined identifiers in #if evaluate to 0.
-    pub(super) fn replace_remaining_idents_with_zero(&self, expr: &str) -> String {
+    pub(super) fn replace_remaining_idents_with_zero(expr: &str) -> String {
         let mut result = String::new();
         let bytes = expr.as_bytes();
         let len = bytes.len();
@@ -151,13 +151,13 @@ impl Preprocessor {
                     let is_def = self.macros.is_defined(name);
                     result.push_str(if is_def { "1" } else { "0" });
                 } else if ident == "__has_builtin" {
-                    let val = self.resolve_has_builtin_call_bytes(bytes, &mut i);
+                    let val = Self::resolve_has_builtin_call_bytes(bytes, &mut i);
                     result.push_str(val);
                 } else if ident == "__has_attribute" {
-                    let val = self.resolve_has_attribute_call_bytes(bytes, &mut i);
+                    let val = Self::resolve_has_attribute_call_bytes(bytes, &mut i);
                     result.push_str(val);
                 } else if ident == "__has_feature" || ident == "__has_extension" {
-                    self.skip_paren_arg_bytes(bytes, &mut i);
+                    Self::skip_paren_arg_bytes(bytes, &mut i);
                     result.push('0');
                 } else if ident == "__has_include" {
                     let val = self.resolve_has_include_call_bytes(bytes, &mut i, false);
@@ -179,7 +179,7 @@ impl Preprocessor {
     }
 
     /// Parse `(name)` after `__has_builtin` and return "1" or "0" (byte-oriented).
-    fn resolve_has_builtin_call_bytes(&self, bytes: &[u8], i: &mut usize) -> &'static str {
+    fn resolve_has_builtin_call_bytes(bytes: &[u8], i: &mut usize) -> &'static str {
         let len = bytes.len();
         while *i < len && (bytes[*i] == b' ' || bytes[*i] == b'\t') {
             *i += 1;
@@ -210,7 +210,7 @@ impl Preprocessor {
     }
 
     /// Parse `(name)` after `__has_attribute` and return "1" or "0" (byte-oriented).
-    fn resolve_has_attribute_call_bytes(&self, bytes: &[u8], i: &mut usize) -> &'static str {
+    fn resolve_has_attribute_call_bytes(bytes: &[u8], i: &mut usize) -> &'static str {
         let len = bytes.len();
         while *i < len && (bytes[*i] == b' ' || bytes[*i] == b'\t') {
             *i += 1;
@@ -320,7 +320,7 @@ impl Preprocessor {
     }
 
     /// Skip a parenthesized argument (byte-oriented).
-    fn skip_paren_arg_bytes(&self, bytes: &[u8], i: &mut usize) {
+    fn skip_paren_arg_bytes(bytes: &[u8], i: &mut usize) {
         let len = bytes.len();
         while *i < len && (bytes[*i] == b' ' || bytes[*i] == b'\t') {
             *i += 1;

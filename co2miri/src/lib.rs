@@ -92,9 +92,11 @@ fn interpreter_mode(args: Vec<String>) -> std::process::ExitCode {
 
     // Snapshot environment before we mutate it.
     let env_snapshot: Vec<_> = env::vars_os().collect();
-    let mut miri_config = MiriConfig::default();
-    miri_config.env = env_snapshot;
-    miri_config.args = program_args;
+    let miri_config = MiriConfig {
+        env: env_snapshot,
+        args: program_args,
+        ..Default::default()
+    };
 
     // Splice MIRI_DEFAULT_ARGS and run co2 pipeline + miri interpretation.
     let miri_args = splice_miri_default_args(rustc_args);

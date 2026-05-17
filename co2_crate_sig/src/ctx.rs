@@ -15,7 +15,7 @@ pub(crate) struct CrateSigCtx<'a> {
 }
 
 impl CrateSigCtx<'_> {
-    pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {
+    pub(crate) fn terminate_with_error(span: co2_ast::Span, msg: &str) -> ! {
         co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(span, msg)]);
     }
 
@@ -23,7 +23,7 @@ impl CrateSigCtx<'_> {
         self.hir_ctx.root_crate_def_id()
     }
 
-    pub(crate) fn allocate_def_id(&self, parent: DefId, data: DefData) -> DefId {
+    pub(crate) fn allocate_def_id(&self, parent: DefId, data: &DefData) -> DefId {
         self.hir_ctx.allocate_def_id(parent, data)
     }
 

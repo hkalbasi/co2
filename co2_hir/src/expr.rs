@@ -27,87 +27,87 @@ use crate::{decl::hir_ty_to_ty, ty::is_condition_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
 fn lower_dependency_const(
-    value: rustc_public_generative::DependencyConstValue,
+    value: &rustc_public_generative::DependencyConstValue,
     span: RustSpan,
 ) -> HirExpr {
     match value {
         rustc_public_generative::DependencyConstValue::Bool(v) => HirExpr {
-            kind: HirExprKind::ConstInt(if v { 1 } else { 0 }),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::bool_ty(),
             span,
         },
         rustc_public_generative::DependencyConstValue::Char(ch) => HirExpr {
-            kind: HirExprKind::ConstInt(ch as i128),
+            kind: HirExprKind::ConstInt(*ch as i128),
             ty: Ty::signed_ty(IntTy::I32),
             span,
         },
         rustc_public_generative::DependencyConstValue::I8(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::signed_ty(IntTy::I8),
             span,
         },
         rustc_public_generative::DependencyConstValue::I16(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::signed_ty(IntTy::I16),
             span,
         },
         rustc_public_generative::DependencyConstValue::I32(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::signed_ty(IntTy::I32),
             span,
         },
         rustc_public_generative::DependencyConstValue::I64(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::signed_ty(IntTy::I64),
             span,
         },
         rustc_public_generative::DependencyConstValue::I128(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v),
+            kind: HirExprKind::ConstInt(*v),
             ty: Ty::signed_ty(IntTy::I128),
             span,
         },
         rustc_public_generative::DependencyConstValue::Isize(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::signed_ty(IntTy::Isize),
             span,
         },
         rustc_public_generative::DependencyConstValue::U8(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::unsigned_ty(UintTy::U8),
             span,
         },
         rustc_public_generative::DependencyConstValue::U16(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::unsigned_ty(UintTy::U16),
             span,
         },
         rustc_public_generative::DependencyConstValue::U32(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::unsigned_ty(UintTy::U32),
             span,
         },
         rustc_public_generative::DependencyConstValue::U64(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::unsigned_ty(UintTy::U64),
             span,
         },
         rustc_public_generative::DependencyConstValue::U128(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(*v as i128),
             ty: Ty::unsigned_ty(UintTy::U128),
             span,
         },
         rustc_public_generative::DependencyConstValue::Usize(v) => HirExpr {
-            kind: HirExprKind::ConstInt(v as i128),
+            kind: HirExprKind::ConstInt(i128::from(*v)),
             ty: Ty::unsigned_ty(UintTy::Usize),
             span,
         },
         rustc_public_generative::DependencyConstValue::F32(v) => HirExpr {
-            kind: HirExprKind::ConstFloat(v as f64),
+            kind: HirExprKind::ConstFloat(f64::from(*v)),
             ty: Ty::from_rigid_kind(RigidTy::Float(FloatTy::F32)),
             span,
         },
         rustc_public_generative::DependencyConstValue::F64(v) => HirExpr {
-            kind: HirExprKind::ConstFloat(v),
+            kind: HirExprKind::ConstFloat(*v),
             ty: Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
             span,
         },
@@ -124,8 +124,7 @@ pub struct HirExpr {
 impl HirExpr {
     fn is_null_like(&self) -> bool {
         match &self.kind {
-            HirExprKind::Zeroed => true,
-            HirExprKind::ConstInt(0) => true,
+            HirExprKind::Zeroed | HirExprKind::ConstInt(0) => true,
             HirExprKind::Cast(inner) => inner.is_null_like(),
             _ => false,
         }
@@ -280,7 +279,7 @@ pub enum HirBinOp {
 }
 
 impl HirBinOp {
-    fn is_comparison(&self) -> bool {
+    fn is_comparison(self) -> bool {
         matches!(
             self,
             HirBinOp::Eq | HirBinOp::Lt | HirBinOp::Le | HirBinOp::Ne | HirBinOp::Ge | HirBinOp::Gt
@@ -470,7 +469,7 @@ impl HirCtx<'_> {
         &self,
         parser_span: co2_ast::Span,
         sig: &rustc_public_generative::rustc_public::ty::FnSig,
-        args: &mut Vec<HirExpr>,
+        args: &mut [HirExpr],
     ) {
         if sig.inputs().len() != args.len() && !sig.c_variadic {
             self.terminate_with_error(
@@ -484,19 +483,18 @@ impl HirCtx<'_> {
         }
 
         for (idx, actual) in args.iter_mut().enumerate() {
-            let expected = match sig.inputs().get(idx) {
-                Some(ty) => *ty,
-                None => {
-                    if actual.ty.kind().is_adt() && enum_payload_ty(actual.ty).is_none() {
-                        *actual = HirExpr {
-                            kind: HirExprKind::AddrOf(Box::new(actual.clone())),
-                            ty: Ty::new_ptr(actual.ty, Mutability::Mut),
-                            span: actual.span,
-                        };
-                        continue;
-                    }
-                    ty_passed_to_variadic(actual.ty)
+            let expected = if let Some(ty) = sig.inputs().get(idx) {
+                *ty
+            } else {
+                if actual.ty.kind().is_adt() && enum_payload_ty(actual.ty).is_none() {
+                    *actual = HirExpr {
+                        kind: HirExprKind::AddrOf(Box::new(actual.clone())),
+                        ty: Ty::new_ptr(actual.ty, Mutability::Mut),
+                        span: actual.span,
+                    };
+                    continue;
                 }
+                ty_passed_to_variadic(actual.ty)
             };
             if needs_implicit_cast(expected, actual.ty) {
                 *actual = HirExpr {
@@ -575,10 +573,7 @@ impl HirCtx<'_> {
         else {
             return Ok(None);
         };
-        let resolved = match resolution_kind {
-            MethodResolutionKind::Inherent => ResolvedValue::Fn(fn_def, resolved_generic_args),
-            MethodResolutionKind::Trait => ResolvedValue::Fn(fn_def, resolved_generic_args),
-        };
+        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args);
         let func_ty = resolved.ty();
 
         let mut lowered_args = Vec::with_capacity(params.len() + 1);
@@ -713,10 +708,7 @@ impl HirCtx<'_> {
         else {
             return Ok(None);
         };
-        let resolved = match resolution_kind {
-            MethodResolutionKind::Inherent => ResolvedValue::Fn(fn_def, resolved_generic_args),
-            MethodResolutionKind::Trait => ResolvedValue::Fn(fn_def, resolved_generic_args),
-        };
+        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args);
         let func_ty = resolved.ty();
 
         let mut lowered_args = Vec::with_capacity(params.len());
@@ -741,12 +733,12 @@ impl HirCtx<'_> {
         if !is_array_ty(expr.ty) {
             return;
         }
-        *expr = self.array_to_pointer_decay(expr.clone());
+        *expr = self.array_to_pointer_decay(expr);
     }
 
-    fn array_to_pointer_decay(&self, expr: HirExpr) -> HirExpr {
+    fn array_to_pointer_decay(&self, expr: &HirExpr) -> HirExpr {
         let elem = array_elem_ty(expr.ty).expect("Expr is not array");
-        let mutability = addr_of_mutability(&expr);
+        let mutability = addr_of_mutability(expr);
         HirExpr {
             kind: HirExprKind::ArrayToPointer(Box::new(expr.clone())),
             ty: Ty::new_ptr(elem, mutability),
@@ -767,11 +759,11 @@ impl HirCtx<'_> {
             .kind()
             .fn_sig()
             .expect("FnDef should have fn signature");
-        return HirExpr {
+        HirExpr {
             span: expr.span,
             kind: HirExprKind::Cast(Box::new(expr)),
             ty: Ty::from_rigid_kind(RigidTy::FnPtr(sig)),
-        };
+        }
     }
 
     fn fn_def_to_c_fn_ptr_decay(&self, expr: HirExpr) -> HirExpr {
@@ -782,11 +774,11 @@ impl HirCtx<'_> {
             .expect("FnDef should have fn signature");
         let ty = Ty::from_rigid_kind(RigidTy::FnPtr(sig));
         let ty = self.maybe_uninit_of(ty);
-        return HirExpr {
+        HirExpr {
             span: expr.span,
             kind: HirExprKind::Cast(Box::new(expr)),
             ty,
-        };
+        }
     }
 
     fn emit_cast(&self, expr: HirExpr, ty: Ty) -> HirExpr {
@@ -846,7 +838,7 @@ impl HirCtx<'_> {
                             span,
                         })
                     } else if let Some(value) = resolver.dependency_const_value(def_id) {
-                        Ok(lower_dependency_const(value, span))
+                        Ok(lower_dependency_const(&value, span))
                     } else {
                         Err(format!("missing scalar constant value for def {def_id:?}"))
                     }
@@ -859,15 +851,15 @@ impl HirCtx<'_> {
                     let Some(&local) = local_map.get(&(l as usize)) else {
                         self.terminate_with_error(
                             parser_span,
-                            &format!("Invalid local {l}. Available locals are {:#?}", local_map),
+                            &format!("Invalid local {l}. Available locals are {local_map:#?}"),
                         );
                     };
                     let local_decl = &locals[local];
-                    return Ok(HirExpr {
+                    Ok(HirExpr {
                         kind: HirExprKind::Local(local),
                         ty: local_decl.ty,
                         span,
-                    });
+                    })
                 }
                 co2_crate_sig::DefOrLocal::LocalConst(l) => {
                     let Some(&local) = local_map.get(&(l as usize)) else {
@@ -882,11 +874,11 @@ impl HirCtx<'_> {
                         });
                     };
                     let local_decl = &locals[local];
-                    return Ok(HirExpr {
+                    Ok(HirExpr {
                         kind: HirExprKind::LocalConst(local),
                         ty: local_decl.ty,
                         span,
-                    });
+                    })
                 }
                 co2_crate_sig::DefOrLocal::FuncName => Ok(HirExpr {
                     kind: HirExprKind::ConstStr(
@@ -921,7 +913,7 @@ impl HirCtx<'_> {
             }
             Expression::Constant(Constant::Int(v, suffix)) => Ok(HirExpr {
                 kind: HirExprKind::ConstInt(v),
-                ty: int_suffix_ty(suffix, v),
+                ty: int_suffix_ty(&suffix, v),
                 span,
             }),
             Expression::Constant(Constant::Float(v, suffix)) => {
@@ -936,7 +928,7 @@ impl HirCtx<'_> {
                 })
             }
             Expression::Constant(Constant::Char(ch)) => Ok(HirExpr {
-                kind: HirExprKind::ConstInt((ch as u8 as i8) as i128),
+                kind: HirExprKind::ConstInt(i128::from(ch as u8 as i8)),
                 ty: Ty::signed_ty(IntTy::I32),
                 span,
             }),
@@ -1281,7 +1273,7 @@ impl HirCtx<'_> {
                         .bytes() as u64
                 };
                 Ok(HirExpr {
-                    kind: HirExprKind::ConstInt(size as i128),
+                    kind: HirExprKind::ConstInt(i128::from(size)),
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
                 })
@@ -1307,10 +1299,7 @@ impl HirCtx<'_> {
                     matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
                 let dst_is_void =
                     matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
-                if !((src_is_int && dst_is_int)
-                    || (src_is_ptr_like && dst_is_ptr_like)
-                    || (src_is_int && dst_is_ptr_like)
-                    || (src_is_ptr_like && dst_is_int)
+                if !(((dst_is_ptr_like || dst_is_int) && (src_is_ptr_like || src_is_int))
                     || dst_is_void
                     || (src_is_fn_item && dst_is_int)
                     || (src_is_fn_item
@@ -1341,11 +1330,7 @@ impl HirCtx<'_> {
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
                 let t1 = self.lower_type_name(*ty1, parser_span)?;
                 let t2 = self.lower_type_name(*ty2, parser_span)?;
-                let compatible = if ty_matches_expected(t1, t2) {
-                    1i128
-                } else {
-                    0i128
-                };
+                let compatible = i128::from(ty_matches_expected(t1, t2));
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(compatible),
                     ty: Ty::signed_ty(IntTy::I32),
@@ -1374,7 +1359,7 @@ impl HirCtx<'_> {
                     .shape()
                     .abi_align;
                 Ok(HirExpr {
-                    kind: HirExprKind::ConstInt(align as i128),
+                    kind: HirExprKind::ConstInt(i128::from(align)),
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
                 })
@@ -1388,7 +1373,7 @@ impl HirCtx<'_> {
                     .shape()
                     .abi_align;
                 Ok(HirExpr {
-                    kind: HirExprKind::ConstInt(align as i128),
+                    kind: HirExprKind::ConstInt(i128::from(align)),
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
                 })
@@ -1427,18 +1412,15 @@ impl HirCtx<'_> {
                         )
                     });
                     let field_offset = match &layout.shape().fields {
-                        FieldsShape::Arbitrary { offsets, .. } => {
-                            let off = offsets
-                                .get(field_idx)
-                                .unwrap_or_else(|| {
-                                    self.terminate_with_error(
-                                        parser_span,
-                                        &format!("offsetof: field index {field_idx} out of bounds"),
-                                    )
-                                })
-                                .bytes();
-                            off
-                        }
+                        FieldsShape::Arbitrary { offsets, .. } => offsets
+                            .get(field_idx)
+                            .unwrap_or_else(|| {
+                                self.terminate_with_error(
+                                    parser_span,
+                                    &format!("offsetof: field index {field_idx} out of bounds"),
+                                )
+                            })
+                            .bytes(),
                         other => {
                             self.terminate_with_error(
                                 parser_span,
@@ -1458,7 +1440,7 @@ impl HirCtx<'_> {
                         });
                 }
                 Ok(HirExpr {
-                    kind: HirExprKind::ConstInt(offset_bytes as i128),
+                    kind: HirExprKind::ConstInt(i128::from(offset_bytes)),
                     ty: Ty::usize_ty(),
                     span,
                 })
@@ -1468,7 +1450,7 @@ impl HirCtx<'_> {
                 match op {
                     ParsedUnaryOp::AddrOf => {
                         if is_array_ty(inner.ty) {
-                            return Ok(self.array_to_pointer_decay(inner));
+                            return Ok(self.array_to_pointer_decay(&inner));
                         }
                         if matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _))) {
                             return Ok(self.fn_def_to_fn_ptr_decay(inner));
@@ -1581,7 +1563,12 @@ impl HirCtx<'_> {
                 for (stmt_or_decl, _) in parsed.statements {
                     match stmt_or_decl {
                         StatementOrDeclaration::Declaration((decl, _)) => {
-                            self.lower_decl(decl, &mut lowered_statements, locals, &mut scoped_map)?
+                            self.lower_decl(
+                                decl,
+                                &mut lowered_statements,
+                                locals,
+                                &mut scoped_map,
+                            )?;
                         }
                         StatementOrDeclaration::Statement((stmt, span)) => self.lower_stmt(
                             stmt,
@@ -1864,11 +1851,11 @@ impl HirCtx<'_> {
     fn field_path_ty(&self, mut base_ty: Ty, path: &[usize]) -> Result<Ty, String> {
         for index in path {
             let Some(field_tys) = adt_field_tys(base_ty) else {
-                return Err(format!("field projection on non-adt type: {:?}", base_ty));
+                return Err(format!("field projection on non-adt type: {base_ty:?}"));
             };
             base_ty = *field_tys
                 .get(*index)
-                .ok_or_else(|| format!("field index out of bounds: {} for {:?}", index, base_ty))?;
+                .ok_or_else(|| format!("field index out of bounds: {index} for {base_ty:?}"))?;
         }
         Ok(base_ty)
     }
@@ -1917,18 +1904,14 @@ fn ty_passed_to_variadic(ty: Ty) -> Ty {
         TyKind::RigidTy(rigid_ty) => {
             let rigid_ty = match rigid_ty {
                 RigidTy::Int(int_ty) => RigidTy::Int(match int_ty {
-                    IntTy::I8 => IntTy::I32,
-                    IntTy::I16 => IntTy::I32,
-                    IntTy::I32 => IntTy::I32,
+                    IntTy::I8 | IntTy::I16 | IntTy::I32 => IntTy::I32,
                     IntTy::I64 => IntTy::I64,
                     IntTy::Isize => IntTy::Isize,
                     IntTy::I128 => IntTy::I128,
                 }),
                 RigidTy::Uint(uint_ty) => RigidTy::Uint(uint_ty),
                 RigidTy::Float(float_ty) => RigidTy::Float(match float_ty {
-                    FloatTy::F16 => FloatTy::F64,
-                    FloatTy::F32 => FloatTy::F64,
-                    FloatTy::F64 => FloatTy::F64,
+                    FloatTy::F16 | FloatTy::F32 | FloatTy::F64 => FloatTy::F64,
                     FloatTy::F128 => FloatTy::F128,
                 }),
                 _ => rigid_ty,
@@ -1987,9 +1970,8 @@ impl HirCtx<'_> {
 
         if is_assignment && is_array_ty(lhs.ty) {
             return Err("Type error - can not run binop on arrays.".to_owned());
-        } else {
-            self.array_to_pointer_decay_if_array(&mut lhs);
         }
+        self.array_to_pointer_decay_if_array(&mut lhs);
         self.array_to_pointer_decay_if_array(&mut rhs);
 
         if matches!(op, HirBinOp::Shl | HirBinOp::Shr) {
@@ -2319,90 +2301,89 @@ impl HirCtx<'_> {
                         span,
                     }
                 } else {
-                    if let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() {
-                        if let Some(logical_fields) = self.decl_resolver.adt_logical_fields(def.0)
-                            && logical_fields.iter().any(|field| {
-                                matches!(field.kind, LogicalAdtFieldKind::Bitfield { .. })
-                            })
-                        {
-                            let Some(physical_field_tys) = adt_field_tys(ty) else {
-                                self.terminate_with_error(parser_span, "Can't compute adt fields");
-                            };
-                            let mut physical_args = vec![None::<HirExpr>; physical_field_tys.len()];
-                            for (child, logical_field) in children.iter().zip(logical_fields.iter())
-                            {
-                                match &logical_field.kind {
-                                    LogicalAdtFieldKind::Direct { physical_index } => {
-                                        physical_args[*physical_index] =
-                                            Some(self.initializer_tree_to_expr(
-                                                child,
-                                                physical_field_tys[*physical_index],
-                                                parser_span,
-                                            ));
-                                    }
-                                    LogicalAdtFieldKind::Bitfield {
-                                        storage_index,
-                                        storage_ty,
-                                        bit_offset,
-                                        bit_width,
-                                        ..
-                                    } => {
-                                        let storage_ty = hir_ty_to_ty(storage_ty);
-                                        let current_storage = physical_args[*storage_index]
-                                            .take()
-                                            .unwrap_or_else(|| self.zeroed_expr(storage_ty, span));
-                                        let value = self.initializer_tree_to_expr(
+                    if let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind()
+                        && let Some(logical_fields) = self.decl_resolver.adt_logical_fields(def.0)
+                        && logical_fields
+                            .iter()
+                            .any(|field| matches!(field.kind, LogicalAdtFieldKind::Bitfield { .. }))
+                    {
+                        let Some(physical_field_tys) = adt_field_tys(ty) else {
+                            self.terminate_with_error(parser_span, "Can't compute adt fields");
+                        };
+                        let mut physical_args = vec![None::<HirExpr>; physical_field_tys.len()];
+                        for (child, logical_field) in children.iter().zip(logical_fields.iter()) {
+                            match &logical_field.kind {
+                                LogicalAdtFieldKind::Direct { physical_index } => {
+                                    physical_args[*physical_index] =
+                                        Some(self.initializer_tree_to_expr(
                                             child,
-                                            hir_ty_to_ty(&logical_field.ty),
+                                            physical_field_tys[*physical_index],
                                             parser_span,
-                                        );
-                                        physical_args[*storage_index] =
-                                            Some(self.pack_bitfield_initializer(
-                                                current_storage,
-                                                value,
-                                                storage_ty,
-                                                *bit_offset,
-                                                *bit_width,
-                                                span,
-                                            ));
-                                    }
+                                        ));
+                                }
+                                LogicalAdtFieldKind::Bitfield {
+                                    storage_index,
+                                    storage_ty,
+                                    bit_offset,
+                                    bit_width,
+                                    ..
+                                } => {
+                                    let storage_ty = hir_ty_to_ty(storage_ty);
+                                    let current_storage = physical_args[*storage_index]
+                                        .take()
+                                        .unwrap_or_else(|| self.zeroed_expr(storage_ty, span));
+                                    let value = self.initializer_tree_to_expr(
+                                        child,
+                                        hir_ty_to_ty(&logical_field.ty),
+                                        parser_span,
+                                    );
+                                    physical_args[*storage_index] =
+                                        Some(self.pack_bitfield_initializer(
+                                            current_storage,
+                                            value,
+                                            storage_ty,
+                                            *bit_offset,
+                                            *bit_width,
+                                            span,
+                                        ));
                                 }
                             }
-                            if def.kind().is_union() {
-                                // For a union only one physical field can be active.
-                                // Find the first slot that was populated by the initializer.
-                                let active = physical_args.iter().position(|a| a.is_some());
-                                let Some(active_field) = active else {
-                                    return HirExpr {
-                                        kind: HirExprKind::Zeroed,
-                                        ty,
-                                        span,
-                                    };
-                                };
+                        }
+                        if def.kind().is_union() {
+                            // For a union only one physical field can be active.
+                            // Find the first slot that was populated by the initializer.
+                            let active =
+                                physical_args.iter().position(std::option::Option::is_some);
+                            let Some(active_field) = active else {
                                 return HirExpr {
-                                    kind: HirExprKind::UnionAggregate {
-                                        active_field,
-                                        arg: Box::new(physical_args[active_field].take().unwrap()),
-                                    },
+                                    kind: HirExprKind::Zeroed,
                                     ty,
                                     span,
                                 };
-                            }
-                            let args = physical_field_tys
-                                .into_iter()
-                                .enumerate()
-                                .map(|(idx, field_ty)| {
-                                    physical_args[idx]
-                                        .take()
-                                        .unwrap_or_else(|| self.zeroed_expr(field_ty, span))
-                                })
-                                .collect();
+                            };
                             return HirExpr {
-                                kind: HirExprKind::Aggregate { args },
+                                kind: HirExprKind::UnionAggregate {
+                                    active_field,
+                                    arg: Box::new(physical_args[active_field].take().unwrap()),
+                                },
                                 ty,
                                 span,
                             };
                         }
+                        let args = physical_field_tys
+                            .into_iter()
+                            .enumerate()
+                            .map(|(idx, field_ty)| {
+                                physical_args[idx]
+                                    .take()
+                                    .unwrap_or_else(|| self.zeroed_expr(field_ty, span))
+                            })
+                            .collect();
+                        return HirExpr {
+                            kind: HirExprKind::Aggregate { args },
+                            ty,
+                            span,
+                        };
                     }
                     let Some(field_tys) = adt_field_tys(ty) else {
                         self.terminate_with_error(parser_span, "Can't compute adt fields");
@@ -2479,15 +2460,11 @@ impl HirCtx<'_> {
 
 pub(crate) fn is_place_expr(expr: &HirExpr) -> bool {
     match &expr.kind {
-        HirExprKind::Local(_) | HirExprKind::LocalConst(_) => true,
+        HirExprKind::Local(_)
+        | HirExprKind::LocalConst(_)
+        | HirExprKind::Deref(_)
+        | HirExprKind::Path(ResolvedValue::Static { .. } | ResolvedValue::StaticConst(_)) => true,
         HirExprKind::Field { base, .. } => is_place_expr(base),
-        HirExprKind::Path(ResolvedValue::Static { .. } | ResolvedValue::StaticConst(_)) => true,
-        HirExprKind::PtrOffset { .. } => false,
-        HirExprKind::PtrDiff { .. } => false,
-        HirExprKind::Logical { .. } => false,
-        HirExprKind::LogicalNot(_) => false,
-        HirExprKind::BitNot(_) => false,
-        HirExprKind::Deref(_) => true,
         _ => false,
     }
 }
@@ -2513,23 +2490,24 @@ fn addr_of_mutability(expr: &HirExpr) -> Mutability {
             _ => Mutability::Mut,
         },
         HirExprKind::Field { base, .. } => addr_of_mutability(base),
-        HirExprKind::LocalConst(_) => Mutability::Not,
-        HirExprKind::Path(ResolvedValue::StaticConst(_)) => Mutability::Not,
+        HirExprKind::LocalConst(_) | HirExprKind::Path(ResolvedValue::StaticConst(_)) => {
+            Mutability::Not
+        }
         _ => Mutability::Mut,
     }
 }
 
-fn int_suffix_ty(suffix: IntegerSuffix, value: i128) -> Ty {
+fn int_suffix_ty(suffix: &IntegerSuffix, value: i128) -> Ty {
     match suffix {
         IntegerSuffix::None => {
             let value = value.abs();
-            if value <= (i32::MAX as i128) {
+            if value <= i128::from(i32::MAX) {
                 Ty::signed_ty(IntTy::I32)
-            } else if value <= (u32::MAX as i128) {
+            } else if value <= i128::from(u32::MAX) {
                 Ty::unsigned_ty(UintTy::U32)
-            } else if value <= (i64::MAX as i128) {
+            } else if value <= i128::from(i64::MAX) {
                 Ty::signed_ty(IntTy::I64)
-            } else if value <= (u64::MAX as i128) {
+            } else if value <= i128::from(u64::MAX) {
                 Ty::unsigned_ty(UintTy::U64)
             } else {
                 Ty::signed_ty(IntTy::I128)
@@ -2538,9 +2516,9 @@ fn int_suffix_ty(suffix: IntegerSuffix, value: i128) -> Ty {
         IntegerSuffix::Long | IntegerSuffix::LongLong => Ty::signed_ty(IntTy::I64),
         IntegerSuffix::Unsigned => {
             let value_u = value as u128;
-            if value_u <= (u32::MAX as u128) {
+            if value_u <= u128::from(u32::MAX) {
                 Ty::unsigned_ty(UintTy::U32)
-            } else if value_u <= (u64::MAX as u128) {
+            } else if value_u <= u128::from(u64::MAX) {
                 Ty::unsigned_ty(UintTy::U64)
             } else {
                 Ty::unsigned_ty(UintTy::U128)

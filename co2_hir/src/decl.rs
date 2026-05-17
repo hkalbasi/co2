@@ -188,10 +188,10 @@ pub struct HirDecl {
 
 impl HirCtx<'_> {
     pub(crate) fn maybe_uninit_of(&self, inner: Ty) -> Ty {
-        return Ty::from_rigid_kind(RigidTy::Adt(
+        Ty::from_rigid_kind(RigidTy::Adt(
             self.wellknown_defs.maybe_uninit,
             GenericArgs(vec![GenericArgKind::Type(inner)]),
-        ));
+        ))
     }
 
     pub(crate) fn lower_generic_args(
@@ -299,7 +299,7 @@ impl HirCtx<'_> {
             co2_crate_sig::DefOrLocal::FuncName => panic!("Invalid __func__ in type position"),
             co2_crate_sig::DefOrLocal::Prim(primitive_ty) => prim_ty_to_ty(*primitive_ty),
             co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
-                match self.sig_cty_to_cty(sig_ty) {
+                match Self::sig_cty_to_cty(sig_ty) {
                     CTy::Ty(ty) => ty,
                     CTy::Function(_) => panic!("Function is invalid as a type name"),
                     CTy::UnsizedArray(_) => panic!("Unsized array is invalid as a type name"),
@@ -416,7 +416,7 @@ impl HirCtx<'_> {
                     };
 
                     let span = self.to_rust_span(parser_span);
-                    let hir_ty = self.ty_to_hir_ty(ty, span);
+                    let hir_ty = Self::ty_to_hir_ty(ty, span);
                     self.decl_resolver.set_local_ty(name.0 as u32, hir_ty);
 
                     let local = locals.alloc(HirLocal {
@@ -458,7 +458,7 @@ impl HirCtx<'_> {
                                     ty
                                 };
                                 locals[local].ty = local_ty;
-                                let hir_ty = self.ty_to_hir_ty(local_ty, span);
+                                let hir_ty = Self::ty_to_hir_ty(local_ty, span);
                                 self.decl_resolver.set_local_ty(name.0 as u32, hir_ty);
 
                                 // END TODO.
@@ -620,7 +620,7 @@ impl HirCtx<'_> {
             CompressedTypeSpecifier::TypedefName(path) => {
                 return match &path.0 {
                     co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
-                        (self.sig_cty_to_cty(sig_ty), specifiers)
+                        (Self::sig_cty_to_cty(sig_ty), specifiers)
                     }
                     _ => (CTy::Ty(self.ty_of_resolved_path(&path.0, span)), specifiers),
                 };
@@ -759,7 +759,7 @@ impl HirCtx<'_> {
         }
     }
 
-    fn hir_ty_to_ty(&self, hir_ty: &HirTy) -> Ty {
+    fn hir_ty_to_ty(hir_ty: &HirTy) -> Ty {
         hir_ty_to_ty(hir_ty)
     }
 
@@ -774,14 +774,14 @@ impl HirCtx<'_> {
             };
             let peeled = self.decl_resolver.peel_constexpr_typedef_hir(hir_ty);
             if let rustc_public_generative::HirTyKind::Array(_, _) = &peeled.kind {
-                let peeled_ty = self.hir_ty_to_ty(&peeled);
+                let peeled_ty = Self::hir_ty_to_ty(&peeled);
                 return array_elem_ty(peeled_ty);
             }
         }
         None
     }
 
-    fn ty_to_hir_ty(&self, ty: Ty, span: RustSpan) -> HirTy {
+    fn ty_to_hir_ty(ty: Ty, span: RustSpan) -> HirTy {
         match ty.kind() {
             TyKind::RigidTy(RigidTy::Bool) => HirTy {
                 kind: rustc_public_generative::HirTyKind::Bool,
@@ -797,12 +797,12 @@ impl HirCtx<'_> {
             TyKind::RigidTy(RigidTy::Tuple(items)) => HirTy::new_tuple(
                 items
                     .iter()
-                    .map(|ty| self.ty_to_hir_ty(*ty, span))
+                    .map(|ty| Self::ty_to_hir_ty(*ty, span))
                     .collect(),
                 span,
             ),
             TyKind::RigidTy(RigidTy::RawPtr(inner, mutability)) => {
-                HirTy::new_ptr(self.ty_to_hir_ty(inner, span), mutability, span)
+                HirTy::new_ptr(Self::ty_to_hir_ty(inner, span), mutability, span)
             }
             TyKind::RigidTy(RigidTy::Array(inner, len)) => {
                 let len = len
@@ -810,7 +810,7 @@ impl HirCtx<'_> {
                     .expect("local array type should have concrete length")
                     as usize;
                 HirTy::new_array(
-                    self.ty_to_hir_ty(inner, span),
+                    Self::ty_to_hir_ty(inner, span),
                     HirTyConst::Literal(len),
                     span,
                 )
@@ -821,9 +821,13 @@ impl HirCtx<'_> {
                 args.0
                     .iter()
                     .map(|arg| match arg {
-                        GenericArgKind::Type(ty) => HirGenericArg::Ty(self.ty_to_hir_ty(*ty, span)),
+                        GenericArgKind::Type(ty) => {
+                            HirGenericArg::Ty(Self::ty_to_hir_ty(*ty, span))
+                        }
                         GenericArgKind::Lifetime(_) => HirGenericArg::Lifetime(HirLifetime::Static),
-                        _ => panic!("unsupported generic arg in local C type"),
+                        GenericArgKind::Const(_) => {
+                            panic!("unsupported generic arg in local C type")
+                        }
                     })
                     .collect(),
                 span,
@@ -841,9 +845,9 @@ impl HirCtx<'_> {
                         inputs: sig
                             .inputs()
                             .iter()
-                            .map(|ty| self.ty_to_hir_ty(*ty, span))
+                            .map(|ty| Self::ty_to_hir_ty(*ty, span))
                             .collect(),
-                        output: self.ty_to_hir_ty(sig.output(), span),
+                        output: Self::ty_to_hir_ty(sig.output(), span),
                         abi,
                         is_unsafe: matches!(sig.safety, Safety::Unsafe),
                         c_variadic: sig.c_variadic,
@@ -852,7 +856,7 @@ impl HirCtx<'_> {
                 }
             }
             TyKind::RigidTy(RigidTy::Ref(region, inner, mutability)) => HirTy::new_ref(
-                self.ty_to_hir_ty(inner, span),
+                Self::ty_to_hir_ty(inner, span),
                 mutability,
                 match region.kind {
                     RegionKind::ReStatic => HirLifetime::Static,
@@ -864,9 +868,9 @@ impl HirCtx<'_> {
         }
     }
 
-    fn sig_cty_to_cty(&self, sig_ty: &co2_crate_sig::CTy) -> CTy {
+    fn sig_cty_to_cty(sig_ty: &co2_crate_sig::CTy) -> CTy {
         match sig_ty {
-            co2_crate_sig::CTy::Ty(hir_ty) => CTy::Ty(self.hir_ty_to_ty(hir_ty)),
+            co2_crate_sig::CTy::Ty(hir_ty) => CTy::Ty(Self::hir_ty_to_ty(hir_ty)),
             co2_crate_sig::CTy::Function(sig) => {
                 // Convert FunctionSignature to FnSig
                 let abi = match sig.abi {
@@ -879,12 +883,9 @@ impl HirCtx<'_> {
                     Safety::Safe
                 };
                 // Convert inputs (HirTy) to Ty and add output at the end
-                let mut inputs_and_output: Vec<Ty> = sig
-                    .inputs
-                    .iter()
-                    .map(|hir_ty| self.hir_ty_to_ty(hir_ty))
-                    .collect();
-                inputs_and_output.push(self.hir_ty_to_ty(&sig.output));
+                let mut inputs_and_output: Vec<Ty> =
+                    sig.inputs.iter().map(Self::hir_ty_to_ty).collect();
+                inputs_and_output.push(Self::hir_ty_to_ty(&sig.output));
                 CTy::Function(FnSig {
                     inputs_and_output,
                     c_variadic: sig.c_variadic,
@@ -893,7 +894,7 @@ impl HirCtx<'_> {
                 })
             }
             co2_crate_sig::CTy::UnsizedArray(hir_ty) => {
-                CTy::UnsizedArray(self.hir_ty_to_ty(hir_ty))
+                CTy::UnsizedArray(Self::hir_ty_to_ty(hir_ty))
             }
         }
     }
@@ -966,10 +967,8 @@ pub(crate) fn hir_ty_to_ty(hir_ty: &HirTy) -> Ty {
         }
         rustc_public_generative::HirTyKind::Ref(mutability, lifetime, inner) => {
             let region = match lifetime {
-                rustc_public_generative::HirLifetime::Static => Region {
-                    kind: RegionKind::ReStatic,
-                },
-                rustc_public_generative::HirLifetime::Param(_) => Region {
+                rustc_public_generative::HirLifetime::Static
+                | rustc_public_generative::HirLifetime::Param(_) => Region {
                     kind: RegionKind::ReStatic,
                 },
             };

@@ -17,7 +17,7 @@ pub(crate) fn place(local: usize) -> MirPlace {
     }
 }
 
-impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
+impl Builder<'_, '_> {
     pub(crate) fn lower_expr_to_place(&mut self, expr: &HirExpr) -> Option<MirPlace> {
         match &expr.kind {
             HirExprKind::Local(local) | HirExprKind::LocalConst(local) => {
@@ -60,7 +60,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         }
     }
 
-    fn lower_expr_to_place_or_temp(&mut self, inner: &Box<HirExpr>) -> MirPlace {
+    fn lower_expr_to_place_or_temp(&mut self, inner: &HirExpr) -> MirPlace {
         if let Some(place) = self.lower_expr_to_place(inner) {
             place
         } else {

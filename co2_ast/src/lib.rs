@@ -1,7 +1,6 @@
 use std::{
     ascii::escape_default,
     fmt::{self, Display},
-    u32,
 };
 
 use itertools::Itertools;
@@ -700,10 +699,10 @@ impl Display for Token {
             Token::BuiltinNan => write!(f, "__builtin_nan"),
             Token::BuiltinTypesCompatibleP => write!(f, "__builtin_types_compatible_p"),
 
-            Token::Ident(s) => write!(f, "{}", s),
+            Token::Ident(s) => write!(f, "{s}"),
 
             Token::Integer(num, suffix) => {
-                write!(f, "{}", num)?;
+                write!(f, "{num}")?;
                 match suffix {
                     IntegerSuffix::None => Ok(()),
                     IntegerSuffix::Unsigned => write!(f, "u"),
@@ -714,7 +713,7 @@ impl Display for Token {
                 }
             }
             Token::FloatLit(num, suffix) => {
-                write!(f, "{}", num)?;
+                write!(f, "{num}")?;
                 match suffix {
                     FloatSuffix::None => Ok(()),
                     FloatSuffix::Float => write!(f, "f"),
@@ -785,7 +784,7 @@ impl Display for Token {
             Token::LBrace => write!(f, "{{"),
             Token::RBrace => write!(f, "}}"),
 
-            Token::Preprocessor(dir) => write!(f, "#{}", dir),
+            Token::Preprocessor(dir) => write!(f, "#{dir}"),
             Token::Ellipsis => write!(f, "..."),
             Token::Hash => write!(f, "#"),
             Token::HashHash => write!(f, "##"),
@@ -898,7 +897,7 @@ impl LazyRustConstExpr {
     pub fn constant_len(&self) -> Option<u128> {
         if let [(token, _)] = &self.tokens[..] {
             match token {
-                Token::Integer(text, suffix) if matches!(suffix, IntegerSuffix::None) => {
+                Token::Integer(text, IntegerSuffix::None) => {
                     parse_unsigned_integer_constant(text).ok()
                 }
                 _ => None,
@@ -1071,8 +1070,8 @@ impl<R: TypeResolver> Declarator<R> {
                 }
             }
             Declarator::Identifier(_) | Declarator::Abstract => false,
-            Declarator::PointerDeclarator { declarator, .. } => declarator.0.is_function(),
-            Declarator::ArrayDeclarator { declarator, .. } => declarator.0.is_function(),
+            Declarator::PointerDeclarator { declarator, .. }
+            | Declarator::ArrayDeclarator { declarator, .. } => declarator.0.is_function(),
         }
     }
 
@@ -1098,45 +1097,45 @@ pub enum DeclarationSpecifier<R: TypeResolver> {
 impl<R: TypeResolver> DeclarationSpecifier<R> {
     pub fn is_typedef(&self) -> bool {
         match self {
-            DeclarationSpecifier::TypeSpecifier(_) => false,
-            DeclarationSpecifier::TypeQualifier(_) => false,
+            DeclarationSpecifier::TypeSpecifier(_)
+            | DeclarationSpecifier::TypeQualifier(_)
+            | DeclarationSpecifier::FunctionSpecifier(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Typedef)
             }
-            DeclarationSpecifier::FunctionSpecifier(_) => false,
         }
     }
 
     pub fn is_extern(&self) -> bool {
         match self {
-            DeclarationSpecifier::TypeSpecifier(_) => false,
-            DeclarationSpecifier::TypeQualifier(_) => false,
+            DeclarationSpecifier::TypeSpecifier(_)
+            | DeclarationSpecifier::TypeQualifier(_)
+            | DeclarationSpecifier::FunctionSpecifier(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Extern)
             }
-            DeclarationSpecifier::FunctionSpecifier(_) => false,
         }
     }
 
     pub fn is_static(&self) -> bool {
         match self {
-            DeclarationSpecifier::TypeSpecifier(_) => false,
-            DeclarationSpecifier::TypeQualifier(_) => false,
+            DeclarationSpecifier::TypeSpecifier(_)
+            | DeclarationSpecifier::TypeQualifier(_)
+            | DeclarationSpecifier::FunctionSpecifier(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Static)
             }
-            DeclarationSpecifier::FunctionSpecifier(_) => false,
         }
     }
 
     pub fn is_constexpr(&self) -> bool {
         match self {
-            DeclarationSpecifier::TypeSpecifier(_) => false,
-            DeclarationSpecifier::TypeQualifier(_) => false,
+            DeclarationSpecifier::TypeSpecifier(_)
+            | DeclarationSpecifier::TypeQualifier(_)
+            | DeclarationSpecifier::FunctionSpecifier(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Constexpr)
             }
-            DeclarationSpecifier::FunctionSpecifier(_) => false,
         }
     }
 }

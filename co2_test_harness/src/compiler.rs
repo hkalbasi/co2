@@ -40,10 +40,10 @@ pub fn exe_name(name: &str) -> String {
 }
 
 fn ensure_link(source: &Path, target: &Path) -> Result<()> {
-    if let Ok(existing) = fs::read_link(target) {
-        if existing == source || existing == Path::new(source.file_name().unwrap_or_default()) {
-            return Ok(());
-        }
+    if let Ok(existing) = fs::read_link(target)
+        && (existing == source || existing == Path::new(source.file_name().unwrap_or_default()))
+    {
+        return Ok(());
     }
 
     if target.exists() || fs::symlink_metadata(target).is_ok() {

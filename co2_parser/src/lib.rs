@@ -11,7 +11,10 @@ mod exp;
 mod lexer;
 mod parser;
 
-pub(crate) use co2_ast::*;
+pub(crate) use co2_ast::{
+    CompoundStatement, Expression, FileId, StatelessResolver, Token, TranslationUnit, TypeResolver,
+    print_errors_and_terminate,
+};
 
 pub(crate) use co2_ast::{Span, Spanned};
 
@@ -27,7 +30,7 @@ fn map_lexer_span(
 }
 
 fn map_lexer_error<'src>(
-    err: Rich<'src, char, SimpleSpan<usize>>,
+    err: &Rich<'src, char, SimpleSpan<usize>>,
     pp: Option<&co2_preprocessor::PreprocessedSource>,
 ) -> Rich<'src, char, Span> {
     Rich::custom(map_lexer_span(*err.span(), pp), err.to_string())
@@ -50,20 +53,20 @@ fn eoi_span_for_tokens(tokens: &[Spanned<Token>], fallback: Span) -> Span {
 }
 
 pub fn parse_translation_unit<R: TypeResolver>(
-    filename: String,
+    filename: &str,
     src: &'static str,
     pp: Option<&co2_preprocessor::PreprocessedSource>,
     resolver: R,
 ) -> Option<Spanned<TranslationUnit<R>>> {
-    parse_translation_unit_internal(filename, src, pp, resolver)
+    Some(parse_translation_unit_internal(filename, src, pp, resolver))
 }
 
 fn parse_translation_unit_internal<R: TypeResolver>(
-    filename: String,
+    filename: &str,
     src: &'static str,
     pp: Option<&co2_preprocessor::PreprocessedSource>,
     resolver: R,
-) -> Option<Spanned<TranslationUnit<R>>> {
+) -> Spanned<TranslationUnit<R>> {
     let (tokens, errs) = lexer().parse(src).into_output_errors();
 
     if let Some(tokens) = tokens {
@@ -82,7 +85,7 @@ fn parse_translation_unit_internal<R: TypeResolver>(
 
         if parse_errs.is_empty() {
             if let Some(ast) = ast {
-                return Some(ast.0);
+                return ast.0;
             }
         } else {
             co2_ast::emit_errors_and_terminate(
@@ -97,14 +100,12 @@ fn parse_translation_unit_internal<R: TypeResolver>(
     print_errors_and_terminate(
         filename,
         src,
-        errs.into_iter()
-            .map(|err| map_lexer_error(err, pp))
-            .collect(),
+        errs.iter().map(|err| map_lexer_error(err, pp)).collect(),
     );
 }
 
 pub fn parse_items(
-    filename: String,
+    filename: &str,
     src: &'static str,
     pp: Option<&co2_preprocessor::PreprocessedSource>,
 ) -> Option<Spanned<TranslationUnit<StatelessResolver>>> {
@@ -115,7 +116,7 @@ pub fn parse_items(
 /// Used for inline modules whose tokens were captured during parent-file parsing.
 pub fn parse_translation_unit_from_tokens<R: TypeResolver>(
     tokens: &[Spanned<Token>],
-    filename: String,
+    filename: &str,
     src: &'static str,
     end_span: Span,
     resolver: R,
@@ -144,7 +145,7 @@ pub fn parse_translation_unit_from_tokens<R: TypeResolver>(
 
 pub fn parse_compound_statement<R: TypeResolver>(
     tokens: &[Spanned<Token>],
-    filename: String,
+    filename: &str,
     src: &'static str,
     end_span: Span,
     resolver: R,
@@ -173,6 +174,7 @@ pub fn parse_compound_statement<R: TypeResolver>(
 
 #[test]
 fn include_body_lazy_span_uses_header_context() {
+    use co2_ast::Declaration;
     use std::path::Path;
 
     let pp = co2_preprocessor::preprocess(

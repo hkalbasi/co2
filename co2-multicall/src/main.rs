@@ -18,24 +18,26 @@ fn dispatch(arg0: &str, args: impl IntoIterator<Item = String>) -> std::process:
             co2rustc::main_with_args(std::iter::once("co2rustc".to_owned()).chain(args).collect())
         }
         Some("co2cc") => {
-            co2cc::main_with_args(std::iter::once("co2cc".to_owned()).chain(args).collect())
+            let cc_args: Vec<String> = std::iter::once("co2cc".to_owned()).chain(args).collect();
+            co2cc::main_with_args(&cc_args)
         }
         Some("co2cargo") => {
-            let code = co2cargo::main_with_args(
-                std::iter::once("co2cargo".to_owned()).chain(args).collect(),
-            );
+            let args_vec: Vec<String> =
+                std::iter::once("co2cargo".to_owned()).chain(args).collect();
+            let code = co2cargo::main_with_args(&args_vec);
             std::process::ExitCode::from(code as u8)
         }
         Some("co2miri") => {
             co2miri::main_with_args(std::iter::once("co2miri".to_owned()).chain(args).collect())
         }
-        Some("co2-multicall") => match args.next().as_deref() {
-            Some("install") => install(args),
-            _ => {
+        Some("co2-multicall") => {
+            if let Some("install") = args.next().as_deref() {
+                install(args)
+            } else {
                 eprintln!("usage: co2-multicall install [target_dir]");
                 std::process::ExitCode::from(2)
             }
-        },
+        }
         _ => {
             if args.next().as_deref() == Some("install") {
                 install(args)
@@ -67,8 +69,7 @@ fn applet_name(arg0: &str) -> Option<&str> {
 fn install(mut args: impl Iterator<Item = String>) -> std::process::ExitCode {
     let target_dir = args
         .next()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/usr/bin"));
+        .map_or_else(|| PathBuf::from("/usr/bin"), PathBuf::from);
     match try_install(&target_dir) {
         Ok(()) => {
             println!("Successfully installed to {}", target_dir.display());
@@ -82,13 +83,14 @@ fn install(mut args: impl Iterator<Item = String>) -> std::process::ExitCode {
 }
 
 fn try_install(bin_dir: &Path) -> Result<(), String> {
-    let current = std::env::var_os("CO2_RUN_SCRIPT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
+    let current = std::env::var_os("CO2_RUN_SCRIPT").map_or_else(
+        || {
             std::env::current_exe()
                 .map_err(|err| format!("resolve current exe: {err}"))
                 .unwrap()
-        });
+        },
+        PathBuf::from,
+    );
 
     if !bin_dir.exists() {
         fs::create_dir_all(bin_dir)

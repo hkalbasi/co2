@@ -95,11 +95,11 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
 
         let (result, pending_mirs, wellknown_defs) = co2_crate_sig::lower_crate_sig(
             ctx,
-            pending.source_path.clone(),
-            source_name.clone(),
+            &pending.source_path,
+            &source_name,
             src_static,
             file_id,
-            pending.preprocessed.clone(),
+            &pending.preprocessed,
             &mut file_ids,
             &mut source_files,
             pending.mode.no_main,
@@ -119,10 +119,10 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         }
 
         let state = Co2GeneratorState {
-            wellknown_defs,
             file_id,
             file_ids,
             pending_mirs,
+            wellknown_defs,
         };
 
         (state, result)
@@ -265,19 +265,19 @@ impl Co2GeneratorState {
         );
 
         let mut target_ty = CrateItem(def).ty();
-        if let TyKind::RigidTy(RigidTy::Array(elem_ty, len)) = target_ty.kind() {
-            if len.eval_target_usize().is_err() {
-                let inferred_len =
-                    infer_array_len_from_initializer(initializer.clone(), elem_ty, &hir_ctx)
-                        .expect("failed to infer static array length");
-                target_ty = Ty::from_rigid_kind(RigidTy::Array(
-                    elem_ty,
-                    rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(
-                        inferred_len,
-                    )
-                    .expect("failed to materialize inferred array length"),
-                ));
-            }
+        if let TyKind::RigidTy(RigidTy::Array(elem_ty, len)) = target_ty.kind()
+            && len.eval_target_usize().is_err()
+        {
+            let inferred_len =
+                infer_array_len_from_initializer(initializer.clone(), elem_ty, &hir_ctx)
+                    .expect("failed to infer static array length");
+            target_ty = Ty::from_rigid_kind(RigidTy::Array(
+                elem_ty,
+                rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(
+                    inferred_len,
+                )
+                .expect("failed to materialize inferred array length"),
+            ));
         }
 
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
@@ -294,26 +294,26 @@ impl Co2GeneratorState {
         array_len: co2_ast::Spanned<Initializer<LocalResolver>>,
     ) -> Body {
         let mut target_ty = CrateItem(def).ty();
-        if let TyKind::RigidTy(RigidTy::Array(elem_ty, len)) = target_ty.kind() {
-            if len.eval_target_usize().is_err() {
-                let len_span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
-                let len_hir_ctx = HirCtx::new(
-                    self.wellknown_defs,
-                    &len_span_converter,
-                    None,
-                    Ty::usize_ty(),
-                    resolver.clone(),
-                );
-                let evaluated_len = eval_usize_initializer(array_len, &len_hir_ctx)
-                    .expect("failed to evaluate static array length");
-                target_ty = Ty::from_rigid_kind(RigidTy::Array(
-                    elem_ty,
-                    rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(
-                        evaluated_len,
-                    )
-                    .expect("failed to materialize static array length"),
-                ));
-            }
+        if let TyKind::RigidTy(RigidTy::Array(elem_ty, len)) = target_ty.kind()
+            && len.eval_target_usize().is_err()
+        {
+            let len_span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
+            let len_hir_ctx = HirCtx::new(
+                self.wellknown_defs,
+                &len_span_converter,
+                None,
+                Ty::usize_ty(),
+                resolver.clone(),
+            );
+            let evaluated_len = eval_usize_initializer(array_len, &len_hir_ctx)
+                .expect("failed to evaluate static array length");
+            target_ty = Ty::from_rigid_kind(RigidTy::Array(
+                elem_ty,
+                rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(
+                    evaluated_len,
+                )
+                .expect("failed to materialize static array length"),
+            ));
         }
         let span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
         let hir_ctx = HirCtx::new(
@@ -546,8 +546,7 @@ fn build_clone_method_body(
         },
     ];
 
-    let mut projection = Vec::new();
-    projection.push(rustc_public_generative::rustc_public::mir::ProjectionElem::Deref);
+    let projection = vec![rustc_public_generative::rustc_public::mir::ProjectionElem::Deref];
     let deref_place = rustc_public_generative::rustc_public::mir::Place {
         local: 1,
         projection,

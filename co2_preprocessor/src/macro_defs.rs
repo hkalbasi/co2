@@ -26,33 +26,15 @@ use super::utils::{
 fn would_paste_tokens(last: u8, first: u8) -> bool {
     match (last, first) {
         // -- or -=  or -> from separate sources
-        (b'-', b'-') | (b'-', b'=') | (b'-', b'>') => true,
+        (b'-', b'-' | b'=' | b'>')
         // ++ or +=
-        (b'+', b'+') | (b'+', b'=') => true,
+        | (b'+', b'+' | b'=')
         // << or <= or <:
-        (b'<', b'<') | (b'<', b'=') | (b'<', b':') | (b'<', b'%') => true,
+        | (b'<', b'<' | b'=' | b':' | b'%')
         // >> or >=
-        (b'>', b'>') | (b'>', b'=') => true,
+        | (b'>', b'>' | b'=')
         // == or ending = followed by =
-        (b'=', b'=') => true,
-        // != &= |= *= /= ^= %=
-        (b'!', b'=')
-        | (b'&', b'=')
-        | (b'|', b'=')
-        | (b'*', b'=')
-        | (b'/', b'=')
-        | (b'^', b'=')
-        | (b'%', b'=') => true,
-        // && ||
-        (b'&', b'&') | (b'|', b'|') => true,
-        // ## (token paste)
-        (b'#', b'#') => true,
-        // / followed by * or / (comment start)
-        (b'/', b'*') | (b'/', b'/') => true,
-        // . followed by digit (e.g., prevent "1." + "5" pasting weirdly)
-        (b'.', b'0'..=b'9') => true,
-        // Identifier/number continuation: letter/digit/_ followed by letter/digit/_
-        (a, b) if is_ident_cont_byte(a) && is_ident_cont_byte(b) => true,
+        | (b'=', b'=') => true,
         _ => false,
     }
 }
@@ -257,31 +239,26 @@ impl MacroTable {
         let len = bytes.len();
         loop {
             let trailing = extract_trailing_ident(&expanded);
-            if let Some(ref trail_ident) = trailing {
-                if !expanding.contains(trail_ident.as_str()) {
-                    if let Some(trail_mac) = self.macros.get(trail_ident.as_str()) {
-                        if trail_mac.is_function_like {
-                            let mut k = i;
-                            while k < len && bytes[k].is_ascii_whitespace() {
-                                k += 1;
-                            }
-                            if k < len && bytes[k] == b'(' {
-                                let (trail_args, trail_end) = self.parse_macro_args(bytes, k);
-                                i = trail_end;
-                                let trail_mac_clone = trail_mac.clone();
-                                let trimmed_len = expanded.trim_end().len();
-                                let prefix_len = trimmed_len - trail_ident.len();
-                                expanded.truncate(prefix_len);
-                                let (trail_expanded, _) = self.expand_function_macro(
-                                    &trail_mac_clone,
-                                    &trail_args,
-                                    expanding,
-                                );
-                                expanded.push_str(&trail_expanded);
-                                continue;
-                            }
-                        }
-                    }
+            if let Some(ref trail_ident) = trailing
+                && !expanding.contains(trail_ident.as_str())
+                && let Some(trail_mac) = self.macros.get(trail_ident.as_str())
+                && trail_mac.is_function_like
+            {
+                let mut k = i;
+                while k < len && bytes[k].is_ascii_whitespace() {
+                    k += 1;
+                }
+                if k < len && bytes[k] == b'(' {
+                    let (trail_args, trail_end) = self.parse_macro_args(bytes, k);
+                    i = trail_end;
+                    let trail_mac_clone = trail_mac.clone();
+                    let trimmed_len = expanded.trim_end().len();
+                    let prefix_len = trimmed_len - trail_ident.len();
+                    expanded.truncate(prefix_len);
+                    let (trail_expanded, _) =
+                        self.expand_function_macro(&trail_mac_clone, &trail_args, expanding);
+                    expanded.push_str(&trail_expanded);
+                    continue;
                 }
             }
             break;
@@ -462,10 +439,10 @@ impl MacroTable {
         }
 
         // Try macro expansion
-        if !expanding.contains(ident) {
-            if let Some(mac) = self.macros.get(ident) {
-                return self.expand_macro_invocation(text, bytes, i, ident, mac, result, expanding);
-            }
+        if !expanding.contains(ident)
+            && let Some(mac) = self.macros.get(ident)
+        {
+            return self.expand_macro_invocation(text, bytes, i, ident, mac, result, expanding);
         }
 
         // Not a macro, or already expanding (blue-painted).
@@ -675,10 +652,9 @@ impl MacroTable {
                             args.push(trimmed.to_string());
                         }
                         return (args, i + 1);
-                    } else {
-                        paren_depth -= 1;
-                        i += 1;
                     }
+                    paren_depth -= 1;
+                    i += 1;
                 }
                 b',' if paren_depth == 0 => {
                     let arg_slice = std::str::from_utf8(&bytes[arg_start..i]).unwrap_or("");
@@ -802,17 +778,15 @@ impl MacroTable {
         // (like EMPTY() -> ""), the identifier should NOT connect with subsequent
         // source `(`. Only identifiers that are NEW after rescan (produced by ##
         // concatenation or other macro expansion) should allow trailing resolution.
-        let result_ends_with_func_ident = if !body_ends_with_func_ident {
-            if let Some(trailing) = extract_trailing_ident(&result) {
-                if let Some(tmac) = self.macros.get(trailing.as_str()) {
-                    if tmac.is_function_like {
-                        // Only allow if this identifier was NOT already present as a
-                        // standalone token in the pre-rescan body. If it was, the
-                        // barrier tokens after it were intentional (DEFER pattern).
-                        !contains_standalone_ident(&body, trailing.as_str())
-                    } else {
-                        false
-                    }
+        let result_ends_with_func_ident = if body_ends_with_func_ident {
+            true
+        } else if let Some(trailing) = extract_trailing_ident(&result) {
+            if let Some(tmac) = self.macros.get(trailing.as_str()) {
+                if tmac.is_function_like {
+                    // Only allow if this identifier was NOT already present as a
+                    // standalone token in the pre-rescan body. If it was, the
+                    // barrier tokens after it were intentional (DEFER pattern).
+                    !contains_standalone_ident(&body, trailing.as_str())
                 } else {
                     false
                 }
@@ -820,7 +794,7 @@ impl MacroTable {
                 false
             }
         } else {
-            true
+            false
         };
 
         (result, result_ends_with_func_ident)
@@ -879,7 +853,7 @@ impl MacroTable {
                     } else if let Some(idx) = params.iter().position(|p| p == left_ident.as_str()) {
                         let trim_len = result.len() - left_ident.len();
                         result.truncate(trim_len);
-                        let arg = args.get(idx).map(|s| s.as_str()).unwrap_or("");
+                        let arg = args.get(idx).map_or("", std::string::String::as_str);
                         // Strip blue paint: ## creates a new token that must be rescanned
                         // without inheriting blue paint from operands (C11 §6.10.3.3)
                         let clean_arg = strip_blue_paint(arg);
@@ -938,7 +912,7 @@ impl MacroTable {
                                 result.push(PASTE_PROTECT_END as char);
                             }
                         } else {
-                            let arg = args.get(idx).map(|s| s.as_str()).unwrap_or("");
+                            let arg = args.get(idx).map_or("", std::string::String::as_str);
                             // Strip blue paint: ## creates a new token that must be rescanned
                             // without inheriting blue paint from operands (C11 §6.10.3.3)
                             let clean_arg = strip_blue_paint(arg);
@@ -998,7 +972,7 @@ impl MacroTable {
                             if is_variadic && has_named_variadic && idx == params.len() - 1 {
                                 self.get_named_va_args(idx, args)
                             } else {
-                                args.get(idx).map(|s| s.to_string()).unwrap_or_default()
+                                args.get(idx).cloned().unwrap_or_default()
                             };
                         result.push('"');
                         result.push_str(&stringify_arg(&arg_str));
@@ -1008,10 +982,9 @@ impl MacroTable {
                         result.push_str(param_name);
                     }
                     continue;
-                } else {
-                    result.push('#');
-                    continue;
                 }
+                result.push('#');
+                continue;
             }
 
             // Regular byte
@@ -1096,7 +1069,7 @@ impl MacroTable {
                         let next = if i < len { Some(bytes[i]) } else { None };
                         Self::append_with_paste_guard(&mut result, &va_args, next);
                     } else {
-                        let arg = args.get(idx).map(|s| s.as_str()).unwrap_or("");
+                        let arg = args.get(idx).map_or("", std::string::String::as_str);
                         let next = if i < len { Some(bytes[i]) } else { None };
                         Self::append_with_paste_guard(&mut result, arg, next);
                     }

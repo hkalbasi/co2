@@ -156,7 +156,7 @@ pub fn check_compile_warnings(
         return Ok(());
     }
 
-    let diagnostics = parse_compile_diagnostics(&String::from_utf8_lossy(&output.stderr))?;
+    let diagnostics = parse_compile_diagnostics(&String::from_utf8_lossy(&output.stderr));
     let warning_expectations = span_expectations
         .iter()
         .filter(|expected| expected.level == Some(UiAnnotationLevel::Warning))
@@ -200,9 +200,7 @@ pub fn check_compile_warnings(
         if !warning_expectations
             .iter()
             .any(|expected| diagnostic_matches_expected(expected, diagnostic))
-            && !directive_expectations
-                .iter()
-                .any(|expected| diagnostic.message == *expected)
+            && !directive_expectations.contains(&diagnostic.message)
         {
             issues.push(unexpected_diagnostic_issue(diagnostic));
         }
@@ -284,14 +282,14 @@ fn parse_ui_span_annotation(
 }
 
 pub fn parse_ui_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
-    let diagnostics = parse_json_diagnostics(stderr)?;
+    let diagnostics = parse_json_diagnostics(stderr);
     if diagnostics.is_empty() {
         bail!("failed to find JSON diagnostics in stderr");
     }
     Ok(diagnostics)
 }
 
-pub fn parse_compile_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
+pub fn parse_compile_diagnostics(stderr: &str) -> Vec<UiDiagnostic> {
     parse_json_diagnostics(stderr)
 }
 
@@ -316,7 +314,8 @@ pub fn prettify_diagnostic_output(text: &str) -> String {
             out.push_str(rendered.trim_end_matches('\n'));
             out.push('\n');
         } else {
-            out.push_str(&format!("{}: {}\n", diagnostic.level, diagnostic.message));
+            use std::fmt::Write;
+            writeln!(out, "{}: {}", diagnostic.level, diagnostic.message).unwrap();
         }
     }
 
@@ -332,7 +331,7 @@ pub fn format_named_output(name: &str, text: &str) -> String {
     format!("{name}:\n{pretty}")
 }
 
-fn parse_json_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
+fn parse_json_diagnostics(stderr: &str) -> Vec<UiDiagnostic> {
     let mut diagnostics = Vec::new();
 
     for line in stderr.lines() {
@@ -342,7 +341,7 @@ fn parse_json_diagnostics(stderr: &str) -> Result<Vec<UiDiagnostic>> {
         diagnostics.push(diagnostic);
     }
 
-    Ok(diagnostics)
+    diagnostics
 }
 
 fn parse_diagnostic_line(line: &str) -> Option<(&str, UiDiagnostic)> {
@@ -363,12 +362,8 @@ fn parse_diagnostic_line(line: &str) -> Option<(&str, UiDiagnostic)> {
     {
         return None;
     }
-    let Some(level) = value.get("level").and_then(serde_json::Value::as_str) else {
-        return None;
-    };
-    let Some(message) = value.get("message").and_then(serde_json::Value::as_str) else {
-        return None;
-    };
+    let level = value.get("level")?.as_str()?;
+    let message = value.get("message")?.as_str()?;
 
     let spans = value
         .get("spans")
@@ -459,7 +454,7 @@ fn missing_expected_issue(
                 expected.file_name, msg
             )
         } else {
-            format!("Missing {diagnostic_kind}: {}", msg)
+            format!("Missing {diagnostic_kind}: {msg}")
         }
     } else {
         format!(

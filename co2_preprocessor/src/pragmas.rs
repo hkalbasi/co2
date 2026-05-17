@@ -68,7 +68,7 @@ impl Preprocessor {
                 let inner = rest.trim_start_matches('(').trim_end_matches(')').trim();
                 match inner {
                     "hidden" | "default" | "protected" | "internal" => {
-                        return Some(format!("__ccc_visibility_push_{} ;\n", inner));
+                        return Some(format!("__ccc_visibility_push_{inner} ;\n"));
                     }
                     _ => {}
                 }
@@ -87,14 +87,13 @@ impl Preprocessor {
 
     /// Handle #pragma pop_macro("name") - restore the previously saved definition.
     fn handle_pragma_pop_macro(&mut self, content: &str) {
-        if let Some(name) = Self::extract_pragma_macro_name(content) {
-            if let Some(stack) = self.macro_save_stack.get_mut(&name) {
-                if let Some(saved) = stack.pop() {
-                    match saved {
-                        Some(def) => self.macros.define(def),
-                        None => self.macros.undefine(&name),
-                    }
-                }
+        if let Some(name) = Self::extract_pragma_macro_name(content)
+            && let Some(stack) = self.macro_save_stack.get_mut(&name)
+            && let Some(saved) = stack.pop()
+        {
+            match saved {
+                Some(def) => self.macros.define(def),
+                None => self.macros.undefine(&name),
             }
         }
     }
@@ -183,14 +182,14 @@ impl Preprocessor {
             }
             // #pragma pack(push, N) - push current and set to N (0 means default)
             if let Ok(n) = rest.parse::<usize>() {
-                return Some(format!("__ccc_pack_push_{} ;\n", n));
+                return Some(format!("__ccc_pack_push_{n} ;\n"));
             }
             return None;
         }
 
         // #pragma pack(N) - set alignment
         if let Ok(n) = inner.parse::<usize>() {
-            return Some(format!("__ccc_pack_set_{} ;\n", n));
+            return Some(format!("__ccc_pack_set_{n} ;\n"));
         }
 
         None

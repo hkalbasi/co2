@@ -257,8 +257,7 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
             source: test.source.clone(),
             span: None,
             message: format!(
-                "exit code mismatch: expected `{}`, got `{}`",
-                expected_status, got_status
+                "exit code mismatch: expected `{expected_status}`, got `{got_status}`"
             ),
         }
         .into());
@@ -273,7 +272,7 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
             return Err(TestError {
                 source: test.source.clone(),
                 span: None,
-                message: format!("stdout mismatch:\n  expected: {expected}\n  actual:   {stdout}",),
+                message: format!("stdout mismatch:\n  expected: {expected}\n  actual:   {stdout}"),
             }
             .into());
         }
@@ -454,6 +453,5 @@ fn tool_available(name: &str) -> bool {
     Command::new(name)
         .arg("--version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }

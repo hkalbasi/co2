@@ -32,12 +32,11 @@ pub fn unescape_text(s: &str) -> String {
             Some('n') => out.push('\n'),
             Some('r') => out.push('\r'),
             Some('t') => out.push('\t'),
-            Some('\\') => out.push('\\'),
+            Some('\\') | None => out.push('\\'),
             Some(other) => {
                 out.push('\\');
                 out.push(other);
             }
-            None => out.push('\\'),
         }
     }
     out

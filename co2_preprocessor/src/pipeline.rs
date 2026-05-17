@@ -297,12 +297,10 @@ impl Preprocessor {
                 }
             } else if self.conditionals.is_active() {
                 self.accumulate_and_expand(&slice, &mut pending, &mut output, &mut expanding);
+            } else if pending.is_empty() {
+                self.emit_blank_slice(&mut output, &slice);
             } else {
-                if pending.is_empty() {
-                    self.emit_blank_slice(&mut output, &slice);
-                } else {
-                    pending.push_gap(&slice);
-                }
+                pending.push_gap(&slice);
             }
         }
 
@@ -487,7 +485,7 @@ impl Preprocessor {
     /// Set the filename for __FILE__ and __BASE_FILE__ macros and set as the base include directory.
     pub fn set_filename(&mut self, filename: &str) {
         self.filename = filename.to_string();
-        self.macros.set_file(format!("\"{}\"", filename));
+        self.macros.set_file(format!("\"{filename}\""));
         // __BASE_FILE__ always expands to the main input file name,
         // unlike __FILE__ which changes during #include processing.
         self.macros.define(MacroDef {
@@ -496,7 +494,7 @@ impl Preprocessor {
             params: Vec::new(),
             is_variadic: false,
             has_named_variadic: false,
-            body: format!("\"{}\"", filename),
+            body: format!("\"{filename}\""),
         });
         // Push the file path onto the include stack for relative includes.
         // Use make_absolute (not canonicalize) to preserve symlinks, matching GCC
@@ -585,17 +583,20 @@ impl Preprocessor {
         }
 
         // Check for include guard
-        if let Some(guard) = self.include_guard_macros.get(&resolved) {
-            if self.macros.is_defined(guard) {
-                return;
-            }
+        if let Some(guard) = self.include_guard_macros.get(&resolved)
+            && self.macros.is_defined(guard)
+        {
+            return;
         }
 
         // Push onto include stack
         self.include_stack.push(resolved.clone());
 
         // Save and set __FILE__ (uses set_file to avoid full MacroDef allocation)
-        let old_file = self.macros.get_file_body().map(|s| s.to_string());
+        let old_file = self
+            .macros
+            .get_file_body()
+            .map(std::string::ToString::to_string);
         self.macros.set_file(format!("\"{}\"", resolved.display()));
 
         // Preprocess the included content (macros persist; any pragma synthetic tokens
@@ -653,18 +654,12 @@ impl Preprocessor {
             (keyword, rest, rest_offset)
         };
         match keyword {
-            "ifdef" | "ifndef" | "if" => {
-                if !self.conditionals.is_active() {
-                    self.conditionals.push_if(
-                        false,
-                        self.slice_range(
-                            slice,
-                            keyword_offset,
-                            keyword_offset + keyword.len().max(1),
-                        ),
-                    );
-                    return None;
-                }
+            "ifdef" | "ifndef" | "if" if !self.conditionals.is_active() => {
+                self.conditionals.push_if(
+                    false,
+                    self.slice_range(slice, keyword_offset, keyword_offset + keyword.len().max(1)),
+                );
+                return None;
             }
             "elif" => {
                 self.handle_elif(rest);
@@ -730,7 +725,7 @@ impl Preprocessor {
                         keyword_offset,
                         keyword_offset + keyword.len().max(1),
                     ),
-                    message: format!("#error {}", expanded),
+                    message: format!("#error {expanded}"),
                 });
             }
             "warning" => {
@@ -741,10 +736,9 @@ impl Preprocessor {
                         keyword_offset,
                         keyword_offset + keyword.len().max(1),
                     ),
-                    message: format!("#warning {}", rest),
+                    message: format!("#warning {rest}"),
                 });
             }
-            "" => {}
             _ => {}
         }
 
@@ -793,7 +787,7 @@ impl Preprocessor {
         // __has_attribute(), __has_builtin(), __has_include(), etc.
         let expanded = self.resolve_defined_in_expr(&expanded);
         // Replace any remaining identifiers with 0 (standard C behavior for #if)
-        let final_expr = self.replace_remaining_idents_with_zero(&expanded);
+        let final_expr = Self::replace_remaining_idents_with_zero(&expanded);
         let condition = evaluate_condition(&final_expr, &self.macros);
         self.conditionals.push_if(condition, position);
     }
@@ -805,7 +799,7 @@ impl Preprocessor {
             .expand_line_reuse(&resolved, &mut self.directive_expanding);
         // Resolve again after macro expansion (same reason as handle_if)
         let expanded = self.resolve_defined_in_expr(&expanded);
-        let final_expr = self.replace_remaining_idents_with_zero(&expanded);
+        let final_expr = Self::replace_remaining_idents_with_zero(&expanded);
         let condition = evaluate_condition(&final_expr, &self.macros);
         self.conditionals.handle_elif(condition);
     }

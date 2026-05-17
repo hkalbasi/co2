@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn main_with_args(args: Vec<String>) -> i32 {
+pub fn main_with_args(args: &[String]) -> i32 {
     if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
         println!("co2cargo: A wrapper around cargo that supports CO2 language features.");
         println!();
@@ -44,15 +44,14 @@ pub fn main_with_args(args: Vec<String>) -> i32 {
             return match cargo_init(subcommand_args) {
                 Ok(()) => 0,
                 Err(e) => {
-                    eprintln!("co2cargo init failed: {}", e);
+                    eprintln!("co2cargo init failed: {e}");
                     1
                 }
             };
         } else if subcommand == "miri" {
             return run_miri(subcommand_args);
-        } else {
-            return run_cargo(&args[1..]);
         }
+        return run_cargo(&args[1..]);
     }
 
     let subcommand = &args[0];
@@ -62,14 +61,14 @@ pub fn main_with_args(args: Vec<String>) -> i32 {
         match cargo_init(subcommand_args) {
             Ok(()) => 0,
             Err(e) => {
-                eprintln!("co2cargo init failed: {}", e);
+                eprintln!("co2cargo init failed: {e}");
                 1
             }
         }
     } else if subcommand == "miri" {
         run_miri(subcommand_args)
     } else {
-        run_cargo(&args[..])
+        run_cargo(args)
     }
 }
 
@@ -81,8 +80,10 @@ fn run_miri(args: &[String]) -> i32 {
     let co2miri_path = bin_dir
         .map(|d| d.join("co2miri"))
         .filter(|p| p.exists())
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "co2miri".to_owned());
+        .map_or_else(
+            || "co2miri".to_owned(),
+            |p| p.to_string_lossy().into_owned(),
+        );
 
     let mut cmd = Command::new("cargo-miri");
     // cargo-miri is invoked by cargo as `cargo-miri miri <subcommand> [args...]`.
@@ -148,7 +149,7 @@ fn cargo_init(args: &[String]) -> Result<(), String> {
 
     let output = cmd
         .output()
-        .map_err(|e| format!("failed to run cargo init: {}", e))?;
+        .map_err(|e| format!("failed to run cargo init: {e}"))?;
 
     if !output.status.success() {
         return Err(format!(
@@ -171,13 +172,13 @@ fn cargo_init(args: &[String]) -> Result<(), String> {
 }
 
 fn determine_project_dir(args: &[String]) -> Result<PathBuf, String> {
-    for i in 0..args.len() {
-        if !args[i].starts_with('-') && args[i] != "init" {
-            return Ok(PathBuf::from(&args[i]));
+    for arg in args {
+        if !arg.starts_with('-') && arg != "init" {
+            return Ok(PathBuf::from(arg));
         }
     }
 
-    let cwd = env::current_dir().map_err(|e| format!("get current dir: {}", e))?;
+    let cwd = env::current_dir().map_err(|e| format!("get current dir: {e}"))?;
     let name = cwd
         .file_name()
         .and_then(|n| n.to_str())

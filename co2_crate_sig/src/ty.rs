@@ -39,13 +39,18 @@ impl CompressedTypeSpecifier {
     pub fn build(
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
     ) -> Result<Self, String> {
+        enum Base {
+            Int,
+            Double,
+            Char,
+        }
         let specifiers = specifiers
             .into_iter()
             .filter_map(|x| match x.0 {
                 DeclarationSpecifier::TypeSpecifier(s) => Some(s.0),
-                DeclarationSpecifier::TypeQualifier(_) => None,
-                DeclarationSpecifier::StorageSpecifier(_) => None,
-                DeclarationSpecifier::FunctionSpecifier(_) => None,
+                DeclarationSpecifier::TypeQualifier(_)
+                | DeclarationSpecifier::StorageSpecifier(_)
+                | DeclarationSpecifier::FunctionSpecifier(_) => None,
             })
             .collect::<Vec<_>>();
         if specifiers.is_empty() {
@@ -69,11 +74,6 @@ impl CompressedTypeSpecifier {
                     _ => break 'b,
                 });
             }
-        }
-        enum Base {
-            Int,
-            Double,
-            Char,
         }
         let mut base = None;
         let mut signed = None;
@@ -144,9 +144,8 @@ impl CompressedTypeSpecifier {
                     return Err("short and long char is invalid".to_owned());
                 }
                 match signed {
-                    Some(true) => PrimitiveTy::IntTy(IntTy::I8),
+                    Some(true) | None => PrimitiveTy::IntTy(IntTy::I8),
                     Some(false) => PrimitiveTy::UintTy(UintTy::U8),
-                    None => PrimitiveTy::IntTy(IntTy::I8),
                 }
             }
         }))
@@ -257,22 +256,21 @@ impl CrateSigCtx<'_> {
         base: CTy,
         base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
-        resolver: &LocalResolver,
     ) -> (
         String,
         CTy,
         Option<co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>>,
     ) {
         let span = declarator.1;
-        match self.extract_decl_type_with_consts(base, base_const, declarator, resolver) {
+        match self.extract_decl_type_with_consts(base, base_const, declarator) {
             Ok((ty, name, array_len)) => {
                 let Some(name) = name else {
-                    self.terminate_with_error(span, "Unexpected abstract declarator");
+                    CrateSigCtx::<'_>::terminate_with_error(span, "Unexpected abstract declarator");
                 };
                 (name, ty, array_len)
             }
             Err(e) => {
-                self.terminate_with_error(span, &e);
+                CrateSigCtx::<'_>::terminate_with_error(span, &e);
             }
         }
     }
@@ -282,7 +280,6 @@ impl CrateSigCtx<'_> {
         current: CTy,
         current_const: bool,
         (decl, span): Spanned<Declarator<LocalResolver>>,
-        resolver: &LocalResolver,
     ) -> Result<
         (
             CTy,
@@ -354,7 +351,7 @@ impl CrateSigCtx<'_> {
                         return Err("function returning unsized array is not valid".to_owned());
                     }
                 };
-                self.extract_decl_type_with_consts(function_ty, false, *declarator, resolver)
+                self.extract_decl_type_with_consts(function_ty, false, *declarator)
             }
             Declarator::PointerDeclarator {
                 declarator,
@@ -383,7 +380,7 @@ impl CrateSigCtx<'_> {
                 let next_const = qualifiers
                     .iter()
                     .any(|(q, _)| matches!(q, TypeQualifier::Const));
-                self.extract_decl_type_with_consts(ptr_or_fn_ptr, next_const, *declarator, resolver)
+                self.extract_decl_type_with_consts(ptr_or_fn_ptr, next_const, *declarator)
             }
             Declarator::ArrayDeclarator {
                 declarator,
@@ -406,7 +403,6 @@ impl CrateSigCtx<'_> {
                         CTy::UnsizedArray(inner),
                         current_const,
                         *declarator,
-                        resolver,
                     );
                 } else {
                     let def_id = subscription
@@ -425,12 +421,8 @@ impl CrateSigCtx<'_> {
                     (HirTyConst::Literal(literal_len), None)
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len.0, rust_span));
-                let (ty, name, nested_len) = self.extract_decl_type_with_consts(
-                    array_ty,
-                    current_const,
-                    *declarator,
-                    resolver,
-                )?;
+                let (ty, name, nested_len) =
+                    self.extract_decl_type_with_consts(array_ty, current_const, *declarator)?;
                 Ok((ty, name, nested_len.or(len.1)))
             }
         }
@@ -640,7 +632,7 @@ impl LocalResolverBase {
                 kind: HirTyKind::RawPtr(_, _),
                 ..
             })
-        ) && !self.is_null_pointer_constexpr_expr(expr)
+        ) && !Self::is_null_pointer_constexpr_expr(expr)
         {
             return Err("`constexpr` pointer initializer must be null".to_owned());
         }
@@ -660,13 +652,10 @@ impl LocalResolverBase {
         Ok(())
     }
 
-    fn is_null_pointer_constexpr_expr(
-        &mut self,
-        (expr, _): &Spanned<Expression<LocalResolver>>,
-    ) -> bool {
+    fn is_null_pointer_constexpr_expr((expr, _): &Spanned<Expression<LocalResolver>>) -> bool {
         match expr {
             Expression::Constant(Constant::Int(0, _)) => true,
-            Expression::Cast { expr, .. } => self.is_null_pointer_constexpr_expr(expr),
+            Expression::Cast { expr, .. } => Self::is_null_pointer_constexpr_expr(expr),
             _ => false,
         }
     }
@@ -779,8 +768,9 @@ impl LocalResolverBase {
             crate::DefOrLocal::AssocMethod { .. } => {
                 panic!("invalid associated method in type position")
             }
-            crate::DefOrLocal::Local(_) => panic!("invalid parsing"),
-            crate::DefOrLocal::LocalConst(_) => panic!("invalid parsing"),
+            crate::DefOrLocal::Local(_) | crate::DefOrLocal::LocalConst(_) => {
+                panic!("invalid parsing")
+            }
             crate::DefOrLocal::FuncName => panic!("invalid __func__ in type position"),
             crate::DefOrLocal::Prim(primitive_ty) => self.hir_ty_of_prim(*primitive_ty, span),
             crate::DefOrLocal::UnrepresentableType(ty) => match ty {
@@ -810,31 +800,45 @@ impl LocalResolverBase {
     ) -> Result<i128, String> {
         match expr {
             Expression::Constant(Constant::Int(v, _)) => Ok(*v),
-            Expression::Constant(Constant::Char(ch)) => Ok((*ch as u8 as i8) as i128),
+            Expression::Constant(Constant::Char(ch)) => Ok(i128::from(*ch as u8 as i8)),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Const(def_id) => {
                     if self.has_local_const_value(*def_id) {
                         self.eval_local_const(*def_id)
                     } else if let Some(val) = self.hir_ctx.dependency_const_value(*def_id) {
                         match val {
-                            rustc_public_generative::DependencyConstValue::Bool(b) => Ok(b as i128),
+                            rustc_public_generative::DependencyConstValue::Bool(b) => {
+                                Ok(i128::from(b))
+                            }
                             rustc_public_generative::DependencyConstValue::Char(c) => Ok(c as i128),
-                            rustc_public_generative::DependencyConstValue::I8(i) => Ok(i as i128),
-                            rustc_public_generative::DependencyConstValue::I16(i) => Ok(i as i128),
-                            rustc_public_generative::DependencyConstValue::I32(i) => Ok(i as i128),
-                            rustc_public_generative::DependencyConstValue::I64(i) => Ok(i as i128),
+                            rustc_public_generative::DependencyConstValue::I8(i) => {
+                                Ok(i128::from(i))
+                            }
+                            rustc_public_generative::DependencyConstValue::I16(i) => {
+                                Ok(i128::from(i))
+                            }
+                            rustc_public_generative::DependencyConstValue::I32(i) => {
+                                Ok(i128::from(i))
+                            }
+                            rustc_public_generative::DependencyConstValue::I64(i)
+                            | rustc_public_generative::DependencyConstValue::Isize(i) => {
+                                Ok(i128::from(i))
+                            }
                             rustc_public_generative::DependencyConstValue::I128(i) => Ok(i),
-                            rustc_public_generative::DependencyConstValue::Isize(i) => {
-                                Ok(i as i128)
+                            rustc_public_generative::DependencyConstValue::U8(u) => {
+                                Ok(i128::from(u))
                             }
-                            rustc_public_generative::DependencyConstValue::U8(u) => Ok(u as i128),
-                            rustc_public_generative::DependencyConstValue::U16(u) => Ok(u as i128),
-                            rustc_public_generative::DependencyConstValue::U32(u) => Ok(u as i128),
-                            rustc_public_generative::DependencyConstValue::U64(u) => Ok(u as i128),
+                            rustc_public_generative::DependencyConstValue::U16(u) => {
+                                Ok(i128::from(u))
+                            }
+                            rustc_public_generative::DependencyConstValue::U32(u) => {
+                                Ok(i128::from(u))
+                            }
+                            rustc_public_generative::DependencyConstValue::U64(u)
+                            | rustc_public_generative::DependencyConstValue::Usize(u) => {
+                                Ok(i128::from(u))
+                            }
                             rustc_public_generative::DependencyConstValue::U128(u) => Ok(u as i128),
-                            rustc_public_generative::DependencyConstValue::Usize(u) => {
-                                Ok(u as i128)
-                            }
                             rustc_public_generative::DependencyConstValue::F32(_)
                             | rustc_public_generative::DependencyConstValue::F64(_) => {
                                 Err("float constant in array size".to_owned())
@@ -842,16 +846,14 @@ impl LocalResolverBase {
                         }
                     } else {
                         Err(format!(
-                            "unsupported identifier in constant expression: {:?}",
-                            resolved
+                            "unsupported identifier in constant expression: {resolved:?}"
                         ))
                     }
                 }
                 crate::DefOrLocal::Def { def_id, .. } => self.eval_local_const(*def_id),
                 crate::DefOrLocal::LocalConst(local) => self.eval_local_constexpr(*local),
                 _ => Err(format!(
-                    "unsupported identifier in constant expression: {:?}",
-                    resolved
+                    "unsupported identifier in constant expression: {resolved:?}"
                 )),
             },
             Expression::UnaryOp(op, inner) => {
@@ -859,7 +861,7 @@ impl LocalResolverBase {
                 match op {
                     UnaryOp::Plus => Ok(inner),
                     UnaryOp::Minus => Ok(-inner),
-                    UnaryOp::Not => Ok((inner == 0) as i128),
+                    UnaryOp::Not => Ok(i128::from(inner == 0)),
                     UnaryOp::Com => Ok(!inner),
                     _ => Err("unsupported unary op in array size".to_owned()),
                 }
@@ -876,16 +878,16 @@ impl LocalResolverBase {
                     BinOp::BitOr => Ok(lhs | rhs),
                     BinOp::BitXor => Ok(lhs ^ rhs),
                     BinOp::BitAnd => Ok(lhs & rhs),
-                    BinOp::Eq => Ok((lhs == rhs) as i128),
-                    BinOp::Lt => Ok((lhs < rhs) as i128),
-                    BinOp::Le => Ok((lhs <= rhs) as i128),
-                    BinOp::Ne => Ok((lhs != rhs) as i128),
-                    BinOp::Ge => Ok((lhs >= rhs) as i128),
-                    BinOp::Gt => Ok((lhs > rhs) as i128),
+                    BinOp::Eq => Ok(i128::from(lhs == rhs)),
+                    BinOp::Lt => Ok(i128::from(lhs < rhs)),
+                    BinOp::Le => Ok(i128::from(lhs <= rhs)),
+                    BinOp::Ne => Ok(i128::from(lhs != rhs)),
+                    BinOp::Ge => Ok(i128::from(lhs >= rhs)),
+                    BinOp::Gt => Ok(i128::from(lhs > rhs)),
                     BinOp::Shl => Ok(lhs << rhs),
                     BinOp::Shr => Ok(lhs >> rhs),
-                    BinOp::And => Ok(((lhs != 0) && (rhs != 0)) as i128),
-                    BinOp::Or => Ok(((lhs != 0) || (rhs != 0)) as i128),
+                    BinOp::And => Ok(i128::from((lhs != 0) && (rhs != 0))),
+                    BinOp::Or => Ok(i128::from((lhs != 0) || (rhs != 0))),
                     BinOp::Comma | BinOp::Assign => {
                         Err("unsupported binary op in array size".to_owned())
                     }
@@ -907,7 +909,12 @@ impl LocalResolverBase {
                 let target_ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
                 self.cast_const_int(value, &target_ty)
             }
-            Expression::SizeofType(type_name) => {
+            Expression::SizeofType(type_name)
+            | Expression::Offsetof {
+                ty: type_name,
+                field: _,
+                field_span: _,
+            } => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
             }
@@ -923,18 +930,10 @@ impl LocalResolverBase {
                 let ty = self.type_of_expr_for_sizeof(expr)?;
                 Ok(self.sizeof_hir_ty(&ty)?.1 as i128)
             }
-            Expression::Offsetof {
-                ty: type_name,
-                field: _,
-                field_span: _,
-            } => {
-                let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
-                Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
-            }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
                 let t1 = self.lower_type_name_for_const(*ty1.clone(), *span)?;
                 let t2 = self.lower_type_name_for_const(*ty2.clone(), *span)?;
-                Ok(hir_tys_compatible(&t1, &t2) as i128)
+                Ok(i128::from(hir_tys_compatible(&t1, &t2)))
             }
             Expression::GenericSelection {
                 controlling,
@@ -983,7 +982,7 @@ impl LocalResolverBase {
             .iter()
             .find(|e| e.def_id == def_id)
             .map(|e| &e.mir_info)
-            .ok_or_else(|| format!("could not find enum constant {:?}", def_id))?;
+            .ok_or_else(|| format!("could not find enum constant {def_id:?}"))?;
 
         let value = match &mir_info {
             crate::MirOwnerInfo::EnumConstZeroed => 0,
@@ -994,7 +993,7 @@ impl LocalResolverBase {
                 let prev_id = *prev_id;
                 self.eval_local_const(prev_id)? + 1
             }
-            _ => return Err(format!("def {:?} is not an enum constant", def_id)),
+            _ => return Err(format!("def {def_id:?} is not an enum constant")),
         };
 
         self.enum_const_values.insert(def_id, value);
@@ -1011,8 +1010,7 @@ impl LocalResolverBase {
     }
 
     fn hir_ty_of_dependency_const_value(
-        &self,
-        value: rustc_public_generative::DependencyConstValue,
+        value: &rustc_public_generative::DependencyConstValue,
         span: rustc_public_generative::rustc_public::ty::Span,
     ) -> HirTy {
         match value {
@@ -1020,7 +1018,8 @@ impl LocalResolverBase {
                 kind: HirTyKind::Bool,
                 span,
             },
-            rustc_public_generative::DependencyConstValue::Char(_) => {
+            rustc_public_generative::DependencyConstValue::Char(_)
+            | rustc_public_generative::DependencyConstValue::I32(_) => {
                 HirTy::signed_ty(IntTy::I32, span)
             }
             rustc_public_generative::DependencyConstValue::I8(_) => {
@@ -1028,9 +1027,6 @@ impl LocalResolverBase {
             }
             rustc_public_generative::DependencyConstValue::I16(_) => {
                 HirTy::signed_ty(IntTy::I16, span)
-            }
-            rustc_public_generative::DependencyConstValue::I32(_) => {
-                HirTy::signed_ty(IntTy::I32, span)
             }
             rustc_public_generative::DependencyConstValue::I64(_) => {
                 HirTy::signed_ty(IntTy::I64, span)
@@ -1084,7 +1080,7 @@ impl LocalResolverBase {
     ) -> Option<HirTy> {
         self.hir_ctx
             .dependency_const_value(def_id)
-            .map(|value| self.hir_ty_of_dependency_const_value(value, span))
+            .map(|value| Self::hir_ty_of_dependency_const_value(&value, span))
             .or_else(|| self.maybe_local_enum_const_ty(def_id, span))
     }
 
@@ -1106,7 +1102,7 @@ impl LocalResolverBase {
             return self.cast_const_int(value, &HirTy::signed_ty(IntTy::I32, target_ty.span));
         }
         match target_ty.kind {
-            HirTyKind::Bool => Ok((value != 0) as i128),
+            HirTyKind::Bool => Ok(i128::from(value != 0)),
             HirTyKind::Char => {
                 let codepoint =
                     u32::try_from(value).map_err(|_| format!("invalid char cast value {value}"))?;
@@ -1114,16 +1110,16 @@ impl LocalResolverBase {
                     .map(|ch| ch as i128)
                     .ok_or_else(|| format!("invalid char cast value {value}"))
             }
-            HirTyKind::Int(IntTy::I8) => Ok((value as i8) as i128),
-            HirTyKind::Int(IntTy::I16) => Ok((value as i16) as i128),
-            HirTyKind::Int(IntTy::I32) => Ok((value as i32) as i128),
-            HirTyKind::Int(IntTy::I64) => Ok((value as i64) as i128),
+            HirTyKind::Int(IntTy::I8) => Ok(i128::from(value as i8)),
+            HirTyKind::Int(IntTy::I16) => Ok(i128::from(value as i16)),
+            HirTyKind::Int(IntTy::I32) => Ok(i128::from(value as i32)),
+            HirTyKind::Int(IntTy::I64) => Ok(i128::from(value as i64)),
             HirTyKind::Int(IntTy::I128) => Ok(value),
             HirTyKind::Int(IntTy::Isize) => Ok((value as isize) as i128),
-            HirTyKind::Uint(UintTy::U8) => Ok((value as u8) as i128),
-            HirTyKind::Uint(UintTy::U16) => Ok((value as u16) as i128),
-            HirTyKind::Uint(UintTy::U32) => Ok((value as u32) as i128),
-            HirTyKind::Uint(UintTy::U64) => Ok((value as u64) as i128),
+            HirTyKind::Uint(UintTy::U8) => Ok(i128::from(value as u8)),
+            HirTyKind::Uint(UintTy::U16) => Ok(i128::from(value as u16)),
+            HirTyKind::Uint(UintTy::U32) => Ok(i128::from(value as u32)),
+            HirTyKind::Uint(UintTy::U64) => Ok(i128::from(value as u64)),
             HirTyKind::Uint(UintTy::U128) => Ok((value as u128) as i128),
             HirTyKind::Uint(UintTy::Usize) => Ok((value as usize) as i128),
             _ => Err(format!(
@@ -1250,7 +1246,6 @@ impl LocalResolverBase {
                     span: rust_span,
                 }),
                 BinOp::Comma => self.type_of_expr_for_sizeof(rhs),
-                BinOp::Assign => self.type_of_expr_for_sizeof(lhs),
                 _ => self.type_of_expr_for_sizeof(lhs),
             },
             _ => Err("unsupported sizeof operand in array size".to_owned()),
@@ -1293,8 +1288,8 @@ impl LocalResolverBase {
         type_name: TypeName<LocalResolver>,
         span: Span,
     ) -> Result<HirTy, String> {
-        if type_name.abstract_declarator.is_none() {
-            if let [
+        if type_name.abstract_declarator.is_none()
+            && let [
                 (
                     co2_ast::SpecifierQualifier::TypeSpecifier((
                         TypeSpecifier::TypedefName((path, path_span)),
@@ -1303,37 +1298,36 @@ impl LocalResolverBase {
                     _,
                 ),
             ] = type_name.specifier_qualifier_list.as_slice()
-            {
-                let rust_span = self.co2_span_to_rustc(*path_span);
-                match path {
-                    crate::DefOrLocal::UnrepresentableType(ty) => match ty {
-                        CTy::Ty(ty) => return Ok(ty.clone()),
-                        CTy::Function(_) => {
-                            return Err("function is invalid as a type name".to_owned());
-                        }
-                        CTy::UnsizedArray(_) => {
-                            return Err("unsized array is invalid as a type name".to_owned());
-                        }
-                    },
-                    crate::DefOrLocal::Def { def_id, .. } => {
-                        if let Some(ty) = self.maybe_const_eval_named_ty(*def_id, rust_span) {
-                            return Ok(ty);
-                        }
+        {
+            let rust_span = self.co2_span_to_rustc(*path_span);
+            match path {
+                crate::DefOrLocal::UnrepresentableType(ty) => match ty {
+                    CTy::Ty(ty) => return Ok(ty.clone()),
+                    CTy::Function(_) => {
+                        return Err("function is invalid as a type name".to_owned());
                     }
-                    crate::DefOrLocal::Const(def_id) => {
-                        return self.scalar_const_ty(*def_id, rust_span).ok_or_else(|| {
-                            format!("missing scalar constant value for def {def_id:?}")
-                        });
+                    CTy::UnsizedArray(_) => {
+                        return Err("unsized array is invalid as a type name".to_owned());
                     }
-                    crate::DefOrLocal::LocalConst(local) => {
-                        return self
-                            .local_tys
-                            .get(local)
-                            .cloned()
-                            .ok_or_else(|| format!("missing local type for local {local}"));
+                },
+                crate::DefOrLocal::Def { def_id, .. } => {
+                    if let Some(ty) = self.maybe_const_eval_named_ty(*def_id, rust_span) {
+                        return Ok(ty);
                     }
-                    _ => {}
                 }
+                crate::DefOrLocal::Const(def_id) => {
+                    return self.scalar_const_ty(*def_id, rust_span).ok_or_else(|| {
+                        format!("missing scalar constant value for def {def_id:?}")
+                    });
+                }
+                crate::DefOrLocal::LocalConst(local) => {
+                    return self
+                        .local_tys
+                        .get(local)
+                        .cloned()
+                        .ok_or_else(|| format!("missing local type for local {local}"));
+                }
+                _ => {}
             }
         }
 
@@ -1371,14 +1365,14 @@ impl LocalResolverBase {
             | HirTyKind::Char
             | HirTyKind::Int(IntTy::I8)
             | HirTyKind::Uint(UintTy::U8) => Ok((1, 1)),
-            HirTyKind::Int(IntTy::I16) | HirTyKind::Uint(UintTy::U16) => Ok((2, 2)),
+            HirTyKind::Int(IntTy::I16)
+            | HirTyKind::Uint(UintTy::U16)
+            | HirTyKind::Float(FloatTy::F16) => Ok((2, 2)),
             HirTyKind::Int(IntTy::I32)
             | HirTyKind::Uint(UintTy::U32)
             | HirTyKind::Float(FloatTy::F32) => Ok((4, 4)),
-            HirTyKind::Int(IntTy::I64)
-            | HirTyKind::Uint(UintTy::U64)
-            | HirTyKind::Int(IntTy::Isize)
-            | HirTyKind::Uint(UintTy::Usize)
+            HirTyKind::Int(IntTy::I64 | IntTy::Isize)
+            | HirTyKind::Uint(UintTy::U64 | UintTy::Usize)
             | HirTyKind::Float(FloatTy::F64)
             | HirTyKind::RawPtr(..)
             | HirTyKind::Ref(..)
@@ -1386,7 +1380,6 @@ impl LocalResolverBase {
             HirTyKind::Int(IntTy::I128)
             | HirTyKind::Uint(UintTy::U128)
             | HirTyKind::Float(FloatTy::F128) => Ok((16, 16)),
-            HirTyKind::Float(FloatTy::F16) => Ok((2, 2)),
             HirTyKind::Tuple(inner) if inner.is_empty() => Ok((0, 1)),
             HirTyKind::Array(HirTyConst::Literal(len), inner) => {
                 let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
@@ -1683,7 +1676,7 @@ impl LocalResolverBase {
         span: rustc_public_generative::rustc_public::ty::Span,
     ) -> Result<HirTy, String> {
         let (def, _) = self.resolver.resolve("core::mem::MaybeUninit")?;
-        return Ok(HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span));
+        Ok(HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span))
     }
 
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {

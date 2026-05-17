@@ -127,8 +127,7 @@ pub(crate) fn infer_fn_generic_args(
                     TyKind::Param(param) => by_index
                         .get(&param.index)
                         .copied()
-                        .map(GenericArgKind::Type)
-                        .unwrap_or_else(|| arg.clone()),
+                        .map_or_else(|| arg.clone(), GenericArgKind::Type),
                     _ => arg.clone(),
                 },
                 _ => arg.clone(),

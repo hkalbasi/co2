@@ -3,6 +3,9 @@ name = "co2_ast"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 ariadne = "0.6.0"
 chumsky = "0.11.0"

@@ -3,6 +3,9 @@ name = "co2_crate_sig"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 co2_ast = { path = "../co2_ast" }
 co2_parser = { path = "../co2_parser" }

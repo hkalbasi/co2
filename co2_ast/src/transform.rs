@@ -83,7 +83,7 @@ where
     type Target<T: TypeResolver> = Box<I::Target<T>>;
 
     fn transform<B: Transformable<Self::Resolver>>(&self, b: &B) -> Self::Target<B> {
-        Box::new((&**self).transform(b))
+        Box::new((**self).transform(b))
     }
 }
 
@@ -302,7 +302,7 @@ impl<A: TypeResolver> DoTransform for EnumSpecifier<A> {
             EnumSpecifier::Defined { ident, enumerators } => EnumSpecifier::Defined {
                 ident: ident.clone(),
                 enumerators: enumerators
-                    .into_iter()
+                    .iter()
                     .map(|i| b.transform_enumerator(i))
                     .collect(),
             },
@@ -311,7 +311,7 @@ impl<A: TypeResolver> DoTransform for EnumSpecifier<A> {
             },
             EnumSpecifier::Anonymous { enumerators } => EnumSpecifier::Anonymous {
                 enumerators: enumerators
-                    .into_iter()
+                    .iter()
                     .map(|i| b.transform_enumerator(i))
                     .collect(),
             },

@@ -107,8 +107,7 @@ impl HirCtx<'_> {
                 let case_expr_ty = case_expr.ty;
                 let case_expr = coerce_expr_to_type(case_expr, discr_ty).map_err(|_| {
                     format!(
-                        "switch case expression type mismatch: expected {:?}, got {:?}",
-                        discr_ty, case_expr_ty
+                        "switch case expression type mismatch: expected {discr_ty:?}, got {case_expr_ty:?}"
                     )
                 })?;
                 let discr_expr = HirExpr {
@@ -138,7 +137,7 @@ impl HirCtx<'_> {
                 self.lower_stmt(statement.0, statement.1, out, locals, local_map)?;
             }
             Statement::Goto(name) => {
-                out.push(HirStmt::Goto(self.resolve_or_insert_label(name.0), span))
+                out.push(HirStmt::Goto(self.resolve_or_insert_label(name.0), span));
             }
             Statement::IndirectGoto(expr) => {
                 let expr = self.lower_expr(expr, locals, local_map)?;

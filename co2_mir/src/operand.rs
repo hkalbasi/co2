@@ -54,7 +54,7 @@ fn enum_payload_ty(ty: Ty) -> Option<Ty> {
     };
     let variant = adt.variant(variant_idx(0))?;
     let fields = variant.fields();
-    if fields.len() != 1 || fields[0].name.to_string() != "__co2_enum_value" {
+    if fields.len() != 1 || fields[0].name.clone() != "__co2_enum_value" {
         return None;
     }
     Some(fields[0].ty_with_args(&args))
@@ -72,7 +72,7 @@ fn callable_sig(
         .or_else(|| maybe_uninit_fn_ptr_inner(ty).and_then(|inner| inner.kind().fn_sig()))
 }
 
-impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
+impl Builder<'_, '_> {
     fn place_operand_for_ty(
         &self,
         place: rustc_public_generative::rustc_public::mir::Place,
@@ -85,7 +85,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         }
     }
 
-    fn const_int_expr(&self, value: i128, ty: Ty, span: RustSpan) -> HirExpr {
+    fn const_int_expr(value: i128, ty: Ty, span: RustSpan) -> HirExpr {
         HirExpr {
             kind: HirExprKind::ConstInt(value),
             ty,
@@ -93,7 +93,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         }
     }
 
-    fn emit_cast_expr(&self, expr: HirExpr, ty: Ty) -> HirExpr {
+    fn emit_cast_expr(expr: HirExpr, ty: Ty) -> HirExpr {
         if expr.ty == ty {
             expr
         } else {
@@ -111,9 +111,11 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             TyKind::RigidTy(RigidTy::Uint(UintTy::U8) | RigidTy::Int(IntTy::I8)) => 8,
             TyKind::RigidTy(RigidTy::Uint(UintTy::U16) | RigidTy::Int(IntTy::I16)) => 16,
             TyKind::RigidTy(RigidTy::Uint(UintTy::U32) | RigidTy::Int(IntTy::I32)) => 32,
-            TyKind::RigidTy(RigidTy::Uint(UintTy::U64) | RigidTy::Int(IntTy::I64)) => 64,
+            TyKind::RigidTy(
+                RigidTy::Uint(UintTy::U64 | UintTy::Usize)
+                | RigidTy::Int(IntTy::I64 | IntTy::Isize),
+            ) => 64,
             TyKind::RigidTy(RigidTy::Uint(UintTy::U128) | RigidTy::Int(IntTy::I128)) => 128,
-            TyKind::RigidTy(RigidTy::Uint(UintTy::Usize) | RigidTy::Int(IntTy::Isize)) => 64,
             other => panic!("unsupported bitfield storage type: {other:?}"),
         }
     }
@@ -177,13 +179,13 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
 
     fn bitfield_mask_expr(&self, width: usize, storage_ty: Ty, span: RustSpan) -> HirExpr {
         if width >= 128 {
-            self.emit_cast_expr(
-                self.const_int_expr(-1, Ty::signed_ty(IntTy::I32), span),
+            Self::emit_cast_expr(
+                Self::const_int_expr(-1, Ty::signed_ty(IntTy::I32), span),
                 storage_ty,
             )
         } else {
-            self.emit_cast_expr(
-                self.const_int_expr(
+            Self::emit_cast_expr(
+                Self::const_int_expr(
                     ((1u128 << width) - 1) as i128,
                     Ty::signed_ty(IntTy::I32),
                     span,
@@ -229,8 +231,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 kind: HirExprKind::Binary {
                     op: co2_hir::HirBinOp::Shr,
                     lhs: Box::new(storage),
-                    rhs: Box::new(self.emit_cast_expr(
-                        self.const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
+                    rhs: Box::new(Self::emit_cast_expr(
+                        Self::const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
                         storage_ty,
                     )),
                 },
@@ -249,7 +251,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         };
         if signed {
             let signed_storage_ty = self.signed_ty_for_storage(storage_ty);
-            let signed_value = self.emit_cast_expr(masked, signed_storage_ty);
+            let signed_value = Self::emit_cast_expr(masked, signed_storage_ty);
             let shift = self.bitfield_storage_bits(storage_ty) - bit_width;
             let sign_extended = if shift == 0 {
                 signed_value
@@ -258,8 +260,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     kind: HirExprKind::Binary {
                         op: co2_hir::HirBinOp::Shl,
                         lhs: Box::new(signed_value),
-                        rhs: Box::new(self.emit_cast_expr(
-                            self.const_int_expr(shift as i128, Ty::signed_ty(IntTy::I32), span),
+                        rhs: Box::new(Self::emit_cast_expr(
+                            Self::const_int_expr(shift as i128, Ty::signed_ty(IntTy::I32), span),
                             signed_storage_ty,
                         )),
                     },
@@ -270,8 +272,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     kind: HirExprKind::Binary {
                         op: co2_hir::HirBinOp::Shr,
                         lhs: Box::new(shifted_left),
-                        rhs: Box::new(self.emit_cast_expr(
-                            self.const_int_expr(shift as i128, Ty::signed_ty(IntTy::I32), span),
+                        rhs: Box::new(Self::emit_cast_expr(
+                            Self::const_int_expr(shift as i128, Ty::signed_ty(IntTy::I32), span),
                             signed_storage_ty,
                         )),
                     },
@@ -279,9 +281,9 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     span,
                 }
             };
-            self.emit_cast_expr(sign_extended, result_ty)
+            Self::emit_cast_expr(sign_extended, result_ty)
         } else {
-            self.emit_cast_expr(masked, result_ty)
+            Self::emit_cast_expr(masked, result_ty)
         }
     }
 
@@ -302,8 +304,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 kind: HirExprKind::Binary {
                     op: co2_hir::HirBinOp::Shl,
                     lhs: Box::new(value_mask.clone()),
-                    rhs: Box::new(self.emit_cast_expr(
-                        self.const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
+                    rhs: Box::new(Self::emit_cast_expr(
+                        Self::const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
                         storage_ty,
                     )),
                 },
@@ -327,7 +329,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         let masked_value = HirExpr {
             kind: HirExprKind::Binary {
                 op: co2_hir::HirBinOp::BitAnd,
-                lhs: Box::new(self.emit_cast_expr(value, storage_ty)),
+                lhs: Box::new(Self::emit_cast_expr(value, storage_ty)),
                 rhs: Box::new(value_mask),
             },
             ty: storage_ty,
@@ -340,8 +342,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 kind: HirExprKind::Binary {
                     op: co2_hir::HirBinOp::Shl,
                     lhs: Box::new(masked_value),
-                    rhs: Box::new(self.emit_cast_expr(
-                        self.const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
+                    rhs: Box::new(Self::emit_cast_expr(
+                        Self::const_int_expr(bit_offset as i128, Ty::signed_ty(IntTy::I32), span),
                         storage_ty,
                     )),
                 },
@@ -822,8 +824,8 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             }
             HirExprKind::Comma { lhs, rhs } => {
                 let _lhs = self.lower_expr_to_operand(lhs);
-                let rhs = self.lower_expr_to_operand(rhs);
-                rhs
+
+                self.lower_expr_to_operand(rhs)
             }
             HirExprKind::Binary { op, lhs, rhs } => {
                 if matches!(
@@ -1112,13 +1114,17 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                     let bin_expr = HirExpr {
                         kind: HirExprKind::Binary {
                             op: *op,
-                            lhs: Box::new(self.emit_cast_expr(old_expr, *binop_ty)),
-                            rhs: Box::new(self.emit_cast_expr((**rhs).clone(), *binop_ty)),
+                            lhs: Box::new(Self::emit_cast_expr(old_expr, *binop_ty)),
+                            rhs: Box::new(Self::emit_cast_expr((**rhs).clone(), *binop_ty)),
                         },
                         ty: *binop_ty,
                         span: expr.span,
                     };
-                    self.emit_bitfield_store(lhs, self.emit_cast_expr(bin_expr, lhs.ty), expr.span);
+                    self.emit_bitfield_store(
+                        lhs,
+                        Self::emit_cast_expr(bin_expr, lhs.ty),
+                        expr.span,
+                    );
                     return match return_semantic {
                         ReturnSemantic::AfterAssign => self.lower_expr_to_operand(lhs),
                         ReturnSemantic::BeforeAssign => old_operand.unwrap(),
@@ -1476,8 +1482,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             });
             return MirOperand::Copy(place(tmp));
         }
-        if dst_mu_fn_ptr.is_some() && src_is_fn_def {
-            let fn_ptr_ty = dst_mu_fn_ptr.expect("checked is_some");
+        if let Some(fn_ptr_ty) = dst_mu_fn_ptr.filter(|_| src_is_fn_def) {
             let src_sig = src_ty
                 .kind()
                 .fn_sig()
@@ -1513,8 +1518,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
                 span,
             );
         }
-        if dst_mu_fn_ptr.is_some() && src_is_fn_def {
-            let fn_ptr_ty = dst_mu_fn_ptr.expect("checked is_some");
+        if let Some(fn_ptr_ty) = dst_mu_fn_ptr.filter(|_| src_is_fn_def) {
             let fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(
@@ -1725,7 +1729,7 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
         if src_mu_fn_ptr.is_some() && dst_mu_fn_ptr.is_some() {
             return self.write_value_into_maybe_uninit_storage(dst_ty, inner_op, src_ty, span);
         }
-        panic!("unsupported cast from {:?} to {:?}", src_ty, dst_ty);
+        panic!("unsupported cast from {src_ty:?} to {dst_ty:?}");
     }
 
     pub(crate) fn lower_call_expr(
@@ -1977,34 +1981,31 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
             };
             arg_ops.push(op);
         }
-        match &func.kind {
-            HirExprKind::Path(ResolvedValue::Fn(fn_def, existing_generic_args)) => {
-                let generic_args =
-                    complete_fn_generic_args(*fn_def, &sig, args, ret_ty, existing_generic_args)
-                        .into_iter()
-                        .map(|arg| match arg {
-                            GenericArgKind::Type(ty) => {
-                                GenericArgKind::Type(self.ctx.normalize_ty_defaults(ty))
-                            }
-                            _ => arg,
-                        })
-                        .collect();
-                self.emit_call_block(
-                    fn_const_operand(*fn_def, generic_args, span),
-                    arg_ops,
-                    destination,
-                    span,
-                );
-            }
-            _ => {
-                let func_op = if let Some(inner_fn_ptr) = maybe_uninit_fn_ptr_inner(func.ty) {
-                    let op = self.lower_expr_to_operand(func);
-                    self.read_maybe_uninit_as(op, func.ty, inner_fn_ptr, span)
-                } else {
-                    self.lower_expr_to_operand(func)
-                };
-                self.emit_call_block(func_op, arg_ops, destination, span);
-            }
+        if let HirExprKind::Path(ResolvedValue::Fn(fn_def, existing_generic_args)) = &func.kind {
+            let generic_args =
+                complete_fn_generic_args(*fn_def, &sig, args, ret_ty, existing_generic_args)
+                    .into_iter()
+                    .map(|arg| match arg {
+                        GenericArgKind::Type(ty) => {
+                            GenericArgKind::Type(self.ctx.normalize_ty_defaults(ty))
+                        }
+                        _ => arg,
+                    })
+                    .collect();
+            self.emit_call_block(
+                fn_const_operand(*fn_def, generic_args, span),
+                arg_ops,
+                destination,
+                span,
+            );
+        } else {
+            let func_op = if let Some(inner_fn_ptr) = maybe_uninit_fn_ptr_inner(func.ty) {
+                let op = self.lower_expr_to_operand(func);
+                self.read_maybe_uninit_as(op, func.ty, inner_fn_ptr, span)
+            } else {
+                self.lower_expr_to_operand(func)
+            };
+            self.emit_call_block(func_op, arg_ops, destination, span);
         }
     }
 
@@ -2031,47 +2032,47 @@ impl<'ctx, 'tcx> Builder<'ctx, 'tcx> {
     }
 
     pub(crate) fn lower_call_arg(&mut self, arg: &HirExpr, expected_ty: Ty) -> MirOperand {
-        if let TyKind::RigidTy(RigidTy::Adt(adt, _)) = expected_ty.kind() {
-            if adt == self.wellknown_defs.valist {
-                let borrowed_place = if let Some(place) = self.lower_expr_to_place(arg) {
-                    place
-                } else {
-                    let tmp = self.new_temp(arg.ty, Mutability::Mut, arg.span);
-                    let value = self.lower_expr_to_operand(arg);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
-                        span: arg.span,
-                    });
-                    place(tmp)
-                };
-
-                let reg = Region {
-                    kind: RegionKind::ReErased,
-                };
-                let ref_ty = Ty::new_ref(reg.clone(), arg.ty, Mutability::Not);
-                let ref_local = self.new_temp(ref_ty, Mutability::Not, arg.span);
+        if let TyKind::RigidTy(RigidTy::Adt(adt, _)) = expected_ty.kind()
+            && adt == self.wellknown_defs.valist
+        {
+            let borrowed_place = if let Some(place) = self.lower_expr_to_place(arg) {
+                place
+            } else {
+                let tmp = self.new_temp(arg.ty, Mutability::Mut, arg.span);
+                let value = self.lower_expr_to_operand(arg);
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(ref_local),
-                        Rvalue::Ref(reg, BorrowKind::Shared, borrowed_place),
-                    ),
+                    kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
                     span: arg.span,
                 });
+                place(tmp)
+            };
 
-                let transmute_copy_fn = self.wellknown_defs.transmute_copy;
-                let generic_args = vec![
-                    GenericArgKind::Type(arg.ty),
-                    GenericArgKind::Type(expected_ty),
-                ];
-                let tmp = self.new_temp(expected_ty, Mutability::Mut, arg.span);
-                self.emit_call_block(
-                    fn_const_operand(transmute_copy_fn, generic_args, arg.span),
-                    vec![MirOperand::Copy(place(ref_local))],
-                    place(tmp),
-                    arg.span,
-                );
-                return MirOperand::Move(place(tmp));
-            }
+            let reg = Region {
+                kind: RegionKind::ReErased,
+            };
+            let ref_ty = Ty::new_ref(reg.clone(), arg.ty, Mutability::Not);
+            let ref_local = self.new_temp(ref_ty, Mutability::Not, arg.span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(ref_local),
+                    Rvalue::Ref(reg, BorrowKind::Shared, borrowed_place),
+                ),
+                span: arg.span,
+            });
+
+            let transmute_copy_fn = self.wellknown_defs.transmute_copy;
+            let generic_args = vec![
+                GenericArgKind::Type(arg.ty),
+                GenericArgKind::Type(expected_ty),
+            ];
+            let tmp = self.new_temp(expected_ty, Mutability::Mut, arg.span);
+            self.emit_call_block(
+                fn_const_operand(transmute_copy_fn, generic_args, arg.span),
+                vec![MirOperand::Copy(place(ref_local))],
+                place(tmp),
+                arg.span,
+            );
+            return MirOperand::Move(place(tmp));
         }
 
         self.lower_expr_to_operand(arg)

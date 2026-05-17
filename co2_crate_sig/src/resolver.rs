@@ -82,7 +82,7 @@ impl ModuleData {
             .ok_or_else(|| "path does not refer to a value or type".to_owned())
     }
 
-    fn lookup_path<'a>(&self, path: &[&'a str]) -> Result<&Self, String> {
+    fn lookup_path(&self, path: &[&str]) -> Result<&Self, String> {
         let Some((seg1, rest)) = path.split_first() else {
             return Ok(self);
         };
@@ -151,7 +151,7 @@ impl ModuleData {
         let mut this = Self::default();
         if include_builtin_va_list {
             for name in ["__builtin_va_list", "__gnuc_va_list"] {
-                let def_id = ctx.allocate_def_id(parent, DefData::TypeNs(name.to_owned()));
+                let def_id = ctx.allocate_def_id(parent, &DefData::TypeNs(name.to_owned()));
                 this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));
             }
         }
@@ -161,12 +161,12 @@ impl ModuleData {
                     let Some(decl) = signature.ident() else {
                         continue;
                     };
-                    let def_id = ctx.allocate_def_id(parent, DefData::ValueNs(decl.clone()));
+                    let def_id = ctx.allocate_def_id(parent, &DefData::ValueNs(decl.clone()));
                     this.insert_path([&*decl].into_iter(), Some((def_id, TypeQueryResult::Expr)));
                 }
                 Declaration::RustTypeAlias { ident, .. } => {
                     let name = ident.0.as_str();
-                    let def_id = ctx.allocate_def_id(parent, DefData::TypeNs(name.to_owned()));
+                    let def_id = ctx.allocate_def_id(parent, &DefData::TypeNs(name.to_owned()));
                     this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));
                 }
                 Declaration::Declaration {
@@ -181,13 +181,14 @@ impl ModuleData {
                             if decl.is_function() {
                                 continue;
                             }
-                            let Some(name) = extract_decl_name(&decl) else {
+                            let Some(name) = extract_decl_name(decl) else {
                                 continue;
                             };
                             if this.resolve_path([&*name].into_iter()).is_ok() {
                                 continue;
                             }
-                            let def_id = ctx.allocate_def_id(parent, DefData::TypeNs(name.clone()));
+                            let def_id =
+                                ctx.allocate_def_id(parent, &DefData::TypeNs(name.clone()));
                             this.insert_path(
                                 [&*name].into_iter(),
                                 Some((def_id, TypeQueryResult::Type)),
@@ -196,7 +197,7 @@ impl ModuleData {
                     } else {
                         for decl in declarators {
                             let decl = &decl.0.declarator.0;
-                            let Some(name) = extract_decl_name(&decl) else {
+                            let Some(name) = extract_decl_name(decl) else {
                                 continue;
                             };
                             if this.resolve_path([&*name].into_iter()).is_ok() {
@@ -208,7 +209,7 @@ impl ModuleData {
                                 parent
                             };
                             let def_id =
-                                ctx.allocate_def_id(parent, DefData::ValueNs(name.clone()));
+                                ctx.allocate_def_id(parent, &DefData::ValueNs(name.clone()));
                             this.insert_path(
                                 [&*name].into_iter(),
                                 Some((def_id, TypeQueryResult::Expr)),
@@ -227,9 +228,7 @@ fn anchored_module_prefix<'a>(
     module_path: &'a [String],
     parts: &'a [&'a str],
 ) -> Option<(Vec<&'a str>, &'a [&'a str])> {
-    let Some(first) = parts.first().copied() else {
-        return None;
-    };
+    let first = parts.first().copied()?;
     match first {
         "crate" => Some((Vec::new(), &parts[1..])),
         "super" => {
@@ -505,14 +504,14 @@ impl Resolver {
                 }
                 continue;
             };
-            if let Some((def_id, TypeQueryResult::Type)) = item.id {
-                if self.traits.contains(&def_id) {
-                    self.scoped_traits.push(ScopedTrait {
-                        name: alias.to_owned(),
-                        def_id,
-                        path: normalized_full_path.clone(),
-                    });
-                }
+            if let Some((def_id, TypeQueryResult::Type)) = item.id
+                && self.traits.contains(&def_id)
+            {
+                self.scoped_traits.push(ScopedTrait {
+                    name: alias.to_owned(),
+                    def_id,
+                    path: normalized_full_path.clone(),
+                });
             }
             let item = if matches!(item.id, Some((_, TypeQueryResult::Expr))) {
                 ModuleData {
@@ -776,10 +775,10 @@ impl Resolver {
     }
 
     fn collect_method_receivers(module: &ModuleData, out: &mut HashMap<DefId, ModuleData>) {
-        if let Some((def_id, TypeQueryResult::Type)) = module.id {
-            if !(module.items.is_empty() && out.contains_key(&def_id)) {
-                out.insert(def_id, module.clone());
-            }
+        if let Some((def_id, TypeQueryResult::Type)) = module.id
+            && !(module.items.is_empty() && out.contains_key(&def_id))
+        {
+            out.insert(def_id, module.clone());
         }
         for child in module.items.values() {
             Self::collect_method_receivers(child, out);
@@ -805,14 +804,13 @@ fn method_search_priority(name: &str) -> (usize, &str) {
     let generic_arity = name
         .strip_prefix('<')
         .and_then(|it| it.strip_suffix('>'))
-        .map(|inner| {
+        .map_or(usize::MAX, |inner| {
             inner
                 .split(',')
                 .map(str::trim)
                 .filter(|part| !part.is_empty())
                 .count()
-        })
-        .unwrap_or(usize::MAX);
+        });
     (generic_arity, name)
 }
 

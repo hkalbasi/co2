@@ -3,6 +3,9 @@ name = "co2miri"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 co2rustc = { path = "../co2rustc" }
 co2_driver_lib = { path = "../co2_driver_lib" }

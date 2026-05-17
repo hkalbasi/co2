@@ -42,7 +42,7 @@ impl InitializerCursor {
                 Designator::Subscript(expr) => {
                     let idx = eval_const_expr_as_usize(&ctx.decl_resolver, expr)?;
                     let elem_ty = array_elem_ty(current_ty).ok_or_else(|| {
-                        format!("array designator used on non-array type: {:?}", current_ty)
+                        format!("array designator used on non-array type: {current_ty:?}")
                     })?;
                     cursor.stack.push((idx, elem_ty));
                     current_ty = elem_ty;
@@ -61,13 +61,12 @@ impl InitializerCursor {
                         })?;
                     let mut cursor_ty = current_ty;
                     for index in path {
-                        let fields = ctx.adt_logical_field_tys(cursor_ty).ok_or_else(|| {
-                            format!("designator on non-adt type: {:?}", cursor_ty)
-                        })?;
+                        let fields = ctx
+                            .adt_logical_field_tys(cursor_ty)
+                            .ok_or_else(|| format!("designator on non-adt type: {cursor_ty:?}"))?;
                         let next_ty = *fields.get(index).ok_or_else(|| {
                             format!(
-                                "designator field index out of bounds: {} for {:?}",
-                                index, cursor_ty
+                                "designator field index out of bounds: {index} for {cursor_ty:?}"
                             )
                         })?;
                         cursor.stack.push((index, next_ty));
@@ -86,7 +85,7 @@ impl InitializerCursor {
     }
 
     fn ty(&self) -> Ty {
-        self.stack.last().map(|(_, ty)| *ty).unwrap_or(self.base_ty)
+        self.stack.last().map_or(self.base_ty, |(_, ty)| *ty)
     }
 
     fn insert_to_tree(
@@ -139,7 +138,7 @@ impl InitializerCursor {
             return Ok(());
         }
         let (mut idx, _) = self.stack.pop().expect("stack not empty");
-        let parent_ty = self.stack.last().map(|(_, ty)| *ty).unwrap_or(self.base_ty);
+        let parent_ty = self.stack.last().map_or(self.base_ty, |(_, ty)| *ty);
 
         if let Some(fields) = ctx.adt_logical_field_tys(parent_ty) {
             if is_union_ty(parent_ty) {
@@ -215,8 +214,7 @@ fn children_count_of_ty(ctx: &HirCtx<'_>, ty: Ty) -> usize {
 
 pub(crate) fn eval_const_int(expr: &HirExpr) -> Result<i128, String> {
     match &expr.kind {
-        HirExprKind::ConstInt(v) => Ok(*v),
-        HirExprKind::Path(crate::ResolvedValue::ConstInt(v)) => Ok(*v),
+        HirExprKind::ConstInt(v) | HirExprKind::Path(crate::ResolvedValue::ConstInt(v)) => Ok(*v),
         HirExprKind::Binary { op, lhs, rhs } => {
             let lhs = eval_const_int(lhs)?;
             let rhs = eval_const_int(rhs)?;
@@ -233,12 +231,12 @@ pub(crate) fn eval_const_int(expr: &HirExpr) -> Result<i128, String> {
                 crate::expr::HirBinOp::BitOr => Ok(lhs | rhs),
                 crate::expr::HirBinOp::BitXor => Ok(lhs ^ rhs),
                 crate::expr::HirBinOp::BitAnd => Ok(lhs & rhs),
-                crate::expr::HirBinOp::Eq => Ok((lhs == rhs) as i128),
-                crate::expr::HirBinOp::Lt => Ok((lhs < rhs) as i128),
-                crate::expr::HirBinOp::Le => Ok((lhs <= rhs) as i128),
-                crate::expr::HirBinOp::Ne => Ok((lhs != rhs) as i128),
-                crate::expr::HirBinOp::Ge => Ok((lhs >= rhs) as i128),
-                crate::expr::HirBinOp::Gt => Ok((lhs > rhs) as i128),
+                crate::expr::HirBinOp::Eq => Ok(i128::from(lhs == rhs)),
+                crate::expr::HirBinOp::Lt => Ok(i128::from(lhs < rhs)),
+                crate::expr::HirBinOp::Le => Ok(i128::from(lhs <= rhs)),
+                crate::expr::HirBinOp::Ne => Ok(i128::from(lhs != rhs)),
+                crate::expr::HirBinOp::Ge => Ok(i128::from(lhs >= rhs)),
+                crate::expr::HirBinOp::Gt => Ok(i128::from(lhs > rhs)),
                 crate::expr::HirBinOp::Shl => Ok(lhs << rhs),
                 crate::expr::HirBinOp::Shr => Ok(lhs >> rhs),
             }
@@ -248,11 +246,11 @@ pub(crate) fn eval_const_int(expr: &HirExpr) -> Result<i128, String> {
             let lhs = eval_const_int(lhs)? != 0;
             let rhs = eval_const_int(rhs)? != 0;
             Ok(match op {
-                crate::expr::HirLogicalOp::Or => (lhs || rhs) as i128,
-                crate::expr::HirLogicalOp::And => (lhs && rhs) as i128,
+                crate::expr::HirLogicalOp::Or => i128::from(lhs || rhs),
+                crate::expr::HirLogicalOp::And => i128::from(lhs && rhs),
             })
         }
-        HirExprKind::LogicalNot(inner) => Ok((eval_const_int(inner)? == 0) as i128),
+        HirExprKind::LogicalNot(inner) => Ok(i128::from(eval_const_int(inner)? == 0)),
         HirExprKind::BitNot(inner) => Ok(!eval_const_int(inner)?),
         HirExprKind::Cast(inner) => eval_const_int(inner),
         HirExprKind::Conditional {
@@ -277,7 +275,7 @@ fn array_len_from_layout(ty: Ty) -> Option<usize> {
     if elem_sz == 0 {
         return None;
     }
-    Some((total / elem_sz) as usize)
+    Some(total / elem_sz)
 }
 
 impl HirCtx<'_> {
@@ -393,12 +391,11 @@ impl HirCtx<'_> {
                     if let Some(fields) = self.adt_logical_field_tys(expected_ty) {
                         if !fields.is_empty() {
                             c.stack.push((0, fields[0]));
-                            if is_union_ty(expected_ty) {
-                                if let Some(sub_fields) = self.adt_logical_field_tys(fields[0]) {
-                                    if !sub_fields.is_empty() {
-                                        c.stack.push((0, sub_fields[0]));
-                                    }
-                                }
+                            if is_union_ty(expected_ty)
+                                && let Some(sub_fields) = self.adt_logical_field_tys(fields[0])
+                                && !sub_fields.is_empty()
+                            {
+                                c.stack.push((0, sub_fields[0]));
                             }
                         }
                     } else if is_array_ty(expected_ty) {
@@ -575,7 +572,7 @@ impl HirCtx<'_> {
                             initializer: (
                                 Initializer::Expr((
                                     Expression::Constant(co2_ast::Constant::Int(
-                                        byte as i128,
+                                        i128::from(byte),
                                         co2_ast::IntegerSuffix::None,
                                     )),
                                     span,

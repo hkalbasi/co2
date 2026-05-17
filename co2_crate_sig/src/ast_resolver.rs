@@ -37,11 +37,12 @@ fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> bool {
                     .iter()
                     .any(|param| expr_contains_label_address(&param.0))
         }
-        Expression::Update { expr, .. } => expr_contains_label_address(&expr.0),
+        Expression::Update { expr, .. } | Expression::Cast { expr, .. } => {
+            expr_contains_label_address(&expr.0)
+        }
         Expression::AssignWithOp { lhs, rhs, .. } => {
             expr_contains_label_address(&lhs.0) || expr_contains_label_address(&rhs.0)
         }
-        Expression::Cast { expr, .. } => expr_contains_label_address(&expr.0),
         Expression::Conditional {
             cond,
             then_expr,
@@ -160,7 +161,7 @@ impl LocalResolverBase {
         self.fake_defs_counter += 1;
         let def_id = self.hir_ctx.allocate_def_id(
             self.hir_ctx.root_crate_def_id(),
-            def_data(fake_name.clone()),
+            &def_data(fake_name.clone()),
         );
         (def_id, fake_name)
     }
@@ -358,15 +359,14 @@ impl LocalResolver {
         let hir_ctx = self.base.borrow().hir_ctx;
         let mut applicable = Vec::new();
         for (trait_name, trait_def, trait_path) in trait_candidates {
-            if hir_ctx.type_implements_trait(self.current_owner, receiver_ty, trait_def) {
-                if let Some((method_def, class)) = self
+            if hir_ctx.type_implements_trait(self.current_owner, receiver_ty, trait_def)
+                && let Some((method_def, class)) = self
                     .base
                     .borrow()
                     .resolver
                     .resolve_trait_method(&trait_path, method)
-                {
-                    applicable.push((trait_name, method_def, class));
-                }
+            {
+                applicable.push((trait_name, method_def, class));
             }
         }
 
@@ -395,7 +395,7 @@ impl LocalResolver {
 
     fn register_array_len_const(
         &self,
-        subscription: Spanned<co2_ast::LazySubscription>,
+        subscription: &Spanned<co2_ast::LazySubscription>,
     ) -> Option<RegisteredArrayLenConst> {
         if subscription.0.is_unsized()
             || subscription.0.is_unspecified_vla()
@@ -569,22 +569,19 @@ impl co2_ast::TypeResolver for LocalResolver {
                 }
             })
             .or_else(|| {
-                if let Some(prim) = PrimitiveTy::parse(&path_pretty) {
-                    Some((DefOrLocal::Prim(prim), TypeQueryResult::Type))
-                } else {
-                    None
-                }
+                PrimitiveTy::parse(&path_pretty)
+                    .map(|prim| (DefOrLocal::Prim(prim), TypeQueryResult::Type))
             })
             .or_else(|| {
                 // Handle ::<T> syntax: a standalone generic type specifier with no leading ident.
                 // The single generic arg is the type itself (e.g., ::<*mut i32> declares *mut i32).
-                if path_pretty.is_empty() {
-                    if let [(ty, _)] = generic_args.as_slice() {
-                        return Some((
-                            DefOrLocal::InlineRustTy(Box::new(ty.clone())),
-                            TypeQueryResult::Type,
-                        ));
-                    }
+                if path_pretty.is_empty()
+                    && let [(ty, _)] = generic_args.as_slice()
+                {
+                    return Some((
+                        DefOrLocal::InlineRustTy(Box::new(ty.clone())),
+                        TypeQueryResult::Type,
+                    ));
                 }
                 None
             })?;
@@ -619,8 +616,7 @@ impl co2_ast::TypeResolver for LocalResolver {
         next.localize();
 
         match decl {
-            Declaration::FunctionDefinition { .. } => next,
-            Declaration::RustTypeAlias { .. } => next,
+            Declaration::FunctionDefinition { .. } | Declaration::RustTypeAlias { .. } => next,
             Declaration::PragmaPack { action } => {
                 next.base.borrow_mut().apply_pack_action(action);
                 next
@@ -752,7 +748,7 @@ impl co2_ast::TypeResolver for LocalResolver {
         RegisteredSubscription {
             raw: subscription.0.clone(),
             array_len_const: self
-                .register_array_len_const(subscription)
+                .register_array_len_const(&subscription)
                 .map(|registered| registered.id),
         }
     }
@@ -791,7 +787,7 @@ impl co2_ast::Transformable<StatelessResolver> for LocalResolver {
         let Some(r) = self.classify_path(path) else {
             self.base
                 .borrow()
-                .terminate_with_error(*span, &format!("Unresolved name {}", path));
+                .terminate_with_error(*span, &format!("Unresolved name {path}"));
         };
         (r.1, *span)
     }

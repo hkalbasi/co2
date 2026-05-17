@@ -86,14 +86,13 @@ impl LocalResolver {
         span: Span,
         redefine: bool,
     ) -> DefId {
-        if let Some(def) = self.struct_tags.borrow().struct_tags.get(name) {
-            if !redefine
+        if let Some(def) = self.struct_tags.borrow().struct_tags.get(name)
+            && (!redefine
                 || self.base.borrow().struct_manager.definitions[def]
                     .emitted_fields
-                    .is_none()
-            {
-                return *def;
-            }
+                    .is_none())
+        {
+            return *def;
         }
 
         let def_id = self.base.borrow_mut().allocate_undef(kind, span, name);
@@ -235,11 +234,11 @@ impl LocalResolverBase {
         );
         let def_id = self.hir_ctx.allocate_def_id(
             self.hir_ctx.root_crate_def_id(),
-            DefData::TypeNs(name.clone()),
+            &DefData::TypeNs(name.clone()),
         );
         let field_id = self
             .hir_ctx
-            .allocate_def_id(def_id, DefData::ValueNs(ENUM_FIELD_NAME.to_owned()));
+            .allocate_def_id(def_id, &DefData::ValueNs(ENUM_FIELD_NAME.to_owned()));
         let field_ty = HirTy::signed_ty(IntTy::I32, span);
         let data = StructData {
             def_id,
@@ -267,7 +266,7 @@ impl LocalResolverBase {
         );
         let def_id = self.hir_ctx.allocate_def_id(
             self.hir_ctx.root_crate_def_id(),
-            DefData::TypeNs(name.clone()),
+            &DefData::TypeNs(name.clone()),
         );
         let data = StructData {
             def_id,
@@ -356,9 +355,7 @@ impl LocalResolverBase {
     ) {
         let struct_kind = self.struct_manager.definitions.get(&def).unwrap().kind;
         let data = self.struct_manager.definitions.get(&def).unwrap();
-        if data.emitted_fields.is_some() {
-            panic!("Redefinition happened");
-        }
+        assert!(data.emitted_fields.is_none(), "Redefinition happened");
         let mut anon_field_count = 0;
         let mut emitted_fields = Vec::new();
         let mut logical_fields = Vec::new();
@@ -460,7 +457,7 @@ impl LocalResolverBase {
                                 format!("__co2_bitfield_storage_{}", emitted_fields.len());
                             let id = self
                                 .hir_ctx
-                                .allocate_def_id(def, DefData::ValueNs(storage_name.clone()));
+                                .allocate_def_id(def, &DefData::ValueNs(storage_name.clone()));
                             let index = emitted_fields.len();
                             emitted_fields.push(StructField {
                                 id,
@@ -518,7 +515,7 @@ impl LocalResolverBase {
                 let physical_index = emitted_fields.len();
                 let id = self
                     .hir_ctx
-                    .allocate_def_id(def, DefData::ValueNs(name.clone()));
+                    .allocate_def_id(def, &DefData::ValueNs(name.clone()));
                 emitted_fields.push(StructField {
                     id,
                     name: name.clone(),
@@ -581,10 +578,10 @@ fn parse_bitfield_width(bits: &Spanned<String>, span: co2_ast::Span) -> Result<u
 
 fn bitfield_storage_ty(resolver: &LocalResolverBase, ty: &HirTy) -> Option<(HirTy, bool, usize)> {
     let (kind, is_signed, bits) = match ty.kind {
-        HirTyKind::Bool => (HirTyKind::Uint(UintTy::U8), false, 8),
-        HirTyKind::Char => (HirTyKind::Uint(UintTy::U8), false, 8),
+        HirTyKind::Bool | HirTyKind::Char | HirTyKind::Uint(UintTy::U8) => {
+            (HirTyKind::Uint(UintTy::U8), false, 8)
+        }
         HirTyKind::Int(IntTy::I8) => (HirTyKind::Uint(UintTy::U8), true, 8),
-        HirTyKind::Uint(UintTy::U8) => (HirTyKind::Uint(UintTy::U8), false, 8),
         HirTyKind::Int(IntTy::I16) => (HirTyKind::Uint(UintTy::U16), true, 16),
         HirTyKind::Uint(UintTy::U16) => (HirTyKind::Uint(UintTy::U16), false, 16),
         HirTyKind::Int(IntTy::I32) => (HirTyKind::Uint(UintTy::U32), true, 32),
@@ -632,7 +629,7 @@ fn ensure_bitfield_storage(
         let name = format!("__co2_bitfield_storage_{}", emitted_fields.len());
         let id = base
             .hir_ctx
-            .allocate_def_id(def, DefData::ValueNs(name.clone()));
+            .allocate_def_id(def, &DefData::ValueNs(name.clone()));
         let index = emitted_fields.len();
         emitted_fields.push(StructField {
             id,

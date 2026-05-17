@@ -3,6 +3,9 @@ name = "co2-multicall"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "co2-multicall"
 path = "src/main.rs"

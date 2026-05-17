@@ -5,9 +5,8 @@ use rustc_ast::{Attribute, MetaItemKind};
 use rustc_driver::{Callbacks, Compilation};
 
 fn is_language_co2(attr: &Attribute) -> bool {
-    let meta = match attr.meta() {
-        Some(meta) => meta,
-        None => return false,
+    let Some(meta) = attr.meta() else {
+        return false;
     };
 
     let path_segments = meta

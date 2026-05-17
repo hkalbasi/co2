@@ -241,10 +241,10 @@ pub(super) fn make_absolute(path: &Path) -> PathBuf {
 
 /// Format a path for diagnostics and `__FILE__`.
 pub(super) fn display_include_path(path: &Path) -> String {
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Ok(relative) = path.strip_prefix(&cwd) {
-            return relative.display().to_string();
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && let Ok(relative) = path.strip_prefix(&cwd)
+    {
+        return relative.display().to_string();
     }
     path.display().to_string()
 }
@@ -345,10 +345,10 @@ impl Preprocessor {
 
             // Check for include guard: if this file has a known guard macro and
             // that macro is still defined, skip re-processing entirely.
-            if let Some(guard) = self.include_guard_macros.get(&resolved_path) {
-                if self.macros.is_defined(guard) {
-                    return Some(super::pipeline::PreprocessOutput::default());
-                }
+            if let Some(guard) = self.include_guard_macros.get(&resolved_path)
+                && self.macros.is_defined(guard)
+            {
+                return Some(super::pipeline::PreprocessOutput::default());
             }
 
             // Check for excessive recursive inclusion.
@@ -367,87 +367,87 @@ impl Preprocessor {
             }
 
             // Read the file
-            match read_c_source_file(&resolved_path) {
-                Ok(content) => {
-                    // Detect include guard pattern in the raw source before preprocessing.
-                    // We do this before preprocessing so we're analyzing the original
-                    // structure of the file, not the expanded output.
-                    let detected_guard = detect_include_guard(&content);
+            if let Ok(content) = read_c_source_file(&resolved_path) {
+                // Detect include guard pattern in the raw source before preprocessing.
+                // We do this before preprocessing so we're analyzing the original
+                // structure of the file, not the expanded output.
+                let detected_guard = detect_include_guard(&content);
 
-                    // Push onto include stack
-                    self.include_stack.push(resolved_path.clone());
+                // Push onto include stack
+                self.include_stack.push(resolved_path.clone());
 
-                    let display_path = display_include_path(&resolved_path);
+                let display_path = display_include_path(&resolved_path);
 
-                    // Update __FILE__ (uses set_file to avoid full MacroDef allocation)
-                    let old_file = self.macros.get_file_body().map(|s| s.to_string());
-                    self.macros.set_file(format!("\"{}\"", display_path));
+                // Update __FILE__ (uses set_file to avoid full MacroDef allocation)
+                let old_file = self
+                    .macros
+                    .get_file_body()
+                    .map(std::string::ToString::to_string);
+                self.macros.set_file(format!("\"{display_path}\""));
 
-                    let result = self.preprocess_included(&content);
+                let result = self.preprocess_included(&content);
 
-                    // Restore __FILE__
-                    if let Some(old) = old_file {
-                        self.macros.set_file(old);
-                    }
-
-                    // Pop include stack
-                    self.include_stack.pop();
-
-                    // Register the include guard for future fast-path skipping.
-                    // We do this after preprocessing so that the guard macro is
-                    // now defined (the #define inside the file was processed).
-                    if let Some(guard) = detected_guard {
-                        self.include_guard_macros
-                            .insert(resolved_path.clone(), guard);
-                    }
-
-                    // For math.h, redefine isinf and isnan after preprocessing to override
-                    // any definitions from the system header that use unsupported builtins
-                    // like __builtin_isinf_sign and __builtin_isnan
-                    if include_path == "math.h" {
-                        self.macros.define(MacroDef {
-                            name: "isinf".to_string(),
-                            is_function_like: true,
-                            params: vec!["x".to_string()],
-                            is_variadic: false,
-                            has_named_variadic: false,
-                            body: "((x) == __builtin_inf() || (x) == -__builtin_inf())".to_string(),
-                        });
-                        self.macros.define(MacroDef {
-                            name: "isfinite".to_string(),
-                            is_function_like: true,
-                            params: vec!["x".to_string()],
-                            is_variadic: false,
-                            has_named_variadic: false,
-                            body: "((x) != __builtin_inf() && (x) != -__builtin_inf())".to_string(),
-                        });
-                        self.macros.define(MacroDef {
-                            name: "isnan".to_string(),
-                            is_function_like: true,
-                            params: vec!["x".to_string()],
-                            is_variadic: false,
-                            has_named_variadic: false,
-                            body: "((x) != (x))".to_string(),
-                        });
-                        self.macros.define(MacroDef {
-                            name: "signbit".to_string(),
-                            is_function_like: true,
-                            params: vec!["x".to_string()],
-                            is_variadic: false,
-                            has_named_variadic: false,
-                            body: "(((x) < 0) || ((x) == 0 && (1.0 / (x)) < 0))".to_string(),
-                        });
-                    }
-
-                    Some(result)
+                // Restore __FILE__
+                if let Some(old) = old_file {
+                    self.macros.set_file(old);
                 }
-                Err(_) => {
-                    // Silently skip unresolvable includes (many system headers
-                    // may not be needed if builtins provide their macros).
-                    // Inject fallback declarations since the real header failed to load.
-                    self.inject_fallback_declarations_for_header(&include_path);
-                    None
+
+                // Pop include stack
+                self.include_stack.pop();
+
+                // Register the include guard for future fast-path skipping.
+                // We do this after preprocessing so that the guard macro is
+                // now defined (the #define inside the file was processed).
+                if let Some(guard) = detected_guard {
+                    self.include_guard_macros
+                        .insert(resolved_path.clone(), guard);
                 }
+
+                // For math.h, redefine isinf and isnan after preprocessing to override
+                // any definitions from the system header that use unsupported builtins
+                // like __builtin_isinf_sign and __builtin_isnan
+                if include_path == "math.h" {
+                    self.macros.define(MacroDef {
+                        name: "isinf".to_string(),
+                        is_function_like: true,
+                        params: vec!["x".to_string()],
+                        is_variadic: false,
+                        has_named_variadic: false,
+                        body: "((x) == __builtin_inf() || (x) == -__builtin_inf())".to_string(),
+                    });
+                    self.macros.define(MacroDef {
+                        name: "isfinite".to_string(),
+                        is_function_like: true,
+                        params: vec!["x".to_string()],
+                        is_variadic: false,
+                        has_named_variadic: false,
+                        body: "((x) != __builtin_inf() && (x) != -__builtin_inf())".to_string(),
+                    });
+                    self.macros.define(MacroDef {
+                        name: "isnan".to_string(),
+                        is_function_like: true,
+                        params: vec!["x".to_string()],
+                        is_variadic: false,
+                        has_named_variadic: false,
+                        body: "((x) != (x))".to_string(),
+                    });
+                    self.macros.define(MacroDef {
+                        name: "signbit".to_string(),
+                        is_function_like: true,
+                        params: vec!["x".to_string()],
+                        is_variadic: false,
+                        has_named_variadic: false,
+                        body: "(((x) < 0) || ((x) == 0 && (1.0 / (x)) < 0))".to_string(),
+                    });
+                }
+
+                Some(result)
+            } else {
+                // Silently skip unresolvable includes (many system headers
+                // may not be needed if builtins provide their macros).
+                // Inject fallback declarations since the real header failed to load.
+                self.inject_fallback_declarations_for_header(&include_path);
+                None
             }
         } else {
             // Header not found - inject fallback type/extern declarations for
@@ -457,7 +457,7 @@ impl Preprocessor {
             self.errors.push(super::pipeline::PreprocessorDiagnostic {
                 file: self.current_file(),
                 range,
-                message: format!("{}: No such file or directory", include_path),
+                message: format!("{include_path}: No such file or directory"),
             });
             None
         }
@@ -514,10 +514,10 @@ impl Preprocessor {
             }
 
             // Check for include guard
-            if let Some(guard) = self.include_guard_macros.get(&resolved_path) {
-                if self.macros.is_defined(guard) {
-                    return Some(super::pipeline::PreprocessOutput::default());
-                }
+            if let Some(guard) = self.include_guard_macros.get(&resolved_path)
+                && self.macros.is_defined(guard)
+            {
+                return Some(super::pipeline::PreprocessOutput::default());
             }
 
             // Check for excessive recursive inclusion
@@ -541,8 +541,11 @@ impl Preprocessor {
 
                     let display_path = display_include_path(&resolved_path);
 
-                    let old_file = self.macros.get_file_body().map(|s| s.to_string());
-                    self.macros.set_file(format!("\"{}\"", display_path));
+                    let old_file = self
+                        .macros
+                        .get_file_body()
+                        .map(std::string::ToString::to_string);
+                    self.macros.set_file(format!("\"{display_path}\""));
 
                     let result = self.preprocess_included(&content);
 
@@ -582,7 +585,7 @@ impl Preprocessor {
             .chain(self.include_paths.iter())
             .chain(self.isystem_include_paths.iter())
             .chain(self.system_include_paths.iter())
-            .map(|p| p.as_path())
+            .map(std::path::PathBuf::as_path)
             .collect();
 
         // Canonicalize the current file path for comparison
@@ -595,13 +598,12 @@ impl Preprocessor {
         if let Some(ref cur_canon) = current_file_canon {
             for search_path in &all_paths {
                 let candidate = search_path.join(include_path);
-                if candidate.is_file() {
-                    if let Ok(candidate_canon) = std::fs::canonicalize(&candidate) {
-                        if &candidate_canon == cur_canon {
-                            found_current = true;
-                            continue;
-                        }
-                    }
+                if candidate.is_file()
+                    && let Ok(candidate_canon) = std::fs::canonicalize(&candidate)
+                    && &candidate_canon == cur_canon
+                {
+                    found_current = true;
+                    continue;
                 }
                 if found_current {
                     let candidate = search_path.join(include_path);
@@ -620,10 +622,10 @@ impl Preprocessor {
                 if candidate.is_file() {
                     // Use canonicalize for comparison to detect same-file
                     let candidate_canon = std::fs::canonicalize(&candidate).ok();
-                    if let (Some(cur), Some(cand)) = (&current_file_canon, &candidate_canon) {
-                        if cur == cand {
-                            continue;
-                        }
+                    if let (Some(cur), Some(cand)) = (&current_file_canon, &candidate_canon)
+                        && cur == cand
+                    {
+                        continue;
                     }
                     return Some(make_absolute(&candidate));
                 }
@@ -646,13 +648,13 @@ impl Preprocessor {
     /// for quoted includes (since resolution depends on it).
     pub fn resolve_include_path(&mut self, include_path: &str, is_system: bool) -> Option<PathBuf> {
         // Compute cache key: (include_path, is_system, current_dir_for_quoted_includes)
-        let current_dir_key = if !is_system {
+        let current_dir_key = if is_system {
+            PathBuf::new()
+        } else {
             self.include_stack
                 .last()
-                .and_then(|f| f.parent().map(|p| p.to_path_buf()))
+                .and_then(|f| f.parent().map(std::path::Path::to_path_buf))
                 .unwrap_or_default()
-        } else {
-            PathBuf::new()
         };
         let cache_key = (include_path.to_string(), is_system, current_dir_key);
 
@@ -685,21 +687,21 @@ impl Preprocessor {
 
         if !is_system {
             // Step 1: Search relative to the current file's directory
-            if let Some(current_file) = self.include_stack.last() {
-                if let Some(current_dir) = current_file.parent() {
-                    let candidate = current_dir.join(include_path);
-                    if candidate.is_file() {
-                        return Some(make_absolute(&candidate));
-                    }
+            if let Some(current_file) = self.include_stack.last()
+                && let Some(current_dir) = current_file.parent()
+            {
+                let candidate = current_dir.join(include_path);
+                if candidate.is_file() {
+                    return Some(make_absolute(&candidate));
                 }
             }
             // Also try relative to the original source file directory
-            if !self.filename.is_empty() {
-                if let Some(parent) = Path::new(&self.filename).parent() {
-                    let candidate = parent.join(include_path);
-                    if candidate.is_file() {
-                        return Some(make_absolute(&candidate));
-                    }
+            if !self.filename.is_empty()
+                && let Some(parent) = Path::new(&self.filename).parent()
+            {
+                let candidate = parent.join(include_path);
+                if candidate.is_file() {
+                    return Some(make_absolute(&candidate));
                 }
             }
 

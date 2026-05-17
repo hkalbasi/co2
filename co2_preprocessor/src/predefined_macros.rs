@@ -264,10 +264,6 @@ impl Preprocessor {
             ("__PRAGMA_REDEFINE_EXTNAME", "1"),
         ];
 
-        for &(name, body) in PREDEFINED_OBJECT_MACROS {
-            self.define_simple_macro(name, body);
-        }
-
         // Function-like predefined macros: (name, params, body)
         // Note: __builtin_expect is handled as a real builtin (not a macro)
         // to properly evaluate side effects in the second argument.
@@ -281,11 +277,18 @@ impl Preprocessor {
             // - #if evaluation uses resolve_defined_in_expr() in expr_eval.rs
         ];
 
+        for &(name, body) in PREDEFINED_OBJECT_MACROS {
+            self.define_simple_macro(name, body);
+        }
+
         for &(name, params, body) in PREDEFINED_FUNC_MACROS {
             self.macros.define(MacroDef {
                 name: name.to_string(),
                 is_function_like: true,
-                params: params.iter().map(|s| s.to_string()).collect(),
+                params: params
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
                 is_variadic: false,
                 has_named_variadic: false,
                 body: body.to_string(),
@@ -313,19 +316,19 @@ impl Preprocessor {
     /// Returns `Some(path)` when a valid bundled include directory is found.
     pub fn bundled_include_dir() -> Option<PathBuf> {
         // Try to find the include dir relative to the running binary.
-        if let Ok(exe) = std::env::current_exe() {
-            if let Ok(canonical) = exe.canonicalize() {
-                let mut dir = canonical.as_path().parent();
-                for _ in 0..5 {
-                    if let Some(d) = dir {
-                        let candidate = d.join("include");
-                        if candidate.join("emmintrin.h").is_file() {
-                            return Some(candidate);
-                        }
-                        dir = d.parent();
-                    } else {
-                        break;
+        if let Ok(exe) = std::env::current_exe()
+            && let Ok(canonical) = exe.canonicalize()
+        {
+            let mut dir = canonical.as_path().parent();
+            for _ in 0..5 {
+                if let Some(d) = dir {
+                    let candidate = d.join("include");
+                    if candidate.join("emmintrin.h").is_file() {
+                        return Some(candidate);
                     }
+                    dir = d.parent();
+                } else {
+                    break;
                 }
             }
         }
@@ -631,8 +634,7 @@ impl Preprocessor {
             self.system_include_paths
                 .iter()
                 .position(|p| *p == bundled)
-                .map(|i| i + 1)
-                .unwrap_or(0)
+                .map_or(0, |i| i + 1)
         } else {
             0
         };

@@ -54,11 +54,10 @@ pub fn render_ui_error(err: &UiTestError) {
                 if let Some(base_name) = Path::new(&span.file_name)
                     .file_name()
                     .and_then(|n| n.to_str())
+                    && let Some(found_source) = err.sources.get(base_name)
                 {
-                    if let Some(found_source) = err.sources.get(base_name) {
-                        source = Some(found_source);
-                        name = &err.sources.keys().find(|k| *k == base_name).unwrap();
-                    }
+                    source = Some(found_source);
+                    name = err.sources.keys().find(|k| *k == base_name).unwrap();
                 }
             }
 
@@ -114,7 +113,7 @@ pub fn render_test_error(path: &Path, err: &TestError) {
             .map(str::trim)
             .find(|line| !line.is_empty() && !line.starts_with("//@") && !line.starts_with("#@"))
         {
-            eprintln!("  source: {}", first_code_line);
+            eprintln!("  source: {first_code_line}");
         }
     }
 }

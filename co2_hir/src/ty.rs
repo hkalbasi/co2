@@ -11,7 +11,7 @@ pub(crate) fn enum_payload_ty(ty: Ty) -> Option<Ty> {
     };
     let variant = adt.variant(variant_idx(0))?;
     let fields = variant.fields();
-    if fields.len() != 1 || fields[0].name.to_string() != ENUM_FIELD_NAME {
+    if fields.len() != 1 || fields[0].name.clone() != ENUM_FIELD_NAME {
         return None;
     }
     Some(fields[0].ty_with_args(&args))
@@ -23,10 +23,7 @@ pub(crate) fn is_numeric_ty(ty: Ty) -> bool {
     }
     matches!(
         ty.kind(),
-        TyKind::RigidTy(RigidTy::Bool)
-            | TyKind::RigidTy(RigidTy::Int(_))
-            | TyKind::RigidTy(RigidTy::Uint(_))
-            | TyKind::RigidTy(RigidTy::Float(_))
+        TyKind::RigidTy(RigidTy::Bool | RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::Float(_))
     )
 }
 
@@ -131,12 +128,10 @@ pub(crate) fn common_numeric_ty(lhs: Ty, rhs: Ty) -> Option<Ty> {
     let (lhs_rank, lhs_unsigned) = numeric_rank(lhs)?;
     let (rhs_rank, rhs_unsigned) = numeric_rank(rhs)?;
 
-    let (rank, unsigned) = if lhs_rank == rhs_rank {
-        (lhs_rank, lhs_unsigned || rhs_unsigned)
-    } else if lhs_rank > rhs_rank {
-        (lhs_rank, lhs_unsigned)
-    } else {
-        (rhs_rank, rhs_unsigned)
+    let (rank, unsigned) = match lhs_rank.cmp(&rhs_rank) {
+        std::cmp::Ordering::Equal => (lhs_rank, lhs_unsigned || rhs_unsigned),
+        std::cmp::Ordering::Greater => (lhs_rank, lhs_unsigned),
+        std::cmp::Ordering::Less => (rhs_rank, rhs_unsigned),
     };
 
     let ty = match (rank, unsigned) {
@@ -179,12 +174,14 @@ pub(crate) fn is_condition_ty(ty: Ty) -> bool {
     }
     matches!(
         ty.kind(),
-        TyKind::RigidTy(RigidTy::Bool)
-            | TyKind::RigidTy(RigidTy::Int(_))
-            | TyKind::RigidTy(RigidTy::Uint(_))
-            | TyKind::RigidTy(RigidTy::RawPtr(_, _))
-            | TyKind::RigidTy(RigidTy::FnPtr(_))
-            | TyKind::RigidTy(RigidTy::FnDef(_, _))
+        TyKind::RigidTy(
+            RigidTy::Bool
+                | RigidTy::Int(_)
+                | RigidTy::Uint(_)
+                | RigidTy::RawPtr(_, _)
+                | RigidTy::FnPtr(_)
+                | RigidTy::FnDef(_, _)
+        )
     ) || is_maybe_uninit_fn_ptr_ty(ty).is_some()
 }
 
@@ -220,7 +217,7 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
     ) || matches!(
         (dst.kind(), src.kind()),
         (
-            TyKind::RigidTy(RigidTy::RawPtr(_, _)),
+            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_)),
             TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
         ) | (
             TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::Ref(_, _, _)),
@@ -228,9 +225,6 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
         ) | (
             TyKind::RigidTy(RigidTy::FnPtr(_)),
             TyKind::RigidTy(RigidTy::FnDef(_, _))
-        ) | (
-            TyKind::RigidTy(RigidTy::FnPtr(_)),
-            TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
         )
     ) || (dst_is_mu_fn_ptr
         && matches!(
@@ -258,13 +252,13 @@ pub(crate) fn resolve_field_path_in_adt(base: Ty, field: &str) -> Option<(Vec<us
     let variant = adt.variant(variant_idx(0))?;
     let fields = variant.fields();
     for (idx, field_def) in fields.iter().enumerate() {
-        let name = field_def.name.to_string();
+        let name = field_def.name.clone();
         if name == field {
             return Some((vec![idx], field_def.ty_with_args(&args)));
         }
     }
     for (idx, field_def) in fields.iter().enumerate() {
-        let name = field_def.name.to_string();
+        let name = field_def.name.clone();
         if !name.starts_with(ANON_FIELD_PREFIX) {
             continue;
         }
