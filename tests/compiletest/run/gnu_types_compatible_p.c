@@ -32,5 +32,12 @@ int main(void) {
     if (!__builtin_types_compatible_p(double, local_ty)) return 14;
     if (__builtin_types_compatible_p(global_ty, local_ty)) return 15;
 
+    if (__builtin_types_compatible_p(int[], int*)) return 16;
+    if (__builtin_types_compatible_p(int[5], int*)) return 17;
+    if (__builtin_types_compatible_p(int[5], int[6])) return 18;
+    if (!__builtin_types_compatible_p(int[5], int[5])) return 19;
+    if (!__builtin_types_compatible_p(int[5], int[])) return 20;
+    if (!__builtin_types_compatible_p(int[], int[])) return 21;
+
     return 0;
 }

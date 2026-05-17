@@ -1328,9 +1328,7 @@ impl HirCtx<'_> {
                 Ok(init_expr)
             }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
-                let t1 = self.lower_type_name(*ty1, parser_span)?;
-                let t2 = self.lower_type_name(*ty2, parser_span)?;
-                let compatible = i128::from(ty_matches_expected(t1, t2));
+                let compatible = i128::from(self.type_names_compatible(*ty1, *ty2, parser_span)?);
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(compatible),
                     ty: Ty::signed_ty(IntTy::I32),
