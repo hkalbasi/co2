@@ -1550,8 +1550,11 @@ impl LocalResolverBase {
                         .unwrap_or_else(|err| self.terminate_with_error(parser_span, &err)),
                 );
             }
-            CompressedTypeSpecifier::TypeofExpr(_) => {
-                self.terminate_with_error(parser_span, "typeof expression is not supported here");
+            CompressedTypeSpecifier::TypeofExpr(expr) => {
+                return CTy::Ty(
+                    self.type_of_expr_for_sizeof(&expr)
+                        .unwrap_or_else(|err| self.terminate_with_error(parser_span, &err)),
+                );
             }
         };
         CTy::Ty(ty)

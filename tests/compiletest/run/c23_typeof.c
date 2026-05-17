@@ -153,5 +153,13 @@ int main(void) {
 
     assert(_Generic(ptr, int *: 1, default: 0));
 
+    // ------------------------------------------------------------
+    // offsetof interaction
+    // ------------------------------------------------------------
+
+    struct foo { int a; int b; } *ptr2 = 0;
+
+    assert(offsetof(typeof(*ptr2), b) == offsetof(struct foo, b));
+
     return 0;
 }

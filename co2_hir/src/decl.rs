@@ -574,12 +574,14 @@ impl HirCtx<'_> {
         }
     }
 
-    pub(crate) fn lower_type_name(
+    pub(crate) fn lower_type_name_in_scope(
         &self,
         type_name: TypeName<LocalResolver>,
         span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<Ty, String> {
-        match self.lower_type_name_cty(type_name, span)? {
+        match self.lower_type_name_cty_with_scope(type_name, span, Some((locals, local_map)))? {
             CTy::Ty(ty) => Ok(ty),
             CTy::Function(_) => {
                 self.terminate_with_error(span, "Function is invalid as a type name");
@@ -590,14 +592,17 @@ impl HirCtx<'_> {
         }
     }
 
-    pub(crate) fn type_names_compatible(
+    pub(crate) fn type_names_compatible_in_scope(
         &self,
         ty1: TypeName<LocalResolver>,
         ty2: TypeName<LocalResolver>,
         span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<bool, String> {
-        let ty1 = self.lower_type_name_cty(ty1, span)?;
-        let ty2 = self.lower_type_name_cty(ty2, span)?;
+        let ty1 =
+            self.lower_type_name_cty_with_scope(ty1, span, Some((&mut *locals, &mut *local_map)))?;
+        let ty2 = self.lower_type_name_cty_with_scope(ty2, span, Some((locals, local_map)))?;
         Ok(c_ty_matches_expected(&ty1, &ty2))
     }
 
@@ -605,6 +610,15 @@ impl HirCtx<'_> {
         &self,
         type_name: TypeName<LocalResolver>,
         span: co2_ast::Span,
+    ) -> Result<CTy, String> {
+        self.lower_type_name_cty_with_scope(type_name, span, None)
+    }
+
+    fn lower_type_name_cty_with_scope(
+        &self,
+        type_name: TypeName<LocalResolver>,
+        span: co2_ast::Span,
+        typeof_scope: Option<(&mut Arena<HirLocal>, &mut HashMap<usize, LocalId>)>,
     ) -> Result<CTy, String> {
         let specifiers = type_name
             .specifier_qualifier_list
@@ -621,7 +635,7 @@ impl HirCtx<'_> {
                 (s, span)
             })
             .collect::<Vec<_>>();
-        let base = self.base_ty_of_decl(specifiers, span);
+        let base = self.base_ty_of_decl_with_scope(specifiers, span, typeof_scope);
         let ty = match type_name.abstract_declarator {
             None => base.0,
             Some(decl) => {

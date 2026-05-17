@@ -1285,7 +1285,8 @@ impl HirCtx<'_> {
             Expression::Cast { type_name, expr } => {
                 let mut inner = self.lower_expr(*expr, locals, local_map)?;
                 self.array_to_pointer_decay_if_array(&mut inner);
-                let target_ty = self.lower_type_name(*type_name, parser_span)?;
+                let target_ty =
+                    self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
                 if ty_matches_expected(target_ty, inner.ty) {
                     return Ok(inner);
                 }
@@ -1325,14 +1326,21 @@ impl HirCtx<'_> {
                 type_name,
                 initializer,
             } => {
-                let target_ty = self.lower_type_name(*type_name, parser_span)?;
+                let target_ty =
+                    self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
                 let tree =
                     self.lower_to_initializer_tree(target_ty, *initializer, locals, local_map);
                 let init_expr = self.initializer_tree_to_expr(&tree, target_ty, parser_span);
                 Ok(init_expr)
             }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
-                let compatible = i128::from(self.type_names_compatible(*ty1, *ty2, parser_span)?);
+                let compatible = i128::from(self.type_names_compatible_in_scope(
+                    *ty1,
+                    *ty2,
+                    parser_span,
+                    locals,
+                    local_map,
+                )?);
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(compatible),
                     ty: Ty::signed_ty(IntTy::I32),
@@ -1348,7 +1356,8 @@ impl HirCtx<'_> {
                 })
             }
             Expression::SizeofType(type_name) => {
-                let ty = self.lower_type_name(*type_name, parser_span)?;
+                let ty =
+                    self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
                 let size = ty
                     .layout()
                     .map_err(|e| format!("failed to compute layout for sizeof(type): {e}"))?
@@ -1362,7 +1371,8 @@ impl HirCtx<'_> {
                 })
             }
             Expression::AlignofType(type_name) => {
-                let ty = self.lower_type_name(*type_name, parser_span)?;
+                let ty =
+                    self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
                 let align = ty
                     .layout()
                     .map_err(|e| format!("failed to compute layout for alignof(type): {e}"))?
@@ -1393,7 +1403,8 @@ impl HirCtx<'_> {
                 field,
                 field_span,
             } => {
-                let ty = self.lower_type_name(*type_name, parser_span)?;
+                let ty =
+                    self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
                 let indices =
                     match self
                         .resolve_struct_field_access(ty, &field)
@@ -1612,7 +1623,8 @@ impl HirCtx<'_> {
             }
             Expression::VaArg { args, type_name } => {
                 let args = Box::new(self.lower_expr(*args, locals, local_map)?);
-                let ty = self.lower_type_name(type_name, parser_span)?;
+                let ty =
+                    self.lower_type_name_in_scope(type_name, parser_span, locals, local_map)?;
                 Ok(HirExpr {
                     kind: HirExprKind::VaArg(args),
                     ty,
@@ -1659,7 +1671,9 @@ impl HirCtx<'_> {
                             default_expr = Some(expr);
                         }
                         GenericAssociation::Type { type_name, expr } => {
-                            let assoc_ty = self.lower_type_name(type_name, assoc_span)?;
+                            let assoc_ty = self.lower_type_name_in_scope(
+                                type_name, assoc_span, locals, local_map,
+                            )?;
                             if ty_matches_expected(assoc_ty, controlling_ty) {
                                 return self.lower_expr(expr, locals, local_map);
                             }
