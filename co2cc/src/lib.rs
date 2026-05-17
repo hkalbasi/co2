@@ -334,6 +334,8 @@ fn build_link_rustc_args(
         rustc_args.push("-C".to_owned());
         rustc_args.push(format!("link-arg={}", object.to_string_lossy()));
     }
+    rustc_args.push("-C".to_owned());
+    rustc_args.push("link-arg=-lc".to_owned());
     for arg in linker_args {
         rustc_args.push("-C".to_owned());
         rustc_args.push(format!("link-arg={arg}"));
@@ -347,6 +349,9 @@ fn build_link_rustc_args(
     let dbg = debuginfo.unwrap_or(0);
     rustc_args.push("-C".to_owned());
     rustc_args.push(format!("debuginfo={dbg}"));
+
+    rustc_args.push("-C".to_owned());
+    rustc_args.push("panic=abort".to_owned());
 
     rustc_args.extend(shared_rust_flags());
     rustc_args.push(link_stub.to_string_lossy().into_owned());
@@ -427,7 +432,7 @@ fn link_objects(
 
     let temp_dir = make_temp_dir();
     let link_stub = temp_dir.join("co2c_link.rs");
-    fs::write(&link_stub, "#![no_main]\n").expect("failed to write linker stub");
+    fs::write(&link_stub, CO2C_LINK_STUB).expect("failed to write linker stub");
 
     let rustc_args = build_link_rustc_args(
         &link_stub,
@@ -453,6 +458,73 @@ fn link_objects(
     let _ = fs::remove_dir_all(&temp_dir);
     assert!(status.success(), "rustc link failed with status {status}");
 }
+
+const CO2C_LINK_STUB: &str = r#"#![no_std]
+#![no_main]
+
+use core::ffi::{c_int, c_void, c_char};
+
+unsafe extern "C" {
+    fn fprintf(stream: *mut c_void, fmt: *const c_char, ...) -> c_int;
+    fn exit(code: c_int) -> !;
+    fn getpid() -> c_int;
+
+    static mut stderr: *mut c_void;
+}
+
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    unsafe {
+        let pid = getpid();
+
+        if let Some(loc) = info.location() {
+            let file = loc.file();
+
+            fprintf(
+                stderr,
+                c"thread '<unnamed>' (%d) panicked at %.*s:%d:%d:\n".as_ptr(),
+                pid,
+                file.len() as c_int,
+                file.as_ptr(),
+                loc.line(),
+                loc.column(),
+            );
+        } else {
+            fprintf(
+                stderr,
+                c"thread '<unnamed>' (%d) panicked:\n".as_ptr(),
+                pid,
+            );
+        }
+
+        if let Some(msg) = info.message().as_str() {
+            fprintf(
+                stderr,
+                c"%.*s\n".as_ptr(),
+                msg.len() as c_int,
+                msg.as_ptr(),
+            );
+        } else {
+            fprintf(
+                stderr,
+                c"<non-string panic>\n".as_ptr(),
+            );
+        }
+
+        fprintf(
+            stderr,
+            c"%s\n".as_ptr(),
+            c"thread caused non-unwinding panic. aborting.".as_ptr(),
+        );
+
+        exit(134);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_eh_personality() {}
+"#;
 
 fn link_shared_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Path>) {
     let mut cmd = Command::new("cc");

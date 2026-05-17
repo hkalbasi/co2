@@ -1,0 +1,3 @@
+thread '<unnamed>' (PID) panicked at main.c:3:12:
+null pointer dereference occurred
+thread caused non-unwinding panic. aborting.
