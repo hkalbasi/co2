@@ -307,6 +307,36 @@ fn build_rustc_object_args(
     rustc_args
 }
 
+fn build_link_stub_rustc_args(
+    link_stub: &Path,
+    output: &Path,
+    debuginfo: Option<u8>,
+) -> Vec<String> {
+    let mut rustc_args = vec![
+        "--crate-name".to_owned(),
+        "co2c_link_stub".to_owned(),
+        "--crate-type=bin".to_owned(),
+        "--edition=2024".to_owned(),
+        "--emit=obj".to_owned(),
+        "-o".to_owned(),
+        output.to_string_lossy().into_owned(),
+    ];
+
+    rustc_args.push("-C".to_owned());
+    rustc_args.push("opt-level=2".to_owned());
+
+    let dbg = debuginfo.unwrap_or(0);
+    rustc_args.push("-C".to_owned());
+    rustc_args.push(format!("debuginfo={dbg}"));
+
+    rustc_args.push("-C".to_owned());
+    rustc_args.push("panic=abort".to_owned());
+
+    rustc_args.extend(shared_rust_flags());
+    rustc_args.push(link_stub.to_string_lossy().into_owned());
+    rustc_args
+}
+
 fn build_link_rustc_args(
     link_stub: &Path,
     objects: &[PathBuf],
@@ -320,15 +350,12 @@ fn build_link_rustc_args(
         "co2c_link".to_owned(),
         "--crate-type=bin".to_owned(),
         "--edition=2024".to_owned(),
+        "-o".to_owned(),
+        output
+            .unwrap_or_else(|| Path::new("a.out"))
+            .to_string_lossy()
+            .into_owned(),
     ];
-
-    if let Some(out) = output {
-        rustc_args.push("-o".to_owned());
-        rustc_args.push(out.to_string_lossy().into_owned());
-    } else {
-        rustc_args.push("-o".to_owned());
-        rustc_args.push("a.out".to_owned());
-    }
 
     for object in objects {
         rustc_args.push("-C".to_owned());
@@ -417,6 +444,12 @@ fn current_invocation_path() -> Option<PathBuf> {
     std::env::args_os().next().map(PathBuf::from)
 }
 
+fn should_try_direct_cc_link(linker_args: &[String]) -> bool {
+    linker_args
+        .iter()
+        .any(|arg| Path::new(arg).extension().and_then(|ext| ext.to_str()) == Some("a"))
+}
+
 fn link_objects(
     objects: &[PathBuf],
     linker_args: &[String],
@@ -430,34 +463,141 @@ fn link_objects(
         return;
     }
 
-    let temp_dir = make_temp_dir();
-    let link_stub = temp_dir.join("co2c_link.rs");
-    fs::write(&link_stub, CO2C_LINK_STUB).expect("failed to write linker stub");
+    if !should_try_direct_cc_link(linker_args) {
+        let temp_dir = make_temp_dir();
+        let rustc_link_stub = temp_dir.join("co2c_link.rs");
+        fs::write(&rustc_link_stub, CO2C_LINK_STUB).expect("failed to write rustc linker stub");
+        let rustc_link_args = build_link_rustc_args(
+            &rustc_link_stub,
+            objects,
+            linker_args,
+            output,
+            opt_level,
+            debuginfo,
+        );
+        let exe = std::env::var_os("CO2_RUN_SCRIPT")
+            .map(PathBuf::from)
+            .or_else(current_invocation_path)
+            .or_else(|| std::env::current_exe().ok())
+            .expect("failed to locate co2c executable");
+        let mut rustc_link_cmd = Command::new(&exe);
+        rustc_link_cmd.args(&rustc_link_args);
+        rustc_link_cmd.env("CO2_APPLET_OVERRIDE", "co2rustc");
 
-    let rustc_args = build_link_rustc_args(
-        &link_stub,
-        objects,
-        linker_args,
-        output,
-        opt_level,
-        debuginfo,
-    );
+        let status = rustc_link_cmd
+            .status()
+            .expect("failed to execute co2rustc link step");
+        let _ = fs::remove_file(&rustc_link_stub);
+        let _ = fs::remove_dir_all(&temp_dir);
+        assert!(status.success(), "rustc link failed with status {status}");
+        return;
+    }
+
+    let temp_dir = make_temp_dir();
+    let cc_link_stub = temp_dir.join("co2c_cc_link.rs");
+    let cc_link_stub_object = temp_dir.join("co2c_cc_link.o");
+    fs::write(&cc_link_stub, CO2C_CC_LINK_STUB).expect("failed to write linker stub");
+
+    let rustc_args = build_link_stub_rustc_args(&cc_link_stub, &cc_link_stub_object, debuginfo);
     let exe = std::env::var_os("CO2_RUN_SCRIPT")
         .map(PathBuf::from)
         .or_else(current_invocation_path)
         .or_else(|| std::env::current_exe().ok())
         .expect("failed to locate co2c executable");
 
-    let mut cmd = Command::new(exe);
-    cmd.args(&rustc_args);
-    // Force the applet name to co2rustc
-    cmd.env("CO2_APPLET_OVERRIDE", "co2rustc");
+    let mut stub_cmd = Command::new(&exe);
+    stub_cmd.args(&rustc_args);
+    stub_cmd.env("CO2_APPLET_OVERRIDE", "co2rustc");
 
-    let status = cmd.status().expect("failed to execute co2rustc link step");
-    let _ = fs::remove_file(&link_stub);
+    let stub_status = stub_cmd
+        .status()
+        .expect("failed to compile co2c panic stub object");
+    assert!(
+        stub_status.success(),
+        "rustc panic stub compile failed with status {stub_status}"
+    );
+
+    let mut link_cmd = Command::new("cc");
+    for object in objects {
+        link_cmd.arg(object);
+    }
+    link_cmd.arg(&cc_link_stub_object);
+    for arg in linker_args {
+        link_cmd.arg(arg);
+    }
+    link_cmd.arg("-o");
+    link_cmd.arg(output.unwrap_or_else(|| Path::new("a.out")));
+
+    let link_output = link_cmd
+        .output()
+        .expect("failed to execute executable link step");
+    if link_output.status.success() {
+        let _ = fs::remove_file(&cc_link_stub);
+        let _ = fs::remove_file(&cc_link_stub_object);
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    }
+
+    let cc_stderr = String::from_utf8_lossy(&link_output.stderr);
+    if !cc_stderr.contains("undefined reference to `core::")
+        && !cc_stderr.contains("undefined symbol: core::")
+    {
+        let _ = fs::remove_file(&cc_link_stub);
+        let _ = fs::remove_file(&cc_link_stub_object);
+        let _ = fs::remove_dir_all(&temp_dir);
+        panic!(
+            "executable link failed with status {}\n{}",
+            link_output.status, cc_stderr
+        );
+    }
+
+    let rustc_link_stub = temp_dir.join("co2c_link.rs");
+    fs::write(&rustc_link_stub, CO2C_LINK_STUB).expect("failed to write rustc linker stub");
+    let rustc_link_args = build_link_rustc_args(
+        &rustc_link_stub,
+        objects,
+        linker_args,
+        output,
+        opt_level,
+        debuginfo,
+    );
+    let mut rustc_link_cmd = Command::new(&exe);
+    rustc_link_cmd.args(&rustc_link_args);
+    rustc_link_cmd.env("CO2_APPLET_OVERRIDE", "co2rustc");
+
+    let status = rustc_link_cmd
+        .status()
+        .expect("failed to execute co2rustc link step");
+    let _ = fs::remove_file(&cc_link_stub);
+    let _ = fs::remove_file(&cc_link_stub_object);
+    let _ = fs::remove_file(&rustc_link_stub);
     let _ = fs::remove_dir_all(&temp_dir);
     assert!(status.success(), "rustc link failed with status {status}");
 }
+
+const CO2C_CC_LINK_STUB: &str = r#"#![no_std]
+#![no_main]
+
+use core::ffi::{c_int, c_void};
+
+unsafe extern "C" {
+    fn fwrite(ptr: *const c_void, size: usize, nmemb: usize, stream: *mut c_void) -> usize;
+    fn exit(code: c_int) -> !;
+
+    static mut stderr: *mut c_void;
+}
+
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
+    unsafe {
+        fwrite(c"co2cc panic\n".as_ptr().cast(), 1, 12, stderr);
+        exit(134);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_eh_personality() {}
+"#;
 
 const CO2C_LINK_STUB: &str = r#"#![no_std]
 #![no_main]
