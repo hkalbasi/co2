@@ -368,6 +368,7 @@ impl HirCtx<'_> {
                     let InitDeclarator {
                         declarator,
                         initializer,
+                        is_transparent_union: _,
                     } = init.0;
                     let is_constexpr = declaration_specifiers
                         .iter()

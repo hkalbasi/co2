@@ -462,6 +462,7 @@ pub struct TypeName<R: TypeResolver> {
 pub struct InitDeclarator<R: TypeResolver> {
     pub declarator: Spanned<Declarator<R>>,
     pub initializer: Option<Spanned<Initializer<R>>>,
+    pub is_transparent_union: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -615,6 +616,9 @@ pub enum Token {
     BuiltinConstantP,
     BuiltinTypesCompatibleP,
 
+    // GCC attributes
+    TransparentUnionAttr,
+
     // Special
     Ellipsis, // ...
     Hash,     // #
@@ -713,6 +717,7 @@ impl Display for Token {
             Token::BuiltinNan => write!(f, "__builtin_nan"),
             Token::BuiltinConstantP => write!(f, "__builtin_constant_p"),
             Token::BuiltinTypesCompatibleP => write!(f, "__builtin_types_compatible_p"),
+            Token::TransparentUnionAttr => write!(f, "__attribute__((__transparent_union__))"),
 
             Token::Ident(s) => write!(f, "{s}"),
 

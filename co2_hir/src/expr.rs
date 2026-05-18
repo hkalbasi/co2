@@ -507,6 +507,11 @@ impl HirCtx<'_> {
                     span: actual.span,
                 };
             }
+            if !ty_matches_expected(expected, actual.ty)
+                && let Some(coerced) = self.coerce_transparent_union_arg(expected, actual)
+            {
+                *actual = coerced;
+            }
             if !ty_matches_expected(expected, actual.ty) {
                 self.terminate_with_error(
                     parser_span,
@@ -517,6 +522,27 @@ impl HirCtx<'_> {
                 );
             }
         }
+    }
+
+    fn coerce_transparent_union_arg(&self, expected: Ty, actual: &HirExpr) -> Option<HirExpr> {
+        let TyKind::RigidTy(RigidTy::Adt(adt, _)) = expected.kind() else {
+            return None;
+        };
+        if !self.decl_resolver.is_transparent_union_def(adt.0) {
+            return None;
+        }
+        let field_tys = adt_field_tys(expected)?;
+        let active_field = field_tys
+            .iter()
+            .position(|field_ty| ty_matches_expected(*field_ty, actual.ty))?;
+        Some(HirExpr {
+            kind: HirExprKind::UnionAggregate {
+                active_field,
+                arg: Box::new(actual.clone()),
+            },
+            ty: expected,
+            span: actual.span,
+        })
     }
 
     fn try_lower_method_call(

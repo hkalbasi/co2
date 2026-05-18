@@ -624,10 +624,12 @@ impl<A: TypeResolver> DoTransform for InitDeclarator<A> {
         let InitDeclarator {
             declarator,
             initializer,
+            is_transparent_union,
         } = self;
         InitDeclarator {
             declarator: declarator.transform(b),
             initializer: initializer.transform(b),
+            is_transparent_union: *is_transparent_union,
         }
     }
 }

@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+};
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, Expression,
@@ -7,11 +12,11 @@ use co2_ast::{
 };
 use co2_parser::parse_expression_tokens;
 use co2_preprocessor::PreprocessedSource;
-use rustc_public_generative::HirTy;
 use rustc_public_generative::{
     DefData, FileId, HirStructureCtx,
     rustc_public::{DefId, ty::Ty},
 };
+use rustc_public_generative::{HirTy, HirTyKind};
 
 use crate::{
     Resolver,
@@ -113,6 +118,7 @@ pub struct LocalResolverBase {
         Vec<co2_ast::Spanned<DeclarationSpecifier<LocalResolver>>>,
         Declarator<LocalResolver>,
         co2_ast::Span,
+        bool,
     )>,
     pub pending_static: Vec<(
         DefId,
@@ -130,6 +136,7 @@ pub struct LocalResolverBase {
     pub(crate) struct_manager: StructManager,
     pub(crate) unrepresentable_typedefs: HashMap<String, CTy>,
     pub(crate) typedef_tys: HashMap<DefId, HirTy>,
+    pub(crate) transparent_unions: HashSet<DefId>,
     pub(crate) global_value_tys: HashMap<DefId, HirTy>,
     pub(crate) global_struct_tags: Rc<RefCell<StructAndEnumData>>,
     pub(crate) global_locals: Rc<RefCell<im::HashMap<String, (DefOrLocal, TypeQueryResult)>>>,
@@ -160,6 +167,13 @@ pub struct RegisteredSubscription {
 }
 
 impl LocalResolverBase {
+    pub(crate) fn mark_transparent_union(&mut self, ty: &HirTy) {
+        let HirTyKind::Adt(def, _) = ty.kind else {
+            return;
+        };
+        self.transparent_unions.insert(def);
+    }
+
     pub fn emit_fake_def(&mut self, def_data: fn(String) -> DefData) -> (DefId, String) {
         let fake_name = format!("__co2_fake_def_{}", self.fake_defs_counter);
         self.fake_defs_counter += 1;
@@ -305,6 +319,10 @@ impl LocalResolver {
 
     pub fn is_enum_def(&self, def_id: DefId) -> bool {
         self.base.borrow().is_enum_def(def_id)
+    }
+
+    pub fn is_transparent_union_def(&self, def_id: DefId) -> bool {
+        self.base.borrow().transparent_unions.contains(&def_id)
     }
 
     pub fn validate_constexpr_decl(
@@ -649,6 +667,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                             declaration_specifiers.clone(),
                             decl.0.declarator.0.clone(),
                             decl.1,
+                            decl.0.is_transparent_union,
                         ));
                         next.locals.borrow_mut().insert(
                             name.1,

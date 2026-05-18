@@ -55,7 +55,7 @@ pub fn lexer<'src>() -> impl Parser<
         .to_slice()
         .ignored();
 
-    let attributes = just("__attribute__")
+    let attribute = just("__attribute__")
         .or(just("__asm__"))
         .then(recursive(|block| {
             let content = choice((
@@ -68,7 +68,28 @@ pub fn lexer<'src>() -> impl Parser<
 
             content.delimited_by(just('('), just(')'))
         }))
-        .to_slice()
+        .to_slice();
+    let transparent_union_attr = attribute
+        .clone()
+        .try_map(|attr: &str, span| {
+            if attr.contains("__transparent_union__") {
+                Ok(attr)
+            } else {
+                Err(Rich::custom(span, "not a transparent union attribute"))
+            }
+        })
+        .to(Token::TransparentUnionAttr);
+    let attributes = attribute
+        .try_map(|attr: &str, span| {
+            if attr.contains("__transparent_union__") {
+                Err(Rich::custom(
+                    span,
+                    "transparent union attribute is not trivia",
+                ))
+            } else {
+                Ok(attr)
+            }
+        })
         .ignored();
 
     // ----- Whitespace -----
@@ -354,6 +375,7 @@ pub fn lexer<'src>() -> impl Parser<
             "__builtin_nan" | "__builtin_nanf" | "__builtin_nanl" => Token::BuiltinNan,
             "__builtin_constant_p" => Token::BuiltinConstantP,
             "__builtin_types_compatible_p" => Token::BuiltinTypesCompatibleP,
+            "__co2_transparent_union_attr" => Token::TransparentUnionAttr,
 
             _ => Token::Ident(ident),
         });
@@ -368,6 +390,7 @@ pub fn lexer<'src>() -> impl Parser<
         decimal_integer,
         char_literal,
         string_literal,
+        transparent_union_attr,
         operators,
         ident,
     ));

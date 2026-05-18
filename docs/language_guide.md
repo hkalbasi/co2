@@ -14,6 +14,7 @@ In addition to the C standard, CO2 supports some popular GNU extensions:
 * GNU statement expressions
 * Computed goto
 * Range designator (`[0 ... 4] = 1`)
+* Transparent union
 
 ## Module system and use Statements
 

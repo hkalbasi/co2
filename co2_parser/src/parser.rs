@@ -2232,12 +2232,14 @@ where
                     .ignore_then(initializer(current_resolver.clone(), stmt_rec.clone()))
                     .or_not(),
             )?;
+            let is_transparent_union = inp.parse(just(Token::TransparentUnionAttr)).is_ok();
 
             let item_span = inp.span_since(&item_start);
             result.push((
                 InitDeclarator {
                     declarator: decl,
                     initializer: init,
+                    is_transparent_union,
                 },
                 item_span,
             ));

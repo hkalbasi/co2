@@ -540,6 +540,7 @@ fn lower_translation_unit_items(
                     let InitDeclarator {
                         declarator,
                         initializer,
+                        is_transparent_union,
                     } = init.0;
                     let declarator_for_checks = declarator.clone();
 
@@ -565,6 +566,9 @@ fn lower_translation_unit_items(
                             .borrow_mut()
                             .typedef_tys
                             .insert(type_def, ty.clone());
+                        if is_transparent_union {
+                            ctx.resolver.borrow_mut().mark_transparent_union(&ty);
+                        }
                         hir_items.push(HirModuleItem::TypeDef {
                             name,
                             id: type_def,
@@ -876,6 +880,7 @@ pub fn lower_crate_sig(
             struct_manager: StructManager::default(),
             unrepresentable_typedefs: HashMap::new(),
             typedef_tys: HashMap::new(),
+            transparent_unions: HashSet::new(),
             global_value_tys: HashMap::new(),
             global_struct_tags: Rc::new(RefCell::new(StructAndEnumData::default())),
             global_locals: Rc::new(RefCell::new(im::HashMap::new())),
@@ -927,7 +932,7 @@ pub fn lower_crate_sig(
     let clone_trait_fn = ctx.resolve("core::clone::Clone::clone").unwrap().0;
 
     let pending_typedefs = std::mem::take(&mut ctx.resolver.borrow_mut().pending_typedefs);
-    for (id, name, specifiers, declarator, parser_span) in pending_typedefs {
+    for (id, name, specifiers, declarator, parser_span, is_transparent_union) in pending_typedefs {
         let span = ctx.co2_span_to_rustc(parser_span);
         let base_const = has_const_qualifier_in_decl_specs(&specifiers);
         let ty = ctx.base_ty_of_decl(specifiers, parser_span);
@@ -939,6 +944,9 @@ pub fn lower_crate_sig(
             );
         };
         ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
+        if is_transparent_union {
+            ctx.resolver.borrow_mut().mark_transparent_union(&ty);
+        }
         ctx.hir_items
             .push(HirModuleItem::TypeDef { name, id, ty, span });
     }

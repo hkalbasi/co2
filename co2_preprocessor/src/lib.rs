@@ -855,11 +855,11 @@ fn is_ident_continue(b: u8) -> bool {
 
 fn strip_gnu_attributes_mapped(src: &MappedText) -> MappedText {
     let src = compose_boundaries(
-        strip_balanced_call_mapped(src.text.as_str(), "__attribute__"),
+        strip_gnu_attribute_mapped(src.text.as_str(), "__attribute__"),
         &src.boundaries,
     );
     compose_boundaries(
-        strip_balanced_call_mapped(src.text.as_str(), "__attribute"),
+        strip_gnu_attribute_mapped(src.text.as_str(), "__attribute"),
         &src.boundaries,
     )
 }
@@ -876,6 +876,21 @@ fn strip_gnu_asm_annotations_mapped(src: &MappedText) -> MappedText {
 }
 
 fn strip_balanced_call_mapped(src: &str, keyword: &str) -> MappedText {
+    strip_balanced_call_mapped_with(src, keyword, |_| None)
+}
+
+fn strip_gnu_attribute_mapped(src: &str, keyword: &str) -> MappedText {
+    strip_balanced_call_mapped_with(src, keyword, |call| {
+        call.contains("__transparent_union__")
+            .then_some("__co2_transparent_union_attr")
+    })
+}
+
+fn strip_balanced_call_mapped_with(
+    src: &str,
+    keyword: &str,
+    replacement: impl Fn(&str) -> Option<&'static str>,
+) -> MappedText {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
     let mut boundaries = vec![0];
@@ -902,8 +917,19 @@ fn strip_balanced_call_mapped(src: &str, keyword: &str) -> MappedText {
                     }
                     j += 1;
                 }
-                out.push(' ');
-                boundaries.push(j);
+                if let Some(replacement) = replacement(&src[i..j]) {
+                    out.push(' ');
+                    boundaries.push(i);
+                    out.push_str(replacement);
+                    for _ in replacement.bytes() {
+                        boundaries.push(i);
+                    }
+                    out.push(' ');
+                    boundaries.push(j);
+                } else {
+                    out.push(' ');
+                    boundaries.push(j);
+                }
                 i = j;
                 continue;
             }
