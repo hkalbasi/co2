@@ -532,17 +532,44 @@ impl HirCtx<'_> {
             return None;
         }
         let field_tys = adt_field_tys(expected)?;
-        let active_field = field_tys
+        if let Some(active_field) = field_tys
             .iter()
-            .position(|field_ty| ty_matches_expected(*field_ty, actual.ty))?;
-        Some(HirExpr {
-            kind: HirExprKind::UnionAggregate {
-                active_field,
-                arg: Box::new(actual.clone()),
-            },
-            ty: expected,
-            span: actual.span,
-        })
+            .position(|field_ty| ty_matches_expected(*field_ty, actual.ty))
+        {
+            Some(HirExpr {
+                kind: HirExprKind::UnionAggregate {
+                    active_field,
+                    arg: Box::new(actual.clone()),
+                },
+                ty: expected,
+                span: actual.span,
+            })
+        } else if let Some(active_field) =
+            field_tys
+                .iter()
+                .position(|field_ty| match (field_ty.kind(), actual.ty.kind()) {
+                    (
+                        TyKind::RigidTy(RigidTy::RawPtr(exp_ty, _)),
+                        TyKind::RigidTy(RigidTy::RawPtr(act_ty, _)),
+                    ) => ty_matches_expected(exp_ty, act_ty),
+                    _ => false,
+                })
+        {
+            Some(HirExpr {
+                kind: HirExprKind::UnionAggregate {
+                    active_field,
+                    arg: Box::new(HirExpr {
+                        kind: HirExprKind::Cast(Box::new(actual.clone())),
+                        ty: field_tys[active_field],
+                        span: actual.span,
+                    }),
+                },
+                ty: expected,
+                span: actual.span,
+            })
+        } else {
+            None
+        }
     }
 
     fn try_lower_method_call(

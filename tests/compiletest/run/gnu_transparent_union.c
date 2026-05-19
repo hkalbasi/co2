@@ -11,14 +11,33 @@ struct B {
 typedef union {
     struct A *a;
     struct B *b;
-} transparent_u __attribute__((__transparent_union__));
+} transparent_u1 __attribute__((__transparent_union__));
 
-void func(transparent_u u) {
+void func1(transparent_u1 u) {
+    (void)u;
+}
+
+typedef union {
+    const struct A *a;
+} transparent_u2 __attribute__((__transparent_union__));
+
+void func2(transparent_u2 u) {
+    (void)u;
+}
+
+typedef union {
+    struct B *a;
+    int b;
+} transparent_u3 __attribute__((__transparent_union__));
+
+void func3(transparent_u3 u) {
     (void)u;
 }
 
 int main() {
     struct A a = {0};
-    func(&a);
+    func1(&a);
+    func2(&a);
+    func3(5);
     return 0;
 }
