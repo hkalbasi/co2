@@ -427,7 +427,9 @@ impl CrateSigCtx<'_> {
                         .ok_or_else(|| {
                             "missing registered array size constant expression".to_owned()
                         })?;
-                    let literal_len = self.eval_array_len_expr(&expr)?;
+                    let literal_len = self.eval_array_len_expr(&expr).unwrap_or_else(|err| {
+                        CrateSigCtx::<'_>::terminate_with_error(subscription.1, &err)
+                    });
                     (HirTyConst::Literal(literal_len), None)
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len.0, rust_span));
@@ -1687,7 +1689,10 @@ impl LocalResolverBase {
                     let expr = self
                         .lookup_array_len_const_expr(*def_id)
                         .ok_or_else(|| "Can not calculate subscription".to_owned())?;
-                    HirTyConst::Literal(self.eval_array_len_expr(&expr)?)
+                    let literal_len = self
+                        .eval_array_len_expr(&expr)
+                        .unwrap_or_else(|err| self.terminate_with_error(subscription.1, &err));
+                    HirTyConst::Literal(literal_len)
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len, rust_span));
                 self.extract_decl_type(array_ty, current_const, *declarator)

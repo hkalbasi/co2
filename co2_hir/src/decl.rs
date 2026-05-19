@@ -432,6 +432,8 @@ impl HirCtx<'_> {
                                 self.initializer_tree_to_expr(&tree, real_ty, parser_span);
 
                             let span = self.to_rust_span(parser_span);
+                            let hir_ty = Self::ty_to_hir_ty(real_ty, span);
+                            self.decl_resolver.set_local_ty(name.0 as u32, hir_ty);
                             let local = locals.alloc(HirLocal {
                                 name: name.1.clone(),
                                 ty: real_ty,
@@ -477,13 +479,7 @@ impl HirCtx<'_> {
                                 let parser_span = expr.1;
                                 let mut expr = self.lower_expr(expr, locals, local_map)?;
                                 if is_array_ty(expr.ty) && !is_array_ty(ty) {
-                                    let elem = array_elem_ty(expr.ty)
-                                        .expect("array type should have element type");
-                                    expr = HirExpr {
-                                        kind: HirExprKind::ArrayToPointer(Box::new(expr.clone())),
-                                        ty: Ty::new_ptr(elem, Mutability::Mut),
-                                        span: expr.span,
-                                    };
+                                    expr = self.array_to_pointer_decay(&expr);
                                 }
                                 // TODO: This code is very wrong. We should not touch local types beside their declared type.
                                 let local_ty = if ty_matches_expected(ty, expr.ty) {

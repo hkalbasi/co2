@@ -766,7 +766,7 @@ impl HirCtx<'_> {
         *expr = self.array_to_pointer_decay(expr);
     }
 
-    fn array_to_pointer_decay(&self, expr: &HirExpr) -> HirExpr {
+    pub(crate) fn array_to_pointer_decay(&self, expr: &HirExpr) -> HirExpr {
         let elem = array_elem_ty(expr.ty).expect("Expr is not array");
         let mutability = addr_of_mutability(expr);
         HirExpr {
