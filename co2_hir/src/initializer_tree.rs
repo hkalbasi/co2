@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use co2_ast::{Designator, Expression, Initializer, InitializerItem, Spanned};
-use co2_crate_sig::{LocalResolver, eval_const_expr_as_usize};
+use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{AdtKind, IntTy, RigidTy, Ty, TyKind, UintTy};
 
@@ -31,6 +31,8 @@ impl InitializerCursor {
         designators: &[Spanned<Designator<LocalResolver>>],
         base_ty: Ty,
         span: rustc_public_generative::rustc_public::ty::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<Self, String> {
         let mut current_ty = base_ty;
         let mut cursor = InitializerCursor {
@@ -40,7 +42,7 @@ impl InitializerCursor {
         for (designator, span) in designators {
             match designator {
                 Designator::Subscript(expr) => {
-                    let idx = eval_const_expr_as_usize(&ctx.decl_resolver, expr)?;
+                    let idx = ctx.eval_array_len_expr_in_scope(expr, locals, local_map)?;
                     let elem_ty = array_elem_ty(current_ty).ok_or_else(|| {
                         format!("array designator used on non-array type: {current_ty:?}")
                     })?;
@@ -438,10 +440,14 @@ impl HirCtx<'_> {
                                     prefix,
                                     expected_ty,
                                     self.to_rust_span(item_span),
+                                    locals,
+                                    local_map,
                                 )?
                             };
-                            let start_idx = eval_const_expr_as_usize(&self.decl_resolver, start)?;
-                            let end_idx = eval_const_expr_as_usize(&self.decl_resolver, end)?;
+                            let start_idx =
+                                self.eval_array_len_expr_in_scope(start, locals, local_map)?;
+                            let end_idx =
+                                self.eval_array_len_expr_in_scope(end, locals, local_map)?;
                             if end_idx < start_idx {
                                 self.terminate_with_error(
                                     range_span,
@@ -461,6 +467,8 @@ impl HirCtx<'_> {
                                 designators,
                                 expected_ty,
                                 self.to_rust_span(item_span),
+                                locals,
+                                local_map,
                             )?;
                         }
                     }

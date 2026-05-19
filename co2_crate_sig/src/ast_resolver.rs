@@ -111,7 +111,6 @@ pub struct LocalResolverBase {
     pub resolver: Resolver,
     pub local_counter: usize,
     pub fake_defs_counter: usize,
-    pub local_tys: HashMap<u32, HirTy>,
     pub pending_typedefs: Vec<(
         DefId,
         String,
@@ -157,6 +156,11 @@ impl std::fmt::Debug for LocalResolverBase {
 #[derive(Debug, Clone)]
 pub struct RegisteredArrayLenConst {
     pub id: usize,
+    pub def_id: DefId,
+    pub rhs: DefId,
+    pub name: String,
+    pub span: co2_ast::Span,
+    pub resolver: LocalResolver,
     pub expr: co2_ast::Spanned<Expression<LocalResolver>>,
 }
 
@@ -195,27 +199,19 @@ impl LocalResolverBase {
         self.array_len_const_exprs.get(&id).cloned()
     }
 
-    pub fn set_local_ty(&mut self, local: u32, ty: HirTy) {
-        self.local_tys.insert(local, ty);
+    pub fn lookup_array_len_const_by_id(&self, id: usize) -> Option<RegisteredArrayLenConst> {
+        self.array_len_consts
+            .values()
+            .find(|registered| registered.id == id)
+            .cloned()
     }
-}
 
-pub fn eval_registered_array_len_const(
-    resolver: &LocalResolver,
-    id: usize,
-) -> Result<usize, String> {
-    let mut base = resolver.base.borrow_mut();
-    let expr = base
-        .lookup_array_len_const_expr(id)
-        .ok_or_else(|| "missing registered array size constant expression".to_owned())?;
-    base.eval_array_len_expr(&expr)
-}
-
-pub fn eval_const_expr_as_usize(
-    resolver: &LocalResolver,
-    expr: &co2_ast::Spanned<Expression<LocalResolver>>,
-) -> Result<usize, String> {
-    resolver.base.borrow_mut().eval_array_len_expr(expr)
+    pub fn lookup_array_len_const_by_def(&self, def_id: DefId) -> Option<RegisteredArrayLenConst> {
+        self.array_len_consts
+            .values()
+            .find(|registered| registered.def_id == def_id)
+            .cloned()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -276,10 +272,6 @@ impl LocalResolver {
         id
     }
 
-    pub fn set_local_ty(&self, local: u32, ty: HirTy) {
-        self.base.borrow_mut().set_local_ty(local, ty);
-    }
-
     pub fn dependency_const_value(
         &self,
         def_id: DefId,
@@ -335,6 +327,13 @@ impl LocalResolver {
         self.base
             .borrow_mut()
             .validate_constexpr_decl(specifiers, declarator, ty, initializer)
+    }
+
+    pub fn lookup_array_len_const_expr(
+        &self,
+        id: usize,
+    ) -> Option<Spanned<Expression<LocalResolver>>> {
+        self.base.borrow().lookup_array_len_const_expr(id)
     }
 
     pub fn eval_const_expr(
@@ -454,8 +453,19 @@ impl LocalResolver {
         let expr = parse_expression_tokens(&tokens, subscription.1, self.clone());
         let mut base = self.base.borrow_mut();
         let id = base.array_len_consts.len();
+        let name = format!("__co2_array_len_{id}");
+        let def_id = base.hir_ctx.allocate_def_id(
+            base.hir_ctx.root_crate_def_id(),
+            &DefData::ValueNs(name.clone()),
+        );
+        let rhs = base.hir_ctx.allocate_def_id(def_id, &DefData::AnonConst);
         let registered = RegisteredArrayLenConst {
             id,
+            def_id,
+            rhs,
+            name,
+            span: subscription.1,
+            resolver: self.clone(),
             expr: expr.clone(),
         };
         base.array_len_const_exprs

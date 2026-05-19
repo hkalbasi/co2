@@ -13,7 +13,6 @@ pub(crate) use ctx::CrateSigCtx;
 
 pub use ast_resolver::{
     DefOrLocal, LocalResolver, LocalResolverBase, MethodResolutionKind, RegisteredArrayLenConst,
-    eval_const_expr_as_usize, eval_registered_array_len_const,
 };
 pub use lowering::{WellknownDefs, lower_crate_sig};
 pub use mir::MirOwnerInfo;

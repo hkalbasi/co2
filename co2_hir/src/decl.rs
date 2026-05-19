@@ -4,16 +4,17 @@ use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
     Initializer, RustTy, Spanned, TypeName, TypeQualifier,
 };
-use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver, eval_registered_array_len_const};
+use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver};
+use co2_parser::parse_expression_tokens;
 use la_arena::Arena;
 use rustc_public_generative::{
-    FunctionAbi, FunctionSignature, HirGenericArg, HirLifetime, HirTy, HirTyConst,
+    HirTy,
     rustc_public::{
         CrateItem,
         mir::{Mutability, Safety},
         ty::{
-            Abi, AdtDef, Binder, FnSig, ForeignDef, GenericArgKind, GenericArgs, Region,
-            RegionKind, RigidTy, Span as RustSpan, Ty, TyConst, TyKind,
+            Abi, AdtDef, Binder, FnSig, ForeignDef, GenericArgKind, GenericArgs, IntTy, Region,
+            RegionKind, RigidTy, Span as RustSpan, Ty, TyConst, TyKind, UintTy,
         },
     },
 };
@@ -86,6 +87,62 @@ fn is_null_pointer_constexpr_expr((expr, _): &Spanned<Expression<LocalResolver>>
         Expression::Constant(Constant::Int(0, _)) => true,
         Expression::Cast { expr, .. } => is_null_pointer_constexpr_expr(expr),
         _ => false,
+    }
+}
+
+fn dependency_const_value_to_i128(
+    value: &rustc_public_generative::DependencyConstValue,
+) -> Result<i128, String> {
+    match value {
+        rustc_public_generative::DependencyConstValue::Bool(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::Char(ch) => Ok(*ch as i128),
+        rustc_public_generative::DependencyConstValue::I8(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::I16(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::I32(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::I64(v)
+        | rustc_public_generative::DependencyConstValue::Isize(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::I128(v) => Ok(*v),
+        rustc_public_generative::DependencyConstValue::U8(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::U16(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::U32(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::U64(v)
+        | rustc_public_generative::DependencyConstValue::Usize(v) => Ok(i128::from(*v)),
+        rustc_public_generative::DependencyConstValue::U128(v) => Ok(*v as i128),
+        rustc_public_generative::DependencyConstValue::F32(_)
+        | rustc_public_generative::DependencyConstValue::F64(_) => {
+            Err("float constant in array size".to_owned())
+        }
+    }
+}
+
+fn cast_const_int_to_ty(value: i128, target_ty: Ty) -> Result<i128, String> {
+    match target_ty.kind() {
+        TyKind::RigidTy(RigidTy::Bool) => Ok(i128::from(value != 0)),
+        TyKind::RigidTy(RigidTy::Char) => {
+            let codepoint =
+                u32::try_from(value).map_err(|_| format!("invalid char cast value {value}"))?;
+            char::from_u32(codepoint)
+                .map(|ch| ch as i128)
+                .ok_or_else(|| format!("invalid char cast value {value}"))
+        }
+        TyKind::RigidTy(RigidTy::Int(IntTy::I8)) => Ok(i128::from(value as i8)),
+        TyKind::RigidTy(RigidTy::Int(IntTy::I16)) => Ok(i128::from(value as i16)),
+        TyKind::RigidTy(RigidTy::Int(IntTy::I32) | RigidTy::Adt(_, _)) => {
+            Ok(i128::from(value as i32))
+        }
+        TyKind::RigidTy(RigidTy::Int(IntTy::I64)) => Ok(i128::from(value as i64)),
+        TyKind::RigidTy(RigidTy::Int(IntTy::I128)) => Ok(value),
+        TyKind::RigidTy(RigidTy::Int(IntTy::Isize)) => Ok((value as isize) as i128),
+        TyKind::RigidTy(RigidTy::Uint(UintTy::U8)) => Ok(i128::from(value as u8)),
+        TyKind::RigidTy(RigidTy::Uint(UintTy::U16)) => Ok(i128::from(value as u16)),
+        TyKind::RigidTy(RigidTy::Uint(UintTy::U32)) => Ok(i128::from(value as u32)),
+        TyKind::RigidTy(RigidTy::Uint(UintTy::U64)) => Ok(i128::from(value as u64)),
+        TyKind::RigidTy(RigidTy::Uint(UintTy::U128)) => Ok((value as u128) as i128),
+        TyKind::RigidTy(RigidTy::Uint(UintTy::Usize)) => Ok((value as usize) as i128),
+        _ => Err(format!(
+            "unsupported cast target in constant expression: {:?}",
+            target_ty.kind()
+        )),
     }
 }
 
@@ -432,8 +489,6 @@ impl HirCtx<'_> {
                                 self.initializer_tree_to_expr(&tree, real_ty, parser_span);
 
                             let span = self.to_rust_span(parser_span);
-                            let hir_ty = Self::ty_to_hir_ty(real_ty, span);
-                            self.decl_resolver.set_local_ty(name.0 as u32, hir_ty);
                             let local = locals.alloc(HirLocal {
                                 name: name.1.clone(),
                                 ty: real_ty,
@@ -452,9 +507,6 @@ impl HirCtx<'_> {
                     };
 
                     let span = self.to_rust_span(parser_span);
-                    let hir_ty = Self::ty_to_hir_ty(ty, span);
-                    self.decl_resolver.set_local_ty(name.0 as u32, hir_ty);
-
                     let local = locals.alloc(HirLocal {
                         name: name.1.clone(),
                         ty,
@@ -488,9 +540,6 @@ impl HirCtx<'_> {
                                     ty
                                 };
                                 locals[local].ty = local_ty;
-                                let hir_ty = Self::ty_to_hir_ty(local_ty, span);
-                                self.decl_resolver.set_local_ty(name.0 as u32, hir_ty);
-
                                 // END TODO.
                                 let expr = if let resolver = &self.decl_resolver
                                     && resolver.normalize_ty_for_current_owner(expr.ty)
@@ -551,7 +600,12 @@ impl HirCtx<'_> {
         let base =
             self.base_ty_of_decl_in_scope(declaration_specifiers, declarator.1, locals, local_map);
         let base_const = has_const_qualifier_in_decl_specs(&base.1);
-        let (decl_ty, name) = self.extract_decl_type(base.0, base_const, declarator)?;
+        let (decl_ty, name) = self.extract_decl_type_in_scope(
+            base.0,
+            base_const,
+            declarator,
+            Some((locals, local_map)),
+        )?;
         let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
         Ok((name, decl_ty))
     }
@@ -603,19 +657,11 @@ impl HirCtx<'_> {
         Ok(c_ty_matches_expected(&ty1, &ty2))
     }
 
-    fn lower_type_name_cty(
-        &self,
-        type_name: TypeName<LocalResolver>,
-        span: co2_ast::Span,
-    ) -> Result<CTy, String> {
-        self.lower_type_name_cty_with_scope(type_name, span, None)
-    }
-
     fn lower_type_name_cty_with_scope(
         &self,
         type_name: TypeName<LocalResolver>,
         span: co2_ast::Span,
-        typeof_scope: Option<(&mut Arena<HirLocal>, &mut HashMap<usize, LocalId>)>,
+        mut typeof_scope: Option<(&mut Arena<HirLocal>, &mut HashMap<usize, LocalId>)>,
     ) -> Result<CTy, String> {
         let specifiers = type_name
             .specifier_qualifier_list
@@ -632,14 +678,21 @@ impl HirCtx<'_> {
                 (s, span)
             })
             .collect::<Vec<_>>();
-        let base = self.base_ty_of_decl_with_scope(specifiers, span, typeof_scope);
+        let base = self.base_ty_of_decl_with_scope(
+            specifiers,
+            span,
+            typeof_scope
+                .as_mut()
+                .map(|(locals, local_map)| (&mut **locals, &mut **local_map)),
+        );
         let ty = match type_name.abstract_declarator {
             None => base.0,
             Some(decl) => {
-                let (ty, name) = self.extract_decl_type(
+                let (ty, name) = self.extract_decl_type_in_scope(
                     base.0,
                     has_const_qualifier_in_decl_specs(&base.1),
                     decl,
+                    typeof_scope,
                 )?;
                 if let Some((_, span)) = name {
                     self.terminate_with_error(span, "type name should not have name");
@@ -656,18 +709,17 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<CTy, String> {
-        let hir_expr = self.lower_expr(expr.clone(), locals, local_map)?;
-        match hir_expr.ty.kind() {
+        let ty = self.type_of_expr_for_sizeof(expr, locals, local_map)?;
+        match ty.kind() {
             TyKind::RigidTy(RigidTy::FnDef(_, _)) => {
-                let sig = hir_expr
-                    .ty
+                let sig = ty
                     .kind()
                     .fn_sig()
                     .expect("FnDef should have fn signature")
                     .skip_binder();
                 Ok(CTy::Function(sig))
             }
-            _ => Ok(CTy::Ty(hir_expr.ty)),
+            _ => Ok(CTy::Ty(ty)),
         }
     }
 
@@ -736,8 +788,14 @@ impl HirCtx<'_> {
             }
             CompressedTypeSpecifier::TypeofType(type_name) => {
                 return (
-                    self.lower_type_name_cty(type_name, span)
-                        .unwrap_or_else(|err| self.terminate_with_error(span, &err)),
+                    self.lower_type_name_cty_with_scope(
+                        type_name,
+                        span,
+                        typeof_scope
+                            .as_mut()
+                            .map(|(locals, local_map)| (&mut **locals, &mut **local_map)),
+                    )
+                    .unwrap_or_else(|err| self.terminate_with_error(span, &err)),
                     specifiers,
                 );
             }
@@ -756,11 +814,267 @@ impl HirCtx<'_> {
         (CTy::Ty(ty), specifiers)
     }
 
+    pub(crate) fn eval_array_len_expr_in_scope(
+        &self,
+        expr: &Spanned<Expression<LocalResolver>>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<usize, String> {
+        let value = self.eval_const_expr_in_scope(expr, locals, local_map)?;
+        usize::try_from(value)
+            .map_err(|_| format!("array size must be a non-negative integer, got {value}"))
+    }
+
+    pub(crate) fn eval_const_expr_in_scope(
+        &self,
+        (expr, span): &Spanned<Expression<LocalResolver>>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<i128, String> {
+        match expr {
+            Expression::Constant(Constant::Int(v, _)) => Ok(*v),
+            Expression::Constant(Constant::Char(ch)) => Ok(i128::from(*ch as u8 as i8)),
+            Expression::Identifier((resolved, _)) => match resolved {
+                co2_crate_sig::DefOrLocal::Const(def_id) => {
+                    if self.decl_resolver.has_local_const_value(*def_id) {
+                        self.decl_resolver.local_const_int_value(*def_id)
+                    } else if let Some(value) = self.decl_resolver.dependency_const_value(*def_id) {
+                        dependency_const_value_to_i128(&value)
+                    } else {
+                        Err(format!(
+                            "unsupported identifier in constant expression: {resolved:?}"
+                        ))
+                    }
+                }
+                co2_crate_sig::DefOrLocal::Def { def_id, .. } => {
+                    self.decl_resolver.local_const_int_value(*def_id)
+                }
+                co2_crate_sig::DefOrLocal::LocalConst(local) => {
+                    self.decl_resolver.local_constexpr_int_value(*local)
+                }
+                _ => Err(format!(
+                    "unsupported identifier in constant expression: {resolved:?}"
+                )),
+            },
+            Expression::UnaryOp(op, inner) => {
+                let inner = self.eval_const_expr_in_scope(inner, locals, local_map)?;
+                match op {
+                    co2_ast::UnaryOp::Plus => Ok(inner),
+                    co2_ast::UnaryOp::Minus => Ok(-inner),
+                    co2_ast::UnaryOp::Not => Ok(i128::from(inner == 0)),
+                    co2_ast::UnaryOp::Com => Ok(!inner),
+                    _ => Err("unsupported unary op in array size".to_owned()),
+                }
+            }
+            Expression::BinOp(lhs, op, rhs) => {
+                let lhs = self.eval_const_expr_in_scope(lhs, locals, local_map)?;
+                let rhs = self.eval_const_expr_in_scope(rhs, locals, local_map)?;
+                match op {
+                    co2_ast::BinOp::Add => Ok(lhs + rhs),
+                    co2_ast::BinOp::Sub => Ok(lhs - rhs),
+                    co2_ast::BinOp::Mul => Ok(lhs * rhs),
+                    co2_ast::BinOp::Div => Ok(lhs / rhs),
+                    co2_ast::BinOp::Rem => Ok(lhs % rhs),
+                    co2_ast::BinOp::BitOr => Ok(lhs | rhs),
+                    co2_ast::BinOp::BitXor => Ok(lhs ^ rhs),
+                    co2_ast::BinOp::BitAnd => Ok(lhs & rhs),
+                    co2_ast::BinOp::Eq => Ok(i128::from(lhs == rhs)),
+                    co2_ast::BinOp::Lt => Ok(i128::from(lhs < rhs)),
+                    co2_ast::BinOp::Le => Ok(i128::from(lhs <= rhs)),
+                    co2_ast::BinOp::Ne => Ok(i128::from(lhs != rhs)),
+                    co2_ast::BinOp::Ge => Ok(i128::from(lhs >= rhs)),
+                    co2_ast::BinOp::Gt => Ok(i128::from(lhs > rhs)),
+                    co2_ast::BinOp::Shl => Ok(lhs << rhs),
+                    co2_ast::BinOp::Shr => Ok(lhs >> rhs),
+                    co2_ast::BinOp::And => Ok(i128::from((lhs != 0) && (rhs != 0))),
+                    co2_ast::BinOp::Or => Ok(i128::from((lhs != 0) || (rhs != 0))),
+                    co2_ast::BinOp::Comma | co2_ast::BinOp::Assign => {
+                        Err("unsupported binary op in array size".to_owned())
+                    }
+                }
+            }
+            Expression::Conditional {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
+                if self.eval_const_expr_in_scope(cond, locals, local_map)? != 0 {
+                    self.eval_const_expr_in_scope(then_expr, locals, local_map)
+                } else {
+                    self.eval_const_expr_in_scope(else_expr, locals, local_map)
+                }
+            }
+            Expression::Cast { type_name, expr } => {
+                let value = self.eval_const_expr_in_scope(expr, locals, local_map)?;
+                let target_ty =
+                    self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
+                cast_const_int_to_ty(value, target_ty)
+            }
+            Expression::SizeofType(type_name)
+            | Expression::Offsetof {
+                ty: type_name,
+                field: _,
+                field_span: _,
+            } => {
+                let ty =
+                    self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
+                Ok(i128::from(self.sizeof_ty(ty)?))
+            }
+            Expression::Sizeof(expr) => Ok(i128::from(self.sizeof_expr(expr, locals, local_map)?)),
+            Expression::AlignofType(type_name) => {
+                let ty =
+                    self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
+                Ok(i128::from(self.alignof_ty(ty)?))
+            }
+            Expression::Alignof(expr) => {
+                let ty = self.type_of_expr_for_sizeof(expr, locals, local_map)?;
+                Ok(i128::from(self.alignof_ty(ty)?))
+            }
+            Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
+                Ok(i128::from(self.type_names_compatible_in_scope(
+                    *ty1.clone(),
+                    *ty2.clone(),
+                    *span,
+                    locals,
+                    local_map,
+                )?))
+            }
+            Expression::BuiltinConstantP { expr } => Ok(i128::from(
+                self.eval_const_expr_in_scope(expr, locals, local_map)
+                    .is_ok(),
+            )),
+            Expression::GenericSelection {
+                controlling,
+                associations,
+            } => {
+                let controlling_ty =
+                    self.type_of_expr_for_sizeof(controlling, locals, local_map)?;
+                let mut default_expr = None;
+                for (assoc, _) in associations {
+                    match assoc {
+                        co2_ast::GenericAssociation::Default { expr } => {
+                            if default_expr.is_none() {
+                                default_expr = Some(expr);
+                            }
+                        }
+                        co2_ast::GenericAssociation::Type { type_name, expr } => {
+                            let assoc_ty = self.lower_type_name_in_scope(
+                                type_name.clone(),
+                                *span,
+                                locals,
+                                local_map,
+                            )?;
+                            if ty_matches_expected(assoc_ty, controlling_ty) {
+                                return self.eval_const_expr_in_scope(expr, locals, local_map);
+                            }
+                        }
+                    }
+                }
+                if let Some(expr) = default_expr {
+                    self.eval_const_expr_in_scope(expr, locals, local_map)
+                } else {
+                    Err("no matching association in _Generic and no default provided".to_owned())
+                }
+            }
+            _ => Err("unsupported constant expression in array size".to_owned()),
+        }
+    }
+
+    fn sizeof_expr(
+        &self,
+        expr: &Spanned<Expression<LocalResolver>>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<u64, String> {
+        if let Expression::Constant(Constant::String(s)) = &expr.0 {
+            return Ok((s.len() + 1) as u64);
+        }
+        let ty = self.type_of_expr_for_sizeof(expr, locals, local_map)?;
+        self.sizeof_ty(ty)
+    }
+
+    fn type_of_expr_for_sizeof(
+        &self,
+        (expr, span): &Spanned<Expression<LocalResolver>>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<Ty, String> {
+        match expr {
+            Expression::Identifier((resolved, _)) => match resolved {
+                co2_crate_sig::DefOrLocal::Local(local)
+                | co2_crate_sig::DefOrLocal::LocalConst(local) => {
+                    if let Some(&local) = local_map.get(&(*local as usize)) {
+                        return Ok(locals[local].ty);
+                    }
+                    locals
+                        .iter()
+                        .next_back()
+                        .map(|(_, local)| local.ty)
+                        .ok_or_else(|| {
+                            format!("Invalid local {local}. Available locals are {local_map:#?}")
+                        })
+                }
+                _ => self
+                    .lower_expr((expr.clone(), *span), locals, local_map)
+                    .map(|expr| expr.ty),
+            },
+            Expression::UnaryOp(co2_ast::UnaryOp::AddrOf, inner) => {
+                let inner = self.type_of_expr_for_sizeof(inner, locals, local_map)?;
+                Ok(Ty::new_ptr(inner, Mutability::Mut))
+            }
+            Expression::UnaryOp(co2_ast::UnaryOp::Deref, inner) => {
+                let inner = self.type_of_expr_for_sizeof(inner, locals, local_map)?;
+                match inner.kind() {
+                    TyKind::RigidTy(RigidTy::RawPtr(pointee, _) | RigidTy::Ref(_, pointee, _)) => {
+                        Ok(pointee)
+                    }
+                    _ => Err(format!("cannot dereference non-pointer type: {inner:?}")),
+                }
+            }
+            Expression::Subscript(base, _) => {
+                let base = self.type_of_expr_for_sizeof(base, locals, local_map)?;
+                match base.kind() {
+                    TyKind::RigidTy(
+                        RigidTy::Array(elem, _)
+                        | RigidTy::RawPtr(elem, _)
+                        | RigidTy::Ref(_, elem, _),
+                    ) => Ok(elem),
+                    _ => Err(format!("subscript on non-array type: {base:?}")),
+                }
+            }
+            _ => self
+                .lower_expr((expr.clone(), *span), locals, local_map)
+                .map(|expr| expr.ty),
+        }
+    }
+
+    fn sizeof_ty(&self, ty: Ty) -> Result<u64, String> {
+        ty.layout()
+            .map_err(|e| format!("failed to compute layout for sizeof: {e}"))
+            .map(|layout| layout.shape().size.bytes() as u64)
+    }
+
+    fn alignof_ty(&self, ty: Ty) -> Result<u64, String> {
+        ty.layout()
+            .map_err(|e| format!("failed to compute layout for alignof: {e}"))
+            .map(|layout| layout.shape().abi_align)
+    }
+
     fn extract_decl_type(
         &self,
         current: CTy,
         current_const: bool,
         (decl, span): Spanned<Declarator<LocalResolver>>,
+    ) -> Result<(CTy, Option<Spanned<(usize, String)>>), String> {
+        self.extract_decl_type_in_scope(current, current_const, (decl, span), None)
+    }
+
+    fn extract_decl_type_in_scope(
+        &self,
+        current: CTy,
+        current_const: bool,
+        (decl, span): Spanned<Declarator<LocalResolver>>,
+        mut scope: Option<(&mut Arena<HirLocal>, &mut HashMap<usize, LocalId>)>,
     ) -> Result<(CTy, Option<Spanned<(usize, String)>>), String> {
         match decl {
             Declarator::Abstract => Ok((current, None)),
@@ -812,7 +1126,7 @@ impl HirCtx<'_> {
                         return Err("returning unsized array is not valid".to_owned());
                     }
                 };
-                self.extract_decl_type(function_ty, false, *declarator)
+                self.extract_decl_type_in_scope(function_ty, false, *declarator, scope)
             }
             Declarator::PointerDeclarator {
                 declarator,
@@ -837,7 +1151,7 @@ impl HirCtx<'_> {
                 let next_const = qualifiers
                     .iter()
                     .any(|(q, _)| matches!(q, TypeQualifier::Const));
-                self.extract_decl_type(ptr_or_fn_ptr, next_const, *declarator)
+                self.extract_decl_type_in_scope(ptr_or_fn_ptr, next_const, *declarator, scope)
             }
             Declarator::ArrayDeclarator {
                 declarator,
@@ -855,18 +1169,54 @@ impl HirCtx<'_> {
                         {
                             CTy::UnsizedArray(inner)
                         } else {
-                            let len = subscription
-                                .0
-                                .array_len_const
-                                .as_ref()
-                                .copied()
-                                .map(|def_id| (&self.decl_resolver, def_id))
-                                .ok_or_else(|| "Can not calculate subscription".to_owned())
-                                .and_then(|(resolver, def_id)| {
-                                    eval_registered_array_len_const(resolver, def_id).map_err(
-                                        |err| format!("Can not calculate subscription: {err}"),
-                                    )
-                                })?;
+                            let expr = if let Some(const_id) =
+                                subscription.0.array_len_const.as_ref()
+                            {
+                                self.decl_resolver
+                                    .lookup_array_len_const_expr(*const_id)
+                                    .ok_or_else(|| "Can not calculate subscription".to_owned())?
+                            } else {
+                                let tokens = subscription
+                                    .0
+                                    .raw
+                                    .tokens
+                                    .get(1..subscription.0.raw.tokens.len().saturating_sub(1))
+                                    .ok_or_else(|| "Can not calculate subscription".to_owned())?
+                                    .iter()
+                                    .skip_while(|(token, _)| {
+                                        matches!(
+                                            token,
+                                            co2_ast::Token::Static
+                                                | co2_ast::Token::Const
+                                                | co2_ast::Token::Restrict
+                                                | co2_ast::Token::Volatile
+                                                | co2_ast::Token::Atomic
+                                        )
+                                    })
+                                    .cloned()
+                                    .collect::<Vec<_>>();
+                                parse_expression_tokens(
+                                    &tokens,
+                                    subscription.1,
+                                    self.decl_resolver.clone(),
+                                )
+                            };
+                            let len = if let Some((locals, local_map)) = scope.as_mut() {
+                                self.eval_array_len_expr_in_scope(&expr, locals, local_map)
+                            } else {
+                                let mut locals = Arena::new();
+                                let mut local_map = HashMap::new();
+                                self.eval_array_len_expr_in_scope(
+                                    &expr,
+                                    &mut locals,
+                                    &mut local_map,
+                                )
+                            }
+                            .unwrap_or_else(|err| {
+                                let mut span = subscription.1;
+                                span.start = span.start.saturating_sub(1);
+                                self.terminate_with_error(span, &err)
+                            });
                             CTy::Ty(
                                 Ty::try_new_array(inner, len as u64)
                                     .map_err(|e| format!("failed to build array type: {e}"))?,
@@ -880,7 +1230,7 @@ impl HirCtx<'_> {
                         return Err("array of unsized arrays is invalid".to_owned());
                     }
                 };
-                self.extract_decl_type(array_ty, current_const, *declarator)
+                self.extract_decl_type_in_scope(array_ty, current_const, *declarator, scope)
             }
         }
     }
@@ -905,93 +1255,6 @@ impl HirCtx<'_> {
             }
         }
         None
-    }
-
-    fn ty_to_hir_ty(ty: Ty, span: RustSpan) -> HirTy {
-        match ty.kind() {
-            TyKind::RigidTy(RigidTy::Bool) => HirTy {
-                kind: rustc_public_generative::HirTyKind::Bool,
-                span,
-            },
-            TyKind::RigidTy(RigidTy::Char) => HirTy {
-                kind: rustc_public_generative::HirTyKind::Char,
-                span,
-            },
-            TyKind::RigidTy(RigidTy::Int(int_ty)) => HirTy::signed_ty(int_ty, span),
-            TyKind::RigidTy(RigidTy::Uint(uint_ty)) => HirTy::unsigned_ty(uint_ty, span),
-            TyKind::RigidTy(RigidTy::Float(float_ty)) => HirTy::float_ty(float_ty, span),
-            TyKind::RigidTy(RigidTy::Tuple(items)) => HirTy::new_tuple(
-                items
-                    .iter()
-                    .map(|ty| Self::ty_to_hir_ty(*ty, span))
-                    .collect(),
-                span,
-            ),
-            TyKind::RigidTy(RigidTy::RawPtr(inner, mutability)) => {
-                HirTy::new_ptr(Self::ty_to_hir_ty(inner, span), mutability, span)
-            }
-            TyKind::RigidTy(RigidTy::Array(inner, len)) => {
-                let len = len
-                    .eval_target_usize()
-                    .expect("local array type should have concrete length")
-                    as usize;
-                HirTy::new_array(
-                    Self::ty_to_hir_ty(inner, span),
-                    HirTyConst::Literal(len),
-                    span,
-                )
-            }
-            TyKind::RigidTy(RigidTy::Foreign(def)) => HirTy::adt(def.0, vec![], span),
-            TyKind::RigidTy(RigidTy::Adt(def, args)) => HirTy::adt(
-                def.0,
-                args.0
-                    .iter()
-                    .map(|arg| match arg {
-                        GenericArgKind::Type(ty) => {
-                            HirGenericArg::Ty(Self::ty_to_hir_ty(*ty, span))
-                        }
-                        GenericArgKind::Lifetime(_) => HirGenericArg::Lifetime(HirLifetime::Static),
-                        GenericArgKind::Const(_) => {
-                            panic!("unsupported generic arg in local C type")
-                        }
-                    })
-                    .collect(),
-                span,
-            ),
-            TyKind::RigidTy(RigidTy::FnPtr(sig)) => {
-                let sig = sig.skip_binder();
-                let abi = match sig.abi {
-                    Abi::C { .. } => FunctionAbi::C,
-                    Abi::Rust => FunctionAbi::Rust,
-                    _ => panic!("unsupported fn ptr abi in local C type: {:?}", sig.abi),
-                };
-                HirTy {
-                    kind: rustc_public_generative::HirTyKind::FnPtr(Box::new(FunctionSignature {
-                        lifetimes: vec![],
-                        inputs: sig
-                            .inputs()
-                            .iter()
-                            .map(|ty| Self::ty_to_hir_ty(*ty, span))
-                            .collect(),
-                        output: Self::ty_to_hir_ty(sig.output(), span),
-                        abi,
-                        is_unsafe: matches!(sig.safety, Safety::Unsafe),
-                        c_variadic: sig.c_variadic,
-                    })),
-                    span,
-                }
-            }
-            TyKind::RigidTy(RigidTy::Ref(region, inner, mutability)) => HirTy::new_ref(
-                Self::ty_to_hir_ty(inner, span),
-                mutability,
-                match region.kind {
-                    RegionKind::ReStatic => HirLifetime::Static,
-                    _ => panic!("unsupported region in local C ref type: {:?}", region.kind),
-                },
-                span,
-            ),
-            other => panic!("unsupported local C type for array-size evaluation: {other:?}"),
-        }
     }
 
     fn sig_cty_to_cty(sig_ty: &co2_crate_sig::CTy) -> CTy {

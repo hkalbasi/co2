@@ -416,22 +416,32 @@ impl CrateSigCtx<'_> {
                         *declarator,
                     );
                 } else {
-                    let def_id = subscription
+                    let registered = subscription
                         .0
                         .array_len_const
                         .as_ref()
                         .ok_or_else(|| "missing registered array size constant".to_owned())?;
-                    let expr = self
+                    let registered = self
                         .resolver
                         .borrow()
-                        .lookup_array_len_const_expr(*def_id)
-                        .ok_or_else(|| {
-                            "missing registered array size constant expression".to_owned()
-                        })?;
-                    let literal_len = self.eval_array_len_expr(&expr).unwrap_or_else(|err| {
-                        CrateSigCtx::<'_>::terminate_with_error(subscription.1, &err)
-                    });
-                    (HirTyConst::Literal(literal_len), None)
+                        .lookup_array_len_const_by_id(*registered)
+                        .ok_or_else(|| "missing registered array size constant".to_owned())?;
+                    let literal_len =
+                        self.eval_array_len_expr(&registered.expr)
+                            .unwrap_or_else(|err| {
+                                CrateSigCtx::<'_>::terminate_with_error(subscription.1, &err)
+                            });
+                    let len_expr = (
+                        Expression::Constant(Constant::Int(
+                            literal_len as i128,
+                            IntegerSuffix::None,
+                        )),
+                        registered.span,
+                    );
+                    (
+                        HirTyConst::Literal(literal_len),
+                        Some((Initializer::Expr(len_expr), registered.span)),
+                    )
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len.0, rust_span));
                 let (ty, name, nested_len) =
@@ -1171,22 +1181,11 @@ impl LocalResolverBase {
             }
             Expression::Constant(Constant::Char(_)) => HirTy::signed_ty(IntTy::I8, rust_span),
             Expression::Identifier((resolved, _)) => match resolved {
-                crate::DefOrLocal::Local(local) => {
-                    self.local_tys.get(local).cloned().unwrap_or_else(|| {
-                        self.terminate_with_error(
-                            *span,
-                            &format!("missing local type for local {local}"),
-                        )
-                    })
-                }
-                crate::DefOrLocal::LocalConst(local) => {
-                    self.local_tys.get(local).cloned().unwrap_or_else(|| {
-                        self.terminate_with_error(
-                            *span,
-                            &format!("missing local type for local {local}"),
-                        )
-                    })
-                }
+                crate::DefOrLocal::Local(_) | crate::DefOrLocal::LocalConst(_) => self
+                    .terminate_with_error(
+                        *span,
+                        "local identifiers are invalid in crate signature",
+                    ),
                 crate::DefOrLocal::Def { def_id, .. } => self
                     .maybe_const_eval_named_ty(*def_id, rust_span)
                     .unwrap_or_else(|| {
@@ -1362,13 +1361,11 @@ impl LocalResolverBase {
                         )
                     });
                 }
-                crate::DefOrLocal::LocalConst(local) => {
-                    return self.local_tys.get(local).cloned().unwrap_or_else(|| {
-                        self.terminate_with_error(
-                            span,
-                            &format!("missing local type for local {local}"),
-                        )
-                    });
+                crate::DefOrLocal::LocalConst(_) => {
+                    self.terminate_with_error(
+                        span,
+                        "local identifiers are invalid in crate signature",
+                    );
                 }
                 _ => {}
             }
@@ -1410,7 +1407,7 @@ impl LocalResolverBase {
         }
     }
 
-    fn sizeof_hir_ty(&self, ty: &HirTy) -> Result<(usize, usize), String> {
+    fn sizeof_hir_ty(&mut self, ty: &HirTy) -> Result<(usize, usize), String> {
         match &ty.kind {
             HirTyKind::Bool
             | HirTyKind::Char
@@ -1433,6 +1430,14 @@ impl LocalResolverBase {
             | HirTyKind::Float(FloatTy::F128) => Ok((16, 16)),
             HirTyKind::Tuple(inner) if inner.is_empty() => Ok((0, 1)),
             HirTyKind::Array(HirTyConst::Literal(len), inner) => {
+                let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
+                Ok((elem_size * len, elem_align))
+            }
+            HirTyKind::Array(HirTyConst::ConstDef(def_id), inner) => {
+                let registered = self
+                    .lookup_array_len_const_by_def(*def_id)
+                    .ok_or_else(|| "unsupported array length const in sizeof".to_owned())?;
+                let len = self.eval_array_len_expr(&registered.expr)?;
                 let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
                 Ok((elem_size * len, elem_align))
             }
@@ -1701,14 +1706,15 @@ impl LocalResolverBase {
                         *declarator,
                     );
                 } else {
-                    let def_id = subscription
-                        .0
-                        .array_len_const
-                        .as_ref()
-                        .ok_or_else(|| "Can not calculate subscription".to_owned())?;
+                    let registered = subscription.0.array_len_const.as_ref().ok_or_else(|| {
+                        "array size must be a non-negative integer, got -1".to_owned()
+                    })?;
                     let expr = self
-                        .lookup_array_len_const_expr(*def_id)
-                        .ok_or_else(|| "Can not calculate subscription".to_owned())?;
+                        .lookup_array_len_const_by_id(*registered)
+                        .ok_or_else(|| {
+                            "array size must be a non-negative integer, got -1".to_owned()
+                        })?
+                        .expr;
                     let literal_len = self
                         .eval_array_len_expr(&expr)
                         .unwrap_or_else(|err| self.terminate_with_error(subscription.1, &err));

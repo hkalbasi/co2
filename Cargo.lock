@@ -334,6 +334,7 @@ version = "0.1.0"
 dependencies = [
  "co2_ast",
  "co2_crate_sig",
+ "co2_parser",
  "la-arena",
  "rustc_public_generative",
 ]

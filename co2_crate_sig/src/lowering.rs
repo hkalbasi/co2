@@ -8,9 +8,10 @@ use std::{
 };
 
 use co2_ast::{
-    Declaration, DeclarationSpecifier, Designator, DoTransform as _, FunctionDefinitionSignature,
-    InitDeclarator, ModItem, Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind,
-    TranslationUnit, TypeQualifier, TypeResolver,
+    Constant, Declaration, DeclarationSpecifier, Declarator, Designator, DoTransform as _,
+    Expression, FunctionDefinitionSignature, InitDeclarator, Initializer, IntegerSuffix, ModItem,
+    Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit,
+    TypeQualifier, TypeResolver,
 };
 use co2_parser::{
     parse_compound_statement, parse_translation_unit, parse_translation_unit_from_tokens,
@@ -27,7 +28,7 @@ use rustc_public_generative::{
 };
 
 use crate::{
-    CrateSigCtx, LocalResolver, LocalResolverBase, MirOwnerInfo,
+    CrateSigCtx, DefOrLocal, LocalResolver, LocalResolverBase, MirOwnerInfo,
     ast_resolver::StructAndEnumData,
     resolver::{ModuleData, Resolver},
     struct_manager::{PendingEnum, StructData, StructManager},
@@ -80,6 +81,125 @@ fn is_scalar_type(ty: &HirTy) -> bool {
             | HirTyKind::Uint(..)
             | HirTyKind::Float(..)
     )
+}
+
+fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
+    match expr {
+        Expression::Identifier((resolved, _)) => {
+            matches!(resolved, DefOrLocal::Local(_) | DefOrLocal::LocalConst(_))
+        }
+        Expression::Field(base, _)
+        | Expression::Arrow(base, _)
+        | Expression::Update { expr: base, .. }
+        | Expression::Sizeof(base)
+        | Expression::Alignof(base)
+        | Expression::UnaryOp(_, base)
+        | Expression::BuiltinConstantP { expr: base } => expr_contains_local(&base.0),
+        Expression::Subscript(base, index) => {
+            expr_contains_local(&base.0) || expr_contains_local(&index.0)
+        }
+        Expression::Call { func, params } => {
+            expr_contains_local(&func.0) || params.iter().any(|param| expr_contains_local(&param.0))
+        }
+        Expression::AssignWithOp { lhs, rhs, .. } | Expression::BinOp(lhs, _, rhs) => {
+            expr_contains_local(&lhs.0) || expr_contains_local(&rhs.0)
+        }
+        Expression::Cast { type_name, expr } => {
+            type_name_contains_local(type_name) || expr_contains_local(&expr.0)
+        }
+        Expression::SizeofType(type_name)
+        | Expression::AlignofType(type_name)
+        | Expression::Offsetof { ty: type_name, .. } => type_name_contains_local(type_name),
+        Expression::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_local(&cond.0)
+                || expr_contains_local(&then_expr.0)
+                || expr_contains_local(&else_expr.0)
+        }
+        Expression::CompoundLiteral {
+            type_name,
+            initializer,
+        } => type_name_contains_local(type_name) || initializer_contains_local(&initializer.0),
+        Expression::VaStart { args, .. }
+        | Expression::VaArg { args, .. }
+        | Expression::VaEnd { args } => expr_contains_local(&args.0),
+        Expression::VaCopy { dest, src } => {
+            expr_contains_local(&dest.0) || expr_contains_local(&src.0)
+        }
+        Expression::GenericSelection {
+            controlling,
+            associations,
+        } => {
+            expr_contains_local(&controlling.0)
+                || associations.iter().any(|(assoc, _)| match assoc {
+                    co2_ast::GenericAssociation::Type { type_name, expr } => {
+                        type_name_contains_local(type_name) || expr_contains_local(&expr.0)
+                    }
+                    co2_ast::GenericAssociation::Default { expr } => expr_contains_local(&expr.0),
+                })
+        }
+        Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
+            type_name_contains_local(ty1) || type_name_contains_local(ty2)
+        }
+        Expression::Empty
+        | Expression::Constant(_)
+        | Expression::LabelAddress(_)
+        | Expression::GnuStatementExpr { .. } => false,
+    }
+}
+
+fn initializer_contains_local(initializer: &Initializer<LocalResolver>) -> bool {
+    match initializer {
+        Initializer::Expr(expr) => expr_contains_local(&expr.0),
+        Initializer::List(items) => items.iter().any(|(item, _)| {
+            item.designators.as_ref().is_some_and(|designators| {
+                designators.iter().any(|(designator, _)| match designator {
+                    Designator::Subscript(expr) => expr_contains_local(&expr.0),
+                    Designator::Range(start, end) => {
+                        expr_contains_local(&start.0) || expr_contains_local(&end.0)
+                    }
+                    Designator::Field(_) => false,
+                })
+            }) || initializer_contains_local(&item.initializer.0)
+        }),
+    }
+}
+
+fn type_name_contains_local(type_name: &co2_ast::TypeName<LocalResolver>) -> bool {
+    type_name
+        .specifier_qualifier_list
+        .iter()
+        .any(|(specifier, _)| match specifier {
+            co2_ast::SpecifierQualifier::TypeSpecifier((ty, _)) => match ty {
+                co2_ast::TypeSpecifier::TypeofExpr(expr) => expr_contains_local(&expr.0),
+                co2_ast::TypeSpecifier::TypeofType(type_name) => {
+                    type_name_contains_local(type_name)
+                }
+                _ => false,
+            },
+            co2_ast::SpecifierQualifier::TypeQualifier(_) => false,
+        })
+        || type_name
+            .abstract_declarator
+            .as_ref()
+            .is_some_and(|(declarator, _)| declarator_contains_local(declarator))
+}
+
+fn declarator_contains_local(declarator: &Declarator<LocalResolver>) -> bool {
+    match declarator {
+        Declarator::Abstract | Declarator::Identifier(_) => false,
+        Declarator::FunctionDeclarator { declarator, .. }
+        | Declarator::PointerDeclarator { declarator, .. } => {
+            declarator_contains_local(&declarator.0)
+        }
+        Declarator::ArrayDeclarator {
+            declarator,
+            subscription: _,
+        } => declarator_contains_local(&declarator.0),
+    }
 }
 
 fn deduplicate_tu_items(
@@ -434,7 +554,6 @@ fn lower_translation_unit_items(
 
                 let id = resolve_in_module(ctx, module_path, &name).0;
                 let function_name = name.clone();
-                let param_tys = sig.inputs.clone();
                 let id = FnDef(id);
                 hir_items.push(HirModuleItem::Function {
                     name,
@@ -446,10 +565,8 @@ fn lower_translation_unit_items(
                 resolver = resolver.start_new_scope().with_owner(id.0);
                 let param_names = param_names
                     .into_iter()
-                    .zip(param_tys)
-                    .map(|(name, ty)| {
+                    .map(|name| {
                         let id = resolver.add_local(name.clone());
-                        resolver.base.borrow_mut().set_local_ty(id as u32, ty);
                         (id, name)
                     })
                     .collect();
@@ -866,7 +983,6 @@ pub fn lower_crate_sig(
             resolver,
             local_counter: 0,
             fake_defs_counter: 0,
-            local_tys: HashMap::new(),
             pending_typedefs: vec![],
             pending_static: vec![],
             array_len_consts: HashMap::new(),
@@ -1191,6 +1307,44 @@ pub fn lower_crate_sig(
                 span,
             });
         ctx.mir_owners.insert(def_id, mir_info);
+    }
+
+    let mut array_len_consts = ctx
+        .resolver
+        .borrow()
+        .array_len_consts
+        .values()
+        .filter(|registered| !expr_contains_local(&registered.expr.0))
+        .cloned()
+        .collect::<Vec<_>>();
+    array_len_consts.sort_by_key(|registered| registered.id);
+    for registered in array_len_consts {
+        let span = ctx.co2_span_to_rustc(registered.span);
+        let value = ctx
+            .resolver
+            .borrow_mut()
+            .eval_array_len_expr(&registered.expr)
+            .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_error(registered.span, &err));
+        let expr = (
+            Expression::Constant(Constant::Int(value as i128, IntegerSuffix::None)),
+            registered.span,
+        );
+        ctx.hir_items.push(HirModuleItem::Const {
+            name: registered.name,
+            id: registered.def_id,
+            ty: HirTy::usize_ty(span),
+            rhs: registered.rhs,
+            span,
+        });
+        ctx.mir_owners.insert(
+            registered.rhs,
+            MirOwnerInfo::Static {
+                resolver: registered.resolver,
+                initializer: (Initializer::Expr(expr), registered.span),
+            },
+        );
+        ctx.mir_owners
+            .insert(registered.def_id, MirOwnerInfo::Const);
     }
 
     let defs = WellknownDefs {
