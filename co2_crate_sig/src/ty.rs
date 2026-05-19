@@ -380,7 +380,8 @@ impl CrateSigCtx<'_> {
                             span: rust_span,
                         },
                         rust_span,
-                    )?),
+                        span,
+                    )),
                     CTy::UnsizedArray(inner) => CTy::Ty(HirTy::new_ptr(
                         HirTy::new_ptr(inner, Mutability::Mut, rust_span),
                         ptr_mutability,
@@ -918,7 +919,7 @@ impl LocalResolverBase {
             }
             Expression::Cast { type_name, expr } => {
                 let value = self.eval_const_expr(expr)?;
-                let target_ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
+                let target_ty = self.lower_type_name_for_const(*type_name.clone(), *span);
                 self.cast_const_int(value, &target_ty)
             }
             Expression::SizeofType(type_name)
@@ -927,24 +928,24 @@ impl LocalResolverBase {
                 field: _,
                 field_span: _,
             } => {
-                let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
+                let ty = self.lower_type_name_for_const(*type_name.clone(), *span);
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
             }
             Expression::Sizeof(expr) => {
-                let ty = self.type_of_expr_for_sizeof(expr)?;
+                let ty = self.type_of_expr_for_sizeof(expr);
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
             }
             Expression::AlignofType(type_name) => {
-                let ty = self.lower_type_name_for_const(*type_name.clone(), *span)?;
+                let ty = self.lower_type_name_for_const(*type_name.clone(), *span);
                 Ok(self.sizeof_hir_ty(&ty)?.1 as i128)
             }
             Expression::Alignof(expr) => {
-                let ty = self.type_of_expr_for_sizeof(expr)?;
+                let ty = self.type_of_expr_for_sizeof(expr);
                 Ok(self.sizeof_hir_ty(&ty)?.1 as i128)
             }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
-                let t1 = self.lower_type_name_for_const(*ty1.clone(), *span)?;
-                let t2 = self.lower_type_name_for_const(*ty2.clone(), *span)?;
+                let t1 = self.lower_type_name_for_const(*ty1.clone(), *span);
+                let t2 = self.lower_type_name_for_const(*ty2.clone(), *span);
                 Ok(i128::from(hir_tys_compatible(&t1, &t2)))
             }
             Expression::BuiltinConstantP { expr } => {
@@ -954,7 +955,7 @@ impl LocalResolverBase {
                 controlling,
                 associations,
             } => {
-                let controlling_ty = self.type_of_expr_for_sizeof(controlling)?;
+                let controlling_ty = self.type_of_expr_for_sizeof(controlling);
                 let mut default_expr = None;
                 for (assoc, _assoc_span) in associations {
                     match assoc {
@@ -964,8 +965,7 @@ impl LocalResolverBase {
                             }
                         }
                         GenericAssociation::Type { type_name, expr } => {
-                            let assoc_ty =
-                                self.lower_type_name_for_const(type_name.clone(), *span)?;
+                            let assoc_ty = self.lower_type_name_for_const(type_name.clone(), *span);
                             if hir_tys_compatible(&assoc_ty, &controlling_ty) {
                                 return self.eval_const_expr(expr);
                             }
@@ -1147,14 +1147,14 @@ impl LocalResolverBase {
     fn type_of_expr_for_sizeof(
         &mut self,
         (expr, span): &Spanned<Expression<LocalResolver>>,
-    ) -> Result<HirTy, String> {
+    ) -> HirTy {
         let rust_span = self.co2_span_to_rustc(*span);
         match expr {
-            Expression::Constant(Constant::String(s)) => Ok(HirTy::new_array(
+            Expression::Constant(Constant::String(s)) => HirTy::new_array(
                 HirTy::signed_ty(IntTy::I8, rust_span),
                 HirTyConst::Literal(s.len() + 1),
                 rust_span,
-            )),
+            ),
             Expression::Constant(Constant::Int(_, suffix)) => {
                 let kind = match suffix {
                     IntegerSuffix::None => HirTyKind::Int(IntTy::I32),
@@ -1164,90 +1164,108 @@ impl LocalResolverBase {
                     IntegerSuffix::UnsignedLong => HirTyKind::Uint(UintTy::U64),
                     IntegerSuffix::UnsignedLongLong => HirTyKind::Uint(UintTy::U128),
                 };
-                Ok(HirTy {
+                HirTy {
                     kind,
                     span: rust_span,
-                })
+                }
             }
-            Expression::Constant(Constant::Char(_)) => Ok(HirTy::signed_ty(IntTy::I8, rust_span)),
+            Expression::Constant(Constant::Char(_)) => HirTy::signed_ty(IntTy::I8, rust_span),
             Expression::Identifier((resolved, _)) => match resolved {
-                crate::DefOrLocal::Local(local) => self
-                    .local_tys
-                    .get(local)
-                    .cloned()
-                    .ok_or_else(|| format!("missing local type for local {local}")),
-                crate::DefOrLocal::LocalConst(local) => self
-                    .local_tys
-                    .get(local)
-                    .cloned()
-                    .ok_or_else(|| format!("missing local type for local {local}")),
+                crate::DefOrLocal::Local(local) => {
+                    self.local_tys.get(local).cloned().unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            *span,
+                            &format!("missing local type for local {local}"),
+                        )
+                    })
+                }
+                crate::DefOrLocal::LocalConst(local) => {
+                    self.local_tys.get(local).cloned().unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            *span,
+                            &format!("missing local type for local {local}"),
+                        )
+                    })
+                }
                 crate::DefOrLocal::Def { def_id, .. } => self
                     .maybe_const_eval_named_ty(*def_id, rust_span)
-                    .ok_or_else(|| format!("missing global or const type for def {def_id:?}")),
-                crate::DefOrLocal::Const(def_id) => self
-                    .scalar_const_ty(*def_id, rust_span)
-                    .ok_or_else(|| format!("missing scalar constant value for def {def_id:?}")),
+                    .unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            *span,
+                            &format!("missing global or const type for def {def_id:?}"),
+                        )
+                    }),
+                crate::DefOrLocal::Const(def_id) => {
+                    self.scalar_const_ty(*def_id, rust_span).unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            *span,
+                            &format!("missing scalar constant value for def {def_id:?}"),
+                        )
+                    })
+                }
                 crate::DefOrLocal::AssocMethod { .. } => {
-                    Err("associated method path is invalid in sizeof".to_owned())
+                    self.terminate_with_error(*span, "associated method path is invalid in sizeof")
                 }
-                crate::DefOrLocal::FuncName => Err("__func__ is invalid in sizeof".to_owned()),
+                crate::DefOrLocal::FuncName => {
+                    self.terminate_with_error(*span, "__func__ is invalid in sizeof")
+                }
                 crate::DefOrLocal::Prim(primitive_ty) => {
-                    Ok(self.hir_ty_of_prim(*primitive_ty, rust_span))
+                    self.hir_ty_of_prim(*primitive_ty, rust_span)
                 }
-                _ => Err("unsupported identifier in sizeof(array size expr)".to_owned()),
+                _ => self.terminate_with_error(
+                    *span,
+                    "unsupported identifier in sizeof(array size expr)",
+                ),
             },
             Expression::Field(base, field) => {
-                let base_ty = self.type_of_expr_for_sizeof(base)?;
-                self.lookup_field_ty_for_sizeof(base_ty, &field.0)
+                let base_ty = self.type_of_expr_for_sizeof(base);
+                self.lookup_field_ty_for_sizeof(base_ty, &field.0, *span)
             }
             Expression::Arrow(base, field) => {
-                let base_ty = self.type_of_expr_for_sizeof(base)?;
+                let base_ty = self.type_of_expr_for_sizeof(base);
                 let pointee = match base_ty.kind {
                     HirTyKind::RawPtr(_, inner) | HirTyKind::Ref(_, _, inner) => *inner,
-                    _ => {
-                        return Err(
-                            "arrow base must be a pointer in sizeof(array size expr)".to_owned()
-                        );
-                    }
+                    _ => self.terminate_with_error(
+                        *span,
+                        "arrow base must be a pointer in sizeof(array size expr)",
+                    ),
                 };
-                self.lookup_field_ty_for_sizeof(pointee, &field.0)
+                self.lookup_field_ty_for_sizeof(pointee, &field.0, *span)
             }
             Expression::Subscript(base, _) => {
-                let base_ty = self.type_of_expr_for_sizeof(base)?;
+                let base_ty = self.type_of_expr_for_sizeof(base);
                 match base_ty.kind {
                     HirTyKind::Array(_, inner)
                     | HirTyKind::RawPtr(_, inner)
-                    | HirTyKind::Ref(_, _, inner) => Ok(*inner),
-                    _ => Err(
-                        "subscript base must be array or pointer in sizeof(array size expr)"
-                            .to_owned(),
+                    | HirTyKind::Ref(_, _, inner) => *inner,
+                    _ => self.terminate_with_error(
+                        *span,
+                        "subscript base must be array or pointer in sizeof(array size expr)",
                     ),
                 }
             }
             Expression::Cast { type_name, .. } => {
                 self.lower_type_name_for_const(*type_name.clone(), *span)
             }
-            Expression::UnaryOp(op, inner) => {
-                match op {
-                    UnaryOp::Deref => {
-                        let inner_ty = self.type_of_expr_for_sizeof(inner)?;
-                        match inner_ty.kind {
-                            HirTyKind::RawPtr(_, pointee) | HirTyKind::Ref(_, _, pointee) => {
-                                Ok(*pointee)
-                            }
-                            _ => Err("cannot dereference non-pointer in sizeof(array size expr)"
-                                .to_owned()),
-                        }
-                    }
-                    UnaryOp::AddrOf => {
-                        let inner_ty = self.type_of_expr_for_sizeof(inner)?;
-                        Ok(HirTy::new_ptr(inner_ty, Mutability::Mut, rust_span))
-                    }
-                    UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::Com => {
-                        self.type_of_expr_for_sizeof(inner)
+            Expression::UnaryOp(op, inner) => match op {
+                UnaryOp::Deref => {
+                    let inner_ty = self.type_of_expr_for_sizeof(inner);
+                    match inner_ty.kind {
+                        HirTyKind::RawPtr(_, pointee) | HirTyKind::Ref(_, _, pointee) => *pointee,
+                        _ => self.terminate_with_error(
+                            *span,
+                            "cannot dereference non-pointer in sizeof(array size expr)",
+                        ),
                     }
                 }
-            }
+                UnaryOp::AddrOf => {
+                    let inner_ty = self.type_of_expr_for_sizeof(inner);
+                    HirTy::new_ptr(inner_ty, Mutability::Mut, rust_span)
+                }
+                UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::Com => {
+                    self.type_of_expr_for_sizeof(inner)
+                }
+            },
             Expression::BinOp(lhs, op, rhs) => match op {
                 BinOp::Eq
                 | BinOp::Ne
@@ -1256,14 +1274,14 @@ impl LocalResolverBase {
                 | BinOp::Gt
                 | BinOp::Ge
                 | BinOp::And
-                | BinOp::Or => Ok(HirTy {
+                | BinOp::Or => HirTy {
                     kind: HirTyKind::Int(IntTy::I32),
                     span: rust_span,
-                }),
+                },
                 BinOp::Comma => self.type_of_expr_for_sizeof(rhs),
                 _ => self.type_of_expr_for_sizeof(lhs),
             },
-            _ => Err("unsupported sizeof operand in array size".to_owned()),
+            _ => self.terminate_with_error(*span, "unsupported sizeof operand in array size"),
         }
     }
 
@@ -1271,15 +1289,21 @@ impl LocalResolverBase {
         &self,
         base_ty: HirTy,
         field_name: &str,
-    ) -> Result<HirTy, String> {
+        span: co2_ast::Span,
+    ) -> HirTy {
         let base_ty = self.peel_typedefs_for_sizeof(base_ty);
         let HirTyKind::Adt(def, _) = base_ty.kind else {
-            return Err(
-                "field access requires struct or union type in sizeof(array size expr)".to_owned(),
-            );
+            self.terminate_with_error(
+                span,
+                "field access requires struct or union type in sizeof(array size expr)",
+            )
         };
-        self.adt_field_ty(def, field_name)
-            .ok_or_else(|| format!("unknown field `{field_name}` in sizeof(array size expr)"))
+        self.adt_field_ty(def, field_name).unwrap_or_else(|| {
+            self.terminate_with_error(
+                span,
+                &format!("unknown field `{field_name}` in sizeof(array size expr)"),
+            )
+        })
     }
 
     fn peel_typedefs_for_sizeof(&self, mut ty: HirTy) -> HirTy {
@@ -1302,7 +1326,7 @@ impl LocalResolverBase {
         &mut self,
         type_name: TypeName<LocalResolver>,
         span: Span,
-    ) -> Result<HirTy, String> {
+    ) -> HirTy {
         if type_name.abstract_declarator.is_none()
             && let [
                 (
@@ -1317,30 +1341,34 @@ impl LocalResolverBase {
             let rust_span = self.co2_span_to_rustc(*path_span);
             match path {
                 crate::DefOrLocal::UnrepresentableType(ty) => match ty {
-                    CTy::Ty(ty) => return Ok(ty.clone()),
+                    CTy::Ty(ty) => return ty.clone(),
                     CTy::Function(_) => {
-                        return Err("function is invalid as a type name".to_owned());
+                        self.terminate_with_error(span, "function is invalid as a type name")
                     }
                     CTy::UnsizedArray(_) => {
-                        return Err("unsized array is invalid as a type name".to_owned());
+                        self.terminate_with_error(span, "unsized array is invalid as a type name")
                     }
                 },
                 crate::DefOrLocal::Def { def_id, .. } => {
                     if let Some(ty) = self.maybe_const_eval_named_ty(*def_id, rust_span) {
-                        return Ok(ty);
+                        return ty;
                     }
                 }
                 crate::DefOrLocal::Const(def_id) => {
-                    return self.scalar_const_ty(*def_id, rust_span).ok_or_else(|| {
-                        format!("missing scalar constant value for def {def_id:?}")
+                    return self.scalar_const_ty(*def_id, rust_span).unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            span,
+                            &format!("missing scalar constant value for def {def_id:?}"),
+                        )
                     });
                 }
                 crate::DefOrLocal::LocalConst(local) => {
-                    return self
-                        .local_tys
-                        .get(local)
-                        .cloned()
-                        .ok_or_else(|| format!("missing local type for local {local}"));
+                    return self.local_tys.get(local).cloned().unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            span,
+                            &format!("missing local type for local {local}"),
+                        )
+                    });
                 }
                 _ => {}
             }
@@ -1365,12 +1393,20 @@ impl LocalResolverBase {
         let base = self.base_ty_of_decl(specifiers, span);
         let ty = match type_name.abstract_declarator {
             None => base,
-            Some(decl) => self.extract_decl_type(base, base_const, decl)?.0,
+            Some(decl) => {
+                self.extract_decl_type(base, base_const, decl)
+                    .unwrap_or_else(|err| self.terminate_with_error(span, &err))
+                    .0
+            }
         };
         match ty {
-            CTy::Ty(ty) => Ok(ty),
-            CTy::Function(_) => Err("function is invalid as a type name".to_owned()),
-            CTy::UnsizedArray(_) => Err("unsized array is invalid as a type name".to_owned()),
+            CTy::Ty(ty) => ty,
+            CTy::Function(_) => {
+                self.terminate_with_error(span, "function is invalid as a type name")
+            }
+            CTy::UnsizedArray(_) => {
+                self.terminate_with_error(span, "unsized array is invalid as a type name")
+            }
         }
     }
 
@@ -1473,35 +1509,24 @@ impl LocalResolverBase {
         declarator: Spanned<Declarator<LocalResolver>>,
     ) -> (String, HirTy, bool) {
         let span = declarator.1;
-        match self.try_lower_value_decl_type_maybe_unsized(base, base_const, declarator) {
-            Ok(x) => x,
-            Err(e) => {
-                self.terminate_with_error(span, &e);
-            }
-        }
-    }
-
-    pub(crate) fn try_lower_value_decl_type_maybe_unsized(
-        &mut self,
-        base: CTy,
-        base_const: bool,
-        declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> Result<(String, HirTy, bool), String> {
-        let span = declarator.1;
-        let (decl_ty, name) = self.extract_decl_type(base, base_const, declarator)?;
-        let name = name.ok_or_else(|| "missing declaration name".to_owned())?;
+        let (decl_ty, name) = self
+            .extract_decl_type(base, base_const, declarator)
+            .unwrap_or_else(|err| self.terminate_with_error(span, &err));
+        let name =
+            name.unwrap_or_else(|| self.terminate_with_error(span, "missing declaration name"));
         match decl_ty {
-            CTy::Ty(ty) => Ok((name, ty, false)),
-            CTy::Function(_) => {
-                Err("function is not a first-class declaration type in this context".to_owned())
-            }
+            CTy::Ty(ty) => (name, ty, false),
+            CTy::Function(_) => self.terminate_with_error(
+                span,
+                "function is not a first-class declaration type in this context",
+            ),
             CTy::UnsizedArray(ty) => {
                 let rust_span = self.co2_span_to_rustc(span);
-                Ok((
+                (
                     name,
                     HirTy::new_array(ty, HirTyConst::Literal(0), rust_span),
                     true,
-                ))
+                )
             }
         }
     }
@@ -1547,16 +1572,10 @@ impl LocalResolverBase {
                 _ => self.hir_ty_of_resolved_path(&path, path_span),
             },
             CompressedTypeSpecifier::TypeofType(type_name) => {
-                return CTy::Ty(
-                    self.lower_type_name_for_const(type_name, parser_span)
-                        .unwrap_or_else(|err| self.terminate_with_error(parser_span, &err)),
-                );
+                return CTy::Ty(self.lower_type_name_for_const(type_name, parser_span));
             }
             CompressedTypeSpecifier::TypeofExpr(expr) => {
-                return CTy::Ty(
-                    self.type_of_expr_for_sizeof(&expr)
-                        .unwrap_or_else(|err| self.terminate_with_error(parser_span, &err)),
-                );
+                return CTy::Ty(self.type_of_expr_for_sizeof(&expr));
             }
         };
         CTy::Ty(ty)
@@ -1646,7 +1665,8 @@ impl LocalResolverBase {
                             span: rust_span,
                         },
                         rust_span,
-                    )?),
+                        span,
+                    )),
                     CTy::UnsizedArray(inner) => CTy::Ty(HirTy::new_ptr(
                         HirTy::new_ptr(inner, Mutability::Mut, rust_span),
                         ptr_mutability,
@@ -1704,9 +1724,13 @@ impl LocalResolverBase {
         &self,
         inner: HirTy,
         span: rustc_public_generative::rustc_public::ty::Span,
-    ) -> Result<HirTy, String> {
-        let (def, _) = self.resolver.resolve("core::mem::MaybeUninit")?;
-        Ok(HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span))
+        co2_span: co2_ast::Span,
+    ) -> HirTy {
+        let (def, _) = self
+            .resolver
+            .resolve("core::mem::MaybeUninit")
+            .unwrap_or_else(|err| self.terminate_with_error(co2_span, &err));
+        HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span)
     }
 
     pub(crate) fn terminate_with_error(&self, span: co2_ast::Span, msg: &str) -> ! {

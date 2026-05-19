@@ -2,7 +2,7 @@
 
 /*
  * Reproduction of "missing local type" issue.
- * Triggered by ARRAY_SIZE on a local anonymous struct array.
+ * Triggered by ARRAY_SIZE on a local array that was sized using ARRAY_SIZE.
  */
 
 #define BUILD_ASSERT_OR_ZERO(cond) \
@@ -14,19 +14,12 @@
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]) + BARF_UNLESS_AN_ARRAY(x))
 
-typedef int (*command_t)(int x);
-int run_status(int x) { return x; }
-
 void test_func() {
-    struct {
-        const char *string;
-        command_t command;
-    } command_list[] = {
-        { "status", run_status },
-    };
+    const char *paths[2];
+    char *to_free[ARRAY_SIZE(paths)] = { 0 };
     int i;
-    for (i = 0; i < (int)ARRAY_SIZE(command_list); i++) {
-        (void)command_list[i].string;
+    for (i = 0; i < (int)ARRAY_SIZE(to_free); i++) {
+        (void)to_free[i];
     }
 }
 
