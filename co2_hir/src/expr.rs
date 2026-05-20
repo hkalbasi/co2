@@ -1261,6 +1261,9 @@ impl HirCtx<'_> {
                             RigidTy::Int(_) | RigidTy::Uint(_) => {
                                 (lhs.ty, HirExprKind::ConstInt(1))
                             }
+                            _ if enum_payload_ty(lhs.ty).is_some() => {
+                                (lhs.ty, HirExprKind::ConstInt(1))
+                            }
                             RigidTy::Float(_) => (
                                 Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
                                 HirExprKind::ConstFloat(1.),
