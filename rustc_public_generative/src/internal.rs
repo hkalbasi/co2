@@ -3068,6 +3068,10 @@ fn mir_rvalue_to_rustc<'tcx>(
                 mir_operand_to_rustc(tcx, rhs),
             )),
         ),
+        MirRvalue::UnaryOp(operation, operand) => rustc_middle::mir::Rvalue::UnaryOp(
+            mir_un_op_to_rustc(*operation),
+            mir_operand_to_rustc(tcx, operand),
+        ),
         MirRvalue::Cast(kind, operand, ty) => {
             let kind = match kind {
                 rustc_public::mir::CastKind::PointerExposeAddress => {
@@ -3189,6 +3193,14 @@ fn mir_bin_op_to_rustc(op: rustc_public::mir::BinOp) -> rustc_middle::mir::BinOp
         rustc_public::mir::BinOp::Gt => rustc_middle::mir::BinOp::Gt,
         rustc_public::mir::BinOp::Cmp => rustc_middle::mir::BinOp::Cmp,
         rustc_public::mir::BinOp::Offset => rustc_middle::mir::BinOp::Offset,
+    }
+}
+
+fn mir_un_op_to_rustc(op: rustc_public::mir::UnOp) -> rustc_middle::mir::UnOp {
+    match op {
+        rustc_public::mir::UnOp::Not => rustc_middle::mir::UnOp::Not,
+        rustc_public::mir::UnOp::Neg => rustc_middle::mir::UnOp::Neg,
+        rustc_public::mir::UnOp::PtrMetadata => rustc_middle::mir::UnOp::PtrMetadata,
     }
 }
 

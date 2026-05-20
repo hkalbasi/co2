@@ -1,6 +1,6 @@
 //@ mode: c
 //@ run-status: 0
-//@ run-stdout: 20\n10\n20\n123\n2\n0\n5\n1\n2\n3\n4\nlong\n1\n3\n3\n2\n
+//@ run-stdout: 20\n10\n20\n123\n2\n0\n5\n1\n2\n3\n4\nlong\n1\n3\n3\n2\n1\n2\n2\n
 
 #include <stdio.h>
 
@@ -33,6 +33,12 @@ int foo(int i)
 typedef int int_type1;
 
 #define gen_sw(a) _Generic(a, const char *: 1, default: 8, int: 123);
+
+enum Color {
+	RED,
+	GREEN,
+	BLUE,
+};
 
 int main()
 {
@@ -76,5 +82,14 @@ int main()
 	printf("%d\n", i);
 	i = _Generic(l == 2, _Bool: 1, int: 2, signed long int: 3);
 	printf("%d\n", i);
+	
+	i = _Generic(RED, int: 1, enum Color: 2, default: 3);
+	printf("%d\n", i);
+	enum Color c = BLUE;
+	i = _Generic(c, int: 1, enum Color: 2, default: 3);
+	printf("%d\n", i);
+	i = _Generic(~c, int: 1, enum Color: 2, default: 3);
+	printf("%d\n", i);
+	
 	return 0;
 }

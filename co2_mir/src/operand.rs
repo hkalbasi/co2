@@ -956,25 +956,31 @@ impl Builder<'_, '_> {
                 self.lower_logical_not_expr(inner, expr.span, expr.ty)
             }
             HirExprKind::BitNot(inner) => {
-                let inner_op = self.lower_expr_to_operand(inner);
-                let minus_one = self.lower_expr_to_operand(&HirExpr {
-                    kind: HirExprKind::ConstInt(-1),
-                    ty: expr.ty,
-                    span: expr.span,
-                });
-                let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
+                let mut inner_op = self.lower_expr_to_operand(inner);
+                let enum_ty = enum_payload_ty(expr.ty);
+                let mut tmp_ty = expr.ty;
+                if let Some(payload_ty) = enum_ty {
+                    inner_op = self.read_enum_payload_operand(inner_op, expr.ty, payload_ty, expr.span);
+                    tmp_ty = payload_ty;
+                }
+                let tmp = self.new_temp(tmp_ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         place(tmp),
-                        Rvalue::BinaryOp(
-                            rustc_public_generative::rustc_public::mir::BinOp::BitXor,
+                        Rvalue::UnaryOp(
+                            rustc_public_generative::rustc_public::mir::UnOp::Not,
                             inner_op,
-                            minus_one,
                         ),
                     ),
                     span: expr.span,
                 });
-                MirOperand::Copy(place(tmp))
+                let mut result = MirOperand::Copy(place(tmp));
+                
+                if let Some(payload_ty) = enum_ty {
+                    result = self.wrap_enum_payload_operand(result, payload_ty, expr.ty, expr.span);
+                }
+                
+                result
             }
             HirExprKind::Aggregate { args } => match expr.ty.kind() {
                 TyKind::RigidTy(RigidTy::Adt(adt, adt_args)) => {

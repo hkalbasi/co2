@@ -558,6 +558,10 @@ int main16()
 		return 1;
 	if (WHITE - 9)
 		return 1;
+	if ((~WHITE) + 10)
+		return 1;
+	if ((~c) + 7)
+		return 1;
 
 	x = RED + GREEN + BLUE + WHITE;
 	if (x - 20)
