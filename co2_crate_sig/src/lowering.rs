@@ -983,6 +983,7 @@ pub fn lower_crate_sig(
             resolver,
             local_counter: 0,
             fake_defs_counter: 0,
+            array_len_const_counter: 0,
             pending_typedefs: vec![],
             pending_static: vec![],
             array_len_consts: HashMap::new(),

@@ -16,9 +16,7 @@ use crate::{
 };
 
 /// Pretty-print a `Spanned<CompoundStatement<LocalResolver>>` with default config.
-pub fn pretty_print_compound<R: TypeResolver>(
-    compound: &Spanned<CompoundStatement<R>>,
-) {
+pub fn pretty_print_compound<R: TypeResolver>(compound: &Spanned<CompoundStatement<R>>) {
     let config = PrettyConfig::default();
     let mut pp = PrettyPrinter::new(&config);
     compound.pretty_print(&mut pp);

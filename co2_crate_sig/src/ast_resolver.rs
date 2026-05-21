@@ -111,6 +111,7 @@ pub struct LocalResolverBase {
     pub resolver: Resolver,
     pub local_counter: usize,
     pub fake_defs_counter: usize,
+    pub array_len_const_counter: usize,
     pub pending_typedefs: Vec<(
         DefId,
         String,
@@ -126,7 +127,7 @@ pub struct LocalResolverBase {
         InitDeclarator<LocalResolver>,
         co2_ast::Span,
     )>,
-    pub array_len_consts: HashMap<(usize, usize), RegisteredArrayLenConst>,
+    pub array_len_consts: HashMap<usize, RegisteredArrayLenConst>,
     pub array_len_const_exprs: HashMap<usize, co2_ast::Spanned<Expression<LocalResolver>>>,
     pub hir_ctx: &'static HirStructureCtx<'static>,
     pub file_id: FileId,
@@ -149,6 +150,7 @@ impl std::fmt::Debug for LocalResolverBase {
         f.debug_struct("LocalResolverBase")
             .field("local_counter", &self.local_counter)
             .field("fake_defs_counter", &self.fake_defs_counter)
+            .field("array_len_const_counter", &self.array_len_const_counter)
             .finish_non_exhaustive()
     }
 }
@@ -189,7 +191,10 @@ impl LocalResolverBase {
     }
 
     pub fn lookup_array_len_const(&self, span: co2_ast::Span) -> Option<RegisteredArrayLenConst> {
-        self.array_len_consts.get(&(span.start, span.end)).cloned()
+        self.array_len_consts
+            .values()
+            .find(|registered| registered.span == span)
+            .cloned()
     }
 
     pub fn lookup_array_len_const_expr(
@@ -200,10 +205,7 @@ impl LocalResolverBase {
     }
 
     pub fn lookup_array_len_const_by_id(&self, id: usize) -> Option<RegisteredArrayLenConst> {
-        self.array_len_consts
-            .values()
-            .find(|registered| registered.id == id)
-            .cloned()
+        self.array_len_consts.get(&id).cloned()
     }
 
     pub fn lookup_array_len_const_by_def(&self, def_id: DefId) -> Option<RegisteredArrayLenConst> {
@@ -424,10 +426,6 @@ impl LocalResolver {
         {
             return None;
         }
-        let key = (subscription.1.start, subscription.1.end);
-        if let Some(existing) = self.base.borrow().array_len_consts.get(&key).cloned() {
-            return Some(existing);
-        }
         let tokens = subscription
             .0
             .tokens
@@ -452,7 +450,8 @@ impl LocalResolver {
         // tries to borrow_mut (e.g. to register an anonymous struct in sizeof).
         let expr = parse_expression_tokens(&tokens, subscription.1, self.clone());
         let mut base = self.base.borrow_mut();
-        let id = base.array_len_consts.len();
+        let id = base.array_len_const_counter;
+        base.array_len_const_counter += 1;
         let name = format!("__co2_array_len_{id}");
         let def_id = base.hir_ctx.allocate_def_id(
             base.hir_ctx.root_crate_def_id(),
@@ -470,7 +469,7 @@ impl LocalResolver {
         };
         base.array_len_const_exprs
             .insert(id, registered.expr.clone());
-        base.array_len_consts.insert(key, registered.clone());
+        base.array_len_consts.insert(id, registered.clone());
         Some(registered)
     }
 }
