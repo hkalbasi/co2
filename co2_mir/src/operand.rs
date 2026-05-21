@@ -960,7 +960,8 @@ impl Builder<'_, '_> {
                 let enum_ty = enum_payload_ty(expr.ty);
                 let mut tmp_ty = expr.ty;
                 if let Some(payload_ty) = enum_ty {
-                    inner_op = self.read_enum_payload_operand(inner_op, expr.ty, payload_ty, expr.span);
+                    inner_op =
+                        self.read_enum_payload_operand(inner_op, expr.ty, payload_ty, expr.span);
                     tmp_ty = payload_ty;
                 }
                 let tmp = self.new_temp(tmp_ty, Mutability::Mut, expr.span);
@@ -975,11 +976,11 @@ impl Builder<'_, '_> {
                     span: expr.span,
                 });
                 let mut result = MirOperand::Copy(place(tmp));
-                
+
                 if let Some(payload_ty) = enum_ty {
                     result = self.wrap_enum_payload_operand(result, payload_ty, expr.ty, expr.span);
                 }
-                
+
                 result
             }
             HirExprKind::Aggregate { args } => match expr.ty.kind() {

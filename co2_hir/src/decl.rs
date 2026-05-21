@@ -995,57 +995,12 @@ impl HirCtx<'_> {
 
     fn type_of_expr_for_sizeof(
         &self,
-        (expr, span): &Spanned<Expression<LocalResolver>>,
+        expr: &Spanned<Expression<LocalResolver>>,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<Ty, String> {
-        match expr {
-            Expression::Identifier((resolved, _)) => match resolved {
-                co2_crate_sig::DefOrLocal::Local(local)
-                | co2_crate_sig::DefOrLocal::LocalConst(local) => {
-                    if let Some(&local) = local_map.get(&(*local as usize)) {
-                        return Ok(locals[local].ty);
-                    }
-                    locals
-                        .iter()
-                        .next_back()
-                        .map(|(_, local)| local.ty)
-                        .ok_or_else(|| {
-                            format!("Invalid local {local}. Available locals are {local_map:#?}")
-                        })
-                }
-                _ => self
-                    .lower_expr((expr.clone(), *span), locals, local_map)
-                    .map(|expr| expr.ty),
-            },
-            Expression::UnaryOp(co2_ast::UnaryOp::AddrOf, inner) => {
-                let inner = self.type_of_expr_for_sizeof(inner, locals, local_map)?;
-                Ok(Ty::new_ptr(inner, Mutability::Mut))
-            }
-            Expression::UnaryOp(co2_ast::UnaryOp::Deref, inner) => {
-                let inner = self.type_of_expr_for_sizeof(inner, locals, local_map)?;
-                match inner.kind() {
-                    TyKind::RigidTy(RigidTy::RawPtr(pointee, _) | RigidTy::Ref(_, pointee, _)) => {
-                        Ok(pointee)
-                    }
-                    _ => Err(format!("cannot dereference non-pointer type: {inner:?}")),
-                }
-            }
-            Expression::Subscript(base, _) => {
-                let base = self.type_of_expr_for_sizeof(base, locals, local_map)?;
-                match base.kind() {
-                    TyKind::RigidTy(
-                        RigidTy::Array(elem, _)
-                        | RigidTy::RawPtr(elem, _)
-                        | RigidTy::Ref(_, elem, _),
-                    ) => Ok(elem),
-                    _ => Err(format!("subscript on non-array type: {base:?}")),
-                }
-            }
-            _ => self
-                .lower_expr((expr.clone(), *span), locals, local_map)
-                .map(|expr| expr.ty),
-        }
+        let result = self.lower_expr(expr.clone(), locals, local_map)?;
+        Ok(result.ty)
     }
 
     fn sizeof_ty(&self, ty: Ty) -> Result<u64, String> {

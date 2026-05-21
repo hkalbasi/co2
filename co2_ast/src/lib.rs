@@ -6,6 +6,7 @@ use std::{
 use itertools::Itertools;
 
 mod diagnostic;
+mod pretty;
 mod resolver;
 mod transform;
 
@@ -33,6 +34,7 @@ pub use diagnostic::{
     print_errors_and_terminate, reset_diagnostic_state, safe_range, set_diagnostic_base_path,
     set_force_json_diagnostics, set_source_map, take_errors,
 };
+pub use pretty::{PrettyConfig, PrettyPrint, PrettyPrinter, pretty_print_compound};
 pub use resolver::{StatelessResolver, TypeResolver};
 pub use transform::{DoTransform, Transformable};
 

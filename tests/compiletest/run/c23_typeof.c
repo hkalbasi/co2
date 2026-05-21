@@ -66,8 +66,10 @@ int main(void) {
     int arr[10];
 
     typeof(arr) arr2 = {0};
+    typeof(*arr) arr_elem = 0;
 
     assert(sizeof(arr2) == sizeof(int[10]));
+    assert(sizeof(arr_elem) == sizeof(int));
 
     arr4_t a4 = {0};
 
