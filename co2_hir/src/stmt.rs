@@ -11,7 +11,7 @@ use crate::HirDecl;
 use crate::expr::{HirExpr, HirExprKind, coerce_expr_to_type};
 use crate::item::{HirLocal, LabelId, LocalId};
 use crate::resolver::HirCtx;
-use crate::ty::{is_condition_ty, needs_implicit_cast};
+use crate::ty::{is_condition_ty, is_integer_ty, needs_implicit_cast, ty_matches_expected};
 
 #[derive(Clone, Debug)]
 pub enum HirStmt {
@@ -100,14 +100,15 @@ impl HirCtx<'_> {
                     self.terminate_with_error(parser_span, "case label outside of switch body");
                 };
                 let case_label = self.fresh_label();
+                let case_expr_span = expr.1;
                 let case_expr = self
                     .lower_expr(expr, locals, local_map)
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                if !is_condition_ty(case_expr.ty) {
+                if !is_integer_ty(case_expr.ty) {
                     self.terminate_with_error(
-                        parser_span,
+                        case_expr_span,
                         &format!(
-                            "switch case expression must be scalar-like, got {:?}",
+                            "switch case expression must be integer-like, got {:?}",
                             case_expr.ty
                         ),
                     );
@@ -115,9 +116,11 @@ impl HirCtx<'_> {
                 let case_expr_ty = case_expr.ty;
                 let Some(case_expr) = coerce_expr_to_type(case_expr, discr_ty) else {
                     self.terminate_with_error(
-                        parser_span,
+                        case_expr_span,
                         &format!(
-                            "switch case expression type mismatch: expected {discr_ty:?}, got {case_expr_ty:?}"
+                            "switch case expression type mismatch: expected {}, got {}",
+                            self.format_ty(discr_ty),
+                            self.format_ty(case_expr_ty)
                         ),
                     );
                 };
@@ -173,6 +176,7 @@ impl HirCtx<'_> {
             }
             Statement::Return(expr) => {
                 if let Some(expr) = expr {
+                    let expr_span = expr.1;
                     let mut expr = self
                         .lower_expr((expr.0, expr.1), locals, local_map)
                         .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
@@ -184,6 +188,16 @@ impl HirCtx<'_> {
                             ty: self.ret_ty,
                             span: expr.span,
                         };
+                    }
+                    if !ty_matches_expected(self.ret_ty, expr.ty) {
+                        self.terminate_with_error(
+                            expr_span,
+                            &format!(
+                                "return type mismatch: expected {}, got {}",
+                                self.format_ty(self.ret_ty),
+                                self.format_ty(expr.ty)
+                            ),
+                        );
                     }
                     out.push(HirStmt::Return(Some(expr), span));
                 } else {
@@ -345,10 +359,10 @@ impl HirCtx<'_> {
                 let discr = self
                     .lower_expr(expr, locals, local_map)
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                if !is_condition_ty(discr.ty) {
+                if !is_integer_ty(discr.ty) {
                     self.terminate_with_error(
                         parser_span,
-                        &format!("switch expression must be scalar-like, got {:?}", discr.ty),
+                        &format!("switch expression must be integer-like, got {:?}", discr.ty),
                     );
                 }
                 let discr_ty = discr.ty;

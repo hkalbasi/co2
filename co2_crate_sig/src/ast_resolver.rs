@@ -319,6 +319,13 @@ impl LocalResolver {
         self.base.borrow().transparent_unions.contains(&def_id)
     }
 
+    pub fn c_adt_display_info(
+        &self,
+        def_id: DefId,
+    ) -> Option<crate::struct_manager::CAdtDisplayInfo> {
+        self.base.borrow().c_adt_display_info(def_id)
+    }
+
     pub fn validate_constexpr_decl(
         &self,
         specifiers: &[Spanned<DeclarationSpecifier<LocalResolver>>],

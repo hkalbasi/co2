@@ -235,16 +235,19 @@ fn has_volatile_qualifier_in_decl_specs(
         .map(|x| x.1)
 }
 
-fn has_atomic_storage_specifier(specs: &[Spanned<DeclarationSpecifier<LocalResolver>>]) -> Option<Span> {
-    specs.iter().find(|(spec, _)| {
-        matches!(
-            spec,
-            DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Atomic, _))
-                | DeclarationSpecifier::TypeQualifier((TypeQualifier::Atomic, _))
-        )
-    })
+fn has_atomic_storage_specifier(
+    specs: &[Spanned<DeclarationSpecifier<LocalResolver>>],
+) -> Option<Span> {
+    specs
+        .iter()
+        .find(|(spec, _)| {
+            matches!(
+                spec,
+                DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Atomic, _))
+                    | DeclarationSpecifier::TypeQualifier((TypeQualifier::Atomic, _))
+            )
+        })
         .map(|x| x.1)
-
 }
 
 fn declarator_has_restrict_qualifier(decl: &Declarator<LocalResolver>) -> Option<Span> {
@@ -257,14 +260,11 @@ fn declarator_has_restrict_qualifier(decl: &Declarator<LocalResolver>) -> Option
         Declarator::PointerDeclarator {
             declarator,
             qualifiers,
-        } => {
-            qualifiers
-                .iter()
-                .find(|(qualifier, _)| matches!(qualifier, TypeQualifier::Restrict))
-                .map(|x| x.1)
-                .or_else(
-                || declarator_has_restrict_qualifier(&declarator.0))
-        }
+        } => qualifiers
+            .iter()
+            .find(|(qualifier, _)| matches!(qualifier, TypeQualifier::Restrict))
+            .map(|x| x.1)
+            .or_else(|| declarator_has_restrict_qualifier(&declarator.0)),
     }
 }
 

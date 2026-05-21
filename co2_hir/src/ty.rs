@@ -1,9 +1,180 @@
-use rustc_public_generative::rustc_public::ty::{
-    Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx,
+use co2_ast::StructOrUnionKind;
+use co2_crate_sig::LocalResolver;
+use rustc_public_generative::rustc_public::{
+    CrateDef,
+    mir::Mutability,
+    ty::{Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx},
 };
+
+use crate::resolver::HirCtx;
 
 const ANON_FIELD_PREFIX: &str = "__anon_field_";
 const ENUM_FIELD_NAME: &str = "__co2_enum_value";
+
+impl HirCtx<'_> {
+    pub(crate) fn format_ty(&self, ty: Ty) -> String {
+        match ty.kind() {
+            TyKind::RigidTy(rigid) => format_rigid_ty(&self.decl_resolver, rigid),
+            TyKind::Alias(_, _) | TyKind::Param(_) | TyKind::Bound(_, _) => format!("{ty:?}"),
+        }
+    }
+}
+
+fn format_ty(resolver: &LocalResolver, ty: Ty) -> String {
+    match ty.kind() {
+        TyKind::RigidTy(rigid) => format_rigid_ty(resolver, rigid),
+        TyKind::Alias(_, _) | TyKind::Param(_) | TyKind::Bound(_, _) => format!("{ty:?}"),
+    }
+}
+
+fn format_rigid_ty(resolver: &LocalResolver, ty: RigidTy) -> String {
+    match ty {
+        RigidTy::Bool => "bool".to_owned(),
+        RigidTy::Char => "char".to_owned(),
+        RigidTy::Int(int_ty) => format_int_ty(int_ty).to_owned(),
+        RigidTy::Uint(uint_ty) => format_uint_ty(uint_ty).to_owned(),
+        RigidTy::Float(float_ty) => format_float_ty(float_ty).to_owned(),
+        RigidTy::Adt(adt, args) => {
+            let base = if let Some(info) = resolver.c_adt_display_info(adt.0) {
+                let kind = if info.is_enum {
+                    "enum"
+                } else {
+                    match info.kind {
+                        StructOrUnionKind::Struct => "struct",
+                        StructOrUnionKind::Union => "union",
+                    }
+                };
+                let name = info
+                    .tag_name
+                    .unwrap_or_else(|| format!("#{}", info.anonymous_id));
+                format!("co2({kind} {name})")
+            } else {
+                adt.trimmed_name().clone()
+            };
+            format_with_generic_args(resolver, base, &args.0)
+        }
+        RigidTy::Foreign(def) => def.trimmed_name().clone(),
+        RigidTy::Str => "str".to_owned(),
+        RigidTy::Array(inner, len) => {
+            let len = len
+                .eval_target_usize()
+                .map_or_else(|_| format!("{len:?}"), |len| len.to_string());
+            format!("[{}; {len}]", format_ty(resolver, inner))
+        }
+        RigidTy::Pat(inner, _) => format_ty(resolver, inner),
+        RigidTy::Slice(inner) => format!("[{}]", format_ty(resolver, inner)),
+        RigidTy::RawPtr(inner, mutability) => {
+            format!(
+                "*{} {}",
+                format_mutability(mutability),
+                format_ty(resolver, inner)
+            )
+        }
+        RigidTy::Ref(_, inner, Mutability::Not) => format!("&{}", format_ty(resolver, inner)),
+        RigidTy::Ref(_, inner, Mutability::Mut) => format!("&mut {}", format_ty(resolver, inner)),
+        RigidTy::FnDef(def, args) => {
+            format_with_generic_args(resolver, def.trimmed_name().clone(), &args.0)
+        }
+        RigidTy::FnPtr(sig) => {
+            let sig = sig.value;
+            let params = sig
+                .inputs()
+                .iter()
+                .map(|ty| format_ty(resolver, *ty))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("fn({params}) -> {}", format_ty(resolver, sig.output()))
+        }
+        RigidTy::Never => "!".to_owned(),
+        RigidTy::Tuple(items) => {
+            if items.is_empty() {
+                return "()".to_owned();
+            }
+            let mut items = items
+                .into_iter()
+                .map(|ty| format_ty(resolver, ty))
+                .collect::<Vec<_>>();
+            if items.len() == 1 {
+                items[0].push(',');
+            }
+            format!("({})", items.join(", "))
+        }
+        RigidTy::Closure(def, args) => {
+            format_with_generic_args(resolver, def.trimmed_name().clone(), &args.0)
+        }
+        RigidTy::Coroutine(def, args) => {
+            format_with_generic_args(resolver, def.trimmed_name().clone(), &args.0)
+        }
+        RigidTy::CoroutineClosure(def, args) => {
+            format_with_generic_args(resolver, def.trimmed_name().clone(), &args.0)
+        }
+        RigidTy::CoroutineWitness(def, args) => {
+            format_with_generic_args(resolver, def.trimmed_name().clone(), &args.0)
+        }
+        RigidTy::Dynamic(_, _) => "dyn Trait".to_owned(),
+    }
+}
+
+fn format_with_generic_args(
+    resolver: &LocalResolver,
+    base: String,
+    args: &[GenericArgKind],
+) -> String {
+    let args = args
+        .iter()
+        .filter_map(|arg| match arg {
+            GenericArgKind::Type(ty) => Some(format_ty(resolver, *ty)),
+            GenericArgKind::Const(c) => Some(
+                c.eval_target_usize()
+                    .map_or_else(|_| format!("{c:?}"), |value| value.to_string()),
+            ),
+            GenericArgKind::Lifetime(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if args.is_empty() {
+        base
+    } else {
+        format!("{base}<{}>", args.join(", "))
+    }
+}
+
+fn format_mutability(mutability: Mutability) -> &'static str {
+    match mutability {
+        Mutability::Not => "const",
+        Mutability::Mut => "mut",
+    }
+}
+
+fn format_int_ty(ty: IntTy) -> &'static str {
+    match ty {
+        IntTy::Isize => "isize",
+        IntTy::I8 => "i8",
+        IntTy::I16 => "i16",
+        IntTy::I32 => "i32",
+        IntTy::I64 => "i64",
+        IntTy::I128 => "i128",
+    }
+}
+
+fn format_uint_ty(ty: UintTy) -> &'static str {
+    match ty {
+        UintTy::Usize => "usize",
+        UintTy::U8 => "u8",
+        UintTy::U16 => "u16",
+        UintTy::U32 => "u32",
+        UintTy::U64 => "u64",
+        UintTy::U128 => "u128",
+    }
+}
+
+fn format_float_ty(ty: FloatTy) -> &'static str {
+    match ty {
+        FloatTy::F16 => "f16",
+        FloatTy::F32 => "f32",
+        FloatTy::F64 => "f64",
+        FloatTy::F128 => "f128",
+    }
+}
 
 pub(crate) fn enum_payload_ty(ty: Ty) -> Option<Ty> {
     let TyKind::RigidTy(RigidTy::Adt(adt, args)) = ty.kind() else {
@@ -24,6 +195,16 @@ pub(crate) fn is_numeric_ty(ty: Ty) -> bool {
     matches!(
         ty.kind(),
         TyKind::RigidTy(RigidTy::Bool | RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::Float(_))
+    )
+}
+
+pub(crate) fn is_integer_ty(ty: Ty) -> bool {
+    if enum_payload_ty(ty).is_some() {
+        return true;
+    }
+    matches!(
+        ty.kind(),
+        TyKind::RigidTy(RigidTy::Bool | RigidTy::Int(_) | RigidTy::Uint(_))
     )
 }
 
@@ -220,29 +401,67 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
             TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_)),
             TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
         ) | (
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::Ref(_, _, _)),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::Ref(_, _, _) | RigidTy::FnPtr(_))
-        ) | (
             TyKind::RigidTy(RigidTy::FnPtr(_)),
             TyKind::RigidTy(RigidTy::FnDef(_, _))
+        ) | (
+            TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_)),
+            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
         )
-    ) || (dst_is_mu_fn_ptr
-        && matches!(
-            src.kind(),
-            TyKind::RigidTy(
-                RigidTy::Int(_)
-                    | RigidTy::Uint(_)
-                    | RigidTy::FnDef(_, _)
-                    | RigidTy::FnPtr(_)
-                    | RigidTy::RawPtr(..)
-            )
-        ))
+    ) || fn_pointer_void_pointer_cast_allowed(dst, src)
+        || pointer_implicit_cast_allowed(dst, src)
+        || (dst_is_mu_fn_ptr
+            && matches!(
+                src.kind(),
+                TyKind::RigidTy(
+                    RigidTy::Int(_)
+                        | RigidTy::Uint(_)
+                        | RigidTy::FnDef(_, _)
+                        | RigidTy::FnPtr(_)
+                        | RigidTy::RawPtr(..)
+                )
+            ))
         || (src_is_mu_fn_ptr
             && matches!(
                 dst.kind(),
                 TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..))
             ))
         || (is_numeric_ty(dst) && is_numeric_ty(src))
+}
+
+fn fn_pointer_void_pointer_cast_allowed(dst: Ty, src: Ty) -> bool {
+    match (dst.kind(), src.kind()) {
+        (
+            TyKind::RigidTy(RigidTy::RawPtr(dst_pointee, _)),
+            TyKind::RigidTy(RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)),
+        ) => is_void_ty(dst_pointee),
+        (TyKind::RigidTy(RigidTy::FnPtr(_)), TyKind::RigidTy(RigidTy::RawPtr(src_pointee, _))) => {
+            is_void_ty(src_pointee)
+        }
+        _ => false,
+    }
+}
+
+fn pointer_implicit_cast_allowed(dst: Ty, src: Ty) -> bool {
+    let Some(dst_pointee) = pointer_pointee_ty(dst) else {
+        return false;
+    };
+    let Some(src_pointee) = pointer_pointee_ty(src) else {
+        return false;
+    };
+    is_void_ty(dst_pointee)
+        || is_void_ty(src_pointee)
+        || ty_matches_expected(dst_pointee, src_pointee)
+}
+
+fn pointer_pointee_ty(ty: Ty) -> Option<Ty> {
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::RawPtr(inner, _) | RigidTy::Ref(_, inner, _)) => Some(inner),
+        _ => None,
+    }
+}
+
+fn is_void_ty(ty: Ty) -> bool {
+    matches!(ty.kind(), TyKind::RigidTy(RigidTy::Tuple(items)) if items.is_empty())
 }
 
 pub(crate) fn resolve_field_path_in_adt(base: Ty, field: &str) -> Option<(Vec<usize>, Ty)> {

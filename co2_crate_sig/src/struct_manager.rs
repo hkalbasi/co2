@@ -16,6 +16,7 @@ use crate::{DefOrLocal, LocalResolver, LocalResolverBase, MirOwnerInfo, ty::CTy}
 pub(crate) struct StructData {
     pub(crate) def_id: DefId,
     pub(crate) name: String,
+    pub(crate) tag_name: Option<String>,
     pub(crate) kind: StructOrUnionKind,
     pub(crate) span: Span,
     pub(crate) emitted_fields: Option<Vec<StructField>>,
@@ -44,6 +45,14 @@ pub enum LogicalAdtFieldKind {
         bit_width: usize,
         is_signed: bool,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct CAdtDisplayInfo {
+    pub kind: StructOrUnionKind,
+    pub tag_name: Option<String>,
+    pub anonymous_id: String,
+    pub is_enum: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +252,7 @@ impl LocalResolverBase {
         let data = StructData {
             def_id,
             name,
+            tag_name: (!hint.is_empty()).then(|| hint.to_owned()),
             kind: StructOrUnionKind::Struct,
             span,
             emitted_fields: Some(vec![StructField {
@@ -271,6 +281,7 @@ impl LocalResolverBase {
         let data = StructData {
             def_id,
             name,
+            tag_name: (!hint.is_empty()).then(|| hint.to_owned()),
             kind,
             span,
             emitted_fields: None,
@@ -283,6 +294,20 @@ impl LocalResolverBase {
 
     pub(crate) fn is_enum_def(&self, def_id: DefId) -> bool {
         self.struct_manager.enum_defs.contains(&def_id)
+    }
+
+    pub(crate) fn c_adt_display_info(&self, def_id: DefId) -> Option<CAdtDisplayInfo> {
+        let data = self.struct_manager.definitions.get(&def_id)?;
+        let anonymous_id = data
+            .name
+            .rsplit_once('_')
+            .map_or_else(|| data.name.clone(), |(_, suffix)| suffix.to_owned());
+        Some(CAdtDisplayInfo {
+            kind: data.kind,
+            tag_name: data.tag_name.clone(),
+            anonymous_id,
+            is_enum: self.struct_manager.enum_defs.contains(&def_id),
+        })
     }
 
     pub(crate) fn apply_pack_action(&mut self, action: &co2_ast::PackAction) {

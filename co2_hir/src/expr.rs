@@ -528,8 +528,9 @@ impl HirCtx<'_> {
                 self.terminate_with_error(
                     parser_span,
                     &format!(
-                        "call argument type mismatch at index {idx}: expected {expected:?}, got {:?}",
-                        actual.ty
+                        "call argument type mismatch at index {idx}: expected {}, got {}",
+                        self.format_ty(expected),
+                        self.format_ty(actual.ty)
                     ),
                 );
             }
@@ -1228,8 +1229,9 @@ impl HirCtx<'_> {
                         return Err(spanned_error(
                             parser_span,
                             format!(
-                                "assignment type mismatch: lhs={:?}, rhs={:?}",
-                                lhs.ty, rhs.ty
+                                "assignment type mismatch: expected {}, got {}",
+                                self.format_ty(lhs.ty),
+                                self.format_ty(rhs.ty)
                             ),
                         ));
                     }
@@ -1853,8 +1855,9 @@ impl HirCtx<'_> {
                     self.terminate_with_error(
                         parser_span,
                         &format!(
-                            "ternary operator branches have mismatched types: {:?} vs {:?}",
-                            then_expr.ty, else_expr.ty,
+                            "ternary operator branches have mismatched types: expected {}, got {}",
+                            self.format_ty(then_expr.ty),
+                            self.format_ty(else_expr.ty),
                         ),
                     );
                 };
@@ -2070,8 +2073,9 @@ impl HirCtx<'_> {
             return Err(spanned_error(
                 invalid_span(),
                 format!(
-                    "resolved field type mismatch: projected {:?}, expected {:?}",
-                    base.ty, field_ty
+                    "resolved field type mismatch: expected {}, got {}",
+                    self.format_ty(field_ty),
+                    self.format_ty(base.ty)
                 ),
             ));
         }
@@ -2320,8 +2324,9 @@ impl HirCtx<'_> {
             return Err(spanned_error(
                 parser_span,
                 format!(
-                    "binary op type mismatch: lhs={:?}, rhs={:?}",
-                    lhs.ty, rhs.ty
+                    "binary op type mismatch: expected {}, got {}",
+                    self.format_ty(lhs.ty),
+                    self.format_ty(rhs.ty)
                 ),
             ));
         }

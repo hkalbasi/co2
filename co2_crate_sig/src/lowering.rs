@@ -1172,6 +1172,7 @@ pub fn lower_crate_sig(
     for StructData {
         def_id: def,
         name,
+        tag_name: _,
         kind,
         emitted_fields: fields,
         logical_fields: _,

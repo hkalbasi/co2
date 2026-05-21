@@ -351,10 +351,15 @@ impl HirCtx<'_> {
                     ));
                 }
                 let expr = self.lower_expr(expr, locals, local_map)?;
+                let expr_ty = expr.ty;
                 let coerced = coerce_expr_to_type(expr, expected_ty).ok_or_else(|| {
                     spanned_error(
                         initializer.1,
-                        format!("initializer type mismatch: expected {expected_ty:?}"),
+                        format!(
+                            "initializer type mismatch: expected {}, got {}",
+                            self.format_ty(expected_ty),
+                            self.format_ty(expr_ty)
+                        ),
                     )
                 })?;
                 Ok(InitializerTree::Leaf(coerced))
@@ -559,11 +564,17 @@ impl HirCtx<'_> {
                                 {
                                     break InitializerTree::Leaf(coerced);
                                 }
+                                let expected_ty = value_cursor.ty();
+                                let expr_ty = expr.ty;
                                 if !value_cursor.go_through(self) {
-                                    self.terminate_with_error(
+                                    return Err(spanned_error(
                                         item_span,
-                                        "failed to lower initializer tree",
-                                    );
+                                        format!(
+                                            "initializer type mismatch: expected {}, got {}",
+                                            self.format_ty(expected_ty),
+                                            self.format_ty(expr_ty)
+                                        ),
+                                    ));
                                 }
                             }
                         }

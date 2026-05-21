@@ -632,6 +632,9 @@ int main17()
 	a = 010;
 	if (a - 8)
 		return 1;
+	a = NULL;
+	if (a)
+		return 1;
 	y = -1l;
 	if (y + 1l)
 		return 1;

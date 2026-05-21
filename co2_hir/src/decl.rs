@@ -594,7 +594,9 @@ impl HirCtx<'_> {
                                         None => self.terminate_with_error(
                                             parser_span,
                                             &format!(
-                                                "initializer type mismatch: expected {local_ty:?}, got {expr_ty:?}"
+                                                "initializer type mismatch: expected {}, got {}",
+                                                self.format_ty(local_ty),
+                                                self.format_ty(expr_ty)
                                             ),
                                         ),
                                     }
