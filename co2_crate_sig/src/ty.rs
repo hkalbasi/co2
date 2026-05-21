@@ -312,6 +312,7 @@ impl CrateSigCtx<'_> {
         }
     }
 
+    /// TODO: This function is duplicate with [`LocalResolverBase::extract_decl_type`]
     fn extract_decl_type_with_consts(
         &mut self,
         current: CTy,
@@ -358,11 +359,14 @@ impl CrateSigCtx<'_> {
                                 }
                             }
                             CTy::Function(sig) => {
-                                // C adjusts function parameters to function pointers.
-                                HirTy {
-                                    kind: HirTyKind::FnPtr(Box::new(sig)),
-                                    span: rust_span,
-                                }
+                                self.resolver.borrow().maybe_uninit_of(
+                                    HirTy {
+                                        kind: HirTyKind::FnPtr(Box::new(sig)),
+                                        span: rust_span,
+                                    },
+                                    rust_span,
+                                    span,
+                                )
                             }
                             CTy::UnsizedArray(elem) => {
                                 let span = elem.span;
