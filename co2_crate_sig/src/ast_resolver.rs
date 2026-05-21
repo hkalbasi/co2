@@ -281,7 +281,7 @@ impl LocalResolver {
         self.base.borrow().hir_ctx.dependency_const_value(def_id)
     }
 
-    pub fn local_const_int_value(&self, def_id: DefId) -> Result<i128, String> {
+    pub fn local_const_int_value(&self, def_id: DefId) -> Result<i128, (co2_ast::Span, String)> {
         self.base.borrow_mut().eval_local_const(def_id)
     }
 
@@ -289,7 +289,7 @@ impl LocalResolver {
         self.base.borrow().has_local_const_value(def_id)
     }
 
-    pub fn local_constexpr_int_value(&self, local: u32) -> Result<i128, String> {
+    pub fn local_constexpr_int_value(&self, local: u32) -> Result<i128, (co2_ast::Span, String)> {
         self.base.borrow_mut().eval_local_constexpr(local)
     }
 
@@ -325,7 +325,7 @@ impl LocalResolver {
         declarator: &Declarator<LocalResolver>,
         ty: &crate::CTy,
         initializer: Option<&Spanned<Initializer<LocalResolver>>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), (co2_ast::Span, String)> {
         self.base
             .borrow_mut()
             .validate_constexpr_decl(specifiers, declarator, ty, initializer)
@@ -341,7 +341,7 @@ impl LocalResolver {
     pub fn eval_const_expr(
         &self,
         expr: &Spanned<Expression<LocalResolver>>,
-    ) -> Result<i128, String> {
+    ) -> Result<i128, (co2_ast::Span, String)> {
         self.base.borrow_mut().eval_const_expr(expr)
     }
 
@@ -363,12 +363,14 @@ impl LocalResolver {
         &self,
         receiver_ty: Ty,
         method: &str,
-    ) -> Result<Option<(DefId, TypeQueryResult, MethodResolutionKind)>, String> {
+        span: co2_ast::Span,
+    ) -> Result<Option<(DefId, TypeQueryResult, MethodResolutionKind)>, (co2_ast::Span, String)>
+    {
         if let Some(found) = self
             .base
             .borrow()
             .resolver
-            .resolve_inherent_method(receiver_ty, method)?
+            .resolve_inherent_method(receiver_ty, method)
         {
             let (method_def, class) = found;
             return Ok(Some((method_def, class, MethodResolutionKind::Inherent)));
@@ -398,20 +400,23 @@ impl LocalResolver {
                 rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
                     rustc_public_generative::rustc_public::ty::RigidTy::Ref(_, inner, _)
                     | rustc_public_generative::rustc_public::ty::RigidTy::RawPtr(inner, _),
-                ) => self.resolve_method(inner, method),
+                ) => self.resolve_method(inner, method, span),
                 _ => Ok(None),
             },
             1 => {
                 let (_, method_def, class) = applicable.pop().unwrap();
                 Ok(Some((method_def, class, MethodResolutionKind::Trait)))
             }
-            _ => Err(format!(
-                "multiple traits in scope provide method `{method}` for receiver type {receiver_ty:?}: {}",
-                applicable
-                    .into_iter()
-                    .map(|(trait_name, _, _)| trait_name)
-                    .collect::<Vec<_>>()
-                    .join(", ")
+            _ => Err((
+                span,
+                format!(
+                    "multiple traits in scope provide method `{method}` for receiver type {receiver_ty:?}: {}",
+                    applicable
+                        .into_iter()
+                        .map(|(trait_name, _, _)| trait_name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             )),
         }
     }
@@ -584,8 +589,7 @@ impl co2_ast::TypeResolver for LocalResolver {
             .or_else(|| {
                 match base
                     .resolver
-                    .resolve_relative_expr_path(&self.module_path, &path_pretty)
-                    .ok()?
+                    .resolve_relative_expr_path(&self.module_path, &path_pretty)?
                 {
                     ResolvedExprPath::Def(def_id, class) => Some((
                         DefOrLocal::Def {
@@ -792,7 +796,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                 .borrow()
                 .resolver
                 .resolve_in_current(["fn"])
-                .is_err()
+                .is_none()
     }
 }
 

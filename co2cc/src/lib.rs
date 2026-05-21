@@ -1,5 +1,6 @@
 #![feature(rustc_private)]
 
+use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,25 @@ struct CcArgs {
     debuginfo: Option<u8>,
     cpp_args: Vec<String>,
     linker_args: Vec<String>,
+}
+
+#[derive(Debug)]
+enum ParseArgsError {
+    MissingInputFile,
+    MissingArgumentAfter(String),
+    InvalidObjectEmissionInputs,
+}
+
+impl fmt::Display for ParseArgsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingInputFile => f.write_str("missing input file"),
+            Self::MissingArgumentAfter(flag) => write!(f, "missing argument after {flag}"),
+            Self::InvalidObjectEmissionInputs => {
+                f.write_str("object emission mode expects exactly one C input file")
+            }
+        }
+    }
 }
 
 pub fn main() -> std::process::ExitCode {
@@ -137,9 +157,9 @@ fn run_co2c(args: &CcArgs) {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-fn parse_args(args: &[String]) -> Result<CcArgs, String> {
+fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     if args.len() < 2 {
-        return Err("missing input file".to_owned());
+        return Err(ParseArgsError::MissingInputFile);
     }
 
     let mut emit_obj_only = false;
@@ -164,11 +184,15 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
             }
             "-x" => {
                 i += 1;
-                let _lang = args.get(i).ok_or("missing argument after -x")?;
+                let _lang = args
+                    .get(i)
+                    .ok_or_else(|| ParseArgsError::MissingArgumentAfter("-x".to_owned()))?;
             }
             "-o" => {
                 i += 1;
-                let out = args.get(i).ok_or("missing argument after -o")?;
+                let out = args
+                    .get(i)
+                    .ok_or_else(|| ParseArgsError::MissingArgumentAfter("-o".to_owned()))?;
                 output = Some(PathBuf::from(out));
             }
             "-I" | "-D" | "-U" | "-include" | "-isystem" | "-iquote" => {
@@ -176,7 +200,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
                 i += 1;
                 let val = args
                     .get(i)
-                    .ok_or_else(|| format!("missing argument after {flag}"))?;
+                    .ok_or_else(|| ParseArgsError::MissingArgumentAfter(flag.clone()))?;
                 cpp_args.push(flag);
                 cpp_args.push(val.clone());
             }
@@ -188,7 +212,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
                 i += 1;
                 let val = args
                     .get(i)
-                    .ok_or_else(|| format!("missing argument after {flag}"))?;
+                    .ok_or_else(|| ParseArgsError::MissingArgumentAfter(flag.clone()))?;
                 linker_args.push(flag);
                 linker_args.push(val.clone());
             }
@@ -235,7 +259,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
     }
 
     if inputs.is_empty() {
-        return Err("missing input file".to_owned());
+        return Err(ParseArgsError::MissingInputFile);
     }
     if emit_obj_only {
         let c_count = inputs
@@ -243,7 +267,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, String> {
             .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("c") || p.as_os_str() == "-")
             .count();
         if c_count != 1 {
-            return Err("object emission mode expects exactly one C input file".to_owned());
+            return Err(ParseArgsError::InvalidObjectEmissionInputs);
         }
     }
     Ok(CcArgs {

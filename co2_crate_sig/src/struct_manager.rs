@@ -392,7 +392,7 @@ impl LocalResolverBase {
                     .as_ref()
                     .map(|bits| parse_bitfield_width(bits, *parser_span))
                     .transpose()
-                    .unwrap_or_else(|msg| self.terminate_with_error(*parser_span, &msg));
+                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                 let is_abstract = matches!(declarator.declarator.0, Declarator::Abstract);
                 let (name, ty, is_unsized) = if is_abstract {
                     let CTy::Ty(ty) = base.clone() else {
@@ -570,10 +570,13 @@ struct OpenBitfieldStorage {
     storage_bits: usize,
 }
 
-fn parse_bitfield_width(bits: &Spanned<String>, span: co2_ast::Span) -> Result<usize, String> {
+fn parse_bitfield_width(
+    bits: &Spanned<String>,
+    span: co2_ast::Span,
+) -> Result<usize, (co2_ast::Span, String)> {
     bits.0
         .parse::<usize>()
-        .map_err(|_| format!("invalid bitfield width `{}` at {:?}", bits.0, span))
+        .map_err(|_| (span, format!("invalid bitfield width `{}`", bits.0)))
 }
 
 fn bitfield_storage_ty(resolver: &LocalResolverBase, ty: &HirTy) -> Option<(HirTy, bool, usize)> {

@@ -198,11 +198,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
 
                 let hir = match std::panic::catch_unwind(AssertUnwindSafe(|| {
                     co2_hir::lower_function_body(body.clone(), def, &param_names, &mut hir_ctx)
-                        .unwrap_or_else(|err| {
-                            co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(
-                                body.1, err,
-                            )])
-                        })
                 })) {
                     Ok(hir) => hir,
                     Err(payload) => {
@@ -269,8 +264,7 @@ impl Co2GeneratorState {
             && len.eval_target_usize().is_err()
         {
             let inferred_len =
-                infer_array_len_from_initializer(initializer.clone(), elem_ty, &hir_ctx)
-                    .expect("failed to infer static array length");
+                infer_array_len_from_initializer(initializer.clone(), elem_ty, &hir_ctx);
             target_ty = Ty::from_rigid_kind(RigidTy::Array(
                 elem_ty,
                 rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(
@@ -280,7 +274,7 @@ impl Co2GeneratorState {
             ));
         }
 
-        let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
+        let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx);
 
         co2_mir::build_mir_for_body(&hir, ctx, def, self.file_id, self.wellknown_defs)
     }
@@ -305,8 +299,7 @@ impl Co2GeneratorState {
                 Ty::usize_ty(),
                 resolver.clone(),
             );
-            let evaluated_len = eval_usize_initializer(array_len, &len_hir_ctx)
-                .expect("failed to evaluate static array length");
+            let evaluated_len = eval_usize_initializer(array_len, &len_hir_ctx);
             target_ty = Ty::from_rigid_kind(RigidTy::Array(
                 elem_ty,
                 rustc_public_generative::rustc_public::ty::TyConst::try_from_target_usize(
@@ -323,7 +316,7 @@ impl Co2GeneratorState {
             target_ty,
             resolver,
         );
-        let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx).unwrap();
+        let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx);
         co2_mir::build_mir_for_body(&hir, ctx, def, self.file_id, self.wellknown_defs)
     }
 

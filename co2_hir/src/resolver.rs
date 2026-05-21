@@ -119,6 +119,10 @@ impl<'a> HirCtx<'a> {
         co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(span, msg)]);
     }
 
+    pub(crate) fn terminate_with_spanned_error(&self, (span, msg): (co2_ast::Span, String)) -> ! {
+        self.terminate_with_error(span, &msg)
+    }
+
     pub(crate) fn reset_labels(&self) {
         *self.labels.borrow_mut() = Arena::new();
         self.named_labels.borrow_mut().clear();
@@ -208,16 +212,15 @@ impl<'a> HirCtx<'a> {
             .push((cond, label));
     }
 
-    pub(crate) fn register_default(&self, label: LabelId) -> Result<(), String> {
+    pub(crate) fn register_default(&self, label: LabelId, span: co2_ast::Span) {
         let mut scopes = self.switch_scopes.borrow_mut();
         let scope = scopes
             .last_mut()
             .expect("register_default called outside switch");
         if scope.default_label.is_some() {
-            return Err("duplicate `default` label in switch".to_owned());
+            self.terminate_with_error(span, "duplicate `default` label in switch");
         }
         scope.default_label = Some(label);
-        Ok(())
     }
 
     pub(crate) fn current_continue_label(&self) -> Option<LabelId> {

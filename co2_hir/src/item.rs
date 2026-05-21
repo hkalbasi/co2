@@ -67,7 +67,7 @@ pub fn lower_function_body(
     def: FnDef,
     param_names: &[(usize, String)],
     hir_ctx: &mut HirCtx<'_>,
-) -> Result<HirBody, String> {
+) -> HirBody {
     hir_ctx.lower_function_body(tokens, def, param_names)
 }
 
@@ -75,7 +75,7 @@ pub fn lower_static_body(
     (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
     def: DefId,
     hir_ctx: &HirCtx<'_>,
-) -> Result<HirBody, String> {
+) -> HirBody {
     lower_static_body_for_ty((initializer, parser_span), CrateItem(def).ty(), hir_ctx)
 }
 
@@ -83,7 +83,7 @@ pub fn lower_static_body_for_ty(
     (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
     target_ty: Ty,
     hir_ctx: &HirCtx<'_>,
-) -> Result<HirBody, String> {
+) -> HirBody {
     let body_span = hir_ctx.to_rust_span(parser_span);
     let mut locals = Arena::new();
     let mut local_map: HashMap<usize, LocalId> = HashMap::new();
@@ -100,21 +100,21 @@ pub fn lower_static_body_for_ty(
         &mut local_map,
     );
     let init_expr = hir_ctx.initializer_tree_to_expr(&tree, target_ty, parser_span);
-    Ok(HirBody {
+    HirBody {
         locals,
         labels: hir_ctx.take_labels(),
         params: vec![],
         c_variadic_local: None,
         stmts: vec![HirStmt::Return(Some(init_expr), body_span)],
         span: body_span,
-    })
+    }
 }
 
 pub fn infer_array_len_from_initializer(
     (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
     elem_ty: Ty,
     hir_ctx: &HirCtx<'_>,
-) -> Result<u64, String> {
+) -> u64 {
     let mut locals = Arena::new();
     let mut local_map: HashMap<usize, LocalId> = HashMap::new();
     infer_array_len_from_initializer_in_scope(
@@ -132,7 +132,7 @@ pub(crate) fn infer_array_len_from_initializer_in_scope(
     hir_ctx: &HirCtx<'_>,
     locals: &mut Arena<HirLocal>,
     local_map: &mut HashMap<usize, LocalId>,
-) -> Result<u64, String> {
+) -> u64 {
     let fake_ty = Ty::from_rigid_kind(RigidTy::Array(
         elem_ty,
         TyConst::try_from_target_usize(567_567).unwrap(),
@@ -140,15 +140,15 @@ pub(crate) fn infer_array_len_from_initializer_in_scope(
     let tree =
         hir_ctx.lower_to_initializer_tree(fake_ty, (initializer, parser_span), locals, local_map);
     let InitializerTree::Middle { children } = tree else {
-        return Err("invalid initializer for unsized array".to_owned());
+        hir_ctx.terminate_with_error(parser_span, "invalid initializer for unsized array");
     };
-    Ok(children.len() as u64)
+    children.len() as u64
 }
 
 pub fn eval_usize_initializer(
     (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
     hir_ctx: &HirCtx<'_>,
-) -> Result<u64, String> {
+) -> u64 {
     let target_ty = Ty::usize_ty();
     let mut locals = Arena::new();
     let mut local_map: HashMap<usize, LocalId> = HashMap::new();
@@ -159,8 +159,15 @@ pub fn eval_usize_initializer(
         &mut local_map,
     );
     let expr = hir_ctx.initializer_tree_to_expr(&tree, target_ty, parser_span);
-    let value = eval_const_int(&expr)?;
-    u64::try_from(value).map_err(|_| format!("expected non-negative usize constant, got {value}"))
+    let Some(value) = eval_const_int(&expr) else {
+        hir_ctx.terminate_with_error(parser_span, "expected integer constant initializer");
+    };
+    u64::try_from(value).unwrap_or_else(|_| {
+        hir_ctx.terminate_with_error(
+            parser_span,
+            &format!("expected non-negative usize constant, got {value}"),
+        )
+    })
 }
 
 impl HirCtx<'_> {
@@ -169,7 +176,7 @@ impl HirCtx<'_> {
         parsed: Spanned<CompoundStatement<LocalResolver>>,
         def: FnDef,
         param_names: &[(usize, String)],
-    ) -> Result<HirBody, String> {
+    ) -> HirBody {
         self.reset_labels();
         self.lower_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names)
     }
@@ -179,7 +186,7 @@ impl HirCtx<'_> {
         (compound, parser_span): Spanned<CompoundStatement<LocalResolver>>,
         sig: &FnSig,
         param_names: &[(usize, String)],
-    ) -> Result<HirBody, String> {
+    ) -> HirBody {
         let body_span = self.to_rust_span(parser_span);
         let mut locals = Arena::new();
         let mut params = Vec::new();
@@ -220,18 +227,18 @@ impl HirCtx<'_> {
         }
 
         let mut stmts = Vec::new();
-        self.lower_compound_items(compound, &mut stmts, &mut locals, &mut local_map)?;
+        self.lower_compound_items(compound, &mut stmts, &mut locals, &mut local_map);
         let mut hoisted = self.take_hoisted_zeroed_decls();
         hoisted.extend(stmts);
         let stmts = hoisted;
 
-        Ok(HirBody {
+        HirBody {
             locals,
             labels: self.take_labels(),
             params,
             c_variadic_local: self.c_variadic_local,
             stmts,
             span: body_span,
-        })
+        }
     }
 }

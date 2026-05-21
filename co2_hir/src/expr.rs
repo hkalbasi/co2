@@ -26,6 +26,18 @@ use crate::ty::{
 use crate::{decl::hir_ty_to_ty, ty::is_condition_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
+fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span, String) {
+    (span, msg.into())
+}
+
+fn invalid_span() -> co2_ast::Span {
+    co2_ast::Span {
+        start: 0,
+        end: 0,
+        context: co2_ast::FileId::INVALID,
+    }
+}
+
 fn lower_dependency_const(
     value: &rustc_public_generative::DependencyConstValue,
     span: RustSpan,
@@ -580,7 +592,7 @@ impl HirCtx<'_> {
             rustc_public_generative::rustc_public::ty::FnSig,
             Vec<HirExpr>,
         )>,
-        String,
+        (co2_ast::Span, String),
     > {
         let resolver = &self.decl_resolver;
 
@@ -606,7 +618,7 @@ impl HirCtx<'_> {
         };
 
         let (method_def, class, resolution_kind) =
-            match resolver.resolve_method(receiver.ty, method_name) {
+            match resolver.resolve_method(receiver.ty, method_name, parser_span) {
                 Ok(Some(found)) => found,
                 Ok(None) => return Ok(None),
                 Err(err) => return Err(err),
@@ -666,7 +678,7 @@ impl HirCtx<'_> {
             rustc_public_generative::rustc_public::ty::FnSig,
             Vec<HirExpr>,
         )>,
-        String,
+        (co2_ast::Span, String),
     > {
         let resolver = &self.decl_resolver;
 
@@ -694,7 +706,7 @@ impl HirCtx<'_> {
             )
         };
         let (method_def, class, resolution_kind) =
-            match resolver.resolve_method(receiver_ty, method_name) {
+            match resolver.resolve_method(receiver_ty, method_name, parser_span) {
                 Ok(Some(found)) => found,
                 Ok(None) => return Ok(None),
                 Err(err) => return Err(err),
@@ -851,7 +863,7 @@ impl HirCtx<'_> {
         (expr, parser_span): Spanned<Expression<LocalResolver>>,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
-    ) -> Result<HirExpr, String> {
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
         let span = self.to_rust_span(parser_span);
         match expr {
             Expression::Identifier(path) => match path.0 {
@@ -864,7 +876,10 @@ impl HirCtx<'_> {
                             self.decl_resolver
                                 .local_const_int_value(def_id)
                                 .map_err(|_| {
-                                    format!("missing scalar constant value for def {def_id:?}")
+                                    spanned_error(
+                                        parser_span,
+                                        format!("missing scalar constant value for def {def_id:?}"),
+                                    )
                                 })?;
                         return Ok(HirExpr {
                             kind: HirExprKind::ConstInt(value),
@@ -883,7 +898,10 @@ impl HirCtx<'_> {
                     let resolver = &self.decl_resolver;
                     if resolver.has_local_const_value(def_id) {
                         let value = resolver.local_const_int_value(def_id).map_err(|_| {
-                            format!("missing scalar constant value for def {def_id:?}")
+                            spanned_error(
+                                parser_span,
+                                format!("missing scalar constant value for def {def_id:?}"),
+                            )
                         })?;
                         Ok(HirExpr {
                             kind: HirExprKind::ConstInt(value),
@@ -893,7 +911,10 @@ impl HirCtx<'_> {
                     } else if let Some(value) = resolver.dependency_const_value(def_id) {
                         Ok(lower_dependency_const(&value, span))
                     } else {
-                        Err(format!("missing scalar constant value for def {def_id:?}"))
+                        Err(spanned_error(
+                            parser_span,
+                            format!("missing scalar constant value for def {def_id:?}"),
+                        ))
                     }
                 }
                 co2_crate_sig::DefOrLocal::AssocMethod { .. } => self.terminate_with_error(
@@ -916,10 +937,15 @@ impl HirCtx<'_> {
                 }
                 co2_crate_sig::DefOrLocal::LocalConst(l) => {
                     let Some(&local) = local_map.get(&(l as usize)) else {
-                        let value = self
-                            .decl_resolver
-                            .local_constexpr_int_value(l)
-                            .map_err(|_| format!("missing scalar constant value for local {l}"))?;
+                        let value =
+                            self.decl_resolver
+                                .local_constexpr_int_value(l)
+                                .map_err(|_| {
+                                    spanned_error(
+                                        parser_span,
+                                        format!("missing scalar constant value for local {l}"),
+                                    )
+                                })?;
                         return Ok(HirExpr {
                             kind: HirExprKind::ConstInt(value),
                             ty: Ty::signed_ty(IntTy::I32),
@@ -956,7 +982,10 @@ impl HirCtx<'_> {
             },
             Expression::LabelAddress(label) => {
                 if self.function_name.is_none() {
-                    return Err("GNU label address is only valid inside a function body".to_owned());
+                    return Err(spanned_error(
+                        parser_span,
+                        "GNU label address is only valid inside a function body",
+                    ));
                 }
                 Ok(HirExpr {
                     kind: HirExprKind::LabelAddress(self.resolve_or_insert_label(label.0)),
@@ -1031,8 +1060,12 @@ impl HirCtx<'_> {
                 let base = self.lower_expr(*base, locals, local_map)?;
                 match self
                     .resolve_struct_field_access(base.ty, &field.0)
-                    .ok_or_else(|| format!("unknown field `{}` on type {:?}", field.0, base.ty))?
-                {
+                    .ok_or_else(|| {
+                        spanned_error(
+                            parser_span,
+                            format!("unknown field `{}` on type {:?}", field.0, base.ty),
+                        )
+                    })? {
                     ResolvedFieldAccess::Direct { path, ty } => {
                         self.project_field_path(base, &path, ty, span)
                     }
@@ -1067,9 +1100,9 @@ impl HirCtx<'_> {
                 let mut base = self.lower_expr(*base, locals, local_map)?;
                 self.array_to_pointer_decay_if_array(&mut base);
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base.ty.kind() else {
-                    return Err(format!(
-                        "arrow base must be pointer type, got {:?}",
-                        base.ty
+                    return Err(spanned_error(
+                        parser_span,
+                        format!("arrow base must be pointer type, got {:?}", base.ty),
                     ));
                 };
                 let deref_base = HirExpr {
@@ -1080,7 +1113,10 @@ impl HirCtx<'_> {
                 match self
                     .resolve_struct_field_access(deref_base.ty, &field.0)
                     .ok_or_else(|| {
-                        format!("unknown field `{}` on type {:?}", field.0, deref_base.ty)
+                        spanned_error(
+                            parser_span,
+                            format!("unknown field `{}` on type {:?}", field.0, deref_base.ty),
+                        )
                     })? {
                     ResolvedFieldAccess::Direct { path, ty } => {
                         self.project_field_path(deref_base, &path, ty, span)
@@ -1121,15 +1157,15 @@ impl HirCtx<'_> {
                 self.array_to_pointer_decay_if_array(&mut base);
                 let index = self.lower_expr(*index, locals, local_map)?;
                 if !is_numeric_ty(index.ty) {
-                    return Err(format!(
-                        "subscript index must be integer, got {:?}",
-                        index.ty
+                    return Err(spanned_error(
+                        parser_span,
+                        format!("subscript index must be integer, got {:?}", index.ty),
                     ));
                 }
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base.ty.kind() else {
-                    return Err(format!(
-                        "subscript base must be pointer type, got {:?}",
-                        base.ty
+                    return Err(spanned_error(
+                        parser_span,
+                        format!("subscript base must be pointer type, got {:?}", base.ty),
                     ));
                 };
                 let ptr_ty = base.ty;
@@ -1168,10 +1204,16 @@ impl HirCtx<'_> {
                                 &format!("assignment of read-only constexpr variable `{name}`"),
                             );
                         }
-                        return Err("assignment target is not assignable".to_owned());
+                        return Err(spanned_error(
+                            lhs_span,
+                            "assignment target is not assignable",
+                        ));
                     }
                     if is_array_ty(lhs.ty) {
-                        return Err("Type error - can not run binop on arrays.".to_owned());
+                        return Err(spanned_error(
+                            parser_span,
+                            "Type error - can not run binop on arrays.",
+                        ));
                     }
                     let mut rhs = self.lower_expr(*rhs, locals, local_map)?;
                     self.array_to_pointer_decay_if_array(&mut rhs);
@@ -1183,9 +1225,12 @@ impl HirCtx<'_> {
                         };
                     }
                     if !ty_matches_expected(lhs.ty, rhs.ty) {
-                        return Err(format!(
-                            "assignment type mismatch: lhs={:?}, rhs={:?}",
-                            lhs.ty, rhs.ty
+                        return Err(spanned_error(
+                            parser_span,
+                            format!(
+                                "assignment type mismatch: lhs={:?}, rhs={:?}",
+                                lhs.ty, rhs.ty
+                            ),
                         ));
                     }
                     return Ok(HirExpr {
@@ -1212,7 +1257,10 @@ impl HirCtx<'_> {
                             &format!("assignment of read-only constexpr variable `{name}`"),
                         );
                     }
-                    return Err("assignment target is not assignable".to_owned());
+                    return Err(spanned_error(
+                        lhs_span,
+                        "assignment target is not assignable",
+                    ));
                 }
                 let rhs = self.lower_expr(*rhs, locals, local_map)?;
                 let ty = lhs.ty;
@@ -1232,7 +1280,9 @@ impl HirCtx<'_> {
                             rhs: index,
                             return_semantic: ReturnSemantic::AfterAssign,
                         },
-                        _ => return Err("invalid assignment operation".to_owned()),
+                        _ => {
+                            return Err(spanned_error(parser_span, "invalid assignment operation"));
+                        }
                     },
                     ty,
                     span,
@@ -1252,7 +1302,10 @@ impl HirCtx<'_> {
                             &format!("update of read-only constexpr variable `{name}`"),
                         );
                     }
-                    return Err("update target is not assignable".to_owned());
+                    return Err(spanned_error(
+                        parser_span,
+                        "update target is not assignable",
+                    ));
                 }
                 let ty = lhs.ty;
                 let rhs = {
@@ -1312,7 +1365,10 @@ impl HirCtx<'_> {
                         ty,
                         span,
                     }),
-                    _ => Err("invalid update expression lowering".to_owned()),
+                    _ => Err(spanned_error(
+                        parser_span,
+                        "invalid update expression lowering",
+                    )),
                 }
             }
             Expression::Sizeof(expr) => {
@@ -1323,7 +1379,12 @@ impl HirCtx<'_> {
                     inner
                         .ty
                         .layout()
-                        .map_err(|e| format!("failed to compute layout for sizeof: {e}"))?
+                        .map_err(|e| {
+                            spanned_error(
+                                parser_span,
+                                format!("failed to compute layout for sizeof: {e}"),
+                            )
+                        })?
                         .shape()
                         .size
                         .bytes() as u64
@@ -1363,9 +1424,9 @@ impl HirCtx<'_> {
                         && (matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
                             || is_maybe_uninit_fn_ptr_ty(target_ty).is_some())))
                 {
-                    return Err(format!(
-                        "unsupported cast from {:?} to {:?}",
-                        inner.ty, target_ty
+                    return Err(spanned_error(
+                        parser_span,
+                        format!("unsupported cast from {:?} to {:?}", inner.ty, target_ty),
                     ));
                 }
                 Ok(HirExpr {
@@ -1412,7 +1473,12 @@ impl HirCtx<'_> {
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
                 let size = ty
                     .layout()
-                    .map_err(|e| format!("failed to compute layout for sizeof(type): {e}"))?
+                    .map_err(|e| {
+                        spanned_error(
+                            parser_span,
+                            format!("failed to compute layout for sizeof(type): {e}"),
+                        )
+                    })?
                     .shape()
                     .size
                     .bytes();
@@ -1427,7 +1493,12 @@ impl HirCtx<'_> {
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
                 let align = ty
                     .layout()
-                    .map_err(|e| format!("failed to compute layout for alignof(type): {e}"))?
+                    .map_err(|e| {
+                        spanned_error(
+                            parser_span,
+                            format!("failed to compute layout for alignof(type): {e}"),
+                        )
+                    })?
                     .shape()
                     .abi_align;
                 Ok(HirExpr {
@@ -1441,7 +1512,12 @@ impl HirCtx<'_> {
                 let align = inner
                     .ty
                     .layout()
-                    .map_err(|e| format!("failed to compute layout for alignof: {e}"))?
+                    .map_err(|e| {
+                        spanned_error(
+                            parser_span,
+                            format!("failed to compute layout for alignof: {e}"),
+                        )
+                    })?
                     .shape()
                     .abi_align;
                 Ok(HirExpr {
@@ -1557,9 +1633,9 @@ impl HirCtx<'_> {
                             return Ok(inner);
                         }
                         let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = inner.ty.kind() else {
-                            return Err(format!(
-                                "cannot dereference non-pointer type: {:?}",
-                                inner.ty
+                            return Err(spanned_error(
+                                parser_span,
+                                format!("cannot dereference non-pointer type: {:?}", inner.ty),
                             ));
                         };
                         Ok(HirExpr {
@@ -1579,7 +1655,10 @@ impl HirCtx<'_> {
                     }
                     ParsedUnaryOp::Com => {
                         if !is_numeric_ty(inner.ty) {
-                            return Err("unary `~` expects integer expression".to_owned());
+                            return Err(spanned_error(
+                                parser_span,
+                                "unary `~` expects integer expression",
+                            ));
                         }
                         Ok(HirExpr {
                             kind: HirExprKind::BitNot(Box::new(inner.clone())),
@@ -1589,7 +1668,10 @@ impl HirCtx<'_> {
                     }
                     ParsedUnaryOp::Minus => {
                         if !is_numeric_ty(inner.ty) {
-                            return Err("unary `-` expects integer expression".to_owned());
+                            return Err(spanned_error(
+                                parser_span,
+                                "unary `-` expects integer expression",
+                            ));
                         }
                         Ok(HirExpr {
                             kind: HirExprKind::Binary {
@@ -1649,7 +1731,7 @@ impl HirCtx<'_> {
                             &mut lowered_statements,
                             locals,
                             &mut scoped_map,
-                        )?,
+                        ),
                     }
                 }
                 let tail = self.lower_expr(tail, locals, &mut scoped_map)?;
@@ -1933,14 +2015,24 @@ impl HirCtx<'_> {
         None
     }
 
-    fn field_path_ty(&self, mut base_ty: Ty, path: &[usize]) -> Result<Ty, String> {
+    fn field_path_ty(
+        &self,
+        mut base_ty: Ty,
+        path: &[usize],
+    ) -> Result<Ty, (co2_ast::Span, String)> {
         for index in path {
             let Some(field_tys) = adt_field_tys(base_ty) else {
-                return Err(format!("field projection on non-adt type: {base_ty:?}"));
+                return Err(spanned_error(
+                    invalid_span(),
+                    format!("field projection on non-adt type: {base_ty:?}"),
+                ));
             };
-            base_ty = *field_tys
-                .get(*index)
-                .ok_or_else(|| format!("field index out of bounds: {index} for {base_ty:?}"))?;
+            base_ty = *field_tys.get(*index).ok_or_else(|| {
+                spanned_error(
+                    invalid_span(),
+                    format!("field index out of bounds: {index} for {base_ty:?}"),
+                )
+            })?;
         }
         Ok(base_ty)
     }
@@ -1951,15 +2043,18 @@ impl HirCtx<'_> {
         path: &[usize],
         field_ty: Ty,
         span: RustSpan,
-    ) -> Result<HirExpr, String> {
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
         for index in path {
             let Some(field_tys) = adt_field_tys(base.ty) else {
-                return Err(format!("field projection on non-adt type: {:?}", base.ty));
+                return Err(spanned_error(
+                    invalid_span(),
+                    format!("field projection on non-adt type: {:?}", base.ty),
+                ));
             };
             let Some(next_ty) = field_tys.get(*index).copied() else {
-                return Err(format!(
-                    "field index out of bounds: {} for {:?}",
-                    index, base.ty
+                return Err(spanned_error(
+                    invalid_span(),
+                    format!("field index out of bounds: {} for {:?}", index, base.ty),
                 ));
             };
             base = HirExpr {
@@ -1972,9 +2067,12 @@ impl HirCtx<'_> {
             };
         }
         if !ty_matches_expected(field_ty, base.ty) {
-            return Err(format!(
-                "resolved field type mismatch: projected {:?}, expected {:?}",
-                base.ty, field_ty
+            return Err(spanned_error(
+                invalid_span(),
+                format!(
+                    "resolved field type mismatch: projected {:?}, expected {:?}",
+                    base.ty, field_ty
+                ),
             ));
         }
         Ok(base)
@@ -2016,7 +2114,7 @@ impl HirCtx<'_> {
         span: RustSpan,
         parser_span: co2_ast::Span,
         is_assignment: bool,
-    ) -> Result<HirExpr, String> {
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
         let op = match op {
             ParsedBinOp::Comma | ParsedBinOp::Assign => unreachable!(),
             ParsedBinOp::Add => HirBinOp::Add,
@@ -2054,7 +2152,10 @@ impl HirCtx<'_> {
         };
 
         if is_assignment && is_array_ty(lhs.ty) {
-            return Err("Type error - can not run binop on arrays.".to_owned());
+            return Err(spanned_error(
+                parser_span,
+                "Type error - can not run binop on arrays.",
+            ));
         }
         self.array_to_pointer_decay_if_array(&mut lhs);
         self.array_to_pointer_decay_if_array(&mut rhs);
@@ -2073,7 +2174,7 @@ impl HirCtx<'_> {
                             UintTy::U8 | UintTy::U16 => UintTy::U32,
                             _ => uint_ty,
                         }),
-                        _ => return Err("Invalid type for shift".to_owned()),
+                        _ => return Err(spanned_error(parser_span, "Invalid type for shift")),
                     },
                     _ => unreachable!(),
                 }
@@ -2118,7 +2219,10 @@ impl HirCtx<'_> {
                         });
                     }
                     (true, true) => {
-                        return Err("type error: adding two pointers is invalid".to_owned());
+                        return Err(spanned_error(
+                            parser_span,
+                            "type error: adding two pointers is invalid",
+                        ));
                     }
                     _ => {}
                 }
@@ -2176,7 +2280,10 @@ impl HirCtx<'_> {
                 || enum_payload_ty(rhs.ty).is_some())
         {
             let Some(mut common_ty) = common_numeric_ty(lhs.ty, rhs.ty) else {
-                return Err("failed to find common ty in binop".to_owned());
+                return Err(spanned_error(
+                    parser_span,
+                    "failed to find common ty in binop",
+                ));
             };
             if common_ty.kind().is_bool() {
                 common_ty = Ty::signed_ty(IntTy::I32);
@@ -2210,9 +2317,12 @@ impl HirCtx<'_> {
         }
 
         if lhs.ty != rhs.ty && !is_assignment {
-            return Err(format!(
-                "binary op type mismatch: lhs={:?}, rhs={:?}",
-                lhs.ty, rhs.ty
+            return Err(spanned_error(
+                parser_span,
+                format!(
+                    "binary op type mismatch: lhs={:?}, rhs={:?}",
+                    lhs.ty, rhs.ty
+                ),
             ));
         }
 
@@ -2239,7 +2349,7 @@ impl HirCtx<'_> {
         op: ParsedBinOp,
         span: RustSpan,
         parser_span: co2_ast::Span,
-    ) -> Result<HirExpr, String> {
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
         self.lower_binop_from_lowered(lhs, rhs, op, span, parser_span, true)
     }
 
@@ -2517,7 +2627,7 @@ impl HirCtx<'_> {
         expr: Spanned<Expression<LocalResolver>>,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, la_arena::Idx<HirLocal>>,
-    ) -> Result<HirExpr, String> {
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
         let parser_span = expr.1;
         let expr = self.lower_expr(expr, locals, local_map)?;
         Ok(self.condition_to_bool(expr, parser_span))
@@ -2615,9 +2725,9 @@ fn int_suffix_ty(suffix: &IntegerSuffix, value: i128) -> Ty {
     }
 }
 
-pub(crate) fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Result<HirExpr, String> {
+pub(crate) fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Option<HirExpr> {
     if ty_matches_expected(expected_ty, expr.ty) {
-        return Ok(expr);
+        return Some(expr);
     }
     if matches!(expr.kind, HirExprKind::ConstInt(0))
         && matches!(
@@ -2625,21 +2735,18 @@ pub(crate) fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Result<HirE
             TyKind::RigidTy(RigidTy::RawPtr(..) | RigidTy::FnPtr(..))
         )
     {
-        return Ok(HirExpr {
+        return Some(HirExpr {
             kind: HirExprKind::Zeroed,
             ty: expected_ty,
             span: expr.span,
         });
     }
     if needs_implicit_cast(expected_ty, expr.ty) {
-        return Ok(HirExpr {
+        return Some(HirExpr {
             kind: HirExprKind::Cast(Box::new(expr.clone())),
             ty: expected_ty,
             span: expr.span,
         });
     }
-    Err(format!(
-        "initializer type mismatch: expected {expected_ty:?}, got {:?}",
-        expr.ty
-    ))
+    None
 }

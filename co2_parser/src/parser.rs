@@ -1145,50 +1145,40 @@ where
 }
 
 fn parse_integer_constant(text: &str) -> i128 {
-    parse_unsigned_integer_constant(text).map_or_else(
-        |e| panic!("invalid integer literal `{text}`: {e}"),
-        |v| v as i128,
-    )
+    parse_unsigned_integer_constant(text)
+        .map_or_else(|| panic!("invalid integer literal `{text}`"), |v| v as i128)
 }
 
 fn parse_float_constant(text: &str) -> f64 {
     text.parse::<f64>()
-        .or_else(|_| parse_hex_float_constant(text))
-        .unwrap_or_else(|e| panic!("invalid float literal `{text}`: {e}"))
+        .ok()
+        .or_else(|| parse_hex_float_constant(text))
+        .unwrap_or_else(|| panic!("invalid float literal `{text}`"))
 }
 
-fn parse_hex_float_constant(text: &str) -> Result<f64, String> {
-    let (significand, exponent) = text
-        .split_once(['p', 'P'])
-        .ok_or_else(|| "missing binary exponent".to_owned())?;
-    let exponent = exponent
-        .parse::<i32>()
-        .map_err(|e| format!("invalid binary exponent: {e}"))?;
+fn parse_hex_float_constant(text: &str) -> Option<f64> {
+    let (significand, exponent) = text.split_once(['p', 'P'])?;
+    let exponent = exponent.parse::<i32>().ok()?;
     let significand = significand
         .strip_prefix("0x")
-        .or_else(|| significand.strip_prefix("0X"))
-        .ok_or_else(|| "missing hex prefix".to_owned())?;
+        .or_else(|| significand.strip_prefix("0X"))?;
     let (int_part, frac_part) = significand.split_once('.').unwrap_or((significand, ""));
     if int_part.is_empty() && frac_part.is_empty() {
-        return Err("missing hexadecimal digits".to_owned());
+        return None;
     }
 
     let mut value = 0.0f64;
     for ch in int_part.chars() {
-        let digit = ch
-            .to_digit(16)
-            .ok_or_else(|| format!("invalid hex digit `{ch}`"))?;
+        let digit = ch.to_digit(16)?;
         value = value * 16.0 + f64::from(digit);
     }
     let mut scale = 1.0f64 / 16.0;
     for ch in frac_part.chars() {
-        let digit = ch
-            .to_digit(16)
-            .ok_or_else(|| format!("invalid hex digit `{ch}`"))?;
+        let digit = ch.to_digit(16)?;
         value += f64::from(digit) * scale;
         scale /= 16.0;
     }
-    Ok(value * 2.0f64.powi(exponent))
+    Some(value * 2.0f64.powi(exponent))
 }
 
 fn lazy_subscription<'src, I>()

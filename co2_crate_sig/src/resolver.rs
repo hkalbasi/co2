@@ -65,64 +65,50 @@ impl ModuleData {
     fn resolve_path<'a>(
         &self,
         path: impl Iterator<Item = &'a str>,
-    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         let parts = path.collect::<Vec<_>>();
-        self.lookup_path(&parts)?
-            .id
-            .ok_or_else(|| "path does not refer to a value or type".to_owned())
+        self.lookup_path(&parts)?.id
     }
 
     fn resolve_path_or_unique_leaf<'a>(
         &self,
         path: impl Iterator<Item = &'a str>,
-    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         let parts = path.collect::<Vec<_>>();
-        self.lookup_path_or_unique_leaf(&parts)?
-            .id
-            .ok_or_else(|| "path does not refer to a value or type".to_owned())
+        self.lookup_path_or_unique_leaf(&parts)?.id
     }
 
-    fn lookup_path(&self, path: &[&str]) -> Result<&Self, String> {
+    fn lookup_path(&self, path: &[&str]) -> Option<&Self> {
         let Some((seg1, rest)) = path.split_first() else {
-            return Ok(self);
+            return Some(self);
         };
-        let part = self.items.get(*seg1).ok_or_else(|| {
-            format!(
-                "Failed to lookup {seg1}.\nAvailable items are: {:?}",
-                self.items.keys()
-            )
-        })?;
+        let part = self.items.get(*seg1)?;
         part.lookup_path(rest)
     }
 
-    fn lookup_path_or_unique_leaf<'a>(&'a self, path: &[&'a str]) -> Result<&'a Self, String> {
+    fn lookup_path_or_unique_leaf<'a>(&'a self, path: &[&'a str]) -> Option<&'a Self> {
         match self.lookup_path(path) {
-            Ok(found) => Ok(found),
-            Err(err) if path.len() == 1 => self.lookup_unique_leaf(path[0]).or(Err(err)),
-            Err(err) => Err(err),
+            Some(found) => Some(found),
+            None if path.len() == 1 => self.lookup_unique_leaf(path[0]),
+            None => None,
         }
     }
 
     // TODO: this function is super wrong. It's just a workaround for
     // having `libc::puts` (not `libc::unix::puts`) without supporting
     // `pub use` in dependencies properly.
-    fn lookup_unique_leaf<'a>(&'a self, leaf: &str) -> Result<&'a Self, String> {
+    fn lookup_unique_leaf<'a>(&'a self, leaf: &str) -> Option<&'a Self> {
         let mut matches = Vec::new();
         self.collect_leaf_matches(leaf, &mut matches);
         match matches.as_slice() {
-            [] => Err(format!(
-                "Failed to lookup {leaf}.\nAvailable items are: {:?}",
-                self.items.keys()
-            )),
-            [single] => Ok(*single),
+            [] => None,
+            [single] => Some(*single),
             many => {
                 let first_id = many[0].id;
                 if first_id.is_some() && many.iter().all(|item| item.id == first_id) {
-                    Ok(many[0])
+                    Some(many[0])
                 } else {
-                    Err(format!(
-                        "lookup for `{leaf}` is ambiguous in dependency tree"
-                    ))
+                    None
                 }
             }
         }
@@ -184,7 +170,7 @@ impl ModuleData {
                             let Some(name) = extract_decl_name(decl) else {
                                 continue;
                             };
-                            if this.resolve_path([&*name].into_iter()).is_ok() {
+                            if this.resolve_path([&*name].into_iter()).is_some() {
                                 continue;
                             }
                             let def_id =
@@ -200,7 +186,7 @@ impl ModuleData {
                             let Some(name) = extract_decl_name(decl) else {
                                 continue;
                             };
-                            if this.resolve_path([&*name].into_iter()).is_ok() {
+                            if this.resolve_path([&*name].into_iter()).is_some() {
                                 continue;
                             }
                             let parent = if decl.is_function() || is_extern {
@@ -414,11 +400,9 @@ impl Resolver {
         &self,
         module_path: &[String],
         path: impl IntoIterator<Item = &'a str>,
-    ) -> Result<ModuleData, String> {
+    ) -> Option<ModuleData> {
         let parts = path.into_iter().collect::<Vec<_>>();
-        let Some(first) = parts.first().copied() else {
-            return Err("empty path".to_owned());
-        };
+        let first = parts.first().copied()?;
         if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
             return self
                 .current
@@ -450,7 +434,7 @@ impl Resolver {
             };
 
             if last_segment == "*" {
-                let Ok(item) = self.resolve_module_path_relative(
+                let Some(item) = self.resolve_module_path_relative(
                     module_path,
                     use_item.path[..use_item.path.len() - 1]
                         .iter()
@@ -479,7 +463,7 @@ impl Resolver {
                 last_segment.as_str()
             };
             let module = self.module_mut(module_path);
-            if module.resolve_path([alias].into_iter()).is_ok()
+            if module.resolve_path([alias].into_iter()).is_some()
                 || self.const_values.contains_key(alias)
             {
                 continue;
@@ -495,7 +479,7 @@ impl Resolver {
                 self.const_values.insert(alias.to_owned(), def_id);
                 continue;
             }
-            let Ok(item) = self.resolve_module_path_relative(
+            let Some(item) = self.resolve_module_path_relative(
                 module_path,
                 use_item.path.iter().map(|(segment, _)| segment.as_str()),
             ) else {
@@ -611,23 +595,20 @@ impl Resolver {
         &self,
         mut crate_name: &str,
         path: impl IntoIterator<Item = &'a str>,
-    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         normalize_crate_name(&mut crate_name);
-        let crate_data = self
-            .dependencies
-            .get(crate_name)
-            .ok_or_else(|| format!("Crate {crate_name} not found"))?;
+        let crate_data = self.dependencies.get(crate_name)?;
         crate_data.resolve_path_or_unique_leaf(path.into_iter())
     }
 
     pub(crate) fn resolve_in_current<'a>(
         &self,
         path: impl IntoIterator<Item = &'a str>,
-    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         self.current.resolve_path(path.into_iter())
     }
 
-    pub fn resolve(&self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+    pub fn resolve(&self, path: &str) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         let Some((mut crate_name, rest)) = path.split_once("::") else {
             return self.resolve_in_current([path]);
         };
@@ -643,23 +624,21 @@ impl Resolver {
         &self,
         module_path: &[String],
         path: &str,
-    ) -> Result<ResolvedExprPath, String> {
+    ) -> Option<ResolvedExprPath> {
         if let Some(def_id) = self.const_values.get(&normalized_path(path)) {
-            return Ok(ResolvedExprPath::Const(*def_id));
+            return Some(ResolvedExprPath::Const(*def_id));
         }
         let (def_id, class) = self.resolve_relative(module_path, path)?;
-        Ok(ResolvedExprPath::Def(def_id, class))
+        Some(ResolvedExprPath::Def(def_id, class))
     }
 
     pub(crate) fn resolve_relative(
         &self,
         module_path: &[String],
         path: &str,
-    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         let parts = path.split("::").collect::<Vec<_>>();
-        let Some(first) = parts.first().copied() else {
-            return Err("empty path".to_owned());
-        };
+        let first = parts.first().copied()?;
 
         if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
             return self
@@ -680,11 +659,11 @@ impl Resolver {
 
         for prefix_len in (0..=module_path.len()).rev() {
             let prefix = module_path[..prefix_len].iter().map(String::as_str);
-            if let Ok(found) = self
+            if let Some(found) = self
                 .current
                 .resolve_path(prefix.chain(parts.iter().copied()))
             {
-                return Ok(found);
+                return Some(found);
             }
         }
 
@@ -695,16 +674,16 @@ impl Resolver {
         &self,
         receiver_ty: Ty,
         method: &str,
-    ) -> Result<Option<(DefId, TypeQueryResult)>, String> {
+    ) -> Option<(DefId, TypeQueryResult)> {
         match receiver_ty.kind() {
-            TyKind::RigidTy(RigidTy::Adt(adt, _)) => Ok(self
+            TyKind::RigidTy(RigidTy::Adt(adt, _)) => self
                 .method_receivers
                 .get(&adt.0)
-                .and_then(|module| Self::resolve_method_in_module(module, method).ok())),
+                .and_then(|module| Self::resolve_method_in_module(module, method)),
             TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
                 self.resolve_inherent_method(inner, method)
             }
-            _ => Ok(None),
+            _ => None,
         }
     }
 
@@ -743,27 +722,24 @@ impl Resolver {
 
     fn is_known_trait_path(&self, path: &str) -> bool {
         self.resolve(path)
-            .is_ok_and(|(_, class)| class == TypeQueryResult::Type)
+            .is_some_and(|(_, class)| class == TypeQueryResult::Type)
     }
 
     fn resolve_method_in_module(
         module: &ModuleData,
         method: &str,
-    ) -> Result<(DefId, TypeQueryResult), String> {
-        if let Ok(found) = module.resolve_path([method].into_iter()) {
-            return Ok(found);
+    ) -> Option<(DefId, TypeQueryResult)> {
+        if let Some(found) = module.resolve_path([method].into_iter()) {
+            return Some(found);
         }
         let mut children = module.items.iter().collect::<Vec<_>>();
         children.sort_by_key(|(name, _)| method_search_priority(name));
         for (_, child) in children {
-            if let Ok(found) = Self::resolve_method_in_module(child, method) {
-                return Ok(found);
+            if let Some(found) = Self::resolve_method_in_module(child, method) {
+                return Some(found);
             }
         }
-        Err(format!(
-            "Failed to lookup {method}.\nAvailable items are: {:?}",
-            module.items.keys()
-        ))
+        None
     }
 
     pub(crate) fn rebuild_method_receivers(&mut self) {

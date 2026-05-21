@@ -15,6 +15,10 @@ pub(crate) struct CrateSigCtx<'a> {
 }
 
 impl CrateSigCtx<'_> {
+    pub(crate) fn terminate_with_spanned_error((span, msg): (co2_ast::Span, String)) -> ! {
+        Self::terminate_with_error(span, &msg)
+    }
+
     pub(crate) fn terminate_with_error(span: co2_ast::Span, msg: &str) -> ! {
         co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(span, msg)]);
     }
@@ -27,14 +31,14 @@ impl CrateSigCtx<'_> {
         self.hir_ctx.allocate_def_id(parent, data)
     }
 
-    pub(crate) fn resolve(&self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+    pub(crate) fn resolve(&self, path: &str) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         self.resolver.borrow().resolver.resolve(path)
     }
 
     pub(crate) fn resolve_in_current<'a>(
         &self,
         path: impl IntoIterator<Item = &'a str>,
-    ) -> Result<(DefId, co2_ast::TypeQueryResult), String> {
+    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         self.resolver.borrow().resolver.resolve_in_current(path)
     }
 }

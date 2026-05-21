@@ -542,7 +542,7 @@ fn lower_translation_unit_items(
                         let (name, sig, param_names) = ctx
                             .lower_function_signature(base, base_const, declarator)
                             .unwrap_or_else(|err| {
-                                CrateSigCtx::<'_>::terminate_with_error(parser_span, &err)
+                                CrateSigCtx::<'_>::terminate_with_spanned_error(err)
                             });
                         (name, sig, param_names, !is_static)
                     }
@@ -716,10 +716,7 @@ fn lower_translation_unit_items(
                                         initializer.as_ref(),
                                     )
                                     .unwrap_or_else(|err| {
-                                        CrateSigCtx::<'_>::terminate_with_error(
-                                            constexpr_decl_span(&original_specs, parser_span),
-                                            &err,
-                                        )
+                                        CrateSigCtx::<'_>::terminate_with_spanned_error(err)
                                     });
                                 if let Some((co2_ast::Initializer::Expr(expr), _span)) =
                                     initializer.clone()
@@ -810,20 +807,14 @@ fn lower_translation_unit_items(
                                         initializer.as_ref(),
                                     )
                                     .unwrap_or_else(|err| {
-                                        CrateSigCtx::<'_>::terminate_with_error(
-                                            constexpr_decl_span(&original_specs, parser_span),
-                                            &err,
-                                        )
+                                        CrateSigCtx::<'_>::terminate_with_spanned_error(err)
                                     });
                             }
                             if let Some(initializer) = initializer {
                                 let len =
                                     infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
                                         .unwrap_or_else(|err| {
-                                            CrateSigCtx::<'_>::terminate_with_error(
-                                                parser_span,
-                                                &err,
-                                            )
+                                            CrateSigCtx::<'_>::terminate_with_spanned_error(err)
                                         });
                                 let ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
                                 ctx.resolver
@@ -1019,7 +1010,7 @@ pub fn lower_crate_sig(
             span,
         );
         for name in ["__builtin_va_list", "__gnuc_va_list"] {
-            let Ok((id, _)) = ctx.resolve(name) else {
+            let Some((id, _)) = ctx.resolve(name) else {
                 continue;
             };
             ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
@@ -1095,12 +1086,7 @@ pub fn lower_crate_sig(
                             &CTy::Ty(ty.clone()),
                             declarator.initializer.as_ref(),
                         )
-                        .unwrap_or_else(|err| {
-                            CrateSigCtx::<'_>::terminate_with_error(
-                                constexpr_decl_span(&original_specs, parser_span),
-                                &err,
-                            )
-                        });
+                        .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_spanned_error(err));
                     if let Some((co2_ast::Initializer::Expr(expr), _span)) =
                         declarator.initializer.clone()
                     {
@@ -1140,12 +1126,7 @@ pub fn lower_crate_sig(
                             &CTy::UnsizedArray(elem_ty.clone()),
                             declarator.initializer.as_ref(),
                         )
-                        .unwrap_or_else(|err| {
-                            CrateSigCtx::<'_>::terminate_with_error(
-                                constexpr_decl_span(&original_specs, parser_span),
-                                &err,
-                            )
-                        });
+                        .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_spanned_error(err));
                 }
                 let initializer = if let Some((initializer, init_span)) = declarator.initializer {
                     (initializer, init_span)
@@ -1156,9 +1137,7 @@ pub fn lower_crate_sig(
                     );
                 };
                 let len = infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
-                    .unwrap_or_else(|err| {
-                        CrateSigCtx::<'_>::terminate_with_error(parser_span, &err)
-                    });
+                    .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_spanned_error(err));
                 let sized_ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
                 ctx.resolver
                     .borrow_mut()
@@ -1325,7 +1304,7 @@ pub fn lower_crate_sig(
             .resolver
             .borrow_mut()
             .eval_array_len_expr(&registered.expr)
-            .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_error(registered.span, &err));
+            .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_spanned_error(err));
         let expr = (
             Expression::Constant(Constant::Int(value as i128, IntegerSuffix::None)),
             registered.span,
@@ -1396,7 +1375,7 @@ fn infer_unsized_array_len(
     initializer: &co2_ast::Initializer<LocalResolver>,
     resolver: &LocalResolver,
     elem_ty: &HirTy,
-) -> Result<usize, String> {
+) -> Result<usize, (co2_ast::Span, String)> {
     match initializer {
         co2_ast::Initializer::Expr((
             co2_ast::Expression::Constant(co2_ast::Constant::String(s)),
@@ -1410,26 +1389,31 @@ fn infer_unsized_array_len(
             for (item, _) in items {
                 let index = match &item.designators {
                     None => next_index,
-                    Some(designators) => {
-                        match designators.first() {
-                            None => next_index,
-                            Some((first, _)) => match first {
-                                Designator::Subscript(expr) => {
-                                    let mut base = resolver.base.borrow_mut();
-                                    let value = base.eval_const_expr(expr)?;
-                                    usize::try_from(value).map_err(|_| {
-                                        format!("array designator index must be non-negative, got {value}")
+                    Some(designators) => match designators.first() {
+                        None => next_index,
+                        Some((first, _)) => match first {
+                            Designator::Subscript(expr) => {
+                                let mut base = resolver.base.borrow_mut();
+                                let value = base.eval_const_expr(expr)?;
+                                usize::try_from(value).map_err(|_| {
+                                        (expr.1, format!("array designator index must be non-negative, got {value}"))
                                     })?
-                                }
-                                Designator::Field(_) => {
-                                    return Err("field designator is invalid for unsized array length inference".to_owned());
-                                }
-                                Designator::Range(_, _) => {
-                                    return Err("unsupported GNU range designator".to_owned());
-                                }
-                            },
-                        }
-                    }
+                            }
+                            Designator::Field(_) => {
+                                return Err((
+                                        item.initializer.1,
+                                        "field designator is invalid for unsized array length inference"
+                                            .to_owned(),
+                                    ));
+                            }
+                            Designator::Range(_, _) => {
+                                return Err((
+                                    item.initializer.1,
+                                    "unsupported GNU range designator".to_owned(),
+                                ));
+                            }
+                        },
+                    },
                 };
                 if index != next_index {
                     used_slots_in_current = 0;
@@ -1449,9 +1433,10 @@ fn infer_unsized_array_len(
             }
             Ok(max_len)
         }
-        co2_ast::Initializer::Expr(_) => {
-            Err("static with unsized array type should have list or string initializer".to_owned())
-        }
+        co2_ast::Initializer::Expr((_, span)) => Err((
+            *span,
+            "static with unsized array type should have list or string initializer".to_owned(),
+        )),
     }
 }
 
@@ -1459,14 +1444,17 @@ fn consumed_initializer_slots(
     initializer: &co2_ast::Initializer<LocalResolver>,
     target_ty: &HirTy,
     resolver: &LocalResolver,
-) -> Result<usize, String> {
+) -> Result<usize, (co2_ast::Span, String)> {
     match initializer {
         co2_ast::Initializer::Expr(_) => Ok(1),
         co2_ast::Initializer::List(_) => flattened_scalar_slots(target_ty, resolver),
     }
 }
 
-fn flattened_scalar_slots(ty: &HirTy, resolver: &LocalResolver) -> Result<usize, String> {
+fn flattened_scalar_slots(
+    ty: &HirTy,
+    resolver: &LocalResolver,
+) -> Result<usize, (co2_ast::Span, String)> {
     match &ty.kind {
         rustc_public_generative::HirTyKind::Array(HirTyConst::Literal(len), inner) => {
             Ok(len * flattened_scalar_slots(inner, resolver)?)

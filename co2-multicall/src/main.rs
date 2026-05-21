@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,29 +83,87 @@ fn install(mut args: impl Iterator<Item = String>) -> std::process::ExitCode {
     }
 }
 
-fn try_install(bin_dir: &Path) -> Result<(), String> {
+#[derive(Debug)]
+enum InstallError {
+    ResolveCurrentExe(std::io::Error),
+    CreateDir {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    CopyFile {
+        from: PathBuf,
+        to: PathBuf,
+        source: std::io::Error,
+    },
+    StatPath {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    ReplaceDirectory(PathBuf),
+    RemovePath {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    CreateSymlink {
+        source: PathBuf,
+        target: PathBuf,
+        error: std::io::Error,
+    },
+    #[cfg(not(unix))]
+    UnsupportedPlatform,
+}
+
+impl fmt::Display for InstallError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ResolveCurrentExe(err) => write!(f, "resolve current exe: {err}"),
+            Self::CreateDir { path, source } => write!(f, "create {}: {source}", path.display()),
+            Self::CopyFile { from, to, source } => {
+                write!(f, "copy {} -> {}: {source}", from.display(), to.display())
+            }
+            Self::StatPath { path, source } => write!(f, "stat {}: {source}", path.display()),
+            Self::ReplaceDirectory(path) => {
+                write!(f, "refusing to replace directory {}", path.display())
+            }
+            Self::RemovePath { path, source } => write!(f, "remove {}: {source}", path.display()),
+            Self::CreateSymlink {
+                source,
+                target,
+                error,
+            } => write!(
+                f,
+                "symlink {} -> {}: {error}",
+                target.display(),
+                source.display()
+            ),
+            #[cfg(not(unix))]
+            Self::UnsupportedPlatform => {
+                f.write_str("install currently only supports Unix-like systems")
+            }
+        }
+    }
+}
+
+fn try_install(bin_dir: &Path) -> Result<(), InstallError> {
     let current = std::env::var_os("CO2_RUN_SCRIPT").map_or_else(
-        || {
-            std::env::current_exe()
-                .map_err(|err| format!("resolve current exe: {err}"))
-                .unwrap()
-        },
-        PathBuf::from,
+        || std::env::current_exe().map_err(InstallError::ResolveCurrentExe),
+        |path| Ok(PathBuf::from(path)),
     );
+    let current = current?;
 
     if !bin_dir.exists() {
-        fs::create_dir_all(bin_dir)
-            .map_err(|err| format!("create {}: {err}", bin_dir.display()))?;
+        fs::create_dir_all(bin_dir).map_err(|source| InstallError::CreateDir {
+            path: bin_dir.to_path_buf(),
+            source,
+        })?;
     }
 
     let installed = bin_dir.join(exe_name("co2-multicall"));
 
-    fs::copy(&current, &installed).map_err(|err| {
-        format!(
-            "copy {} -> {}: {err}",
-            current.display(),
-            installed.display()
-        )
+    fs::copy(&current, &installed).map_err(|source| InstallError::CopyFile {
+        from: current.clone(),
+        to: installed.clone(),
+        source,
     })?;
 
     for applet in ["co2rustc", "co2cc", "co2cargo", "co2miri"] {
@@ -120,29 +179,29 @@ fn exe_name(name: &str) -> String {
 }
 
 #[cfg(unix)]
-fn replace_symlink(source: &Path, target: &Path) -> Result<(), String> {
+fn replace_symlink(source: &Path, target: &Path) -> Result<(), InstallError> {
     if target.exists() || fs::symlink_metadata(target).is_ok() {
-        let metadata = fs::symlink_metadata(target)
-            .map_err(|err| format!("stat {}: {err}", target.display()))?;
+        let metadata = fs::symlink_metadata(target).map_err(|source| InstallError::StatPath {
+            path: target.to_path_buf(),
+            source,
+        })?;
         if metadata.file_type().is_dir() {
-            return Err(format!(
-                "refusing to replace directory {}",
-                target.display()
-            ));
+            return Err(InstallError::ReplaceDirectory(target.to_path_buf()));
         }
-        fs::remove_file(target).map_err(|err| format!("remove {}: {err}", target.display()))?;
+        fs::remove_file(target).map_err(|source| InstallError::RemovePath {
+            path: target.to_path_buf(),
+            source,
+        })?;
     }
 
-    std::os::unix::fs::symlink(source, target).map_err(|err| {
-        format!(
-            "symlink {} -> {}: {err}",
-            target.display(),
-            source.display()
-        )
+    std::os::unix::fs::symlink(source, target).map_err(|error| InstallError::CreateSymlink {
+        source: source.to_path_buf(),
+        target: target.to_path_buf(),
+        error,
     })
 }
 
 #[cfg(not(unix))]
-fn replace_symlink(_source: &Path, _target: &Path) -> Result<(), String> {
-    Err("install currently only supports Unix-like systems".to_owned())
+fn replace_symlink(_source: &Path, _target: &Path) -> Result<(), InstallError> {
+    Err(InstallError::UnsupportedPlatform)
 }

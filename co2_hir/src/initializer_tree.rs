@@ -12,6 +12,18 @@ use crate::{
     ty::{adt_field_tys, array_elem_ty, is_array_ty, is_union_ty},
 };
 
+fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span, String) {
+    (span, msg.into())
+}
+
+fn invalid_span() -> co2_ast::Span {
+    co2_ast::Span {
+        start: 0,
+        end: 0,
+        context: co2_ast::FileId::INVALID,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum InitializerTree {
     Middle { children: Vec<InitializerTree> },
@@ -33,7 +45,7 @@ impl InitializerCursor {
         span: rustc_public_generative::rustc_public::ty::Span,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, (co2_ast::Span, String)> {
         let mut current_ty = base_ty;
         let mut cursor = InitializerCursor {
             base_ty,
@@ -44,7 +56,10 @@ impl InitializerCursor {
                 Designator::Subscript(expr) => {
                     let idx = ctx.eval_array_len_expr_in_scope(expr, locals, local_map)?;
                     let elem_ty = array_elem_ty(current_ty).ok_or_else(|| {
-                        format!("array designator used on non-array type: {current_ty:?}")
+                        spanned_error(
+                            *span,
+                            format!("array designator used on non-array type: {current_ty:?}"),
+                        )
                     })?;
                     cursor.stack.push((idx, elem_ty));
                     current_ty = elem_ty;
@@ -56,19 +71,28 @@ impl InitializerCursor {
                     let (path, field_ty) = ctx
                         .resolve_logical_field_path(current_ty, name.0.as_str())
                         .ok_or_else(|| {
-                            format!(
-                                "field designator `{}` used on non-struct type: {:?}",
-                                name.0, current_ty
+                            spanned_error(
+                                *span,
+                                format!(
+                                    "field designator `{}` used on non-struct type: {:?}",
+                                    name.0, current_ty
+                                ),
                             )
                         })?;
                     let mut cursor_ty = current_ty;
                     for index in path {
-                        let fields = ctx
-                            .adt_logical_field_tys(cursor_ty)
-                            .ok_or_else(|| format!("designator on non-adt type: {cursor_ty:?}"))?;
+                        let fields = ctx.adt_logical_field_tys(cursor_ty).ok_or_else(|| {
+                            spanned_error(
+                                *span,
+                                format!("designator on non-adt type: {cursor_ty:?}"),
+                            )
+                        })?;
                         let next_ty = *fields.get(index).ok_or_else(|| {
-                            format!(
-                                "designator field index out of bounds: {index} for {cursor_ty:?}"
+                            spanned_error(
+                                *span,
+                                format!(
+                                    "designator field index out of bounds: {index} for {cursor_ty:?}"
+                                ),
                             )
                         })?;
                         cursor.stack.push((index, next_ty));
@@ -80,7 +104,10 @@ impl InitializerCursor {
             }
         }
         if cursor.stack.is_empty() {
-            return Err("empty designator list is invalid".to_owned());
+            return Err(spanned_error(
+                invalid_span(),
+                "empty designator list is invalid",
+            ));
         }
         let _ = span;
         Ok(cursor)
@@ -135,7 +162,7 @@ impl InitializerCursor {
         &mut self,
         ctx: &HirCtx<'_>,
         span: rustc_public_generative::rustc_public::ty::Span,
-    ) -> Result<(), String> {
+    ) -> Result<(), (co2_ast::Span, String)> {
         if self.stack.is_empty() {
             return Ok(());
         }
@@ -160,7 +187,12 @@ impl InitializerCursor {
         if is_array_ty(parent_ty) {
             let elem_ty = array_elem_ty(parent_ty).expect("array elem type");
             let len = array_len_from_layout(parent_ty).ok_or_else(|| {
-                format!("unable to infer array length for initializer from layout: {parent_ty:?}")
+                spanned_error(
+                    invalid_span(),
+                    format!(
+                        "unable to infer array length for initializer from layout: {parent_ty:?}"
+                    ),
+                )
             })?;
             idx += 1;
             if idx < len {
@@ -171,8 +203,9 @@ impl InitializerCursor {
             return Ok(());
         }
 
-        Err(format!(
-            "invalid initializer cursor parent type: {parent_ty:?} at {span:?}"
+        Err(spanned_error(
+            invalid_span(),
+            format!("invalid initializer cursor parent type: {parent_ty:?} at {span:?}"),
         ))
     }
 }
@@ -214,46 +247,42 @@ fn children_count_of_ty(ctx: &HirCtx<'_>, ty: Ty) -> usize {
     if count == 567_567 { 0 } else { count }
 }
 
-pub(crate) fn eval_const_int(expr: &HirExpr) -> Result<i128, String> {
+pub(crate) fn eval_const_int(expr: &HirExpr) -> Option<i128> {
     match &expr.kind {
-        HirExprKind::ConstInt(v) | HirExprKind::Path(crate::ResolvedValue::ConstInt(v)) => Ok(*v),
+        HirExprKind::ConstInt(v) | HirExprKind::Path(crate::ResolvedValue::ConstInt(v)) => Some(*v),
         HirExprKind::Binary { op, lhs, rhs } => {
             let lhs = eval_const_int(lhs)?;
             let rhs = eval_const_int(rhs)?;
             match op {
-                crate::expr::HirBinOp::Add => Ok(lhs + rhs),
-                crate::expr::HirBinOp::Sub => Ok(lhs - rhs),
-                crate::expr::HirBinOp::Mul => Ok(lhs * rhs),
-                crate::expr::HirBinOp::Div => lhs
-                    .checked_div(rhs)
-                    .ok_or_else(|| "constant integer expression division failed".to_owned()),
-                crate::expr::HirBinOp::Rem => lhs
-                    .checked_rem(rhs)
-                    .ok_or_else(|| "constant integer expression remainder failed".to_owned()),
-                crate::expr::HirBinOp::BitOr => Ok(lhs | rhs),
-                crate::expr::HirBinOp::BitXor => Ok(lhs ^ rhs),
-                crate::expr::HirBinOp::BitAnd => Ok(lhs & rhs),
-                crate::expr::HirBinOp::Eq => Ok(i128::from(lhs == rhs)),
-                crate::expr::HirBinOp::Lt => Ok(i128::from(lhs < rhs)),
-                crate::expr::HirBinOp::Le => Ok(i128::from(lhs <= rhs)),
-                crate::expr::HirBinOp::Ne => Ok(i128::from(lhs != rhs)),
-                crate::expr::HirBinOp::Ge => Ok(i128::from(lhs >= rhs)),
-                crate::expr::HirBinOp::Gt => Ok(i128::from(lhs > rhs)),
-                crate::expr::HirBinOp::Shl => Ok(lhs << rhs),
-                crate::expr::HirBinOp::Shr => Ok(lhs >> rhs),
+                crate::expr::HirBinOp::Add => Some(lhs + rhs),
+                crate::expr::HirBinOp::Sub => Some(lhs - rhs),
+                crate::expr::HirBinOp::Mul => Some(lhs * rhs),
+                crate::expr::HirBinOp::Div => lhs.checked_div(rhs),
+                crate::expr::HirBinOp::Rem => lhs.checked_rem(rhs),
+                crate::expr::HirBinOp::BitOr => Some(lhs | rhs),
+                crate::expr::HirBinOp::BitXor => Some(lhs ^ rhs),
+                crate::expr::HirBinOp::BitAnd => Some(lhs & rhs),
+                crate::expr::HirBinOp::Eq => Some(i128::from(lhs == rhs)),
+                crate::expr::HirBinOp::Lt => Some(i128::from(lhs < rhs)),
+                crate::expr::HirBinOp::Le => Some(i128::from(lhs <= rhs)),
+                crate::expr::HirBinOp::Ne => Some(i128::from(lhs != rhs)),
+                crate::expr::HirBinOp::Ge => Some(i128::from(lhs >= rhs)),
+                crate::expr::HirBinOp::Gt => Some(i128::from(lhs > rhs)),
+                crate::expr::HirBinOp::Shl => Some(lhs << rhs),
+                crate::expr::HirBinOp::Shr => Some(lhs >> rhs),
             }
         }
         HirExprKind::Comma { rhs, .. } => eval_const_int(rhs),
         HirExprKind::Logical { op, lhs, rhs } => {
             let lhs = eval_const_int(lhs)? != 0;
             let rhs = eval_const_int(rhs)? != 0;
-            Ok(match op {
+            Some(match op {
                 crate::expr::HirLogicalOp::Or => i128::from(lhs || rhs),
                 crate::expr::HirLogicalOp::And => i128::from(lhs && rhs),
             })
         }
-        HirExprKind::LogicalNot(inner) => Ok(i128::from(eval_const_int(inner)? == 0)),
-        HirExprKind::BitNot(inner) => Ok(!eval_const_int(inner)?),
+        HirExprKind::LogicalNot(inner) => Some(i128::from(eval_const_int(inner)? == 0)),
+        HirExprKind::BitNot(inner) => Some(!eval_const_int(inner)?),
         HirExprKind::Cast(inner) => eval_const_int(inner),
         HirExprKind::Conditional {
             cond,
@@ -266,7 +295,7 @@ pub(crate) fn eval_const_int(expr: &HirExpr) -> Result<i128, String> {
                 eval_const_int(else_expr)
             }
         }
-        _ => Err("designator subscript must be constant integer expression".to_owned()),
+        _ => None,
     }
 }
 
@@ -295,9 +324,7 @@ impl HirCtx<'_> {
             local_map,
         ) {
             Ok(r) => r,
-            Err(e) => {
-                self.terminate_with_error(span, &e);
-            }
+            Err(err) => self.terminate_with_spanned_error(err),
         }
     }
 
@@ -307,7 +334,7 @@ impl HirCtx<'_> {
         initializer: Spanned<Initializer<LocalResolver>>,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
-    ) -> Result<InitializerTree, String> {
+    ) -> Result<InitializerTree, (co2_ast::Span, String)> {
         let span = self.to_rust_span(initializer.1);
         match initializer.0 {
             Initializer::Expr(expr) => {
@@ -324,7 +351,12 @@ impl HirCtx<'_> {
                     ));
                 }
                 let expr = self.lower_expr(expr, locals, local_map)?;
-                let coerced = coerce_expr_to_type(expr, expected_ty)?;
+                let coerced = coerce_expr_to_type(expr, expected_ty).ok_or_else(|| {
+                    spanned_error(
+                        initializer.1,
+                        format!("initializer type mismatch: expected {expected_ty:?}"),
+                    )
+                })?;
                 Ok(InitializerTree::Leaf(coerced))
             }
             Initializer::List(items) => {
@@ -362,12 +394,14 @@ impl HirCtx<'_> {
                     }
                 }
                 if self.adt_logical_field_tys(expected_ty).is_none() && !is_array_ty(expected_ty) {
-                    let first = items
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| "empty initializer list for scalar type".to_owned())?;
+                    let first = items.into_iter().next().ok_or_else(|| {
+                        spanned_error(initializer.1, "empty initializer list for scalar type")
+                    })?;
                     if first.0.designators.is_some() {
-                        return Err("designators are invalid for scalar initializer".to_owned());
+                        return Err(spanned_error(
+                            initializer.1,
+                            "designators are invalid for scalar initializer",
+                        ));
                     }
                     return Ok(self.lower_to_initializer_tree(
                         expected_ty,
@@ -406,8 +440,9 @@ impl HirCtx<'_> {
                     }
                     c
                 } else {
-                    return Err(format!(
-                        "invalid initializer list target type: {expected_ty:?}"
+                    return Err(spanned_error(
+                        initializer.1,
+                        format!("invalid initializer list target type: {expected_ty:?}"),
                     ));
                 };
 
@@ -455,9 +490,12 @@ impl HirCtx<'_> {
                                 );
                             }
                             let elem_ty = array_elem_ty(cursor.ty()).ok_or_else(|| {
-                                format!(
-                                    "GNU range designator used on non-array type: {:?}",
-                                    cursor.ty()
+                                spanned_error(
+                                    item_span,
+                                    format!(
+                                        "GNU range designator used on non-array type: {:?}",
+                                        cursor.ty()
+                                    ),
                                 )
                             })?;
                             repeated_range = Some((start_idx, end_idx, elem_ty));
@@ -516,7 +554,7 @@ impl HirCtx<'_> {
                             self.array_to_pointer_decay_if_array(&mut expr);
                             self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
                             loop {
-                                if let Ok(coerced) =
+                                if let Some(coerced) =
                                     coerce_expr_to_type(expr.clone(), value_cursor.ty())
                                 {
                                     break InitializerTree::Leaf(coerced);

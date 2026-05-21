@@ -7,5 +7,5 @@
 void f(void)
 {
     int xs[BUILD_ASSERT_OR_ZERO(0)];
-        //^^^^^^^^^^^^^^^^^^^^^^^^^ error: array size must be a non-negative integer, got -1
+         //^^^^^^^^^^^^^^^^^^^^^^^ error: array size must be a non-negative integer, got -1
 }

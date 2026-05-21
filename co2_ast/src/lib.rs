@@ -919,9 +919,7 @@ impl LazyRustConstExpr {
     pub fn constant_len(&self) -> Option<u128> {
         if let [(token, _)] = &self.tokens[..] {
             match token {
-                Token::Integer(text, IntegerSuffix::None) => {
-                    parse_unsigned_integer_constant(text).ok()
-                }
+                Token::Integer(text, IntegerSuffix::None) => parse_unsigned_integer_constant(text),
                 _ => None,
             }
         } else {
@@ -1010,7 +1008,7 @@ impl LazySubscription {
                 if !matches!(suffix, IntegerSuffix::None) {
                     return None;
                 }
-                parse_unsigned_integer_constant(text).ok()
+                parse_unsigned_integer_constant(text)
             }
             Token::FloatLit(text, suffix) => {
                 if !matches!(suffix, FloatSuffix::None) {
@@ -1183,16 +1181,16 @@ pub struct ModItem {
     pub inline_content: Option<Spanned<Vec<Spanned<Token>>>>,
 }
 
-pub fn parse_unsigned_integer_constant(text: &str) -> Result<u128, String> {
+pub fn parse_unsigned_integer_constant(text: &str) -> Option<u128> {
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        return u128::from_str_radix(hex, 16).map_err(|e| e.to_string());
+        return u128::from_str_radix(hex, 16).ok();
     }
 
     if text.len() > 1
         && let Some(octal) = text.strip_prefix('0')
     {
-        return u128::from_str_radix(octal, 8).map_err(|e| e.to_string());
+        return u128::from_str_radix(octal, 8).ok();
     }
 
-    text.parse::<u128>().map_err(|e| e.to_string())
+    text.parse::<u128>().ok()
 }

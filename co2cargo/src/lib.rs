@@ -1,7 +1,38 @@
 use std::env;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[derive(Debug)]
+enum CargoInitError {
+    RunCargoInit(std::io::Error),
+    CargoInitFailed(String),
+    CurrentDir(std::io::Error),
+    ProjectNameFromCurrentDirectory,
+    MissingExpectedFile(PathBuf),
+    WriteFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+impl fmt::Display for CargoInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RunCargoInit(err) => write!(f, "failed to run cargo init: {err}"),
+            Self::CargoInitFailed(stderr) => write!(f, "cargo init failed: {stderr}"),
+            Self::CurrentDir(err) => write!(f, "get current dir: {err}"),
+            Self::ProjectNameFromCurrentDirectory => {
+                f.write_str("could not determine project name from current directory")
+            }
+            Self::MissingExpectedFile(path) => {
+                write!(f, "expected file {} does not exist", path.display())
+            }
+            Self::WriteFile { path, source } => write!(f, "write {}: {}", path.display(), source),
+        }
+    }
+}
 
 pub fn main_with_args(args: &[String]) -> i32 {
     if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
@@ -140,21 +171,18 @@ fn run_cargo(args: &[String]) -> i32 {
     status.code().unwrap_or(1)
 }
 
-fn cargo_init(args: &[String]) -> Result<(), String> {
+fn cargo_init(args: &[String]) -> Result<(), CargoInitError> {
     let mut cmd = Command::new("cargo");
     cmd.arg("init");
     cmd.args(args);
 
     println!("Running: cargo init {}", args.join(" "));
 
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run cargo init: {e}"))?;
+    let output = cmd.output().map_err(CargoInitError::RunCargoInit)?;
 
     if !output.status.success() {
-        return Err(format!(
-            "cargo init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+        return Err(CargoInitError::CargoInitFailed(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
         ));
     }
 
@@ -171,23 +199,23 @@ fn cargo_init(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn determine_project_dir(args: &[String]) -> Result<PathBuf, String> {
+fn determine_project_dir(args: &[String]) -> Result<PathBuf, CargoInitError> {
     for arg in args {
         if !arg.starts_with('-') && arg != "init" {
             return Ok(PathBuf::from(arg));
         }
     }
 
-    let cwd = env::current_dir().map_err(|e| format!("get current dir: {e}"))?;
+    let cwd = env::current_dir().map_err(CargoInitError::CurrentDir)?;
     let name = cwd
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or("could not determine project name from current directory")?;
+        .ok_or(CargoInitError::ProjectNameFromCurrentDirectory)?;
 
     Ok(cwd.join(name))
 }
 
-fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), String> {
+fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), CargoInitError> {
     let src_dir = if is_lib {
         project_dir.join("src").join("lib.rs")
     } else {
@@ -195,15 +223,15 @@ fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), String> {
     };
 
     if !src_dir.exists() {
-        return Err(format!(
-            "expected file {} does not exist",
-            src_dir.display()
-        ));
+        return Err(CargoInitError::MissingExpectedFile(src_dir));
     }
 
     let new_content = "#![language(co2)]\n".to_owned();
 
-    fs::write(&src_dir, new_content).map_err(|e| format!("write {}: {}", src_dir.display(), e))?;
+    fs::write(&src_dir, new_content).map_err(|source| CargoInitError::WriteFile {
+        path: src_dir.clone(),
+        source,
+    })?;
 
     let co2_file = project_dir.join(if is_lib {
         "src/lib.co2"
@@ -217,8 +245,10 @@ fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), String> {
         "fn main() {}\n"
     };
 
-    fs::write(&co2_file, co2_template)
-        .map_err(|e| format!("write {}: {}", co2_file.display(), e))?;
+    fs::write(&co2_file, co2_template).map_err(|source| CargoInitError::WriteFile {
+        path: co2_file.clone(),
+        source,
+    })?;
 
     println!("Added #![language(co2)] to {}", src_dir.display());
     println!("Created {}", co2_file.display());
