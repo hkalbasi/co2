@@ -304,8 +304,10 @@ where
                 statement: Box::new(statement),
             });
         let default_statement = just(Token::Default)
-            .ignore_then(just(Token::Colon).ignore_then(stmt_rec.clone()))
-            .map(|statement| Statement::Default {
+            .map_with(|_, e| e.span())
+            .then(just(Token::Colon).ignore_then(stmt_rec.clone()))
+            .map(|(keyword_span, statement)| Statement::Default {
+                keyword_span,
                 statement: Box::new(statement),
             });
 

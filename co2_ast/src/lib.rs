@@ -54,6 +54,7 @@ pub enum Statement<R: TypeResolver> {
         statement: Box<Spanned<Statement<R>>>,
     },
     Default {
+        keyword_span: Span,
         statement: Box<Spanned<Statement<R>>>,
     },
     Label {

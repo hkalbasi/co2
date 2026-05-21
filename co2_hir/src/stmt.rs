@@ -97,7 +97,7 @@ impl HirCtx<'_> {
             }
             Statement::Case { expr, statement } => {
                 let Some((discr_local, discr_ty)) = self.current_switch_discr() else {
-                    self.terminate_with_error(parser_span, "case label outside of switch body");
+                    self.terminate_with_error(expr.1, "case label outside of switch body");
                 };
                 let case_label = self.fresh_label();
                 let case_expr_span = expr.1;
@@ -108,8 +108,8 @@ impl HirCtx<'_> {
                     self.terminate_with_error(
                         case_expr_span,
                         &format!(
-                            "switch case expression must be integer-like, got {:?}",
-                            case_expr.ty
+                            "switch case expression must be integer-like, got {}",
+                            self.format_ty(case_expr.ty)
                         ),
                     );
                 }
@@ -143,12 +143,12 @@ impl HirCtx<'_> {
                 out.push(HirStmt::Label(case_label, span));
                 self.lower_stmt(statement.0, statement.1, out, locals, local_map);
             }
-            Statement::Default { statement } => {
+            Statement::Default { keyword_span, statement } => {
                 if !self.in_switch() {
-                    self.terminate_with_error(parser_span, "default label outside of switch body");
+                    self.terminate_with_error(keyword_span, "default label outside of switch body");
                 }
                 let label = self.fresh_label();
-                self.register_default(label, parser_span);
+                self.register_default(label, keyword_span);
                 out.push(HirStmt::Label(label, span));
                 self.lower_stmt(statement.0, statement.1, out, locals, local_map);
             }
@@ -356,13 +356,17 @@ impl HirCtx<'_> {
                 out.push(HirStmt::Label(end_label, span));
             }
             Statement::Switch { expr, body } => {
+                let switch_expr_span = expr.1;
                 let discr = self
                     .lower_expr(expr, locals, local_map)
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                 if !is_integer_ty(discr.ty) {
                     self.terminate_with_error(
-                        parser_span,
-                        &format!("switch expression must be integer-like, got {:?}", discr.ty),
+                        switch_expr_span,
+                        &format!(
+                            "switch expression must be integer-like, got {}",
+                            self.format_ty(discr.ty)
+                        ),
                     );
                 }
                 let discr_ty = discr.ty;

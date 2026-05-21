@@ -400,7 +400,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Statement<R>> {
                     statement.pretty_print(pp);
                 });
             }
-            Statement::Default { statement } => {
+            Statement::Default { keyword_span: _, statement } => {
                 pp.node("Default", &sp, |pp| statement.pretty_print(pp));
             }
             Statement::Label { name, statement } => {
