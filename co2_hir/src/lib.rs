@@ -8,7 +8,7 @@ mod resolver;
 mod stmt;
 mod ty;
 
-pub use co2_crate_sig::WellknownDefs;
+pub use co2_crate_sig::{LocalResolver, WellknownDefs};
 pub use decl::HirDecl;
 pub use expr::{HirBinOp, HirExpr, HirExprKind, HirLogicalOp, ReturnSemantic};
 pub(crate) use item::infer_array_len_from_initializer_in_scope;
@@ -19,4 +19,4 @@ pub use item::{
 };
 pub use resolver::{HirCtx, ResolvedValue};
 pub use stmt::HirStmt;
-pub use ty::primitive_type;
+pub use ty::{format_ty, primitive_type};

@@ -1957,6 +1957,18 @@ int main87() {
 	return 0;
 }
 
+typedef int cb_88(const char *s, void *data);
+
+static void takes_cb_88(cb_88 cb) {
+    if (cb)
+        cb("", NULL);
+}
+
+int main88() {
+    takes_cb_88(NULL);
+    return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
@@ -1979,7 +1991,7 @@ int main() {
 		main71, main72, main73, main74, main75,
 		main76, main77, main78, main79, main80,
 		main81, main82, main83, main84, main85,
-		main86, main87,
+		main86, main87, main88,
 	};
 	
 	int i;

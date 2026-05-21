@@ -1783,7 +1783,11 @@ impl Builder<'_, '_> {
         if src_mu_fn_ptr.is_some() && dst_mu_fn_ptr.is_some() {
             return self.write_value_into_maybe_uninit_storage(dst_ty, inner_op, src_ty, span);
         }
-        panic!("unsupported cast from {src_ty:?} to {dst_ty:?}");
+        panic!(
+            "unsupported cast from {} to {}",
+            self.format_ty(src_ty),
+            self.format_ty(dst_ty)
+        );
     }
 
     pub(crate) fn lower_call_expr(

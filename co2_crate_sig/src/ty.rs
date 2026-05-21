@@ -1753,10 +1753,14 @@ impl LocalResolverBase {
                             }
                             CTy::Function(sig) => {
                                 // C adjusts function parameters to function pointers.
-                                HirTy {
-                                    kind: HirTyKind::FnPtr(Box::new(sig)),
-                                    span: rust_span,
-                                }
+                                self.maybe_uninit_of(
+                                    HirTy {
+                                        kind: HirTyKind::FnPtr(Box::new(sig)),
+                                        span: rust_span,
+                                    },
+                                    rust_span,
+                                    span,
+                                )
                             }
                             CTy::UnsizedArray(elem) => {
                                 let span = elem.span;

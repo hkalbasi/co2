@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use co2_hir::{HirBody, LabelId, LocalId, WellknownDefs};
+use co2_hir::{HirBody, LabelId, LocalId, LocalResolver, WellknownDefs};
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
     CrateDefType, DefId,
@@ -17,6 +17,7 @@ pub fn build_mir_for_body(
     owner: DefId,
     file_id: rustc_gen::FileId,
     wellknown_defs: WellknownDefs,
+    decl_resolver: Option<LocalResolver>,
 ) -> Body {
     let span = ctx.span_in_file(file_id, 0, 0);
 
@@ -53,6 +54,7 @@ pub fn build_mir_for_body(
         pending_indirect_gotos: Vec::new(),
         span,
         wellknown_defs,
+        decl_resolver,
     };
 
     for stmt in &body.stmts {
@@ -75,6 +77,7 @@ pub fn build_mir_for_body(
 pub(crate) struct Builder<'ctx, 'tcx> {
     pub(crate) ctx: &'ctx rustc_gen::HirStructureCtx<'tcx>,
     pub(crate) owner: DefId,
+    pub(crate) decl_resolver: Option<co2_hir::LocalResolver>,
     pub(crate) wellknown_defs: WellknownDefs,
     pub(crate) local_indices: HashMap<LocalId, usize>,
     pub(crate) locals: Vec<MirLocalDecl>,
@@ -87,6 +90,12 @@ pub(crate) struct Builder<'ctx, 'tcx> {
     pub(crate) pending_indirect_gotos: Vec<usize>,
     pub(crate) span: RustSpan,
     pub(crate) c_variadic_local: Option<usize>,
+}
+
+impl Builder<'_, '_> {
+    pub(crate) fn format_ty(&self, ty: Ty) -> String {
+        co2_hir::format_ty(self.decl_resolver.as_ref(), ty)
+    }
 }
 
 pub(crate) fn variant_idx(id: usize) -> VariantIdx {

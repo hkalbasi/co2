@@ -1441,7 +1441,11 @@ impl HirCtx<'_> {
                 {
                     return Err(spanned_error(
                         parser_span,
-                        format!("unsupported cast from {:?} to {:?}", inner.ty, target_ty),
+                        format!(
+                            "unsupported cast from {} to {}",
+                            self.format_ty(inner.ty),
+                            self.format_ty(target_ty)
+                        ),
                     ));
                 }
                 Ok(HirExpr {

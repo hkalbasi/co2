@@ -193,7 +193,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     &span_converter,
                     Some(function_name),
                     def.fn_sig().skip_binder().output(),
-                    resolver,
+                    resolver.clone(),
                 );
 
                 let hir = match std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -213,13 +213,21 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                 def.0,
                                 self.file_id,
                                 self.wellknown_defs,
+                                Some(resolver),
                             );
                         }
                         std::panic::resume_unwind(payload);
                     }
                 };
 
-                co2_mir::build_mir_for_body(&hir, &ctx, def.0, self.file_id, self.wellknown_defs)
+                co2_mir::build_mir_for_body(
+                    &hir,
+                    &ctx,
+                    def.0,
+                    self.file_id,
+                    self.wellknown_defs,
+                    Some(resolver),
+                )
             }
             MirOwnerInfo::FnBodyError { def, body_span } => {
                 let hir = build_error_fn_body(
@@ -227,7 +235,14 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     &def.fn_sig().skip_binder(),
                     self.map_co2_span(&ctx, body_span),
                 );
-                co2_mir::build_mir_for_body(&hir, &ctx, def.0, self.file_id, self.wellknown_defs)
+                co2_mir::build_mir_for_body(
+                    &hir,
+                    &ctx,
+                    def.0,
+                    self.file_id,
+                    self.wellknown_defs,
+                    None,
+                )
             }
         }
     }
@@ -256,7 +271,7 @@ impl Co2GeneratorState {
             &span_converter,
             None,
             CrateItem(def).ty(),
-            resolver,
+            resolver.clone(),
         );
 
         let mut target_ty = CrateItem(def).ty();
@@ -276,7 +291,14 @@ impl Co2GeneratorState {
 
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx);
 
-        co2_mir::build_mir_for_body(&hir, ctx, def, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(
+            &hir,
+            ctx,
+            def,
+            self.file_id,
+            self.wellknown_defs,
+            Some(resolver),
+        )
     }
 
     fn lower_explicit_static_mir_with_array_len(
@@ -314,10 +336,17 @@ impl Co2GeneratorState {
             &span_converter,
             None,
             target_ty,
-            resolver,
+            resolver.clone(),
         );
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx);
-        co2_mir::build_mir_for_body(&hir, ctx, def, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(
+            &hir,
+            ctx,
+            def,
+            self.file_id,
+            self.wellknown_defs,
+            Some(resolver),
+        )
     }
 
     fn build_enum_prev_plus_body(
@@ -349,7 +378,7 @@ impl Co2GeneratorState {
             span,
         )];
 
-        co2_mir::build_mir_for_body(&hir, ctx, prev, self.file_id, self.wellknown_defs)
+        co2_mir::build_mir_for_body(&hir, ctx, prev, self.file_id, self.wellknown_defs, None)
     }
 }
 

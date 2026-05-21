@@ -13,21 +13,18 @@ const ENUM_FIELD_NAME: &str = "__co2_enum_value";
 
 impl HirCtx<'_> {
     pub(crate) fn format_ty(&self, ty: Ty) -> String {
-        match ty.kind() {
-            TyKind::RigidTy(rigid) => format_rigid_ty(&self.decl_resolver, rigid),
-            TyKind::Alias(_, _) | TyKind::Param(_) | TyKind::Bound(_, _) => format!("{ty:?}"),
-        }
+        format_ty(Some(&self.decl_resolver), ty)
     }
 }
 
-fn format_ty(resolver: &LocalResolver, ty: Ty) -> String {
+pub fn format_ty(resolver: Option<&LocalResolver>, ty: Ty) -> String {
     match ty.kind() {
         TyKind::RigidTy(rigid) => format_rigid_ty(resolver, rigid),
         TyKind::Alias(_, _) | TyKind::Param(_) | TyKind::Bound(_, _) => format!("{ty:?}"),
     }
 }
 
-fn format_rigid_ty(resolver: &LocalResolver, ty: RigidTy) -> String {
+fn format_rigid_ty(resolver: Option<&LocalResolver>, ty: RigidTy) -> String {
     match ty {
         RigidTy::Bool => "bool".to_owned(),
         RigidTy::Char => "char".to_owned(),
@@ -35,7 +32,9 @@ fn format_rigid_ty(resolver: &LocalResolver, ty: RigidTy) -> String {
         RigidTy::Uint(uint_ty) => format_uint_ty(uint_ty).to_owned(),
         RigidTy::Float(float_ty) => format_float_ty(float_ty).to_owned(),
         RigidTy::Adt(adt, args) => {
-            let base = if let Some(info) = resolver.c_adt_display_info(adt.0) {
+            let base = if let Some(resolver) = resolver
+                && let Some(info) = resolver.c_adt_display_info(adt.0)
+            {
                 let kind = if info.is_enum {
                     "enum"
                 } else {
@@ -81,6 +80,7 @@ fn format_rigid_ty(resolver: &LocalResolver, ty: RigidTy) -> String {
                 .inputs()
                 .iter()
                 .map(|ty| format_ty(resolver, *ty))
+                .chain(sig.c_variadic.then(|| "...".to_owned()))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("fn({params}) -> {}", format_ty(resolver, sig.output()))
@@ -116,7 +116,7 @@ fn format_rigid_ty(resolver: &LocalResolver, ty: RigidTy) -> String {
 }
 
 fn format_with_generic_args(
-    resolver: &LocalResolver,
+    resolver: Option<&LocalResolver>,
     base: String,
     args: &[GenericArgKind],
 ) -> String {
