@@ -619,7 +619,8 @@ impl HirCtx<'_> {
             ))
         );
         let items = if is_byte_string {
-            s.iter()
+            s.bytes
+                .iter()
                 .copied()
                 .chain([0u8])
                 .map(|byte| {
@@ -642,7 +643,7 @@ impl HirCtx<'_> {
                 })
                 .collect::<Vec<_>>()
         } else {
-            String::from_utf8_lossy(&s)
+            String::from_utf8_lossy(&s.bytes)
                 .chars()
                 .chain(['\0'])
                 .map(|ch| {

@@ -1,9 +1,185 @@
-use chumsky::{input::MapExtra, prelude::*, span::SimpleSpan};
-use co2_ast::{FloatSuffix, IntegerSuffix, Token};
+use chumsky::{error::Rich, input::MapExtra, prelude::*, span::SimpleSpan};
+use co2_ast::{FloatSuffix, IntegerSuffix, StringLiteral, StringLiteralPrefix, Token};
+
+type LexerError<'src> = Rich<'src, char, SimpleSpan<usize>>;
+type LexerWarning<'src> = Rich<'src, String, SimpleSpan<usize>>;
+type LexerExtra<'src> =
+    extra::Full<LexerError<'src>, extra::SimpleState<Vec<LexerWarning<'src>>>, ()>;
+
+fn literal_subspan(
+    literal_span: SimpleSpan<usize>,
+    start_offset: usize,
+    end_offset: usize,
+) -> SimpleSpan<usize> {
+    SimpleSpan::new(
+        (),
+        (literal_span.start + start_offset)..(literal_span.start + end_offset),
+    )
+}
+
+fn push_escape_overflow_warning<'src>(
+    e: &mut MapExtra<'src, '_, &'src str, LexerExtra<'src>>,
+    span: SimpleSpan<usize>,
+    kind: &str,
+) {
+    e.state().push(Rich::custom(
+        span,
+        format!("{kind} escape sequence out of range; using low 8 bits"),
+    ));
+}
+
+fn decode_literal_bytes<'src>(
+    raw: &str,
+    literal_span: SimpleSpan<usize>,
+    e: &mut MapExtra<'src, '_, &'src str, LexerExtra<'src>>,
+) -> Result<Vec<u8>, LexerError<'src>> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut chars = raw.char_indices().peekable();
+
+    while let Some((idx, ch)) = chars.next() {
+        if ch != '\\' {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+
+        let Some((escape_idx, escape)) = chars.next() else {
+            return Err(Rich::custom(
+                literal_subspan(literal_span, idx, raw.len()),
+                "unterminated escape sequence",
+            ));
+        };
+
+        match escape {
+            '\n' => {}
+            '\r' => {
+                if let Some(&(_, '\n')) = chars.peek() {
+                    chars.next();
+                }
+            }
+            'a' => out.push(b'\x07'),
+            'b' => out.push(b'\x08'),
+            'f' => out.push(b'\x0c'),
+            'n' => out.push(b'\n'),
+            'r' => out.push(b'\r'),
+            't' => out.push(b'\t'),
+            'v' => out.push(b'\x0b'),
+            '\\' => out.push(b'\\'),
+            '\'' => out.push(b'\''),
+            '"' => out.push(b'"'),
+            '?' => out.push(b'?'),
+            '0'..='7' => {
+                let mut digits = String::from(escape);
+                let mut end_offset = escape_idx + escape.len_utf8();
+
+                for _ in 0..2 {
+                    let Some(&(next_idx, next_ch)) = chars.peek() else {
+                        break;
+                    };
+                    if !matches!(next_ch, '0'..='7') {
+                        break;
+                    }
+                    digits.push(next_ch);
+                    end_offset = next_idx + next_ch.len_utf8();
+                    chars.next();
+                }
+
+                let value = u16::from_str_radix(&digits, 8).expect("octal digits are validated");
+                if value > u16::from(u8::MAX) {
+                    push_escape_overflow_warning(
+                        e,
+                        literal_subspan(literal_span, idx, end_offset),
+                        "octal",
+                    );
+                }
+                out.push(value as u8);
+            }
+            'x' => {
+                let Some(&(_, next)) = chars.peek() else {
+                    return Err(Rich::custom(
+                        literal_subspan(literal_span, idx, escape_idx + escape.len_utf8()),
+                        "invalid hex escape sequence",
+                    ));
+                };
+                if !next.is_ascii_hexdigit() {
+                    return Err(Rich::custom(
+                        literal_subspan(literal_span, idx, escape_idx + escape.len_utf8()),
+                        "invalid hex escape sequence",
+                    ));
+                }
+
+                let mut value = 0u8;
+                let mut overflowed = false;
+                let mut end_offset = escape_idx + escape.len_utf8();
+
+                while let Some(&(digit_idx, digit)) = chars.peek() {
+                    if !digit.is_ascii_hexdigit() {
+                        break;
+                    }
+                    let digit_value = digit.to_digit(16).expect("hex digit was validated") as u16;
+                    overflowed |= u16::from(value) * 16 + digit_value > u16::from(u8::MAX);
+                    value = value.wrapping_mul(16).wrapping_add(digit_value as u8);
+                    end_offset = digit_idx + digit.len_utf8();
+                    chars.next();
+                }
+
+                if overflowed {
+                    push_escape_overflow_warning(
+                        e,
+                        literal_subspan(literal_span, idx, end_offset),
+                        "hex",
+                    );
+                }
+                out.push(value);
+            }
+            'u' | 'U' => {
+                let digits = if escape == 'u' { 4 } else { 8 };
+                let mut value = 0u32;
+                let mut end_offset = escape_idx + escape.len_utf8();
+
+                for _ in 0..digits {
+                    let Some((digit_idx, digit)) = chars.next() else {
+                        return Err(Rich::custom(
+                            literal_subspan(literal_span, idx, end_offset),
+                            "invalid universal character name",
+                        ));
+                    };
+                    if !digit.is_ascii_hexdigit() {
+                        return Err(Rich::custom(
+                            literal_subspan(literal_span, idx, digit_idx + digit.len_utf8()),
+                            "invalid universal character name",
+                        ));
+                    }
+                    value = value
+                        .checked_mul(16)
+                        .and_then(|value| value.checked_add(digit.to_digit(16).unwrap()))
+                        .expect("universal character values fit in u32");
+                    end_offset = digit_idx + digit.len_utf8();
+                }
+
+                let Some(ch) = char::from_u32(value) else {
+                    return Err(Rich::custom(
+                        literal_subspan(literal_span, idx, end_offset),
+                        "invalid universal character name",
+                    ));
+                };
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+            }
+            _ => {
+                return Err(Rich::custom(
+                    literal_subspan(literal_span, idx, escape_idx + escape.len_utf8()),
+                    "invalid escape sequence",
+                ));
+            }
+        }
+    }
+
+    Ok(out)
+}
 
 // Helper function to parse integer suffixes
-fn integer_suffix_parser<'src>()
--> impl Parser<'src, &'src str, IntegerSuffix, extra::Err<Rich<'src, char, SimpleSpan<usize>>>> {
+fn integer_suffix_parser<'src>() -> impl Parser<'src, &'src str, IntegerSuffix, LexerExtra<'src>> {
     // First try to parse combinations
     let unsigned_long_long = just("ull")
         .or(just("ULL"))
@@ -27,8 +203,7 @@ fn integer_suffix_parser<'src>()
 }
 
 // Helper function to parse float suffixes
-fn float_suffix_parser<'src>()
--> impl Parser<'src, &'src str, FloatSuffix, extra::Err<Rich<'src, char, SimpleSpan<usize>>>> {
+fn float_suffix_parser<'src>() -> impl Parser<'src, &'src str, FloatSuffix, LexerExtra<'src>> {
     just('f')
         .or(just('F'))
         .to(FloatSuffix::Float)
@@ -37,12 +212,8 @@ fn float_suffix_parser<'src>()
         .map(|opt| opt.unwrap_or(FloatSuffix::None))
 }
 
-pub fn lexer<'src>() -> impl Parser<
-    'src,
-    &'src str,
-    Vec<(Token, SimpleSpan<usize>)>,
-    extra::Err<Rich<'src, char, SimpleSpan<usize>>>,
-> {
+pub fn lexer<'src>()
+-> impl Parser<'src, &'src str, Vec<(Token, SimpleSpan<usize>)>, LexerExtra<'src>> {
     // ----- Comments -----
     let line_comment = just("//")
         .then(any().and_is(just('\n').not()).repeated())
@@ -188,77 +359,48 @@ pub fn lexer<'src>() -> impl Parser<
         .map(|(num, suffix)| Token::FloatLit(num, suffix));
 
     // ----- Character and string literals -----
-    let escape_sequence = just('\\').ignore_then(choice((
-        just('a').to(b'\x07'),
-        just('b').to(b'\x08'),
-        just('f').to(b'\x0c'),
-        just('n').to(b'\n'),
-        just('r').to(b'\r'),
-        just('t').to(b'\t'),
-        just('v').to(b'\x0b'),
-        just('\\').to(b'\\'),
-        just('\'').to(b'\''),
-        just('"').to(b'"'),
-        just('?').to(b'?'),
-        one_of("01234567")
-            .repeated()
-            .at_least(1)
-            .at_most(3)
-            .to_slice()
-            .try_map(|s: &str, span| {
-                u8::from_str_radix(s, 8)
-                    .map_err(|_| Rich::custom(span, "invalid octal escape sequence"))
-            }),
-        just('x').ignore_then(
-            one_of("0123456789abcdefABCDEF")
-                .repeated()
-                .at_least(1)
-                .to_slice()
-                .try_map(|s: &str, span| {
-                    u8::from_str_radix(s, 16)
-                        .map_err(|_| Rich::custom(span, "invalid hex escape sequence"))
-                }),
-        ),
-    )));
+    let literal_prefix = choice((
+        just("u8").to(StringLiteralPrefix::Utf8),
+        just("u").to(StringLiteralPrefix::Utf16),
+        just("U").to(StringLiteralPrefix::Utf32),
+        just("L").to(StringLiteralPrefix::Wide),
+    ))
+    .or_not();
+    let char_literal_prefix = literal_prefix.ignored().or_not();
 
     let char_content = choice((
-        escape_sequence.map(|byte| vec![byte]),
-        none_of("'\\").map(|ch: char| {
-            let mut buf = [0u8; 4];
-            ch.encode_utf8(&mut buf).as_bytes().to_vec()
-        }),
+        just('\\').ignore_then(any()).ignored(),
+        none_of("'\\").ignored(),
     ))
     .repeated()
     .at_least(1)
-    .collect::<Vec<_>>()
-    .map(|parts| parts.into_iter().flatten().collect::<Vec<u8>>());
+    .to_slice()
+    .try_map_with(|raw, e| decode_literal_bytes(raw, e.span(), e));
 
-    let literal_prefix = choice((just("u8"), just("u"), just("U"), just("L")))
-        .ignored()
-        .or_not();
-
-    let char_literal = literal_prefix
+    let char_literal = char_literal_prefix
         .ignore_then(just('\''))
         .ignore_then(char_content)
         .then_ignore(just('\''))
         .map(Token::CharLit);
 
     let string_content = choice((
-        escape_sequence.map(|byte| vec![byte]),
-        none_of("\"\\").map(|ch: char| {
-            let mut buf = [0u8; 4];
-            ch.encode_utf8(&mut buf).as_bytes().to_vec()
-        }),
+        just('\\').ignore_then(any()).ignored(),
+        none_of("\"\\").ignored(),
     ))
     .repeated()
-    .collect::<Vec<_>>()
-    .map(|parts| parts.into_iter().flatten().collect::<Vec<u8>>());
+    .to_slice()
+    .try_map_with(|raw, e| decode_literal_bytes(raw, e.span(), e));
 
     let string_literal = literal_prefix
-        .ignore_then(just('"'))
-        .ignore_then(string_content)
         .then_ignore(just('"'))
-        .map(Token::StringLit);
+        .then(string_content)
+        .then_ignore(just('"'))
+        .map(|(prefix, bytes)| {
+            Token::StringLit(StringLiteral {
+                prefix: prefix.unwrap_or(StringLiteralPrefix::None),
+                bytes,
+            })
+        });
 
     // ----- Operators and punctuators -----
     let operators = choice([

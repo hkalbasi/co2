@@ -36,6 +36,13 @@ fn map_lexer_error<'src>(
     Rich::custom(map_lexer_span(*err.span(), pp), err.to_string())
 }
 
+fn map_lexer_warning<'src>(
+    warning: &Rich<'src, String, SimpleSpan<usize>>,
+    pp: Option<&co2_preprocessor::PreprocessedSource>,
+) -> Rich<'src, String, Span> {
+    Rich::custom(map_lexer_span(*warning.span(), pp), warning.to_string())
+}
+
 fn map_lexer_tokens(
     tokens: Vec<(Token, SimpleSpan<usize>)>,
     pp: Option<&co2_preprocessor::PreprocessedSource>,
@@ -67,7 +74,19 @@ fn parse_translation_unit_internal<R: TypeResolver>(
     pp: Option<&co2_preprocessor::PreprocessedSource>,
     resolver: R,
 ) -> Spanned<TranslationUnit<R>> {
-    let (tokens, errs) = lexer().parse(src).into_output_errors();
+    let mut warnings = chumsky::extra::SimpleState(Vec::new());
+    let (tokens, errs) = lexer()
+        .parse_with_state(src, &mut warnings)
+        .into_output_errors();
+
+    if !warnings.is_empty() {
+        co2_ast::emit_warnings(
+            warnings
+                .iter()
+                .map(|warning| map_lexer_warning(warning, pp))
+                .collect(),
+        );
+    }
 
     if let Some(tokens) = tokens {
         let tokens = map_lexer_tokens(tokens, pp);
@@ -182,7 +201,9 @@ fn include_body_lazy_span_uses_header_context() {
         &["-I".to_owned(), "../tests/compiletest/ui".to_owned()],
     );
     let src: &'static str = Box::leak(pp.normalized.to_string().into_boxed_str());
-    let (tokens, lex_errs) = lexer().parse(src).into_output_errors();
+    let (tokens, lex_errs) = lexer()
+        .parse_with_state(src, &mut chumsky::extra::SimpleState(Vec::new()))
+        .into_output_errors();
     assert!(lex_errs.is_empty());
     let tokens = map_lexer_tokens(tokens.unwrap(), Some(&pp));
     let tokens = tokens.leak();

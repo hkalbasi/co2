@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -266,31 +267,29 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    if let Some(expected) = directive_text(test, "run-stdout") {
-        let expected = unescape_text(&expected);
-        if normalize(&expected) != normalize(&stdout) {
-            return Err(TestError {
-                source: test.source.clone(),
-                span: None,
-                message: format!("stdout mismatch:\n  expected: {expected}\n  actual:   {stdout}"),
-            }
-            .into());
+    if let Some(expected) = output_expectation(test, "run-stdout")?
+        && normalize(&expected) != normalize(&stdout)
+    {
+        return Err(TestError {
+            source: test.source.clone(),
+            span: None,
+            message: format!("stdout mismatch:\n  expected: {expected}\n  actual:   {stdout}"),
         }
+        .into());
     }
-    if let Some(expected) = directive_text(test, "run-stderr") {
-        let expected = unescape_text(&expected);
-        if normalize(&expected) != normalize(&stderr) {
-            return Err(TestError {
-                source: test.source.clone(),
-                span: None,
-                message: format!(
-                    "stderr mismatch:\n  expected: {}\n  actual:   {}",
-                    expected.lines().next().unwrap_or(""),
-                    stderr.lines().next().unwrap_or("")
-                ),
-            }
-            .into());
+    if let Some(expected) = output_expectation(test, "run-stderr")?
+        && normalize(&expected) != normalize(&stderr)
+    {
+        return Err(TestError {
+            source: test.source.clone(),
+            span: None,
+            message: format!(
+                "stderr mismatch:\n  expected: {}\n  actual:   {}",
+                expected.lines().next().unwrap_or(""),
+                stderr.lines().next().unwrap_or("")
+            ),
         }
+        .into());
     }
 
     for pat in test
@@ -333,6 +332,25 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn output_expectation(test: &TestCase, key: &str) -> Result<Option<String>> {
+    let Some(expected) = directive_text(test, key) else {
+        return Ok(None);
+    };
+
+    if let Some(path) = expected.strip_prefix("FILE:") {
+        let expected_path = test
+            .path
+            .parent()
+            .context("test path has no parent")?
+            .join(path.trim());
+        return fs::read_to_string(&expected_path)
+            .with_context(|| format!("failed to read {}", expected_path.display()))
+            .map(Some);
+    }
+
+    Ok(Some(unescape_text(&expected)))
 }
 
 fn check_debuginfo(test: &TestCase, compile: &CompileResult) -> Result<TestOutcome> {

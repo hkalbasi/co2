@@ -96,7 +96,7 @@ pub enum Constant {
     Int(i128, IntegerSuffix),
     Float(f64, FloatSuffix),
     Char(u32),
-    String(Vec<u8>),
+    String(StringLiteral),
 }
 
 #[derive(Debug, Clone)]
@@ -540,7 +540,7 @@ pub enum Token {
     Integer(String, IntegerSuffix),
     FloatLit(String, FloatSuffix),
     CharLit(Vec<u8>),
-    StringLit(Vec<u8>),
+    StringLit(StringLiteral),
 
     // Operators
     Plus,       // +
@@ -635,6 +635,64 @@ pub enum FloatSuffix {
     Long,  // l or L
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StringLiteralPrefix {
+    None,
+    Utf8,
+    Utf16,
+    Utf32,
+    Wide,
+}
+
+impl StringLiteralPrefix {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Utf8 => "u8",
+            Self::Utf16 => "u",
+            Self::Utf32 => "U",
+            Self::Wide => "L",
+        }
+    }
+
+    pub fn element_size(self) -> usize {
+        match self {
+            Self::None | Self::Utf8 => 1,
+            Self::Utf16 => 2,
+            Self::Utf32 | Self::Wide => 4,
+        }
+    }
+
+    pub fn code_unit_len(self, bytes: &[u8]) -> usize {
+        match self {
+            Self::None | Self::Utf8 => bytes.len(),
+            Self::Utf16 | Self::Utf32 | Self::Wide => {
+                String::from_utf8_lossy(bytes).chars().count()
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StringLiteral {
+    pub prefix: StringLiteralPrefix,
+    pub bytes: Vec<u8>,
+}
+
+impl StringLiteral {
+    pub fn code_unit_len(&self) -> usize {
+        self.prefix.code_unit_len(&self.bytes)
+    }
+
+    pub fn nul_terminated_len(&self) -> usize {
+        self.code_unit_len() + 1
+    }
+
+    pub fn storage_size(&self) -> usize {
+        self.nul_terminated_len() * self.prefix.element_size()
+    }
+}
+
 fn fmt_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
     for &byte in bytes {
         for escaped in escape_default(byte) {
@@ -658,9 +716,9 @@ impl Display for Constant {
                 }
                 write!(f, "'")
             }
-            Constant::String(bytes) => {
-                write!(f, "\"")?;
-                fmt_bytes(f, bytes)?;
+            Constant::String(literal) => {
+                write!(f, "{}\"", literal.prefix.as_str())?;
+                fmt_bytes(f, &literal.bytes)?;
                 write!(f, "\"")
             }
         }
@@ -748,9 +806,9 @@ impl Display for Token {
                 fmt_bytes(f, bytes)?;
                 write!(f, "'")
             }
-            Token::StringLit(bytes) => {
-                write!(f, "\"")?;
-                fmt_bytes(f, bytes)?;
+            Token::StringLit(literal) => {
+                write!(f, "{}\"", literal.prefix.as_str())?;
+                fmt_bytes(f, &literal.bytes)?;
                 write!(f, "\"")
             }
 

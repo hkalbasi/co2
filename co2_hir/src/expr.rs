@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use co2_ast::{
     BinOp as ParsedBinOp, Constant, Expression, GenericAssociation, IntegerSuffix, Spanned,
-    Statement, StatementOrDeclaration, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
+    Statement, StatementOrDeclaration, StringLiteral, StringLiteralPrefix,
+    UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
 use co2_crate_sig::{LocalResolver, LogicalAdtFieldKind, MethodResolutionKind};
 use la_arena::Arena;
@@ -36,6 +37,16 @@ fn invalid_span() -> co2_ast::Span {
         end: 0,
         context: co2_ast::FileId::INVALID,
     }
+}
+
+fn string_literal_ptr_ty(literal: &StringLiteral) -> Ty {
+    let elem_ty = match literal.prefix {
+        StringLiteralPrefix::None | StringLiteralPrefix::Utf8 => Ty::signed_ty(IntTy::I8),
+        StringLiteralPrefix::Utf16 => Ty::unsigned_ty(UintTy::U16),
+        StringLiteralPrefix::Utf32 => Ty::unsigned_ty(UintTy::U32),
+        StringLiteralPrefix::Wide => Ty::signed_ty(IntTy::I32),
+    };
+    Ty::new_ptr(elem_ty, Mutability::Mut)
 }
 
 fn lower_dependency_const(
@@ -158,7 +169,7 @@ pub enum HirExprKind {
     LocalConst(LocalId),
     ConstInt(i128),
     ConstFloat(f64),
-    ConstStr(Vec<u8>),
+    ConstStr(StringLiteral),
     LabelAddress(crate::LabelId),
     Zeroed,
     UnionAggregate {
@@ -961,8 +972,10 @@ impl HirCtx<'_> {
                     })
                 }
                 co2_crate_sig::DefOrLocal::FuncName => Ok(HirExpr {
-                    kind: HirExprKind::ConstStr(
-                        self.function_name
+                    kind: HirExprKind::ConstStr(StringLiteral {
+                        prefix: StringLiteralPrefix::None,
+                        bytes: self
+                            .function_name
                             .clone()
                             .unwrap_or_else(|| {
                                 self.terminate_with_error(
@@ -971,7 +984,7 @@ impl HirCtx<'_> {
                                 )
                             })
                             .into_bytes(),
-                    ),
+                    }),
                     ty: Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut),
                     span,
                 }),
@@ -1016,8 +1029,8 @@ impl HirCtx<'_> {
                 span,
             }),
             Expression::Constant(Constant::String(s)) => Ok(HirExpr {
-                kind: HirExprKind::ConstStr(s),
-                ty: Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut),
+                kind: HirExprKind::ConstStr(s.clone()),
+                ty: string_literal_ptr_ty(&s),
                 span,
             }),
             Expression::Call { func, params } => {
@@ -1376,7 +1389,7 @@ impl HirCtx<'_> {
             Expression::Sizeof(expr) => {
                 let inner = self.lower_expr(*expr, locals, local_map)?;
                 let size = if let HirExprKind::ConstStr(s) = &inner.kind {
-                    (s.len() + 1) as u64
+                    s.storage_size() as u64
                 } else {
                     inner
                         .ty

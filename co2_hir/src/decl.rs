@@ -1048,7 +1048,7 @@ impl HirCtx<'_> {
         local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<u64, (co2_ast::Span, String)> {
         if let Expression::Constant(Constant::String(s)) = &expr.0 {
-            return Ok((s.len() + 1) as u64);
+            return Ok(s.storage_size() as u64);
         }
         let ty = self.type_of_expr_for_sizeof(expr, locals, local_map)?;
         self.sizeof_ty(ty)

@@ -10,9 +10,10 @@ use co2_ast::{
     LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
     RustFunctionParam, RustFunctionSignature, RustPath, RustPathSegment, RustTy, Span, Spanned,
     SpecifierQualifier, StatelessResolver, Statement, StatementOrDeclaration,
-    StorageClassSpecifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
-    StructOrUnionSpecifier, Token, TranslationUnit, TypeName, TypeQualifier, TypeQueryResult,
-    TypeSpecifier, UnaryOp, UpdateOp, UseItem, parse_unsigned_integer_constant,
+    StorageClassSpecifier, StringLiteral, StringLiteralPrefix, StructDeclarator,
+    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token, TranslationUnit,
+    TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp, UseItem,
+    parse_unsigned_integer_constant,
 };
 
 fn join_spans(start: Span, end: Span) -> Span {
@@ -24,6 +25,23 @@ fn join_spans(start: Span, end: Span) -> Span {
         }
     } else {
         start
+    }
+}
+
+fn merge_string_literals(parts: Vec<StringLiteral>) -> StringLiteral {
+    let prefix = parts
+        .iter()
+        .map(|part| part.prefix)
+        .find(|prefix| *prefix != StringLiteralPrefix::None)
+        .unwrap_or(StringLiteralPrefix::None);
+    debug_assert!(
+        parts
+            .iter()
+            .all(|part| part.prefix == StringLiteralPrefix::None || part.prefix == prefix)
+    );
+    StringLiteral {
+        prefix,
+        bytes: parts.into_iter().flat_map(|part| part.bytes).collect(),
     }
 }
 
@@ -707,7 +725,7 @@ where
             .repeated()
             .at_least(1)
             .collect::<Vec<_>>()
-            .map(|parts| Expression::Constant(Constant::String(parts.into_iter().flatten().collect::<Vec<u8>>()))),
+            .map(|parts| Expression::Constant(Constant::String(merge_string_literals(parts)))),
             select! {
                 Token::Integer(i, suffix) => Expression::Constant(Constant::Int(parse_integer_constant(&i), suffix)),
                 Token::FloatLit(i, suffix) => Expression::Constant(Constant::Float(parse_float_constant(&i), suffix)),

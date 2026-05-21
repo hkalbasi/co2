@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use co2_ast::{
     BinOp, Constant, DeclarationSpecifier, Declarator, Expression, GenericAssociation, Initializer,
-    IntegerSuffix, Span, Spanned, StorageClassSpecifier, StructOrUnionKind, TypeName,
-    TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp,
+    IntegerSuffix, Span, Spanned, StorageClassSpecifier, StringLiteralPrefix, StructOrUnionKind,
+    TypeName, TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp,
 };
 use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst, HirTyKind};
 use rustc_public_generative::{
@@ -1272,11 +1272,21 @@ impl LocalResolverBase {
     ) -> HirTy {
         let rust_span = self.co2_span_to_rustc(*span);
         match expr {
-            Expression::Constant(Constant::String(s)) => HirTy::new_array(
-                HirTy::signed_ty(IntTy::I8, rust_span),
-                HirTyConst::Literal(s.len() + 1),
-                rust_span,
-            ),
+            Expression::Constant(Constant::String(s)) => {
+                let elem_ty = match s.prefix {
+                    StringLiteralPrefix::None | StringLiteralPrefix::Utf8 => {
+                        HirTy::signed_ty(IntTy::I8, rust_span)
+                    }
+                    StringLiteralPrefix::Utf16 => HirTy::unsigned_ty(UintTy::U16, rust_span),
+                    StringLiteralPrefix::Utf32 => HirTy::unsigned_ty(UintTy::U32, rust_span),
+                    StringLiteralPrefix::Wide => HirTy::signed_ty(IntTy::I32, rust_span),
+                };
+                HirTy::new_array(
+                    elem_ty,
+                    HirTyConst::Literal(s.nul_terminated_len()),
+                    rust_span,
+                )
+            }
             Expression::Constant(Constant::Int(_, suffix)) => {
                 let kind = match suffix {
                     IntegerSuffix::None => HirTyKind::Int(IntTy::I32),

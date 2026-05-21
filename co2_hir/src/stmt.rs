@@ -143,7 +143,10 @@ impl HirCtx<'_> {
                 out.push(HirStmt::Label(case_label, span));
                 self.lower_stmt(statement.0, statement.1, out, locals, local_map);
             }
-            Statement::Default { keyword_span, statement } => {
+            Statement::Default {
+                keyword_span,
+                statement,
+            } => {
                 if !self.in_switch() {
                     self.terminate_with_error(keyword_span, "default label outside of switch body");
                 }

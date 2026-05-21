@@ -74,7 +74,12 @@ impl Builder<'_, '_> {
         }
     }
 
-    pub(crate) fn lower_const_string(&mut self, s: &[u8], span: RustSpan) -> MirOperand {
+    pub(crate) fn lower_const_string(
+        &mut self,
+        s: &[u8],
+        ptr_ty: Ty,
+        span: RustSpan,
+    ) -> MirOperand {
         let mut bytes = s.to_vec();
         if bytes.last().copied() != Some(0) {
             bytes.push(0);
@@ -134,21 +139,19 @@ impl Builder<'_, '_> {
             span,
         });
 
-        // Cast *const u8 → *const i8 (C char pointer convention).
-        let ptr_i8_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut);
-        let ptr_i8_local = self.new_temp(ptr_i8_ty, Mutability::Mut, span);
+        let ptr_local = self.new_temp(ptr_ty, Mutability::Mut, span);
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(
-                place(ptr_i8_local),
+                place(ptr_local),
                 Rvalue::Cast(
                     CastKind::PtrToPtr,
                     MirOperand::Copy(place(ptr_u8_local)),
-                    ptr_i8_ty,
+                    ptr_ty,
                 ),
             ),
             span,
         });
 
-        MirOperand::Copy(place(ptr_i8_local))
+        MirOperand::Copy(place(ptr_local))
     }
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ariadne::{Color, Label, Report, ReportKind, Source};
+use ariadne::{Color, Config, IndexType, Label, Report, ReportKind, Source};
 
 #[derive(Debug, Clone)]
 pub struct TestError {
@@ -66,7 +66,8 @@ pub fn render_ui_error(err: &UiTestError) {
                     let mut r = Report::build(
                         ReportKind::Error,
                         (name.as_str(), span.byte_start..span.byte_end),
-                    );
+                    )
+                    .with_config(Config::new().with_index_type(IndexType::Byte));
                     r.add_label(
                         Label::new((name.as_str(), span.byte_start..span.byte_end))
                             .with_color(Color::Red)
@@ -95,7 +96,8 @@ pub fn render_ui_error(err: &UiTestError) {
 pub fn render_test_error(path: &Path, err: &TestError) {
     let source = &err.source;
     if let Some((start, end)) = err.span {
-        let mut r = Report::build(ReportKind::Error, (path.display().to_string(), start..end));
+        let mut r = Report::build(ReportKind::Error, (path.display().to_string(), start..end))
+            .with_config(Config::new().with_index_type(IndexType::Byte));
         r.add_label(
             Label::new((path.display().to_string(), start..end))
                 .with_color(Color::Red)

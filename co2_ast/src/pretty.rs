@@ -196,14 +196,19 @@ impl PrettyPrint for Constant {
                     pp.leaf_data("Char", "", format_args!("U+{c:X}"));
                 }
             }
-            Constant::String(bytes) => {
-                let escaped: String = bytes
+            Constant::String(literal) => {
+                let escaped: String = literal
+                    .bytes
                     .iter()
                     .copied()
                     .flat_map(escape_default)
                     .map(|e| e as char)
                     .collect();
-                pp.leaf_data("String", "", format_args!("\"{escaped}\""));
+                pp.leaf_data(
+                    "String",
+                    "",
+                    format_args!("{}\"{escaped}\"", literal.prefix.as_str()),
+                );
             }
         }
     }
@@ -400,7 +405,10 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Statement<R>> {
                     statement.pretty_print(pp);
                 });
             }
-            Statement::Default { keyword_span: _, statement } => {
+            Statement::Default {
+                keyword_span: _,
+                statement,
+            } => {
                 pp.node("Default", &sp, |pp| statement.pretty_print(pp));
             }
             Statement::Label { name, statement } => {

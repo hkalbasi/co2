@@ -1045,7 +1045,7 @@ impl Builder<'_, '_> {
                 });
                 MirOperand::Copy(place(tmp))
             }
-            HirExprKind::ConstStr(s) => self.lower_const_string(s, expr.span),
+            HirExprKind::ConstStr(s) => self.lower_const_string(&s.bytes, expr.ty, expr.span),
             HirExprKind::Path(path) => match path {
                 ResolvedValue::Fn(fn_def, generic_args) => {
                     let fn_ty = Ty::from_rigid_kind(RigidTy::FnDef(

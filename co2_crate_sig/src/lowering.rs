@@ -1381,7 +1381,7 @@ fn infer_unsized_array_len(
         co2_ast::Initializer::Expr((
             co2_ast::Expression::Constant(co2_ast::Constant::String(s)),
             _,
-        )) => Ok(s.len() + 1),
+        )) => Ok(s.nul_terminated_len()),
         co2_ast::Initializer::List(items) => {
             let slots_per_elem = flattened_scalar_slots(elem_ty, resolver)?;
             let mut next_index = 0usize;
