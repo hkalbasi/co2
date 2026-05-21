@@ -1,6 +1,8 @@
 //@ mode: c
 //@ run-status: 0
 
+#include <stddef.h>
+
 int ar1[12] = {};
 int ar2[12 + 3] = {};
 int ar3[12 / 3 + 4 * 5] = {};
@@ -55,6 +57,15 @@ int ar37[sizeof(ar36[0])] = {};
 
 int ar38_aux = 2;
 int ar38[sizeof(ar38_aux = 3)] = {};
+
+struct Bar {
+  char x;
+  int y;
+  char z;
+} bar;
+
+int ar39[offsetof(struct Bar, y)] = {};
+int ar40[offsetof(typeof(bar), z)] = {};
 
 int the_ar[] = {
     [12] = 1,
@@ -171,7 +182,11 @@ int main() {
     return 38;
   if (ar38_aux != 2)
     return 38;
-
+  if (sizeof(ar39) / sizeof(int) != offsetof(struct Bar, y))
+    return 39;
+  if (sizeof(ar40) / sizeof(int) != offsetof(struct Bar, z))
+    return 40;
+  
   if (the_ar[12] == 1 && the_ar[12 + 3] == 2 && the_ar[12 / 3 + 4 * 5] == 3 &&
       the_ar[sizeof(ar3) + 3] == 5 && the_ar[Var1 * Var2] == 8 &&
       the_ar[Var1 * sizeof(ar3)] == 9 && the_ar[5 ^ 3] == 17 &&

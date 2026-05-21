@@ -1,9 +1,7 @@
 //@ mode: c
+//@ run-status: 0
 
-/*
- * Reproduction of "missing local type" issue.
- * Triggered by ARRAY_SIZE on a local array that was sized using ARRAY_SIZE.
- */
+#include <stddef.h>
 
 #define BUILD_ASSERT_OR_ZERO(cond) \
         (sizeof(char [1 - 2*!(cond)]) - 1)
@@ -23,7 +21,14 @@ void test_func() {
     }
 }
 
+struct object_id {
+    unsigned char hash[32];
+    unsigned int algo;
+};
+
 int main() {
+    BUILD_ASSERT_OR_ZERO(offsetof(struct object_id, hash) <
+                         offsetof(struct object_id, algo));
     test_func();
     return 0;
 }

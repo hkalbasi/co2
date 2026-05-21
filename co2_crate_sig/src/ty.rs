@@ -15,7 +15,7 @@ use rustc_public_generative::{
     },
 };
 
-use crate::{CrateSigCtx, LocalResolver, LocalResolverBase};
+use crate::{CrateSigCtx, LocalResolver, LocalResolverBase, LogicalAdtFieldKind};
 
 #[derive(Debug, Clone)]
 pub enum CTy {
@@ -585,6 +585,11 @@ fn round_up(value: usize, align: usize) -> usize {
     }
 }
 
+enum ResolvedConstFieldAccess {
+    Direct { path: Vec<usize> },
+    Bitfield,
+}
+
 impl LocalResolverBase {
     pub(crate) fn has_local_enum_const(&self, def_id: DefId) -> bool {
         self.enum_const_values.contains_key(&def_id)
@@ -1007,14 +1012,17 @@ impl LocalResolverBase {
                 let target_ty = self.lower_type_name_for_const(*type_name.clone(), *span);
                 self.cast_const_int(value, &target_ty)
             }
-            Expression::SizeofType(type_name)
-            | Expression::Offsetof {
-                ty: type_name,
-                field: _,
-                field_span: _,
-            } => {
+            Expression::SizeofType(type_name) => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span);
                 Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
+            }
+            Expression::Offsetof {
+                ty: type_name,
+                field,
+                field_span,
+            } => {
+                let ty = self.lower_type_name_for_const(*type_name.clone(), *span);
+                Ok(self.offsetof_hir_ty(&ty, field, *span, *field_span)? as i128)
             }
             Expression::Sizeof(expr) => {
                 let ty = self.type_of_expr_for_sizeof(expr);
@@ -1441,6 +1449,131 @@ impl LocalResolverBase {
             };
             ty = next_ty;
         }
+    }
+
+    fn resolve_offsetof_field_access(
+        &self,
+        ty: &HirTy,
+        field: &str,
+    ) -> Option<ResolvedConstFieldAccess> {
+        let HirTyKind::Adt(def, _) = self.peel_typedefs_for_sizeof(ty.clone()).kind else {
+            return None;
+        };
+        self.resolve_offsetof_field_access_from_metadata(def, field)
+    }
+
+    fn resolve_offsetof_field_access_from_metadata(
+        &self,
+        def: DefId,
+        field: &str,
+    ) -> Option<ResolvedConstFieldAccess> {
+        let fields = self.adt_logical_fields(def)?;
+        for logical_field in &fields {
+            if logical_field.name != field || logical_field.name.starts_with("__anon_field_") {
+                continue;
+            }
+            return Some(match logical_field.kind {
+                LogicalAdtFieldKind::Direct { physical_index } => {
+                    ResolvedConstFieldAccess::Direct {
+                        path: vec![physical_index],
+                    }
+                }
+                LogicalAdtFieldKind::Bitfield { .. } => ResolvedConstFieldAccess::Bitfield,
+            });
+        }
+        for logical_field in fields {
+            let LogicalAdtFieldKind::Direct { physical_index } = logical_field.kind else {
+                continue;
+            };
+            if !logical_field.name.starts_with("__anon_field_") {
+                continue;
+            }
+            let HirTyKind::Adt(nested_def, _) = logical_field.ty.kind else {
+                continue;
+            };
+            if let Some(resolved) =
+                self.resolve_offsetof_field_access_from_metadata(nested_def, field)
+            {
+                return Some(match resolved {
+                    ResolvedConstFieldAccess::Direct { mut path } => {
+                        path.insert(0, physical_index);
+                        ResolvedConstFieldAccess::Direct { path }
+                    }
+                    ResolvedConstFieldAccess::Bitfield => ResolvedConstFieldAccess::Bitfield,
+                });
+            }
+        }
+        None
+    }
+
+    fn offsetof_hir_ty(
+        &mut self,
+        ty: &HirTy,
+        field: &str,
+        span: Span,
+        field_span: Span,
+    ) -> Result<usize, (co2_ast::Span, String)> {
+        let ty = self.peel_typedefs_for_sizeof(ty.clone());
+        let access = self
+            .resolve_offsetof_field_access(&ty, field)
+            .ok_or_else(|| {
+                spanned_error(
+                    field_span,
+                    format!("offsetof: field '{field}' not found in type"),
+                )
+            })?;
+        let ResolvedConstFieldAccess::Direct { path } = access else {
+            return Err(spanned_error(
+                field_span,
+                format!("offsetof: field '{field}' is a bitfield"),
+            ));
+        };
+
+        let mut offset = 0usize;
+        let mut cur_ty = ty;
+        for field_idx in path {
+            let peeled_ty = self.peel_typedefs_for_sizeof(cur_ty.clone());
+            let HirTyKind::Adt(def, _) = peeled_ty.kind else {
+                return Err(spanned_error(
+                    span,
+                    "offsetof: field access requires a struct or union type",
+                ));
+            };
+            let (kind, fields) = self.adt_layout_info(def).ok_or_else(|| {
+                spanned_error(span, "offsetof: failed to compute layout for type")
+            })?;
+            let pack_align = self
+                .struct_manager
+                .definitions
+                .get(&def)
+                .and_then(|data| data.pack_align)
+                .map(|n| n as usize);
+            let field_ty = fields.get(field_idx).cloned().ok_or_else(|| {
+                spanned_error(
+                    span,
+                    format!("offsetof: field index {field_idx} out of bounds"),
+                )
+            })?;
+            let field_offset = match kind {
+                co2_ast::StructOrUnionKind::Struct => {
+                    let mut running_offset = 0usize;
+                    for prev_field in fields.iter().take(field_idx) {
+                        let (field_size, field_align) = self.sizeof_hir_ty(prev_field)?;
+                        let field_align =
+                            pack_align.map_or(field_align, |pack| field_align.min(pack));
+                        running_offset = round_up(running_offset, field_align);
+                        running_offset += field_size;
+                    }
+                    let (_, field_align) = self.sizeof_hir_ty(&field_ty)?;
+                    let field_align = pack_align.map_or(field_align, |pack| field_align.min(pack));
+                    round_up(running_offset, field_align)
+                }
+                co2_ast::StructOrUnionKind::Union => 0,
+            };
+            offset += field_offset;
+            cur_ty = field_ty;
+        }
+        Ok(offset)
     }
 
     fn lower_type_name_for_const(

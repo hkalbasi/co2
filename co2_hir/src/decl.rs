@@ -4,13 +4,14 @@ use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
     Initializer, RustTy, Spanned, TypeName, TypeQualifier,
 };
-use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver};
+use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver, LogicalAdtFieldKind};
 use co2_parser::parse_expression_tokens;
 use la_arena::Arena;
 use rustc_public_generative::{
     HirTy,
     rustc_public::{
         CrateItem,
+        abi::FieldsShape,
         mir::{Mutability, Safety},
         ty::{
             Abi, AdtDef, Binder, FnSig, ForeignDef, GenericArgKind, GenericArgs, IntTy, Region,
@@ -22,7 +23,10 @@ use rustc_public_generative::{
 use crate::expr::{HirExpr, HirExprKind};
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
-use crate::ty::{array_elem_ty, enum_payload_ty, is_array_ty, ty_matches_expected};
+use crate::ty::{
+    adt_field_tys, array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt,
+    ty_matches_expected,
+};
 use crate::{
     expr::coerce_expr_to_type,
     item::{HirLocal, LocalId},
@@ -304,6 +308,11 @@ fn validate_local_constexpr_decl(
     }
 
     Ok(())
+}
+
+enum ResolvedConstFieldAccess {
+    Direct { path: Vec<usize> },
+    Bitfield,
 }
 
 #[derive(Clone, Debug)]
@@ -965,15 +974,24 @@ impl HirCtx<'_> {
                     self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
                 cast_const_int_to_ty(value, target_ty)
             }
-            Expression::SizeofType(type_name)
-            | Expression::Offsetof {
-                ty: type_name,
-                field: _,
-                field_span: _,
-            } => {
+            Expression::SizeofType(type_name) => {
                 let ty =
                     self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
                 Ok(i128::from(self.sizeof_ty(ty)?))
+            }
+            Expression::Offsetof {
+                ty: type_name,
+                field,
+                field_span,
+            } => {
+                let ty =
+                    self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
+                Ok(i128::from(self.offsetof_ty(
+                    ty,
+                    field,
+                    *span,
+                    *field_span,
+                )?))
             }
             Expression::Sizeof(expr) => Ok(i128::from(self.sizeof_expr(expr, locals, local_map)?)),
             Expression::AlignofType(type_name) => {
@@ -1084,6 +1102,125 @@ impl HirCtx<'_> {
                 )
             })
             .map(|layout| layout.shape().abi_align)
+    }
+
+    fn resolve_offsetof_field_access(
+        &self,
+        ty: Ty,
+        field: &str,
+    ) -> Option<ResolvedConstFieldAccess> {
+        let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else {
+            return resolve_field_path_in_adt(ty, field)
+                .map(|(path, _)| ResolvedConstFieldAccess::Direct { path });
+        };
+        self.resolve_offsetof_field_access_from_metadata(def.0, field)
+            .or_else(|| {
+                resolve_field_path_in_adt(ty, field)
+                    .map(|(path, _)| ResolvedConstFieldAccess::Direct { path })
+            })
+    }
+
+    fn resolve_offsetof_field_access_from_metadata(
+        &self,
+        def: rustc_public_generative::rustc_public::DefId,
+        field: &str,
+    ) -> Option<ResolvedConstFieldAccess> {
+        let fields = self.decl_resolver.adt_logical_fields(def)?;
+        for logical_field in &fields {
+            if logical_field.name != field || logical_field.name.starts_with("__anon_field_") {
+                continue;
+            }
+            return Some(match logical_field.kind {
+                LogicalAdtFieldKind::Direct { physical_index } => {
+                    ResolvedConstFieldAccess::Direct {
+                        path: vec![physical_index],
+                    }
+                }
+                LogicalAdtFieldKind::Bitfield { .. } => ResolvedConstFieldAccess::Bitfield,
+            });
+        }
+        for logical_field in fields {
+            let LogicalAdtFieldKind::Direct { physical_index } = logical_field.kind else {
+                continue;
+            };
+            if !logical_field.name.starts_with("__anon_field_") {
+                continue;
+            }
+            let rustc_public_generative::HirTyKind::Adt(nested_def, _) = logical_field.ty.kind
+            else {
+                continue;
+            };
+            if let Some(resolved) =
+                self.resolve_offsetof_field_access_from_metadata(nested_def, field)
+            {
+                return Some(match resolved {
+                    ResolvedConstFieldAccess::Direct { mut path } => {
+                        path.insert(0, physical_index);
+                        ResolvedConstFieldAccess::Direct { path }
+                    }
+                    ResolvedConstFieldAccess::Bitfield => ResolvedConstFieldAccess::Bitfield,
+                });
+            }
+        }
+        None
+    }
+
+    fn offsetof_ty(
+        &self,
+        ty: Ty,
+        field: &str,
+        span: co2_ast::Span,
+        field_span: co2_ast::Span,
+    ) -> Result<u64, (co2_ast::Span, String)> {
+        let access = self
+            .resolve_offsetof_field_access(ty, field)
+            .ok_or_else(|| {
+                spanned_error(
+                    field_span,
+                    format!("offsetof: field '{field}' not found in type"),
+                )
+            })?;
+        let ResolvedConstFieldAccess::Direct { path } = access else {
+            return Err(spanned_error(
+                field_span,
+                format!("offsetof: field '{field}' is a bitfield"),
+            ));
+        };
+
+        let mut offset_bytes = 0u64;
+        let mut cur_ty = ty;
+        for field_idx in path {
+            let layout = cur_ty.layout().map_err(|e| {
+                spanned_error(span, format!("offsetof: failed to compute layout: {e}"))
+            })?;
+            let field_offset = match &layout.shape().fields {
+                FieldsShape::Arbitrary { offsets, .. } => offsets
+                    .get(field_idx)
+                    .ok_or_else(|| {
+                        spanned_error(
+                            span,
+                            format!("offsetof: field index {field_idx} out of bounds"),
+                        )
+                    })?
+                    .bytes() as u64,
+                other => {
+                    return Err(spanned_error(
+                        span,
+                        format!("offsetof: unsupported layout kind for type: {other:?}"),
+                    ));
+                }
+            };
+            offset_bytes += field_offset;
+            cur_ty = adt_field_tys(cur_ty)
+                .and_then(|tys| tys.into_iter().nth(field_idx))
+                .ok_or_else(|| {
+                    spanned_error(
+                        span,
+                        format!("offsetof: failed to get field type at index {field_idx}"),
+                    )
+                })?;
+        }
+        Ok(offset_bytes)
     }
 
     fn extract_decl_type(
