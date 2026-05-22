@@ -15,18 +15,17 @@ impl Builder<'_, '_> {
             HirStmt::Decl(HirDecl {
                 local, initializer, ..
             }) => {
-                if let Some(init) = initializer {
-                    let local_index = self.local_to_index(*local);
-                    let local_ty = self.locals[local_index].ty;
-                    if let HirExprKind::Zeroed = &init.kind {
-                        self.lower_zeroed_to_destination(place(local_index), init.span, local_ty);
-                    } else {
-                        let value = self.lower_expr_to_operand(init);
-                        self.stmts.push(MirStatement {
-                            kind: MirStatementKind::Assign(place(local_index), Rvalue::Use(value)),
-                            span: init.span,
-                        });
-                    }
+                let local_index = self.local_to_index(*local);
+                let local_ty = self.locals[local_index].ty;
+                self.lower_zeroed_to_destination(place(local_index), self.span, local_ty);
+                if let Some(init) = initializer
+                    && !matches!(&init.kind, HirExprKind::Zeroed)
+                {
+                    let value = self.lower_expr_to_operand(init);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(place(local_index), Rvalue::Use(value)),
+                        span: init.span,
+                    });
                 }
             }
             HirStmt::Expr(expr) => {

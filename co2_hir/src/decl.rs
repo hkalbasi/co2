@@ -20,7 +20,7 @@ use rustc_public_generative::{
     },
 };
 
-use crate::expr::{HirExpr, HirExprKind};
+use crate::expr::HirExpr;
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
 use crate::ty::{
@@ -622,18 +622,10 @@ impl HirCtx<'_> {
                                 let expr = self.initializer_tree_to_expr(&tree, ty, parser_span);
                                 Some(expr)
                             }
-                            _ => Some(HirExpr {
-                                kind: HirExprKind::Zeroed,
-                                ty,
-                                span,
-                            }),
+                            _ => None,
                         }
                     } else {
-                        Some(HirExpr {
-                            kind: HirExprKind::Zeroed,
-                            ty,
-                            span,
-                        })
+                        None
                     };
 
                     out.push(HirStmt::Decl(HirDecl {
