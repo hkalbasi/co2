@@ -1,11 +1,9 @@
-# co2 compiletest suites
+# co2 compiletest
 
 Each test file is self-contained and uses inline directives prefixed with `//@`.
 
-Supported suites:
-- `tests/compiletest/ui`: compiler diagnostics checks.
-- `tests/compiletest/run`: compile + run checks (status/stdout/stderr).
-- `tests/compiletest/debuginfo`: debugger script checks (`gdb`/`lldb`).
+The harness scans `tests/compiletest` recursively. Directory names are only
+organization and filter conveniences; test behavior is inferred from directives.
 
 Common directives:
 - `//@ mode: c|co2|rust`
@@ -13,15 +11,16 @@ Common directives:
 - `//@ compile-warning: <exact warning text>` (repeatable, for warnings that do not map to source spans)
 - `//@ skip: <reason>` (skip test unconditionally)
 - Inline span annotations like `//^^^^ error: ...` or `//^^^^ warning: ...` can be used in any file-based suite.
-- File-based suites fail on unexpected compiler warnings; annotate intentional warnings inline.
+- File tests fail on unexpected compiler warnings; annotate intentional warnings inline.
 
-UI directives:
+Compile-fail tests:
 - `//@ compile-fail`
 - Inline span annotations on the following line, for example `//^^^^ error: message`.
-- UI checks use rustc JSON diagnostics and match inline annotations by byte span.
-- UI diagnostic text is checked only from inline span annotations.
+- Compile-fail checks use rustc JSON diagnostics and match inline annotations by byte span.
+- Diagnostic text is checked only from inline span annotations.
 
-Run directives:
+Run tests:
+- Any file test without `//@ compile-fail` is compiled and run.
 - `//@ run-status: <int>` (default `0`)
 - `//@ run-args: ...` (repeatable, shell-split)
 - `//@ run-stdout: <exact text>` (`\\n` escapes are supported)
@@ -37,14 +36,6 @@ Directory run tests:
 - `CO2_WORKSPACE_ROOT`, `CO2_TEST_DIR`, and `CO2_BIN_DIR` are provided to the script.
 - The Nushell script is responsible for checking correctness and exiting nonzero on failure.
 
-Debuginfo directives:
-- `//@ debugger: gdb|lldb` (default `gdb`)
-- `//@ debug-command: <command>` (repeatable)
-- `//@ debug-check: <substring>` (repeatable)
-- `//@ debug-status: <int>` (default `0`)
-
 Run harness:
-- `cargo run -p co2_test_harness -- all`
-- `cargo run -p co2_test_harness -- ui`
-- `cargo run -p co2_test_harness -- run`
-- `cargo run -p co2_test_harness -- debuginfo`
+- `cargo run -p co2_test_harness`
+- `cargo run -p co2_test_harness -- 'tests/compiletest/**/*.c'`

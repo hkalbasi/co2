@@ -6,7 +6,6 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use tempfile::Builder as TempDirBuilder;
 
-use crate::cli::SuiteArg;
 use crate::compiler::{CompileResult, compile_test};
 use crate::error::{TestError, UiTestError, render_test_error, render_ui_error};
 use crate::test_case::{
@@ -19,32 +18,6 @@ use crate::ui::{
 };
 use crate::util::{copy_dir_all, normalize, unescape_text};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Suite {
-    Ui,
-    Run,
-    Debuginfo,
-}
-
-impl Suite {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ui => "ui",
-            Self::Run => "run",
-            Self::Debuginfo => "debuginfo",
-        }
-    }
-}
-
-pub fn suites_from_arg(arg: SuiteArg) -> Vec<Suite> {
-    match arg {
-        SuiteArg::All => vec![Suite::Ui, Suite::Run, Suite::Debuginfo],
-        SuiteArg::Ui => vec![Suite::Ui],
-        SuiteArg::Run => vec![Suite::Run],
-        SuiteArg::Debuginfo => vec![Suite::Debuginfo],
-    }
-}
-
 #[derive(Default)]
 pub struct Stats {
     pub passed: usize,
@@ -52,18 +25,13 @@ pub struct Stats {
     pub skipped: usize,
 }
 
-pub fn run_suite(root: &Path, suite: Suite, filter: Option<&str>, stats: &mut Stats) -> Result<()> {
-    let dir = root.join("tests").join("compiletest").join(suite.as_str());
-    let tests = collect_tests(&dir, filter)?;
-    eprintln!(
-        "running {} tests for suite `{}`",
-        tests.len(),
-        suite.as_str()
-    );
+pub fn run_tests(root: &Path, filter: Option<&str>, stats: &mut Stats) -> Result<()> {
+    let tests = collect_tests(root, filter)?;
+    eprintln!("running {} tests", tests.len());
 
     for test in tests {
         let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
-        match run_test(root, suite, &test) {
+        match run_test(root, &test) {
             Ok(TestOutcome::Pass) => {
                 stats.passed += 1;
                 eprintln!("ok   {name}");
@@ -90,18 +58,12 @@ pub fn run_suite(root: &Path, suite: Suite, filter: Option<&str>, stats: &mut St
     Ok(())
 }
 
-fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
+fn run_test(root: &Path, test: &TestCase) -> Result<TestOutcome> {
     if let Some(reason) = directive_text(test, "skip") {
         return Ok(TestOutcome::Skip(reason));
     }
 
     if test.kind == TestKind::NuDir {
-        if suite != Suite::Run {
-            bail!(
-                "directory Nushell tests are only supported in the `run` suite: {}",
-                test.path.display()
-            );
-        }
         run_nu_dir_test(root, test)?;
         return Ok(TestOutcome::Pass);
     }
@@ -119,34 +81,21 @@ fn run_test(root: &Path, suite: Suite, test: &TestCase) -> Result<TestOutcome> {
         .get("compile-warning")
         .cloned()
         .unwrap_or_default();
-    let compile = compile_test(root, suite, mode, test, true)?;
-    match suite {
-        Suite::Ui => {
-            check_ui(test, mode, &compile.output, &compile_annotations, sources)?;
-            Ok(TestOutcome::Pass)
-        }
-        Suite::Run => {
-            check_compile_warnings(
-                test,
-                &compile.output,
-                &compile_annotations,
-                &directive_warning_expectations,
-                sources,
-            )?;
-            check_run(test, &compile)?;
-            Ok(TestOutcome::Pass)
-        }
-        Suite::Debuginfo => {
-            check_compile_warnings(
-                test,
-                &compile.output,
-                &compile_annotations,
-                &directive_warning_expectations,
-                sources,
-            )?;
-            check_debuginfo(test, &compile)
-        }
+    let compile = compile_test(root, mode, test, true)?;
+    if test.directives.contains_key("compile-fail") {
+        check_ui(test, mode, &compile.output, &compile_annotations, sources)?;
+        return Ok(TestOutcome::Pass);
     }
+
+    check_compile_warnings(
+        test,
+        &compile.output,
+        &compile_annotations,
+        &directive_warning_expectations,
+        sources,
+    )?;
+    check_run(test, &compile)?;
+    Ok(TestOutcome::Pass)
 }
 
 fn collect_compile_annotations(
@@ -351,125 +300,4 @@ fn output_expectation(test: &TestCase, key: &str) -> Result<Option<String>> {
     }
 
     Ok(Some(unescape_text(&expected)))
-}
-
-fn check_debuginfo(test: &TestCase, compile: &CompileResult) -> Result<TestOutcome> {
-    if !compile.output.status.success() {
-        bail!(
-            "debuginfo test compilation failed\n{}\n{}",
-            format_named_output("stdout", &String::from_utf8_lossy(&compile.output.stdout)),
-            format_named_output("stderr", &String::from_utf8_lossy(&compile.output.stderr)),
-        );
-    }
-
-    let debugger = directive_text(test, "debugger").unwrap_or_else(|| "gdb".to_owned());
-    if !tool_available(&debugger) {
-        return Ok(TestOutcome::Skip(format!("{debugger} not available")));
-    }
-
-    let run_args = directive_args(test, "run-args")?;
-    let debug_cmds = test
-        .directives
-        .get("debug-command")
-        .cloned()
-        .unwrap_or_else(|| vec!["break main".to_owned(), "run".to_owned()]);
-    let checks = test
-        .directives
-        .get("debug-check")
-        .cloned()
-        .unwrap_or_default();
-
-    let output = match debugger.as_str() {
-        "gdb" => {
-            let mut cmd = Command::new("gdb");
-            cmd.arg("-q").arg("--batch");
-            cmd.arg("-ex").arg("set pagination off");
-            cmd.arg("-ex").arg("set confirm off");
-            for script in debug_cmds {
-                cmd.arg("-ex").arg(script);
-            }
-            cmd.arg("--args").arg(&compile.exe_path).args(&run_args);
-            cmd.output().context("failed to execute gdb")?
-        }
-        "lldb" => {
-            let mut cmd = Command::new("lldb");
-            cmd.arg("-b");
-            for script in debug_cmds {
-                cmd.arg("-o").arg(script);
-            }
-            cmd.arg("--").arg(&compile.exe_path).args(&run_args);
-            cmd.output().context("failed to execute lldb")?
-        }
-        _ => bail!("unsupported debugger `{debugger}`"),
-    };
-
-    let mut merged = String::new();
-    merged.push_str(&String::from_utf8_lossy(&output.stdout));
-    merged.push_str(&String::from_utf8_lossy(&output.stderr));
-
-    let expected_status = directive_i32(test, "debug-status")?.unwrap_or(0);
-    let got_status = output.status.code().unwrap_or(-1);
-    if got_status != expected_status {
-        if let Some(reason) = debuginfo_skip_reason(&merged) {
-            return Ok(TestOutcome::Skip(format!(
-                "debugger execution is restricted in this environment ({reason})"
-            )));
-        }
-        bail!("debugger status mismatch: expected {expected_status}, got {got_status}\n{merged}");
-    }
-
-    for check in checks {
-        if !merged.contains(&check) {
-            if let Some(reason) = debuginfo_skip_reason(&merged) {
-                return Ok(TestOutcome::Skip(format!(
-                    "debugger output not usable in this environment ({reason})"
-                )));
-            }
-            bail!("missing debug-check pattern `{check}`\n{merged}");
-        }
-    }
-
-    Ok(TestOutcome::Pass)
-}
-
-fn debuginfo_skip_reason(output: &str) -> Option<&'static str> {
-    let lowered = output.to_ascii_lowercase();
-    let markers: [(&str, &str); 13] = [
-        ("ptrace", "ptrace unavailable"),
-        ("operation not permitted", "operation not permitted"),
-        ("not permitted", "operation not permitted"),
-        ("permission denied", "permission denied"),
-        (
-            "error disabling address space randomization",
-            "cannot disable ASLR",
-        ),
-        ("could not attach", "attach failed"),
-        ("can't attach", "attach failed"),
-        ("cannot attach", "attach failed"),
-        ("no such process", "target process unavailable"),
-        ("process exited with code 127", "debugger launch failed"),
-        ("no symbol", "missing debuginfo symbols"),
-        (
-            "no line number information",
-            "missing line debug information",
-        ),
-        (
-            "which has no line number information",
-            "missing line debug information",
-        ),
-    ];
-
-    for (needle, reason) in markers {
-        if lowered.contains(needle) {
-            return Some(reason);
-        }
-    }
-    None
-}
-
-fn tool_available(name: &str) -> bool {
-    Command::new(name)
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success())
 }

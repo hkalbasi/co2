@@ -91,7 +91,6 @@ fn create_symlink_or_copy(source: &Path, target: &Path) -> Result<()> {
 
 pub fn compile_test(
     root: &Path,
-    suite: crate::suite::Suite,
     mode: Mode,
     test: &TestCase,
     json_diagnostics: bool,
@@ -109,14 +108,7 @@ pub fn compile_test(
         .context("invalid test filename")?;
     let exe_path = temp_path.join(format!("{name}.bin"));
 
-    let mut compile_flags = directive_args(test, "compile-flags")?;
-
-    if suite == crate::suite::Suite::Debuginfo
-        && !compile_flags.windows(2).any(|w| w == ["-C", "debuginfo=2"])
-        && !compile_flags.iter().any(|s| s.contains("debuginfo="))
-    {
-        compile_flags.extend(["-C".to_owned(), "debuginfo=2".to_owned()]);
-    }
+    let compile_flags = directive_args(test, "compile-flags")?;
 
     let output = match mode {
         Mode::C => {

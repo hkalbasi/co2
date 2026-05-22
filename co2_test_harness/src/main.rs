@@ -11,7 +11,7 @@ mod util;
 
 use cli::Cli;
 use compiler::build_compilers;
-use suite::{Stats, run_suite, suites_from_arg};
+use suite::{Stats, run_tests};
 use util::workspace_root;
 
 fn main() {
@@ -27,9 +27,7 @@ fn run_main() -> Result<()> {
     build_compilers(&root)?;
 
     let mut stats = Stats::default();
-    for suite in suites_from_arg(cli.suite) {
-        run_suite(&root, suite, cli.filter.as_deref(), &mut stats)?;
-    }
+    run_tests(&root, cli.filter.as_deref(), &mut stats)?;
 
     eprintln!(
         "summary: passed={}, failed={}, skipped={}",

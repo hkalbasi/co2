@@ -1,15 +1,11 @@
 [tasks.test]
-description = "Run all co2 compiletest suites"
-run = "cargo run -q --locked -p co2_test_harness -- all"
+description = "Run all co2 compiletests"
+run = "cargo run -q --locked -p co2_test_harness"
 
 [tasks.test-ui]
-description = "Run compiletest UI suite"
-run = "cargo run -q --locked -p co2_test_harness -- ui"
+description = "Run compiletests under the ui directory"
+run = "cargo run -q --locked -p co2_test_harness -- 'tests/compiletest/ui/**'"
 
 [tasks.test-run]
-description = "Run compiletest run suite"
-run = "cargo run -q --locked -p co2_test_harness -- run"
-
-[tasks.test-debuginfo]
-description = "Run compiletest debuginfo suite"
-run = "cargo run -q --locked -p co2_test_harness -- debuginfo"
+description = "Run compiletests under the run directory"
+run = "cargo run -q --locked -p co2_test_harness -- 'tests/compiletest/run/**'"

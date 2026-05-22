@@ -41,25 +41,31 @@ pub enum TestOutcome {
     Skip(String),
 }
 
-pub fn collect_tests(dir: &Path, filter: Option<&str>) -> Result<Vec<TestCase>> {
+pub fn collect_tests(root: &Path, filter: Option<&str>) -> Result<Vec<TestCase>> {
     let mut out = Vec::new();
+    let dir = root.join("tests").join("compiletest");
     if !dir.exists() {
         return Ok(out);
     }
-    collect_tests_inner(dir, filter, &mut out)?;
+    collect_tests_inner(root, &dir, filter, &mut out)?;
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }
 
-fn collect_tests_inner(dir: &Path, filter: Option<&str>, out: &mut Vec<TestCase>) -> Result<()> {
+fn collect_tests_inner(
+    root: &Path,
+    dir: &Path,
+    filter: Option<&str>,
+    out: &mut Vec<TestCase>,
+) -> Result<()> {
     for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
             let main_nu = path.join("main.nu");
             if main_nu.exists() {
-                if let Some(f) = filter
-                    && !path.to_string_lossy().contains(f)
+                if let Some(pattern) = filter
+                    && !path_matches(root, &path, pattern)
                 {
                     continue;
                 }
@@ -71,7 +77,7 @@ fn collect_tests_inner(dir: &Path, filter: Option<&str>, out: &mut Vec<TestCase>
                 });
                 continue;
             }
-            collect_tests_inner(&path, filter, out)?;
+            collect_tests_inner(root, &path, filter, out)?;
             continue;
         }
 
@@ -81,22 +87,53 @@ fn collect_tests_inner(dir: &Path, filter: Option<&str>, out: &mut Vec<TestCase>
         if ext != "c" && ext != "co2" && ext != "rs" {
             continue;
         }
-        if let Some(f) = filter
-            && !path.to_string_lossy().contains(f)
+        if let Some(pattern) = filter
+            && !path_matches(root, &path, pattern)
         {
             continue;
         }
 
         let source = fs::read_to_string(&path)
             .with_context(|| format!("failed to read test source {}", path.display()))?;
+        let directives = parse_directives(&path)?;
+        if !directives.contains_key("mode") {
+            continue;
+        }
         out.push(TestCase {
-            directives: parse_directives(&path)?,
+            directives,
             path,
             kind: TestKind::File,
             source,
         });
     }
     Ok(())
+}
+
+fn path_matches(root: &Path, path: &Path, filter: &str) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
+    glob_matches(filter, &relative)
+}
+
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    fn inner(pattern: &[u8], text: &[u8]) -> bool {
+        if pattern.is_empty() {
+            return text.is_empty();
+        }
+
+        match pattern[0] {
+            b'*' if pattern.get(1) == Some(&b'*') => {
+                inner(&pattern[2..], text) || (!text.is_empty() && inner(pattern, &text[1..]))
+            }
+            b'*' => {
+                inner(&pattern[1..], text)
+                    || (!text.is_empty() && text[0] != b'/' && inner(pattern, &text[1..]))
+            }
+            b'?' => !text.is_empty() && text[0] != b'/' && inner(&pattern[1..], &text[1..]),
+            b => !text.is_empty() && b == text[0] && inner(&pattern[1..], &text[1..]),
+        }
+    }
+
+    inner(pattern.as_bytes(), text.as_bytes())
 }
 
 pub fn parse_directives(path: &Path) -> Result<HashMap<String, Vec<String>>> {
