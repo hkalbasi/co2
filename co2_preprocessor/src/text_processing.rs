@@ -71,6 +71,42 @@ impl Preprocessor {
 
         while i < len {
             match bytes[i] {
+                b'%' if i + 3 < len
+                    && bytes[i + 1] == b':'
+                    && bytes[i + 2] == b'%'
+                    && bytes[i + 3] == b':' =>
+                {
+                    out.push(b'#');
+                    boundaries.push(i + 2);
+                    out.push(b'#');
+                    i += 4;
+                    boundaries.push(i);
+                }
+                b'%' if i + 1 < len && bytes[i + 1] == b':' => {
+                    out.push(b'#');
+                    i += 2;
+                    boundaries.push(i);
+                }
+                b'<' if i + 1 < len && bytes[i + 1] == b':' => {
+                    out.push(b'[');
+                    i += 2;
+                    boundaries.push(i);
+                }
+                b':' if i + 1 < len && bytes[i + 1] == b'>' => {
+                    out.push(b']');
+                    i += 2;
+                    boundaries.push(i);
+                }
+                b'<' if i + 1 < len && bytes[i + 1] == b'%' => {
+                    out.push(b'{');
+                    i += 2;
+                    boundaries.push(i);
+                }
+                b'%' if i + 1 < len && bytes[i + 1] == b'>' => {
+                    out.push(b'}');
+                    i += 2;
+                    boundaries.push(i);
+                }
                 b'"' | b'\'' => {
                     let start = i;
                     i = copy_literal_bytes_raw(bytes, i, bytes[i], &mut out);

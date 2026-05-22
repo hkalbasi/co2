@@ -358,16 +358,14 @@ impl CrateSigCtx<'_> {
                                     ty
                                 }
                             }
-                            CTy::Function(sig) => {
-                                self.resolver.borrow().maybe_uninit_of(
-                                    HirTy {
-                                        kind: HirTyKind::FnPtr(Box::new(sig)),
-                                        span: rust_span,
-                                    },
-                                    rust_span,
-                                    span,
-                                )
-                            }
+                            CTy::Function(sig) => self.resolver.borrow().maybe_uninit_of(
+                                HirTy {
+                                    kind: HirTyKind::FnPtr(Box::new(sig)),
+                                    span: rust_span,
+                                },
+                                rust_span,
+                                span,
+                            ),
                             CTy::UnsizedArray(elem) => {
                                 let span = elem.span;
                                 HirTy::new_ptr(elem, Mutability::Mut, span)

@@ -343,6 +343,77 @@ mod tests {
 
         let _ = fs::remove_dir_all(temp_dir);
     }
+
+    #[test]
+    fn preprocesses_prefixed_char_literals_and_object_like_token_paste() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "co2-preprocessor-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let input = temp_dir.join("prefixed-char-and-paste.c");
+        fs::write(
+            &input,
+            "#define PLUS_EQ + ## =\n#if L'A' != 65\n#error bad wide char\n#endif\nint main(void) { int x = 1; x PLUS_EQ 2; return x != 3; }\n",
+        )
+        .unwrap();
+
+        let mut preprocessor = Preprocessor::new();
+        configure_preprocessor(&mut preprocessor, &input, &[]);
+        let input_source = rewrite_main_source_for_preprocess(&fs::read_to_string(&input).unwrap());
+        let preprocessed = preprocessor.preprocess(&input_source.text);
+        let raw = preprocessed
+            .chunks
+            .iter()
+            .map(|chunk| chunk.raw.as_str())
+            .collect::<String>();
+
+        assert!(preprocessor.errors().is_empty());
+        assert!(raw.contains("x += 2;"));
+        assert!(!raw.contains("##"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn handles_pending_ifdef_else_endif_in_inactive_branch() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "co2-preprocessor-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let input = temp_dir.join("pending-ifdef.c");
+        fs::write(
+            &input,
+            "int check(void) {\n    return (1 &&\n#ifdef FOO\n        0\n#else\n        1\n#endif\n    );\n}\n",
+        )
+        .unwrap();
+
+        let mut preprocessor = Preprocessor::new();
+        configure_preprocessor(&mut preprocessor, &input, &[]);
+        let input_source = rewrite_main_source_for_preprocess(&fs::read_to_string(&input).unwrap());
+        let preprocessed = preprocessor.preprocess(&input_source.text);
+        let raw = preprocessed
+            .chunks
+            .iter()
+            .map(|chunk| chunk.raw.as_str())
+            .collect::<String>();
+
+        assert!(preprocessor.errors().is_empty());
+        assert!(raw.contains("return (1 &&"));
+        assert!(raw.contains("        1\n"));
+        assert!(!raw.contains("        0\n"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
 }
 
 fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_args: &[String]) {

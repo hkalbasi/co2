@@ -12,7 +12,9 @@
 use std::ops::Range;
 
 use super::macro_defs::MacroTable;
-use super::utils::{bytes_to_str, is_ident_cont_byte, is_ident_start_byte};
+use super::utils::{
+    bytes_to_str, is_ident_cont_byte, is_ident_start_byte, literal_prefix_len, skip_literal_bytes,
+};
 
 /// State of a single conditional (#if/#ifdef/#ifndef block).
 #[derive(Debug, Clone)]
@@ -122,39 +124,27 @@ fn expand_condition_macros(expr: &str, macros: &MacroTable) -> String {
     while i < len {
         let b = bytes[i];
 
+        if let prefix_len @ 1..=2 = literal_prefix_len(bytes, i) {
+            let quote_idx = i + prefix_len;
+            let end = skip_literal_bytes(bytes, quote_idx, bytes[quote_idx]);
+            result.push_str(bytes_to_str(bytes, i, end));
+            i = end;
+            continue;
+        }
+
         // Skip character literals verbatim (don't expand macros inside)
         if b == b'\'' {
-            let start = i;
-            i += 1;
-            while i < len && bytes[i] != b'\'' {
-                if bytes[i] == b'\\' && i + 1 < len {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-            if i < len {
-                i += 1; // closing quote
-            }
-            result.push_str(bytes_to_str(bytes, start, i));
+            let end = skip_literal_bytes(bytes, i, b'\'');
+            result.push_str(bytes_to_str(bytes, i, end));
+            i = end;
             continue;
         }
 
         // Skip string literals verbatim
         if b == b'"' {
-            let start = i;
-            i += 1;
-            while i < len && bytes[i] != b'"' {
-                if bytes[i] == b'\\' && i + 1 < len {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-            if i < len {
-                i += 1; // closing quote
-            }
-            result.push_str(bytes_to_str(bytes, start, i));
+            let end = skip_literal_bytes(bytes, i, b'"');
+            result.push_str(bytes_to_str(bytes, i, end));
+            i = end;
             continue;
         }
 
@@ -300,6 +290,49 @@ fn tokenize_expr(expr: &str) -> Vec<ExprToken> {
             continue;
         }
 
+        if let prefix_len @ 1..=2 = literal_prefix_len(bytes, i) {
+            let quote_idx = i + prefix_len;
+            if bytes[quote_idx] == b'\'' {
+                i = quote_idx + 1;
+                let val = if i < len && bytes[i] == b'\\' {
+                    i += 1;
+                    let c = if i < len {
+                        let c = match bytes[i] {
+                            b'n' => b'\n',
+                            b't' => b'\t',
+                            b'r' => b'\r',
+                            b'0' => b'\0',
+                            b'\\' => b'\\',
+                            b'\'' => b'\'',
+                            b'a' => 0x07,
+                            b'b' => 0x08,
+                            b'f' => 0x0C,
+                            b'v' => 0x0B,
+                            other => other,
+                        };
+                        i += 1;
+                        c
+                    } else {
+                        0
+                    };
+                    i64::from(c)
+                } else if i < len {
+                    let c = i64::from(bytes[i]);
+                    i += 1;
+                    c
+                } else {
+                    0
+                };
+                if i < len && bytes[i] == b'\'' {
+                    i += 1;
+                }
+                tokens.push(ExprToken::Num(val, false));
+            } else {
+                i = skip_literal_bytes(bytes, quote_idx, bytes[quote_idx]);
+            }
+            continue;
+        }
+
         // Number (decimal, hex, octal)
         if b.is_ascii_digit() {
             let start = i;
@@ -345,6 +378,7 @@ fn tokenize_expr(expr: &str) -> Vec<ExprToken> {
                     is_unsigned = true;
                 }
             }
+
             // Decimal without suffix: stays signed even for large values (they become long long)
             // But if value > i64::MAX (can't happen for decimal u64 parse unless really huge), treat as unsigned
             if !is_unsigned && !is_hex_or_oct && raw_val > i64::MAX as u64 {

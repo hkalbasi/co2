@@ -8,7 +8,9 @@
 //! All scanning operates on byte slices for performance (no Vec<char> allocation).
 
 use super::pipeline::Preprocessor;
-use super::utils::{bytes_to_str, is_ident_cont_byte, is_ident_start_byte};
+use super::utils::{
+    bytes_to_str, is_ident_cont_byte, is_ident_start_byte, literal_prefix_len, skip_literal_bytes,
+};
 
 impl Preprocessor {
     /// Replace remaining identifiers (not keywords) with 0 in a #if expression.
@@ -20,46 +22,26 @@ impl Preprocessor {
         let mut i = 0;
 
         while i < len {
+            if let prefix_len @ 1..=2 = literal_prefix_len(bytes, i) {
+                let quote_idx = i + prefix_len;
+                let end = skip_literal_bytes(bytes, quote_idx, bytes[quote_idx]);
+                result.push_str(bytes_to_str(bytes, i, end));
+                i = end;
+                continue;
+            }
+
             // Skip character literals verbatim
             if bytes[i] == b'\'' {
-                result.push(bytes[i] as char);
-                i += 1;
-                while i < len && bytes[i] != b'\'' {
-                    if bytes[i] == b'\\' && i + 1 < len {
-                        result.push(bytes[i] as char);
-                        i += 1;
-                        result.push(bytes[i] as char);
-                        i += 1;
-                    } else {
-                        result.push(bytes[i] as char);
-                        i += 1;
-                    }
-                }
-                if i < len && bytes[i] == b'\'' {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
+                let end = skip_literal_bytes(bytes, i, b'\'');
+                result.push_str(bytes_to_str(bytes, i, end));
+                i = end;
                 continue;
             }
             // Skip string literals verbatim
             if bytes[i] == b'"' {
-                result.push(bytes[i] as char);
-                i += 1;
-                while i < len && bytes[i] != b'"' {
-                    if bytes[i] == b'\\' && i + 1 < len {
-                        result.push(bytes[i] as char);
-                        i += 1;
-                        result.push(bytes[i] as char);
-                        i += 1;
-                    } else {
-                        result.push(bytes[i] as char);
-                        i += 1;
-                    }
-                }
-                if i < len && bytes[i] == b'"' {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
+                let end = skip_literal_bytes(bytes, i, b'"');
+                result.push_str(bytes_to_str(bytes, i, end));
+                i = end;
                 continue;
             }
             if bytes[i].is_ascii_digit() {
@@ -111,6 +93,21 @@ impl Preprocessor {
         let mut i = 0;
 
         while i < len {
+            if let prefix_len @ 1..=2 = literal_prefix_len(bytes, i) {
+                let quote_idx = i + prefix_len;
+                let end = skip_literal_bytes(bytes, quote_idx, bytes[quote_idx]);
+                result.push_str(bytes_to_str(bytes, i, end));
+                i = end;
+                continue;
+            }
+
+            if bytes[i] == b'\'' || bytes[i] == b'"' {
+                let end = skip_literal_bytes(bytes, i, bytes[i]);
+                result.push_str(bytes_to_str(bytes, i, end));
+                i = end;
+                continue;
+            }
+
             if is_ident_start_byte(bytes[i]) {
                 let start = i;
                 i += 1;
@@ -456,5 +453,18 @@ impl Preprocessor {
                 | "tls_model"
                 | "__tls_model__"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Preprocessor;
+
+    #[test]
+    fn replace_remaining_idents_keeps_prefixed_char_literals() {
+        assert_eq!(
+            Preprocessor::replace_remaining_idents_with_zero("L'A' == VALUE"),
+            "L'A' == 0"
+        );
     }
 }

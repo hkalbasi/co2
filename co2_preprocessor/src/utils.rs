@@ -40,6 +40,19 @@ pub fn bytes_to_str(bytes: &[u8], start: usize, end: usize) -> &str {
     std::str::from_utf8(&bytes[start..end]).expect("bytes_to_str: input is not valid UTF-8")
 }
 
+/// Return the length of a C string/character literal encoding prefix at `start`.
+///
+/// Recognizes the standard prefixes `u8`, `u`, `U`, and `L` when they are
+/// immediately followed by a matching literal quote.
+#[inline(always)]
+pub fn literal_prefix_len(bytes: &[u8], start: usize) -> usize {
+    match bytes.get(start..) {
+        Some([b'u', b'8', b'"', ..]) => 2,
+        Some([b'u' | b'U' | b'L', b'"' | b'\'', ..]) => 1,
+        _ => 0,
+    }
+}
+
 /// Skip past a string or character literal in a byte slice, starting at position `i`.
 /// Returns the position after the closing quote. Handles backslash escapes.
 /// Byte-oriented version for code that processes `&[u8]` directly.

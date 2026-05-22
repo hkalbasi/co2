@@ -260,7 +260,7 @@ impl Preprocessor {
             if !pending.is_empty()
                 && (is_conditional_directive || (is_include && is_state_only_directive))
             {
-                if self.conditionals.is_active() {
+                if is_conditional_directive || self.conditionals.is_active() {
                     self.process_directive(&slice);
                 }
                 self.emit_blank_slice(&mut output, &slice);

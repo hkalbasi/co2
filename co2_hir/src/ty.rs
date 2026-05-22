@@ -177,6 +177,9 @@ fn format_float_ty(ty: FloatTy) -> &'static str {
 }
 
 pub(crate) fn enum_payload_ty(ty: Ty) -> Option<Ty> {
+    if let TyKind::RigidTy(RigidTy::Pat(inner, _)) = ty.kind() {
+        return enum_payload_ty(inner);
+    }
     let TyKind::RigidTy(RigidTy::Adt(adt, args)) = ty.kind() else {
         return None;
     };
@@ -450,7 +453,7 @@ fn pointer_implicit_cast_allowed(dst: Ty, src: Ty) -> bool {
     };
     is_void_ty(dst_pointee)
         || is_void_ty(src_pointee)
-        || ty_matches_expected(dst_pointee, src_pointee)
+        || pointer_pointees_compatible(dst_pointee, src_pointee)
 }
 
 fn pointer_pointee_ty(ty: Ty) -> Option<Ty> {
@@ -462,6 +465,64 @@ fn pointer_pointee_ty(ty: Ty) -> Option<Ty> {
 
 fn is_void_ty(ty: Ty) -> bool {
     matches!(ty.kind(), TyKind::RigidTy(RigidTy::Tuple(items)) if items.is_empty())
+}
+
+fn pointer_pointees_compatible(expected: Ty, actual: Ty) -> bool {
+    let expected = strip_pat_ty(expected);
+    let actual = strip_pat_ty(actual);
+
+    if ty_matches_expected(expected, actual) {
+        return true;
+    }
+
+    let expected_inner = enum_payload_ty(expected).unwrap_or(expected);
+    let actual_inner = enum_payload_ty(actual).unwrap_or(actual);
+    let expected_is_enum = expected_inner != expected;
+    let actual_is_enum = actual_inner != actual;
+
+    ((expected_inner != expected || actual_inner != actual)
+        && ty_matches_expected(expected_inner, actual_inner))
+        || ((expected_is_enum || actual_is_enum)
+            && integer_bit_width(expected_inner)
+                .zip(integer_bit_width(actual_inner))
+                .is_some_and(|(expected_bits, actual_bits)| expected_bits == actual_bits))
+        || (is_byte_pointer_pointee(expected_inner) && is_byte_pointer_pointee(actual_inner))
+}
+
+fn is_byte_pointer_pointee(ty: Ty) -> bool {
+    matches!(
+        strip_pat_ty(ty).kind(),
+        TyKind::RigidTy(RigidTy::Int(IntTy::I8) | RigidTy::Uint(UintTy::U8))
+    )
+}
+
+fn strip_pat_ty(ty: Ty) -> Ty {
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Pat(inner, _)) => strip_pat_ty(inner),
+        _ => ty,
+    }
+}
+
+fn integer_bit_width(ty: Ty) -> Option<u8> {
+    match strip_pat_ty(ty).kind() {
+        TyKind::RigidTy(RigidTy::Int(int_ty)) => Some(match int_ty {
+            IntTy::I8 => 8,
+            IntTy::I16 => 16,
+            IntTy::I32 => 32,
+            IntTy::I64 => 64,
+            IntTy::I128 => 128,
+            IntTy::Isize => usize::BITS as u8,
+        }),
+        TyKind::RigidTy(RigidTy::Uint(uint_ty)) => Some(match uint_ty {
+            UintTy::U8 => 8,
+            UintTy::U16 => 16,
+            UintTy::U32 => 32,
+            UintTy::U64 => 64,
+            UintTy::U128 => 128,
+            UintTy::Usize => usize::BITS as u8,
+        }),
+        _ => None,
+    }
 }
 
 pub(crate) fn resolve_field_path_in_adt(base: Ty, field: &str) -> Option<(Vec<usize>, Ty)> {

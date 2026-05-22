@@ -418,11 +418,11 @@ impl MacroTable {
             return i;
         }
 
-        // Byte-only preprocessor mode does not track display rows.
-        // Keep __LINE__ parseable for system macros like assert by folding it
-        // to a stable constant instead of carrying line-number state.
+        // Byte-only preprocessor mode does not track display rows here.
+        // Keep __LINE__ parseable in ordinary code by folding it to a stable
+        // positive constant instead of zero.
         if ident == "__LINE__" {
-            result.push('0');
+            result.push('1');
             return i;
         }
 
@@ -546,7 +546,14 @@ impl MacroTable {
 
         // Object-like macro
         expanding.insert(ident.to_string());
-        let expanded = self.expand_text(&mac.body, expanding);
+        let body = self.handle_stringify_and_paste(
+            &mac.body,
+            &mac.params,
+            &[],
+            mac.is_variadic,
+            mac.has_named_variadic,
+        );
+        let expanded = self.expand_text(&body, expanding);
         expanding.remove(ident);
 
         if let Some((func_expanded, end_pos)) =
@@ -1197,6 +1204,7 @@ fn contains_standalone_ident(s: &str, ident: &str) -> bool {
     if ident_len == 0 || s_bytes.len() < ident_len {
         return false;
     }
+
     let mut i = 0;
     while i + ident_len <= s_bytes.len() {
         if &s_bytes[i..i + ident_len] == ident_bytes {
