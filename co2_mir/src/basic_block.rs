@@ -16,11 +16,7 @@ impl Builder<'_, '_> {
                 local, initializer, ..
             }) => {
                 let local_index = self.local_to_index(*local);
-                let local_ty = self.locals[local_index].ty;
-                self.lower_zeroed_to_destination(place(local_index), self.span, local_ty);
-                if let Some(init) = initializer
-                    && !matches!(&init.kind, HirExprKind::Zeroed)
-                {
+                if let Some(init) = initializer {
                     let value = self.lower_expr_to_operand(init);
                     self.stmts.push(MirStatement {
                         kind: MirStatementKind::Assign(place(local_index), Rvalue::Use(value)),

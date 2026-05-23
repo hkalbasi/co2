@@ -1,0 +1,40 @@
+//@ mode: co2
+//@ miri-error
+
+fn conditional_init_indirect(init: i32) -> i32 {
+    i32 x;
+    i32 *y = &x;
+    if (init) {
+        *y = 5;
+    }
+    return x * 3;
+}
+
+typedef struct { int x; int y; } St;
+
+fn init_struct(st: *mut St) {
+    st->x = 1;
+    st->y = 2;
+}
+
+fn conditional_init(init: i32) -> i32 {
+    i32 x;
+    if (init) {
+        x = 5;
+    }
+    return x * 3;
+         //^^^^^ error: Undefined Behavior: using uninitialized data, but this operation requires initialized memory
+}
+
+fn main() {
+    conditional_init_indirect(1);
+
+    St st;
+    init_struct(&st);
+    if (st.x + st.y != 3) {
+        std::process::abort();
+    }
+
+    conditional_init(1);
+    conditional_init(0);
+}

@@ -11,7 +11,7 @@ use rustc_ast::token::Token;
 use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_ast::{Attribute, FloatTy, IntTy, UintTy};
 use rustc_data_structures::fingerprint::Fingerprint;
-use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
 use rustc_data_structures::packed::Pu128;
 use rustc_data_structures::smallvec::SmallVec;
 use rustc_data_structures::steal::Steal;
@@ -26,6 +26,7 @@ use rustc_index::{Idx, IndexVec};
 use rustc_lint::Level;
 use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
 use rustc_middle::mir::{BorrowKind, ConstValue};
+use rustc_middle::queries::mir_borrowck::ProvidedValue as BorrowckProvidedValue;
 use rustc_middle::query::Providers as QueryProviders;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::util::Providers as UtilProviders;
@@ -1756,6 +1757,7 @@ struct OriginalProviders {
     // def_ident_span: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Option<RustcSpan>,
     reachable_set:
         for<'tcx> fn(TyCtxt<'tcx>, ()) -> rustc_data_structures::unord::UnordSet<LocalDefId>,
+    mir_borrowck: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> BorrowckProvidedValue<'tcx>,
     // impl_parent: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Option<RustcDefId>,
     // specialization_graph_of:
     //     for<'tcx> fn(TyCtxt<'tcx>, RustcDefId) -> Result<&'tcx Graph, ErrorGuaranteed>,
@@ -2374,6 +2376,7 @@ fn override_providers<S: CrateGeneratorState>(providers: &mut QueryProviders, ga
             // def_span: providers.def_span,
             // def_ident_span: providers.def_ident_span,
             reachable_set: providers.reachable_set,
+            mir_borrowck: providers.mir_borrowck,
             // impl_parent: providers.impl_parent,
             // specialization_graph_of: providers.specialization_graph_of,
             // all_local_trait_impls: providers.all_local_trait_impls,
@@ -2413,6 +2416,7 @@ fn override_providers<S: CrateGeneratorState>(providers: &mut QueryProviders, ga
     // providers.explicit_predicates_of = generated_explicit_predicates_of;
     // providers.codegen_fn_attrs = generated_codegen_fn_attrs;
     providers.mir_built = generated_mir_built::<S>;
+    providers.mir_borrowck = generated_mir_borrowck;
     // providers.mir_for_ctfe = generated_mir_for_ctfe;
     // providers.mir_drops_elaborated_and_const_checked =
     //     generated_mir_drops_elaborated_and_const_checked;
@@ -2711,6 +2715,29 @@ fn generated_mir_built<S: CrateGeneratorState>(
     let body = build_mir_body(tcx, &mir, def_id);
 
     unsafe { std::mem::transmute(leak(Steal::new(body))) }
+}
+
+fn generated_mir_borrowck<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+) -> BorrowckProvidedValue<'tcx> {
+    let (is_generated, original) = {
+        let state = GENERATE_STATE
+            .get()
+            .cloned()
+            .expect("generate state missing");
+        let guard = state.state.try_lock().unwrap();
+        let original = guard.original.expect("original providers missing");
+        (guard.defined_crate.contains_key(tcx, &def_id), original)
+    };
+
+    if is_generated {
+        let opaque_types: FxIndexMap<LocalDefId, ty::DefinitionSiteHiddenType<'tcx>> =
+            FxIndexMap::default();
+        Ok(tcx.arena.alloc(opaque_types))
+    } else {
+        (original.mir_borrowck)(tcx, def_id)
+    }
 }
 
 fn random_fingerprint() -> Fingerprint {
