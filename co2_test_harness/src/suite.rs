@@ -1,22 +1,22 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
 use tempfile::Builder as TempDirBuilder;
 
-use crate::compiler::{CompileResult, compile_test};
+use crate::compiler::{CompileResult, MiriRun, compile_test, run_miri_test};
 use crate::error::{TestError, UiTestError, render_test_error, render_ui_error};
 use crate::test_case::{
     Mode, TestCase, TestKind, TestOutcome, collect_tests, directive_args, directive_i32,
     directive_text,
 };
 use crate::ui::{
-    UiSpanExpectation, check_compile_warnings, check_ui, format_named_output,
+    UiAnnotationLevel, UiSpanExpectation, check_compile_warnings, check_ui, format_named_output,
     parse_ui_span_expectations,
 };
-use crate::util::{copy_dir_all, normalize, unescape_text};
+use crate::util::{copy_dir_all, line_start_offsets, normalize, unescape_text};
 
 #[derive(Default)]
 pub struct Stats {
@@ -92,9 +92,20 @@ fn run_test(root: &Path, test: &TestCase) -> Result<TestOutcome> {
         &compile.output,
         &compile_annotations,
         &directive_warning_expectations,
-        sources,
+        sources.clone(),
     )?;
-    check_run(test, &compile)?;
+    if !test.directives.contains_key("miri-error") {
+        check_run(test, &compile)?;
+    }
+    if test.directives.contains_key("run-miri") || test.directives.contains_key("miri-error") {
+        match run_miri_test(root, mode, test)? {
+            MiriRun::Ran(output) if test.directives.contains_key("miri-error") => {
+                check_miri_error(test, &output, &compile_annotations, sources)?;
+            }
+            MiriRun::Ran(output) => check_run_output(test, &output, "miri")?,
+            MiriRun::Unavailable(reason) => return Ok(TestOutcome::Skip(reason)),
+        }
+    }
     Ok(TestOutcome::Pass)
 }
 
@@ -200,6 +211,10 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
         .output()
         .with_context(|| format!("failed to execute {}", compile.exe_path.display()))?;
 
+    check_run_output(test, &output, "run")
+}
+
+fn check_run_output(test: &TestCase, output: &Output, runner: &str) -> Result<()> {
     let got_status = output.status.code().unwrap_or(-1);
     let expected_status = directive_i32(test, "run-status")?.unwrap_or(0);
     if got_status != expected_status {
@@ -207,7 +222,9 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
             source: test.source.clone(),
             span: None,
             message: format!(
-                "exit code mismatch: expected `{expected_status}`, got `{got_status}`"
+                "{runner} exit code mismatch: expected `{expected_status}`, got `{got_status}`\n{}\n{}",
+                format_named_output("stdout", &String::from_utf8_lossy(&output.stdout)),
+                format_named_output("stderr", &String::from_utf8_lossy(&output.stderr)),
             ),
         }
         .into());
@@ -222,7 +239,9 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
         return Err(TestError {
             source: test.source.clone(),
             span: None,
-            message: format!("stdout mismatch:\n  expected: {expected}\n  actual:   {stdout}"),
+            message: format!(
+                "{runner} stdout mismatch:\n  expected: {expected}\n  actual:   {stdout}"
+            ),
         }
         .into());
     }
@@ -233,7 +252,7 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
             source: test.source.clone(),
             span: None,
             message: format!(
-                "stderr mismatch:\n  expected: {}\n  actual:   {}",
+                "{runner} stderr mismatch:\n  expected: {}\n  actual:   {}",
                 expected.lines().next().unwrap_or(""),
                 stderr.lines().next().unwrap_or("")
             ),
@@ -252,7 +271,7 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
                 source: test.source.clone(),
                 span: None,
                 message: format!(
-                    "stdout missing pattern `{}` (got `{}`)",
+                    "{runner} stdout missing pattern `{}` (got `{}`)",
                     pat,
                     stdout.lines().next().unwrap_or("")
                 ),
@@ -271,7 +290,7 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
                 source: test.source.clone(),
                 span: None,
                 message: format!(
-                    "stderr missing pattern `{}` (got `{}`)",
+                    "{runner} stderr missing pattern `{}` (got `{}`)",
                     pat,
                     stderr.lines().next().unwrap_or("")
                 ),
@@ -281,6 +300,164 @@ fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn check_miri_error(
+    test: &TestCase,
+    output: &Output,
+    span_expectations: &[UiSpanExpectation],
+    sources: HashMap<String, String>,
+) -> Result<()> {
+    if output.status.success() {
+        bail!("miri-error test unexpectedly succeeded");
+    }
+
+    let error_expectations = span_expectations
+        .iter()
+        .filter(|expected| expected.level == Some(UiAnnotationLevel::Error))
+        .collect::<Vec<_>>();
+    if error_expectations.is_empty() {
+        bail!(
+            "miri-error test has no inline error expectations; add a `//^^^^ error: ...` annotation near the UB source: {}",
+            test.path.display()
+        );
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let diagnostics = parse_miri_rendered_diagnostics(&stderr);
+    let mut issues = Vec::new();
+
+    for expected in error_expectations {
+        if !diagnostics
+            .iter()
+            .any(|diagnostic| miri_diagnostic_matches_expected(test, expected, diagnostic))
+        {
+            issues.push(crate::error::UiTestIssue {
+                span: Some(expected.clone()),
+                reason: expected.message.as_ref().map_or_else(
+                    || "Missing miri error".to_owned(),
+                    |message| format!("Missing miri error: {message}"),
+                ),
+            });
+        }
+    }
+
+    if !issues.is_empty() {
+        return Err(UiTestError {
+            path: test.path.clone(),
+            sources,
+            issues,
+        }
+        .into());
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct MiriRenderedDiagnostic {
+    message: String,
+    line: usize,
+    column_start: usize,
+    column_end: usize,
+}
+
+fn parse_miri_rendered_diagnostics(stderr: &str) -> Vec<MiriRenderedDiagnostic> {
+    let lines = stderr.lines().collect::<Vec<_>>();
+    let mut diagnostics = Vec::new();
+    let mut idx = 0;
+
+    while idx < lines.len() {
+        let Some(message) = lines[idx].strip_prefix("error: ") else {
+            idx += 1;
+            continue;
+        };
+
+        let mut location = None;
+        let mut caret = None;
+        let mut cursor = idx + 1;
+        while cursor < lines.len() {
+            let line = lines[cursor];
+            if cursor != idx + 1 && line.starts_with("error: ") {
+                break;
+            }
+            if let Some(line_no) = parse_miri_location(line) {
+                location = Some(line_no);
+            } else if let Some((column_start, column_end)) = parse_miri_caret(line) {
+                caret = Some((column_start, column_end));
+            }
+            cursor += 1;
+        }
+
+        if let (Some(line_no), Some((caret_start, caret_end))) = (location, caret) {
+            diagnostics.push(MiriRenderedDiagnostic {
+                message: message.to_owned(),
+                line: line_no,
+                column_start: caret_start,
+                column_end: caret_end,
+            });
+        }
+        idx = cursor;
+    }
+
+    diagnostics
+}
+
+fn parse_miri_location(line: &str) -> Option<usize> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix("--> ")?;
+    let mut parts = rest.rsplitn(3, ':');
+    let _column: usize = parts.next()?.parse().ok()?;
+    let line_no = parts.next()?.parse().ok()?;
+    Some(line_no)
+}
+
+fn parse_miri_caret(line: &str) -> Option<(usize, usize)> {
+    let after_pipe = line.split_once('|')?.1;
+    let caret_index = after_pipe.find('^')?;
+    let caret_count = after_pipe[caret_index..]
+        .chars()
+        .take_while(|ch| *ch == '^')
+        .count();
+    Some((caret_index, caret_index + caret_count))
+}
+
+fn miri_diagnostic_matches_expected(
+    test: &TestCase,
+    expected: &UiSpanExpectation,
+    diagnostic: &MiriRenderedDiagnostic,
+) -> bool {
+    if let Some(message) = &expected.message
+        && diagnostic.message != *message
+    {
+        return false;
+    }
+
+    let Some((line, column_start, column_end)) = source_span_line_columns(test, expected) else {
+        return false;
+    };
+    diagnostic.line == line
+        && diagnostic.column_start == column_start
+        && diagnostic.column_end == column_end
+}
+
+fn source_span_line_columns(
+    test: &TestCase,
+    expected: &UiSpanExpectation,
+) -> Option<(usize, usize, usize)> {
+    let line_starts = line_start_offsets(&test.source);
+    let line_idx = line_starts
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, start)| **start <= expected.byte_start)?
+        .0;
+    let line_start = line_starts[line_idx];
+    Some((
+        line_idx + 1,
+        expected.byte_start - line_start + 1,
+        expected.byte_end - line_start + 1,
+    ))
 }
 
 fn output_expectation(test: &TestCase, key: &str) -> Result<Option<String>> {

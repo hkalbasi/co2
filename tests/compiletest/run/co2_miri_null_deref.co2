@@ -1,0 +1,8 @@
+//@ mode: co2
+//@ miri-error
+
+fn main() {
+    i32* ptr = std::ptr::null_mut::<i32>();
+    *ptr = 1;
+  //^^^^^^^^ error: Undefined Behavior: memory access failed: attempting to access 4 bytes, but got null pointer
+}

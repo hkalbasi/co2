@@ -1,0 +1,11 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-miri
+
+fn main() {
+    i32 value = 40;
+    i32* ptr = &value;
+    if (*ptr + 2 != 42) {
+        std::process::exit(1);
+    }
+}

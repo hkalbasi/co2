@@ -27,6 +27,8 @@ Run tests:
 - `//@ run-stderr: <exact text>` (`\\n` escapes are supported)
 - `//@ run-stdout-contains: <substring>` (repeatable)
 - `//@ run-stderr-contains: <substring>` (repeatable)
+- `//@ run-miri` runs `mode: co2` tests through `co2cargo miri run` after the normal run and checks the same run status/output expectations. The test is skipped if `cargo-miri` is unavailable.
+- `//@ miri-error` runs `mode: co2` tests through Miri after the normal run and expects Miri to fail with inline `//^^^^ error: ...` annotations.
 
 Directory run tests:
 - A directory containing `main.nu` is treated as a run test.
