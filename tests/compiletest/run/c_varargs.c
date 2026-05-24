@@ -115,6 +115,30 @@ int copy_after_one(int n, ...) {
 	return 0;
 }
 
+int copy_and_sum(int n, va_list ap) {
+	va_list copy;
+	va_copy(copy, ap);
+	int total = 0;
+	int i;
+	for (i = 0; i < n; i += 1) {
+		total += va_arg(copy, int);
+	}
+	va_end(copy);
+	return total;
+}
+
+int copy_in_the_caller(int n, ...) {
+	va_list ap;
+	va_start(ap, n);
+	for (int i = 0; i < n; i += 1) {
+		if (copy_and_sum(n, ap) != n * n) {
+			return 1;
+		}
+	}
+	va_end(ap);
+	return 0;
+}
+
 struct VarargHolder { void (*f)(char *, va_list); };
 void f1(char *s, va_list ap) {}
 int fill_vararg_holder(struct VarargHolder *p) { p->f = f1; return 0; }
@@ -139,6 +163,9 @@ int main() {
     }
     if (copy_after_one(3, 1, 2, 3)) {
         return 60 + copy_after_one(3, 1, 2, 3);
+    }
+	if (copy_in_the_caller(3, 1, 5, 3)) {
+        return 5;
     }
 
     struct VarargHolder va_holder = { .f = 0 };
