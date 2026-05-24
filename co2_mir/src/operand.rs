@@ -1620,41 +1620,24 @@ impl Builder<'_, '_> {
             });
             return MirOperand::Copy(place(tmp));
         }
-        if (src_is_fn_def || src_is_fn_ptr) && dst_is_int {
-            let fn_ptr_ty = if src_is_fn_def {
+        if src_is_fn_def {
+            let middle_ty = {
                 let src_sig = src_ty
                     .kind()
                     .fn_sig()
                     .expect("fn def should have signature");
                 Ty::from_rigid_kind(RigidTy::FnPtr(src_sig))
-            } else {
-                src_ty
             };
-            let fn_ptr_op = if src_is_fn_def {
-                let fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(fn_ptr_local),
-                        Rvalue::Cast(
-                            CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
-                                Safety::Safe,
-                            )),
-                            inner_op,
-                            fn_ptr_ty,
-                        ),
-                    ),
-                    span,
-                });
-                MirOperand::Copy(place(fn_ptr_local))
-            } else {
-                inner_op
-            };
+            let middle_op = self.lower_cast(inner_op, src_ty, middle_ty, span);
+            return self.lower_cast(middle_op, middle_ty, dst_ty, span);
+        }
+        if src_is_fn_ptr && dst_is_int {
             let raw_ptr_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Not);
             let raw_ptr_local = self.new_temp(raw_ptr_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(
                     place(raw_ptr_local),
-                    Rvalue::Cast(CastKind::FnPtrToPtr, fn_ptr_op, raw_ptr_ty),
+                    Rvalue::Cast(CastKind::FnPtrToPtr, inner_op, raw_ptr_ty),
                 ),
                 span,
             });

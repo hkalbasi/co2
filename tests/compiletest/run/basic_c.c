@@ -1969,6 +1969,13 @@ int main88() {
     return 0;
 }
 
+void foo89(void) {}
+static void take_ptr89(const void *p) { (void)p; }
+int main89(void) {
+    take_ptr89(foo89);
+    return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
