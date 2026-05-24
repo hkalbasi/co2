@@ -574,7 +574,11 @@ impl HirCtx<'_> {
                         (
                             TyKind::RigidTy(RigidTy::RawPtr(exp_ty, _)),
                             TyKind::RigidTy(RigidTy::RawPtr(act_ty, _)),
-                        ) => ty_matches_expected(exp_ty, act_ty),
+                        ) => {
+                            exp_ty.kind().is_unit()
+                                || act_ty.kind().is_unit()
+                                || ty_matches_expected(exp_ty, act_ty)
+                        }
                         _ => false,
                     })
                     .map(|active_field| HirExpr {

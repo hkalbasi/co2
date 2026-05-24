@@ -38,6 +38,7 @@ int main() {
     struct A a = {0};
     func1(&a);
     func2(&a);
+    func2((void*)&a);
     func3(5);
     return 0;
 }
