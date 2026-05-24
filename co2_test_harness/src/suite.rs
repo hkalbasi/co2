@@ -25,13 +25,18 @@ pub struct Stats {
     pub skipped: usize,
 }
 
-pub fn run_tests(root: &Path, filter: Option<&str>, stats: &mut Stats) -> Result<()> {
+pub fn run_tests(
+    root: &Path,
+    filter: Option<&str>,
+    coverage_dir: Option<&Path>,
+    stats: &mut Stats,
+) -> Result<()> {
     let tests = collect_tests(root, filter)?;
     eprintln!("running {} tests", tests.len());
 
     for test in tests {
         let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
-        match run_test(root, &test) {
+        match run_test(root, &test, coverage_dir) {
             Ok(TestOutcome::Pass) => {
                 stats.passed += 1;
                 eprintln!("ok   {name}");
@@ -58,13 +63,13 @@ pub fn run_tests(root: &Path, filter: Option<&str>, stats: &mut Stats) -> Result
     Ok(())
 }
 
-fn run_test(root: &Path, test: &TestCase) -> Result<TestOutcome> {
+fn run_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) -> Result<TestOutcome> {
     if let Some(reason) = directive_text(test, "skip") {
         return Ok(TestOutcome::Skip(reason));
     }
 
     if test.kind == TestKind::NuDir {
-        run_nu_dir_test(root, test)?;
+        run_nu_dir_test(root, test, coverage_dir)?;
         return Ok(TestOutcome::Pass);
     }
 
@@ -81,7 +86,7 @@ fn run_test(root: &Path, test: &TestCase) -> Result<TestOutcome> {
         .get("compile-warning")
         .cloned()
         .unwrap_or_default();
-    let compile = compile_test(root, mode, test, true)?;
+    let compile = compile_test(root, mode, test, true, coverage_dir)?;
     if test.directives.contains_key("compile-fail") {
         check_ui(test, mode, &compile.output, &compile_annotations, sources)?;
         return Ok(TestOutcome::Pass);
@@ -104,7 +109,7 @@ fn run_test(root: &Path, test: &TestCase) -> Result<TestOutcome> {
     }
 
     if !test.directives.contains_key("miri-error") {
-        check_run(test, &compile)?;
+        check_run(test, &compile, coverage_dir)?;
     }
     if test.directives.contains_key("run-miri") || test.directives.contains_key("miri-error") {
         match run_miri_test(root, mode, test)? {
@@ -159,7 +164,7 @@ fn collect_compile_annotations(
     Ok((annotations, sources))
 }
 
-fn run_nu_dir_test(root: &Path, test: &TestCase) -> Result<()> {
+fn run_nu_dir_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) -> Result<()> {
     let temp = TempDirBuilder::new()
         .prefix("co2-ct-dir-")
         .tempdir()
@@ -183,13 +188,25 @@ fn run_nu_dir_test(root: &Path, test: &TestCase) -> Result<()> {
         format!("{}{}{}", compiler_bin.display(), path_sep, current_path)
     };
 
-    let output = Command::new("nu")
-        .arg(&main_nu)
+    let mut cmd = Command::new("nu");
+    cmd.arg(&main_nu)
         .current_dir(&temp_path)
         .env("PATH", merged_path)
         .env("CO2_WORKSPACE_ROOT", root)
         .env("CO2_TEST_DIR", &temp_path)
-        .env("CO2_BIN_DIR", &compiler_bin)
+        .env("CO2_BIN_DIR", &compiler_bin);
+
+    if let Some(dir) = coverage_dir {
+        cmd.env(
+            "LLVM_PROFILE_FILE",
+            dir.join(format!(
+                "compiler-nu-{}-%p-%m.profraw",
+                test.path.file_stem().unwrap().to_str().unwrap()
+            )),
+        );
+    }
+
+    let output = cmd
         .output()
         .with_context(|| format!("failed to execute Nushell test {}", main_nu.display()))?;
 
@@ -205,7 +222,7 @@ fn run_nu_dir_test(root: &Path, test: &TestCase) -> Result<()> {
     Ok(())
 }
 
-fn check_run(test: &TestCase, compile: &CompileResult) -> Result<()> {
+fn check_run(test: &TestCase, compile: &CompileResult, _coverage_dir: Option<&Path>) -> Result<()> {
     let run_args = directive_args(test, "run-args")?;
     let output = Command::new(&compile.exe_path)
         .args(run_args)

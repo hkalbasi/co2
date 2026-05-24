@@ -90,10 +90,16 @@ fn cargo_miri_available() -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-pub fn build_compilers(root: &Path) -> Result<()> {
-    let status = Command::new("cargo")
-        .current_dir(root)
-        .args(["build", "-q", "--locked", "-p", "co2-multicall"])
+pub fn build_compilers(root: &Path, coverage: bool) -> Result<()> {
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(root)
+        .args(["build", "-q", "--locked", "-p", "co2-multicall"]);
+
+    if coverage {
+        cmd.env("RUSTFLAGS", "-C instrument-coverage");
+    }
+
+    let status = cmd
         .status()
         .context("failed to run cargo build for co2-multicall")?;
     if !status.success() {
@@ -170,6 +176,7 @@ pub fn compile_test(
     mode: Mode,
     test: &TestCase,
     json_diagnostics: bool,
+    coverage_dir: Option<&Path>,
 ) -> Result<CompileResult> {
     let temp = TempDirBuilder::new()
         .prefix("co2-ct-")
@@ -205,6 +212,15 @@ pub fn compile_test(
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
             }
+            if let Some(dir) = coverage_dir {
+                cmd.env(
+                    "LLVM_PROFILE_FILE",
+                    dir.join(format!(
+                        "compiler-{}-%p-%m.profraw",
+                        test.path.file_stem().unwrap().to_str().unwrap()
+                    )),
+                );
+            }
             cmd.output().context("failed to execute co2cc")?
         }
         Mode::Co2 => {
@@ -225,6 +241,15 @@ pub fn compile_test(
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
             }
+            if let Some(dir) = coverage_dir {
+                cmd.env(
+                    "LLVM_PROFILE_FILE",
+                    dir.join(format!(
+                        "compiler-{}-%p-%m.profraw",
+                        test.path.file_stem().unwrap().to_str().unwrap()
+                    )),
+                );
+            }
             cmd.output().context("failed to execute co2rustc")?
         }
         Mode::Rust => {
@@ -243,6 +268,15 @@ pub fn compile_test(
                 .args(compile_flags);
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
+            }
+            if let Some(dir) = coverage_dir {
+                cmd.env(
+                    "LLVM_PROFILE_FILE",
+                    dir.join(format!(
+                        "compiler-{}-%p-%m.profraw",
+                        test.path.file_stem().unwrap().to_str().unwrap()
+                    )),
+                );
             }
             cmd.output()
                 .context("failed to execute co2rustc for Rust test")?

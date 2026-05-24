@@ -57,6 +57,7 @@ jobs:
           ninja = true
 
           [build]
+          profiler = true
           target = ["x86_64-unknown-linux-gnu"]
           docs = false
           compiler-docs = false

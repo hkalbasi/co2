@@ -5,4 +5,8 @@ use clap::Parser;
 pub struct Cli {
     /// Optional glob matched against the workspace-relative test path.
     pub filter: Option<String>,
+
+    /// Run tests with code coverage instrumented.
+    #[arg(long)]
+    pub coverage: bool,
 }
