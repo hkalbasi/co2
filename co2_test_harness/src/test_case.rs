@@ -43,7 +43,7 @@ pub enum TestOutcome {
 
 pub fn collect_tests(root: &Path, filter: Option<&str>) -> Result<Vec<TestCase>> {
     let mut out = Vec::new();
-    let dir = root.join("tests").join("compiletest");
+    let dir = root.join("tests");
     if !dir.exists() {
         return Ok(out);
     }

@@ -34,7 +34,7 @@ let stderr_normalized = (
 let stdout_normalized = ($run.stdout | str trim)
 let status = $run.exit_code
 
-let expected_dir = ($env.CO2_WORKSPACE_ROOT | path join "tests" "compiletest" "run" "c_null_deref")
+let expected_dir = ($env.CO2_WORKSPACE_ROOT | path join "tests" "c" "null_deref")
 let expected_status = (open ($expected_dir | path join "status.expected") | str trim | into int)
 let expected_stdout = (open ($expected_dir | path join "stdout.expected") | str trim)
 let expected_stderr = (open ($expected_dir | path join "stderr.expected") | str trim)

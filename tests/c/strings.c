@@ -1,6 +1,6 @@
 //@ mode: c
 //@ run-status: 0
-//@ run-stdout: FILE: c_strings.out
+//@ run-stdout: FILE: strings.out
 
 #include <stdio.h>
 #include <string.h>

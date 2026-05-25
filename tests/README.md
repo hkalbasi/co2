@@ -1,9 +1,15 @@
-# co2 compiletest
+# co2 test suite
 
 Each test file is self-contained and uses inline directives prefixed with `//@`.
 
-The harness scans `tests/compiletest` recursively. Directory names are only
-organization and filter conveniences; test behavior is inferred from directives.
+The harness scans `tests` recursively. Top-level directories are:
+- `tests/c` for tests that are valid C and accepted by GCC
+- `tests/co2` for the remaining file-based language tests
+- `tests/cli` for Nushell-driven CLI tests
+- `tests/miri` for direct Miri file tests
+
+Below those top-level directories, names are organized by feature rather than the
+old `run` and `ui` split. Test behavior is still inferred from directives.
 
 Common directives:
 - `//@ mode: c|co2|rust`
@@ -40,4 +46,4 @@ Directory run tests:
 
 Run harness:
 - `cargo run -p co2_test_harness`
-- `cargo run -p co2_test_harness -- 'tests/compiletest/**/*.c'`
+- `cargo run -p co2_test_harness -- 'tests/c/**'`

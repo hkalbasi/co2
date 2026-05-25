@@ -1,11 +1,19 @@
 [tasks.test]
-description = "Run all co2 compiletests"
+description = "Run all co2 tests"
 run = "cargo run -q --locked -p co2_test_harness"
 
-[tasks.test-ui]
-description = "Run compiletests under the ui directory"
-run = "cargo run -q --locked -p co2_test_harness -- 'tests/compiletest/ui/**'"
+[tasks.test-c]
+description = "Run tests under tests/c"
+run = "cargo run -q --locked -p co2_test_harness -- 'tests/c/**'"
 
-[tasks.test-run]
-description = "Run compiletests under the run directory"
-run = "cargo run -q --locked -p co2_test_harness -- 'tests/compiletest/run/**'"
+[tasks.test-co2]
+description = "Run tests under tests/co2"
+run = "cargo run -q --locked -p co2_test_harness -- 'tests/co2/**'"
+
+[tasks.test-cli]
+description = "Run tests under tests/cli"
+run = "cargo run -q --locked -p co2_test_harness -- 'tests/cli/**'"
+
+[tasks.test-miri]
+description = "Run tests under tests/miri"
+run = "cargo run -q --locked -p co2_test_harness -- 'tests/miri/**'"

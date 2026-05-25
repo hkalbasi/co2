@@ -189,8 +189,8 @@ fn include_body_lazy_span_uses_header_context() {
     use std::path::Path;
 
     let pp = co2_preprocessor::preprocess(
-        Path::new("../tests/compiletest/ui/include_error.c"),
-        &["-I".to_owned(), "../tests/compiletest/ui".to_owned()],
+        Path::new("../tests/c/include_error.c"),
+        &["-I".to_owned(), "../tests/c".to_owned()],
     );
     let src: &'static str = Box::leak(pp.normalized.to_string().into_boxed_str());
     let (tokens, lex_errs) = lexer()

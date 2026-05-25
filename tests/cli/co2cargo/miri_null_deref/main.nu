@@ -72,7 +72,7 @@ let stderr_normalized = (
     | str replace --regex ' --> .+src/main\.co2:' ' --> src/main.co2:'
 )
 
-let expected_path = ($env.CO2_WORKSPACE_ROOT | path join "tests" "compiletest" "run" "co2cargo_miri_null_deref" "stderr.expected")
+let expected_path = ($env.CO2_WORKSPACE_ROOT | path join "tests" "cli" "co2cargo" "miri_null_deref" "stderr.expected")
 let expected = (open --raw $expected_path)
 
 if $stderr_normalized != $expected {
