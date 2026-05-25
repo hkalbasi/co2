@@ -87,6 +87,9 @@ Benefits of Zngur, CXX, Crubit, ... over CO2++:
 * You have more options on C++ compiler and build systems.
 * CO2++ has a higher upfront adoption cost.
 
+## CO2 vs Zig, Hare, C3, Odin, ...
+
+See [CO2 as a C successor language](./c_successor.md).
 
 ## Network effect for programming languages
 

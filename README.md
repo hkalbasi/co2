@@ -73,7 +73,12 @@ But it is not a safe language like Rust:
 No. We can imagine a CO2++ language which is backward compatible with C++. But CO2 is just compatible with C.
 For more details on CO2++, see [this page](./docs/vision/lingua_franca.md). 
 
-## Rewrite a C project in Rust
+### Why the compiler binary is so huge?
+
+The currently packaged binary is a self extracting archive of co2 + rustc + rust std + llvm + miri.
+It would be much smaller if you install the rustc separately and [build CO2 from source](./docs/installation.md).
+
+### How to rewrite a C project in Rust using CO2?
 
 CO2 enables incrementally migrating projects between C and Rust, by using CO2 as a midpoint.
 For converting a C project to Rust, you can:
