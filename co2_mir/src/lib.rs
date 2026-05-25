@@ -4,7 +4,6 @@ mod allocation;
 mod basic_block;
 mod build;
 mod operand;
-mod optimization;
 mod place;
 mod rvalue;
 

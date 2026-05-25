@@ -12,7 +12,7 @@ mod lexer;
 mod parser;
 
 pub(crate) use co2_ast::{
-    CompoundStatement, Expression, FileId, StatelessResolver, Token, TranslationUnit, TypeResolver,
+    CompoundStatement, Expression, FileId, Token, TranslationUnit, TypeResolver,
     print_errors_and_terminate,
 };
 
@@ -123,14 +123,6 @@ fn parse_translation_unit_internal<R: TypeResolver>(
     );
 }
 
-pub fn parse_items(
-    filename: &str,
-    src: &'static str,
-    pp: Option<&co2_preprocessor::PreprocessedSource>,
-) -> Option<Spanned<TranslationUnit<StatelessResolver>>> {
-    parse_translation_unit(filename, src, pp, StatelessResolver::new())
-}
-
 /// Parse a translation unit from an already-tokenised slice.
 /// Used for inline modules whose tokens were captured during parent-file parsing.
 pub fn parse_translation_unit_from_tokens<R: TypeResolver>(
@@ -208,7 +200,7 @@ fn include_body_lazy_span_uses_header_context() {
     let tokens = map_lexer_tokens(tokens.unwrap(), Some(&pp));
     let tokens = tokens.leak();
     let end_span = pp.real_span(src.len(), src.len());
-    let (ast, parse_errs) = translation_unit(StatelessResolver::new())
+    let (ast, parse_errs) = translation_unit(co2_ast::StatelessResolver::new())
         .map_with(|ast, e| (ast, e.span()))
         .parse(tokens.map(end_span, |(t, s)| (t, s)))
         .into_output_errors();

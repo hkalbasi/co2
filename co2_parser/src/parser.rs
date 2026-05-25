@@ -2623,6 +2623,6 @@ where
 #[test]
 fn parser_is_constructible() {
     use chumsky::input::Input;
-    let parser = translation_unit(crate::StatelessResolver::new());
+    let parser = translation_unit(StatelessResolver::new());
     parser.parse((&[]).map(Span::new(FileId::from(0), 1..2), |_| unreachable!()));
 }

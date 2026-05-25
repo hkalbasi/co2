@@ -1700,15 +1700,6 @@ pub enum DefinedItemKind {
     ImplItemFn(DefId),
 }
 
-/// Run rustc_driver but emit a synthetic crate described by three callbacks.
-///
-/// Phase 1 (`define_items`) declares items and allocates their definitions.
-/// Phase 2 (`define_signatures`) defines function signatures using allocated definitions.
-/// Phase 3 (`emit_mir`) emits MIR bodies for generated local functions.
-pub fn generate<S: CrateGeneratorState>() {
-    generate_with_args::<S>(std::env::args().collect());
-}
-
 pub fn generate_with_args<S: CrateGeneratorState>(mut args: Vec<String>) {
     if args.len() == 1 {
         // Provide a dummy crate name if invoked programmatically without args.

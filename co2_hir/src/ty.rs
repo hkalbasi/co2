@@ -579,19 +579,6 @@ pub(crate) fn variant_idx(id: usize) -> VariantIdx {
     unsafe { std::mem::transmute::<usize, VariantIdx>(id) }
 }
 
-pub fn primitive_type(name: &str) -> Option<Ty> {
-    match name {
-        "u8" => Some(Ty::unsigned_ty(UintTy::U8)),
-        "i8" => Some(Ty::signed_ty(IntTy::I8)),
-        "u32" => Some(Ty::unsigned_ty(UintTy::U32)),
-        "i32" => Some(Ty::signed_ty(IntTy::I32)),
-        "usize" => Some(Ty::usize_ty()),
-        "isize" => Some(Ty::signed_ty(IntTy::Isize)),
-        "void" => Some(Ty::new_tuple(&[])),
-        _ => None,
-    }
-}
-
 pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
     if expected == actual {
         return true;

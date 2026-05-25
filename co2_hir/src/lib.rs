@@ -19,4 +19,4 @@ pub use item::{
 };
 pub use resolver::{HirCtx, ResolvedValue};
 pub use stmt::HirStmt;
-pub use ty::{format_ty, primitive_type};
+pub use ty::format_ty;

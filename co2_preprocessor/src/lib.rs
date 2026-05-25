@@ -48,14 +48,6 @@ pub struct MappedSpan {
 }
 
 #[derive(Clone, Debug)]
-pub struct DiagnosticSpan {
-    pub file_name: String,
-    pub source: Arc<str>,
-    pub start: usize,
-    pub end: usize,
-}
-
-#[derive(Clone, Debug)]
 pub struct PreprocessedSource {
     pub normalized: Arc<str>,
     pub main_file_idx: FileId,

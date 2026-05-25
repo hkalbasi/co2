@@ -5,7 +5,6 @@ use ariadne::{Color, Config, IndexType, Label, Report, ReportKind, Source};
 
 #[derive(Debug, Clone)]
 pub struct TestError {
-    #[allow(dead_code)]
     pub source: String,
     pub span: Option<(usize, usize)>,
     pub message: String,

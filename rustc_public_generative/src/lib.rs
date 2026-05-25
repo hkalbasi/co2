@@ -339,10 +339,6 @@ pub trait CrateGeneratorState: Sync + Send + Any + Sized {
     fn emit_mir(&mut self, ctx: HirStructureCtx, def: DefId) -> rustc_public::mir::Body;
 }
 
-pub fn generate<S: CrateGeneratorState>() {
-    internal::generate::<S>();
-}
-
 pub fn generate_with_args<S: CrateGeneratorState>(args: Vec<String>) {
     internal::generate_with_args::<S>(args);
 }
