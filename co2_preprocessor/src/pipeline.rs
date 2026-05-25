@@ -240,7 +240,7 @@ impl Preprocessor {
 
         for slice in Self::logical_slices(source) {
             let trimmed = slice.text.trim();
-            let is_directive = trimmed.starts_with('#');
+            let is_directive = trimmed.starts_with('#') && !trimmed.starts_with("#[");
             let is_conditional_directive = if is_directive {
                 let after_hash = trimmed[1..].trim_start();
                 after_hash.starts_with("if")

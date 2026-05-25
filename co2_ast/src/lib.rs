@@ -904,6 +904,7 @@ pub enum Declaration<R: TypeResolver> {
         declarators: Vec<Spanned<InitDeclarator<R>>>,
     },
     RustTypeAlias {
+        attrs: Vec<Spanned<RustAttribute>>,
         ident: Spanned<R::DeclarationIdent>,
         ty: Spanned<RustTy<R>>,
         is_pub: bool,
@@ -933,6 +934,7 @@ impl<R: TypeResolver> FunctionDefinitionSignature<R> {
 
 #[derive(Debug, Clone)]
 pub struct RustFunctionSignature<R: TypeResolver> {
+    pub attrs: Vec<Spanned<RustAttribute>>,
     pub name: Spanned<R::DeclarationIdent>,
     pub params: Vec<RustFunctionParam<R>>,
     pub ret_ty: Spanned<RustTy<R>>,
@@ -972,6 +974,18 @@ pub enum RustTy<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub struct LazyRustConstExpr {
     pub tokens: Vec<Spanned<Token>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RustAttribute {
+    pub path: Vec<Spanned<String>>,
+    pub args: Vec<Spanned<Token>>,
+}
+
+impl RustAttribute {
+    pub fn is_word(&self, name: &str) -> bool {
+        self.args.is_empty() && matches!(self.path.as_slice(), [(segment, _)] if segment == name)
+    }
 }
 
 impl LazyRustConstExpr {
@@ -1228,16 +1242,33 @@ pub struct TranslationUnit<R: TypeResolver> {
 
 #[derive(Debug, Clone)]
 pub struct UseItem {
+    pub attrs: Vec<Spanned<RustAttribute>>,
     pub path: Vec<Spanned<String>>,
     pub alias: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ModItem {
+    pub attrs: Vec<Spanned<RustAttribute>>,
     pub name: Spanned<String>,
     /// For inline modules (`mod foo { ... }`), the inner tokens (without braces).
     /// `None` means this is a file-based module (`mod foo;`).
     pub inline_content: Option<Spanned<Vec<Spanned<Token>>>>,
+}
+
+pub fn co2_test_symbol_name(module_path: &[String], name: &str) -> String {
+    format!("__co2_test{}", co2_test_symbol_suffix(module_path, name))
+}
+
+pub fn co2_test_symbol_suffix(module_path: &[String], name: &str) -> String {
+    let mut suffix = String::new();
+    for segment in module_path.iter().map(String::as_str).chain([name]) {
+        suffix.push('_');
+        suffix.push_str(&segment.len().to_string());
+        suffix.push('_');
+        suffix.push_str(segment);
+    }
+    suffix
 }
 
 pub fn parse_unsigned_integer_constant(text: &str) -> Option<u128> {

@@ -1,0 +1,7 @@
+
+#[test]
+fn smoke_test() {
+    super::helper();
+    super::helper();
+    super::helper();
+}

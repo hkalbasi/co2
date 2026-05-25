@@ -8,8 +8,8 @@ use co2_ast::{
     EnumSpecifier, Enumerator, Expression, FileId, ForInit, FunctionDefinitionSignature,
     FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
     LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
-    RustFunctionParam, RustFunctionSignature, RustPath, RustPathSegment, RustTy, Span, Spanned,
-    SpecifierQualifier, StatelessResolver, Statement, StatementOrDeclaration,
+    RustAttribute, RustFunctionParam, RustFunctionSignature, RustPath, RustPathSegment, RustTy,
+    Span, Spanned, SpecifierQualifier, StatelessResolver, Statement, StatementOrDeclaration,
     StorageClassSpecifier, StringLiteral, StringLiteralPrefix, StructDeclarator,
     StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token, TranslationUnit,
     TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp, UseItem,
@@ -54,6 +54,106 @@ fn slice_span(slice: &[Spanned<Token>], fallback: Span) -> Span {
         .first()
         .zip(slice.last())
         .map_or(fallback, |(first, last)| join_spans(first.1, last.1))
+}
+
+fn attr_content<'src, I>()
+-> impl Parser<'src, I, Spanned<Vec<Spanned<Token>>>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    recursive(|content| {
+        let any_non_delim = any()
+            .filter(|t| {
+                !matches!(
+                    t,
+                    Token::LParen
+                        | Token::RParen
+                        | Token::LBracket
+                        | Token::RBracket
+                        | Token::LBrace
+                        | Token::RBrace
+                )
+            })
+            .ignored();
+        let any_group = choice((
+            content
+                .clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .ignored(),
+            content
+                .clone()
+                .delimited_by(just(Token::LBracket), just(Token::RBracket))
+                .ignored(),
+            content
+                .clone()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace))
+                .ignored(),
+        ));
+
+        choice((any_non_delim, any_group))
+            .repeated()
+            .ignored()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+    })
+    .map_with(|(), e| {
+        let slice: &[Spanned<Token>] = e.slice();
+        let inner = if slice.len() >= 2 {
+            slice[1..slice.len() - 1].to_vec()
+        } else {
+            Vec::new()
+        };
+        (inner, slice_span(slice, e.span()))
+    })
+}
+
+fn parse_rust_attr(
+    tokens: Vec<Spanned<Token>>,
+    span: Span,
+) -> Result<RustAttribute, Rich<'static, Token, Span>> {
+    let mut idx = 0;
+    let mut path = Vec::new();
+    while let Some((token, token_span)) = tokens.get(idx) {
+        let Token::Ident(segment) = token else {
+            break;
+        };
+        path.push((segment.clone(), *token_span));
+        idx += 1;
+        if !matches!(tokens.get(idx), Some((Token::ColonColon, _))) {
+            break;
+        }
+        idx += 1;
+    }
+    if path.is_empty() {
+        return Err(Rich::custom(
+            span,
+            "attribute path must start with an identifier",
+        ));
+    }
+    Ok(RustAttribute {
+        path,
+        args: tokens[idx..].to_vec(),
+    })
+}
+
+fn rust_attr<'src, I>()
+-> impl Parser<'src, I, Spanned<RustAttribute>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    just(Token::Hash)
+        .ignore_then(attr_content())
+        .try_map(|(tokens, span), _| parse_rust_attr(tokens, span).map(|attr| (attr, span)))
+}
+
+fn rust_attrs<'src, I>()
+-> impl Parser<'src, I, Vec<Spanned<RustAttribute>>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    rust_attr().repeated().collect()
 }
 
 fn rust_path_span<R: TypeResolver>(path: &RustPath<R>, fallback: Span) -> Span {
@@ -1939,8 +2039,9 @@ where
     })
 }
 
-fn rust_style_type_definition<'src, I, R: TypeResolver>(
+fn rust_style_type_definition_with_attrs<'src, I, R: TypeResolver>(
     resolver: R,
+    attrs: Vec<Spanned<RustAttribute>>,
 ) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -1961,6 +2062,7 @@ where
             move |((is_pub, name), ty)| {
                 let name_span = name.1;
                 Declaration::RustTypeAlias {
+                    attrs: attrs.clone(),
                     ident: (resolver.register_ident(name.0), name_span),
                     ty,
                     is_pub,
@@ -1969,8 +2071,9 @@ where
         })
 }
 
-fn rust_style_function_definition<'src, I, R: TypeResolver>(
+fn rust_style_function_definition_with_attrs<'src, I, R: TypeResolver>(
     resolver: R,
+    attrs: Vec<Spanned<RustAttribute>>,
 ) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
@@ -2015,6 +2118,7 @@ where
                 let name_span = name.1;
                 Declaration::FunctionDefinition {
                     signature: FunctionDefinitionSignature::Rust(RustFunctionSignature {
+                        attrs: attrs.clone(),
                         name: (resolver.register_ident(name.0), name_span),
                         params,
                         ret_ty,
@@ -2024,6 +2128,26 @@ where
                 }
             }
         })
+}
+
+fn rust_style_type_definition<'src, I, R: TypeResolver>(
+    resolver: R,
+) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    rust_style_type_definition_with_attrs(resolver, Vec::new())
+}
+
+fn rust_style_function_definition<'src, I, R: TypeResolver>(
+    resolver: R,
+) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    rust_style_function_definition_with_attrs(resolver, Vec::new())
 }
 
 fn declarator<'src, I, R: TypeResolver>(
@@ -2432,7 +2556,44 @@ where
         .map_with(|items, e| {
             items
                 .into_iter()
-                .map(|(path, alias)| (UseItem { path, alias }, e.span()))
+                .map(|(path, alias)| {
+                    (
+                        UseItem {
+                            attrs: Vec::new(),
+                            path,
+                            alias,
+                        },
+                        e.span(),
+                    )
+                })
+                .collect()
+        })
+}
+
+fn use_item_with_attrs<'src, I>(
+    attrs: Vec<Spanned<RustAttribute>>,
+) -> impl Parser<'src, I, Vec<Spanned<UseItem>>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    just(Token::Ident("use".to_owned()))
+        .ignore_then(just(Token::ColonColon).or_not())
+        .ignore_then(use_tree())
+        .then_ignore(just(Token::Semicolon))
+        .map_with(move |items, e| {
+            items
+                .into_iter()
+                .map(|(path, alias)| {
+                    (
+                        UseItem {
+                            attrs: attrs.clone(),
+                            path,
+                            alias,
+                        },
+                        e.span(),
+                    )
+                })
                 .collect()
         })
 }
@@ -2481,6 +2642,7 @@ where
         .ignore_then(identifier())
         .then_ignore(just(Token::Semicolon))
         .map(|name| ModItem {
+            attrs: Vec::new(),
             name,
             inline_content: None,
         });
@@ -2489,6 +2651,39 @@ where
         .ignore_then(identifier())
         .then(inline_mod_body())
         .map(|(name, content)| ModItem {
+            attrs: Vec::new(),
+            name,
+            inline_content: Some(content),
+        });
+
+    choice((file_mod, inline_mod)).map_with(|r, e| (r, e.span()))
+}
+
+fn mod_item_with_attrs<'src, I>(
+    attrs: Vec<Spanned<RustAttribute>>,
+) -> impl Parser<'src, I, Spanned<ModItem>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    let mod_kw = just(Token::Ident("mod".to_owned()));
+
+    let attrs_for_file = attrs.clone();
+    let file_mod = mod_kw
+        .clone()
+        .ignore_then(identifier())
+        .then_ignore(just(Token::Semicolon))
+        .map(move |name| ModItem {
+            attrs: attrs_for_file.clone(),
+            name,
+            inline_content: None,
+        });
+
+    let inline_mod = mod_kw
+        .ignore_then(identifier())
+        .then(inline_mod_body())
+        .map(move |(name, content)| ModItem {
+            attrs: attrs.clone(),
             name,
             inline_content: Some(content),
         });
@@ -2570,7 +2765,47 @@ where
             }
             inp.rewind(checkpoint);
 
-            let item = if let Ok(use_items) = inp.parse(use_item()) {
+            let attrs = inp.parse(rust_attrs())?;
+
+            let item = if !attrs.is_empty() {
+                if let Ok(use_items) = inp.parse(use_item_with_attrs(attrs.clone())) {
+                    for item in use_items {
+                        items.push(TranslationUnitItem::Use(item));
+                    }
+                    TranslationUnitItem::Empty
+                } else if let Ok(item) = inp.parse(mod_item_with_attrs(attrs.clone())) {
+                    TranslationUnitItem::Mod(item)
+                } else if let Ok((decl, next_resolver)) = inp.parse(
+                    choice((
+                        rust_style_function_definition_with_attrs(
+                            current_resolver.clone(),
+                            attrs.clone(),
+                        ),
+                        rust_style_type_definition_with_attrs(
+                            current_resolver.clone(),
+                            attrs.clone(),
+                        ),
+                    ))
+                    .map_with(|v, e| {
+                        let nr = current_resolver.register_decl(&v);
+                        ((v, e.span()), nr)
+                    }),
+                ) {
+                    current_resolver = next_resolver;
+                    TranslationUnitItem::Declaration(decl)
+                } else {
+                    let attr_span = attrs
+                        .first()
+                        .zip(attrs.last())
+                        .map_or(Span::new(FileId::INVALID, 0..0), |(first, last)| {
+                            join_spans(first.1, last.1)
+                        });
+                    return Err(Rich::custom(
+                        attr_span,
+                        "attributes are only supported on rust items",
+                    ));
+                }
+            } else if let Ok(use_items) = inp.parse(use_item()) {
                 for item in use_items {
                     items.push(TranslationUnitItem::Use(item));
                 }

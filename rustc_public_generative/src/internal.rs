@@ -350,6 +350,7 @@ pub enum ItemSignatureKind {
 #[derive(Debug, Clone)]
 pub struct DefinedCrateInfo {
     pub items: Vec<DefinedItemInfo>,
+    pub no_main: bool,
 }
 
 impl DefinedCrateInfo {
@@ -359,12 +360,6 @@ impl DefinedCrateInfo {
         signatures: &[ItemSignatureInfo],
         foreign_mod_def: LocalDefId,
     ) -> IndexVec<LocalDefId, hir::MaybeOwner<'static>> {
-        static RESULT: OnceLock<IndexVec<LocalDefId, hir::MaybeOwner<'static>>> = OnceLock::new();
-
-        if let Some(r) = RESULT.get() {
-            return r.clone();
-        }
-
         let mut owners: IndexVec<LocalDefId, hir::MaybeOwner<'static>> = IndexVec::new();
         let mut owner_parents: LocalDefIdMap<HirId> = LocalDefIdMap::default();
 
@@ -1099,10 +1094,13 @@ impl DefinedCrateInfo {
         item_allocator.set_root_node(hir::Node::Crate(root_mod));
 
         let crate_owner_nodes = item_allocator.into_owner_nodes();
+        let crate_attrs = self
+            .no_main
+            .then(|| vec![hir::Attribute::Parsed(hir::attrs::AttributeKind::NoMain)]);
         insert_owner(
             &mut owners,
             crate_def,
-            leak(make_owner_info(crate_owner_nodes)),
+            leak(make_owner_info_with_attrs(crate_owner_nodes, crate_attrs)),
         );
         owner_parents.insert(crate_def, HirId::make_owner(crate_def));
 
@@ -1171,8 +1169,6 @@ impl DefinedCrateInfo {
         if std::env::var("GEN_DEBUG").is_ok() {
             eprintln!("GeneratedCrate::build: owners len {}", owners.len());
         }
-
-        RESULT.set(owners.clone()).unwrap();
 
         owners
     }
@@ -1358,7 +1354,10 @@ impl DefinedCrateInfo {
             &mut the_foreign_def,
         );
         (
-            Self { items },
+            Self {
+                items,
+                no_main: hir_structure.no_main,
+            },
             the_foreign_def.expect("missing foreign mod"),
         )
     }
@@ -1493,11 +1492,26 @@ impl DefinedCrateState {
         }
     }
 
-    fn hir_crate<'tcx>(&self, tcx: TyCtxt<'tcx>, (): ()) -> rustc_hir::Crate<'tcx> {
+    fn hir_crate<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        original_owners: Option<&IndexVec<LocalDefId, hir::MaybeOwner<'static>>>,
+        (): (),
+    ) -> rustc_hir::Crate<'tcx> {
         let DefinedCrateState::Stage2(defined_crate, signatures, foreign_def_id, ()) = self else {
             panic!("hir_crate query in stage {}", self.stage_id());
         };
-        let owners = defined_crate.owners(tcx, signatures, *foreign_def_id);
+        let generated_owners = defined_crate.owners(tcx, signatures, *foreign_def_id);
+        let mut owners = original_owners.cloned().unwrap_or_default();
+        for (def_id, owner) in generated_owners.iter_enumerated() {
+            if matches!(owner, hir::MaybeOwner::Phantom) {
+                continue;
+            }
+            if def_id.index() >= owners.len() {
+                owners.resize(def_id.index() + 1, hir::MaybeOwner::Phantom);
+            }
+            owners[def_id] = *owner;
+        }
         hir::Crate {
             owners,
             opt_hir_hash: Some(random_fingerprint()),
@@ -1732,6 +1746,7 @@ enum DefinedCrateState {
 struct GenerateState {
     defined_crate: DefinedCrateState,
     original: Option<OriginalProviders>,
+    original_owners: Option<IndexVec<LocalDefId, hir::MaybeOwner<'static>>>,
     context: Option<Context>,
 }
 
@@ -1743,11 +1758,13 @@ struct GenerateGate {
 struct OriginalProviders {
     hir_crate: for<'tcx> fn(TyCtxt<'tcx>, ()) -> hir::Crate<'tcx>,
     resolutions: for<'tcx> fn(TyCtxt<'tcx>, ()) -> &'tcx rustc_middle::ty::ResolverGlobalCtxt,
+    entry_fn: for<'tcx> fn(TyCtxt<'tcx>, ()) -> Option<(RustcDefId, EntryFnType)>,
     def_kind: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> DefKind,
     // def_span: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> RustcSpan,
     // def_ident_span: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Option<RustcSpan>,
     reachable_set:
         for<'tcx> fn(TyCtxt<'tcx>, ()) -> rustc_data_structures::unord::UnordSet<LocalDefId>,
+    mir_built: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<rustc_middle::mir::Body<'tcx>>,
     mir_borrowck: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> BorrowckProvidedValue<'tcx>,
     // impl_parent: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> Option<RustcDefId>,
     // specialization_graph_of:
@@ -1782,6 +1799,24 @@ fn with_generated_and_original<R>(
     let mut guard = state.state.try_lock().unwrap();
     let original = guard.original.expect("original providers missing");
     f(&mut guard.defined_crate, original)
+}
+
+fn with_generated_original_and_owners<R>(
+    _tcx: TyCtxt<'_>,
+    f: impl FnOnce(
+        &mut DefinedCrateState,
+        OriginalProviders,
+        Option<&IndexVec<LocalDefId, hir::MaybeOwner<'static>>>,
+    ) -> R,
+) -> R {
+    let state = GENERATE_STATE
+        .get()
+        .cloned()
+        .expect("generate state missing");
+    let mut guard = state.state.try_lock().unwrap();
+    let original = guard.original.expect("original providers missing");
+    let original_owners = guard.original_owners.clone();
+    f(&mut guard.defined_crate, original, original_owners.as_ref())
 }
 
 pub fn root_crate_def_id(tcx: TyCtxt<'_>) -> DefId {
@@ -1920,8 +1955,56 @@ impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
         });
 
         if is_co2 {
-            krate.attrs.clear();
-            krate.items.clear();
+            krate.attrs.retain(|attr| {
+                let Some(meta) = attr.meta() else {
+                    return true;
+                };
+                let path_segments = meta
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.as_str())
+                    .collect::<Vec<_>>();
+
+                !(path_segments.as_slice() == ["language"]
+                    && match &meta.kind {
+                        rustc_ast::MetaItemKind::List(items) => {
+                            items.iter().any(|item| match item {
+                                rustc_ast::MetaItemInner::MetaItem(item) => {
+                                    item.path.segments.iter().all(|s| s.ident.as_str() == "co2")
+                                }
+                                rustc_ast::MetaItemInner::Lit(_) => false,
+                            })
+                        }
+                        _ => false,
+                    })
+            });
+        }
+
+        if S::force_no_main_attr() {
+            krate.attrs.push(Attribute {
+                kind: rustc_ast::AttrKind::Normal(Box::new(rustc_ast::NormalAttr {
+                    item: rustc_ast::AttrItem {
+                        unsafety: rustc_ast::Safety::Default,
+                        path: rustc_ast::Path {
+                            span: DUMMY_SP,
+                            segments: [rustc_ast::PathSegment {
+                                ident: Ident::from_str("no_main"),
+                                id: rustc_ast::NodeId::from_usize(666_660),
+                                args: None,
+                            }]
+                            .into(),
+                            tokens: None,
+                        },
+                        args: rustc_ast::AttrItemKind::Unparsed(rustc_ast::AttrArgs::Empty),
+                        tokens: None,
+                    },
+                    tokens: None,
+                })),
+                id: rustc_span::AttrId::from_usize(660),
+                style: rustc_ast::AttrStyle::Inner,
+                span: DUMMY_SP,
+            });
         }
 
         for (idx, feature) in ["c_variadic", "extern_types"].into_iter().enumerate() {
@@ -1979,6 +2062,21 @@ impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
 
                 guard.context.clone().unwrap()
             };
+            let original = {
+                let guard = gate.state.try_lock().unwrap();
+                guard.original.expect("original providers missing")
+            };
+            let original_crate = (original.hir_crate)(tcx, ());
+            let original_owners = unsafe {
+                std::mem::transmute::<
+                    IndexVec<LocalDefId, hir::MaybeOwner<'_>>,
+                    IndexVec<LocalDefId, hir::MaybeOwner<'static>>,
+                >(original_crate.owners.clone())
+            };
+            {
+                let mut guard = gate.state.try_lock().unwrap();
+                guard.original_owners = Some(original_owners);
+            }
 
             let (state, hir_structure) = S::hir_structure(crate::HirStructureCtx {
                 tcx,
@@ -2363,10 +2461,12 @@ fn override_providers<S: CrateGeneratorState>(providers: &mut QueryProviders, ga
         guard.original = Some(OriginalProviders {
             hir_crate: providers.hir_crate,
             resolutions: providers.resolutions,
+            entry_fn: providers.entry_fn,
             def_kind: providers.def_kind,
             // def_span: providers.def_span,
             // def_ident_span: providers.def_ident_span,
             reachable_set: providers.reachable_set,
+            mir_built: providers.mir_built,
             mir_borrowck: providers.mir_borrowck,
             // impl_parent: providers.impl_parent,
             // specialization_graph_of: providers.specialization_graph_of,
@@ -2418,7 +2518,9 @@ fn generated_hir_crate(tcx: TyCtxt<'_>, key: ()) -> hir::Crate<'_> {
     if std::env::var("GEN_DEBUG").is_ok() {
         eprintln!("generated_hir_crate");
     }
-    with_generated_and_original(tcx, |generated, _| generated.hir_crate(tcx, key))
+    with_generated_original_and_owners(tcx, |generated, _original, original_owners| {
+        generated.hir_crate(tcx, original_owners, key)
+    })
 }
 
 fn generated_resolutions(tcx: TyCtxt<'_>, (): ()) -> &rustc_middle::ty::ResolverGlobalCtxt {
@@ -2502,9 +2604,9 @@ fn generated_resolutions(tcx: TyCtxt<'_>, (): ()) -> &rustc_middle::ty::Resolver
         for (module, children) in module_children {
             (*r_ptr).module_children.insert(module, children);
         }
-        (*r_ptr)
-            .effective_visibilities
-            .public_at_level(CRATE_DEF_ID);
+        (*r_ptr).effective_visibilities =
+            rustc_middle::middle::privacy::EffectiveVisibilities::default();
+        (*r_ptr).effective_visibilities.update_root();
         for item in &items {
             let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local()
             else {
@@ -2540,6 +2642,23 @@ fn generated_hir_attr_map(tcx: TyCtxt<'_>, key: OwnerId) -> &hir::AttributeMap<'
         };
         let key = key.to_def_id();
         if key.is_crate_root() {
+            if let DefinedCrateState::Stage2(items, _, _, ()) = generated
+                && items.no_main
+            {
+                return leak(hir::AttributeMap {
+                    map: [(
+                        ItemLocalId::ZERO,
+                        leak(
+                            vec![hir::Attribute::Parsed(hir::attrs::AttributeKind::NoMain)]
+                                .into_boxed_slice(),
+                        ) as &[hir::Attribute],
+                    )]
+                    .into_iter()
+                    .collect(),
+                    define_opaque: None,
+                    opt_hash: Some(random_fingerprint()),
+                });
+            }
             return hir::AttributeMap::EMPTY;
         }
         let key = rustc_def_to_my_def(tcx, key);
@@ -2565,9 +2684,7 @@ fn generated_hir_attr_map(tcx: TyCtxt<'_>, key: OwnerId) -> &hir::AttributeMap<'
 fn generated_item_attrs(kind: DefinedItemKind) -> Option<Vec<hir::Attribute>> {
     let attr = match kind {
         DefinedItemKind::Function {
-            abi: FunctionAbi::C,
-            no_mangle: true,
-            ..
+            no_mangle: true, ..
         }
         | DefinedItemKind::Static {
             no_mangle: true, ..
@@ -2601,18 +2718,35 @@ fn generated_opt_ast_lowering_delayed_lints(
     tcx: TyCtxt<'_>,
     key: OwnerId,
 ) -> Option<&hir::lints::DelayedLints> {
-    with_generated_and_original(tcx, |generated, original| {
+    with_generated_original_and_owners(tcx, |generated, _original, original_owners| {
         if generated.contains_key(tcx, &key.def_id) {
             return None;
         }
-        (original.hir_crate)(tcx, ()).owners[key.def_id]
+        original_owners?[key.def_id]
             .as_owner()
             .map(|o| &o.delayed_lints)
     })
 }
 
 fn generated_entry_fn(tcx: TyCtxt<'_>, key: ()) -> Option<(RustcDefId, EntryFnType)> {
-    with_generated_and_original(tcx, |generated, _| generated.entry_fn(tcx, key))
+    let (generated_entry, no_main, original) = {
+        let state = GENERATE_STATE
+            .get()
+            .cloned()
+            .expect("generate state missing");
+        let guard = state.state.try_lock().unwrap();
+        let original = guard.original.expect("original providers missing");
+        let no_main = matches!(
+            &guard.defined_crate,
+            DefinedCrateState::Stage1(items) | DefinedCrateState::Stage2(items, _, _, ())
+                if items.no_main
+        );
+        (guard.defined_crate.entry_fn(tcx, key), no_main, original)
+    };
+    if no_main {
+        return generated_entry;
+    }
+    generated_entry.or_else(|| (original.entry_fn)(tcx, key))
 }
 
 fn generated_def_kind(tcx: TyCtxt<'_>, key: LocalDefId) -> DefKind {
@@ -2668,9 +2802,9 @@ fn generated_reachable_set(
     (): (),
 ) -> rustc_data_structures::unord::UnordSet<LocalDefId> {
     with_generated_and_original(tcx, |generated, original| {
-        let mut reachable = (original.reachable_set)(tcx, ());
+        let mut reachable = rustc_data_structures::unord::UnordSet::default();
         let DefinedCrateState::Stage2(defined_crate, _, _, ()) = generated else {
-            return reachable;
+            return (original.reachable_set)(tcx, ());
         };
         for item in &defined_crate.items {
             let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local()
@@ -2687,6 +2821,19 @@ fn generated_mir_built<S: CrateGeneratorState>(
     tcx: TyCtxt<'_>,
     def_id: LocalDefId,
 ) -> &Steal<rustc_middle::mir::Body<'_>> {
+    let (is_generated, original) = {
+        let state = GENERATE_STATE
+            .get()
+            .cloned()
+            .expect("generate state missing");
+        let guard = state.state.try_lock().unwrap();
+        let original = guard.original.expect("original providers missing");
+        (guard.defined_crate.contains_key(tcx, &def_id), original)
+    };
+    if !is_generated {
+        return (original.mir_built)(tcx, def_id);
+    }
+
     let key = rustc_def_to_my_def(tcx, def_id.to_def_id());
 
     let mir = {

@@ -9,13 +9,13 @@ mod m1 {
 }
 
 mod m2 {
-    int main() {
+    fn main() {
         return missing;
             // ^^^^^^^ error: Unresolved name missing
     }
 }
 
-int main() {
+fn main() {
     return missing;
         // ^^^^^^^ error: Unresolved name missing
 }

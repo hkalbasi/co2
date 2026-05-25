@@ -12,7 +12,7 @@ if $init.exit_code != 0 {
 
 let project_dir = ($test_dir | path join "co2cargo_incremental" "test_project")
 let main_co2 = ($project_dir | path join "src" "main.co2")
-"int main(void) { return 0; }\n" | save -f $main_co2
+"fn main() { return; }\n" | save -f $main_co2
 
 cd $project_dir
 

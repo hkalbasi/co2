@@ -310,7 +310,7 @@ fn build_rustc_object_args(
         rustc_args.push(out.to_string_lossy().into_owned());
     }
 
-    rustc_args.push("/dev/null".to_owned());
+    rustc_args.push(no_main_host_file().to_string_lossy().into_owned());
 
     if let Some(level) = opt_level {
         rustc_args.push("-C".to_owned());
@@ -329,6 +329,12 @@ fn build_rustc_object_args(
     rustc_args.extend(shared_rust_flags());
 
     rustc_args
+}
+
+fn no_main_host_file() -> PathBuf {
+    let path = std::env::temp_dir().join(format!("co2cc-no-main-{}.rs", std::process::id()));
+    let _ = fs::write(&path, "#![no_main]\n");
+    path
 }
 
 fn build_link_stub_rustc_args(

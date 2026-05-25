@@ -66,6 +66,14 @@ impl co2_ast::SourceMap for Co2SourceMap {
 }
 
 impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
+    fn force_no_main_attr() -> bool {
+        pending_compile_cell()
+            .try_lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|pending| pending.mode.no_main)
+    }
+
     fn hir_structure(ctx: rustc_gen::HirStructureCtx) -> (Self, rustc_gen::HirStructure) {
         let pending = pending_compile_cell()
             .try_lock()
@@ -103,6 +111,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             &mut file_ids,
             &mut source_files,
             pending.mode.no_main,
+            pending.mode.test,
         );
         let file_ids = Arc::new(file_ids);
         co2_ast::set_source_map(Arc::new(Co2SourceMap {

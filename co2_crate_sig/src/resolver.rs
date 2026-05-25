@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use co2_ast::{Declaration, Declarator, StatelessResolver, TranslationUnit, TypeQueryResult};
+use co2_ast::{
+    Declaration, Declarator, StatelessResolver, TranslationUnit, TypeQueryResult,
+    co2_test_symbol_name,
+};
 use rustc_public_generative::{
     DefData, DependencyInfo, DependencyValueKind, HirStructureCtx,
     rustc_public::{
@@ -132,7 +135,9 @@ impl ModuleData {
         ast: &TranslationUnit<StatelessResolver>,
         parent: DefId,
         foreign_mod: DefId,
+        module_path: &[String],
         include_builtin_va_list: bool,
+        test: bool,
     ) -> Self {
         let mut this = Self::default();
         if include_builtin_va_list {
@@ -147,7 +152,17 @@ impl ModuleData {
                     let Some(decl) = signature.ident() else {
                         continue;
                     };
-                    let def_id = ctx.allocate_def_id(parent, &DefData::ValueNs(decl.clone()));
+                    let def_name = if test
+                        && matches!(
+                            signature,
+                            co2_ast::FunctionDefinitionSignature::Rust(sig)
+                                if sig.attrs.iter().any(|(attr, _)| attr.is_word("test"))
+                        ) {
+                        co2_test_symbol_name(module_path, decl.as_str())
+                    } else {
+                        decl.clone()
+                    };
+                    let def_id = ctx.allocate_def_id(parent, &DefData::ValueNs(def_name));
                     this.insert_path([&*decl].into_iter(), Some((def_id, TypeQueryResult::Expr)));
                 }
                 Declaration::RustTypeAlias { ident, .. } => {
@@ -260,6 +275,7 @@ impl Resolver {
         deps: DependencyInfo,
         p: &TranslationUnit<StatelessResolver>,
         foreign_mod: DefId,
+        test: bool,
     ) -> Self {
         let mut this = Self::default();
         for c in deps.crates {
@@ -329,7 +345,9 @@ impl Resolver {
             p,
             ctx.root_crate_def_id(),
             foreign_mod,
+            &[],
             true,
+            test,
         );
         this.current.insert_path(
             ["__builtin_bswap16"].into_iter(),

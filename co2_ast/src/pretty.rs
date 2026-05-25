@@ -9,7 +9,7 @@ use crate::{
     EnumSpecifier, Expression, FileId, FloatSuffix, ForInit, FunctionDefinitionSignature,
     FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
     IntegerSuffix, LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, PackAction,
-    ParameterList, RustFunctionParam, RustFunctionSignature, RustTy, Span, Spanned,
+    ParameterList, RustAttribute, RustFunctionParam, RustFunctionSignature, RustTy, Span, Spanned,
     SpecifierQualifier, Statement, StatementOrDeclaration, StorageClassSpecifier, StructDeclarator,
     StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TranslationUnit, TypeName,
     TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp, UpdateOp, UseItem,
@@ -771,6 +771,9 @@ impl<R: TypeResolver> PrettyPrint for FunctionDefinitionSignature<R> {
 impl<R: TypeResolver> PrettyPrint for RustFunctionSignature<R> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         pp.node("RustFunctionSignature", "", |pp| {
+            for attr in &self.attrs {
+                attr.pretty_print(pp);
+            }
             pp.leaf_data(
                 "Name",
                 &fmt_span(&self.name.1, pp.config),
@@ -825,8 +828,16 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Declaration<R>> {
                     }
                 });
             }
-            Declaration::RustTypeAlias { ident, ty, is_pub } => {
+            Declaration::RustTypeAlias {
+                attrs,
+                ident,
+                ty,
+                is_pub,
+            } => {
                 pp.node("RustTypeAlias", &sp, |pp| {
+                    for attr in attrs {
+                        attr.pretty_print(pp);
+                    }
                     pp.leaf_data(
                         "Ident",
                         &fmt_span(&ident.1, pp.config),
@@ -1216,10 +1227,27 @@ impl<R: TypeResolver> PrettyPrint for TranslationUnit<R> {
 // UseItem, ModItem
 // ---------------------------------------------------------------------------
 
+impl PrettyPrint for Spanned<RustAttribute> {
+    fn pretty_print(&self, pp: &mut PrettyPrinter) {
+        let sp = fmt_span(&self.1, pp.config);
+        pp.node("RustAttribute", &sp, |pp| {
+            for segment in &self.0.path {
+                pp.leaf_data("Segment", &fmt_span(&segment.1, pp.config), &segment.0);
+            }
+            if !self.0.args.is_empty() {
+                pp.leaf_data("Args", "", format_args!("{} tokens", self.0.args.len()));
+            }
+        });
+    }
+}
+
 impl PrettyPrint for Spanned<UseItem> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         let sp = fmt_span(&self.1, pp.config);
         pp.node("UseItem", &sp, |pp| {
+            for attr in &self.0.attrs {
+                attr.pretty_print(pp);
+            }
             for seg in &self.0.path {
                 pp.leaf_data("Segment", &fmt_span(&seg.1, pp.config), &seg.0);
             }
@@ -1234,6 +1262,9 @@ impl PrettyPrint for Spanned<ModItem> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         let sp = fmt_span(&self.1, pp.config);
         pp.node("ModItem", &sp, |pp| {
+            for attr in &self.0.attrs {
+                attr.pretty_print(pp);
+            }
             pp.leaf_data("Name", &fmt_span(&self.0.name.1, pp.config), &self.0.name.0);
             if let Some(ref content) = self.0.inline_content {
                 pp.leaf_data(

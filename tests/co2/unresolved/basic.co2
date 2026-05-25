@@ -6,7 +6,7 @@ use missing::foo;
 use std::missing::thing;
        //^^^^^^^ error: Unresolved item
 
-int main() {
+fn main() {
     return missing;
         // ^^^^^^^ error: Unresolved name missing
 }

@@ -8,9 +8,14 @@ extern crate rustc_span;
 mod detect;
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use co2_ast::{PrettyConfig, PrettyPrint, PrettyPrinter, StatelessResolver};
+use co2_ast::{
+    PrettyConfig, PrettyPrint, PrettyPrinter, StatelessResolver, co2_test_symbol_name,
+    co2_test_symbol_suffix,
+};
 use co2_driver_lib::{CompileMode, compile_co2_file};
 
 pub use detect::{DetectResult, detect_co2};
@@ -40,9 +45,43 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
         return dump_ast_tree_for_file(&co2_file);
     }
 
-    if let Err(payload) =
-        std::panic::catch_unwind(|| compile_co2_file(CompileMode::RUST, &co2_file, args))
-    {
+    let is_test = args.iter().any(|arg| arg == "--test");
+    let mode = if is_test {
+        CompileMode::RUST_TEST
+    } else {
+        CompileMode::RUST
+    };
+    let temp_host = if is_test {
+        match write_test_host(&co2_file) {
+            Ok(path) => Some(path),
+            Err(err) => {
+                eprintln!("co2rustc: failed to write test host: {err}");
+                return std::process::ExitCode::from(1);
+            }
+        }
+    } else {
+        None
+    };
+    let args = if let Some(temp_host) = &temp_host {
+        let host = co2_file.with_extension("rs");
+        let mut out = args
+            .into_iter()
+            .filter(|arg| arg != "--test")
+            .map(|arg| {
+                if std::path::Path::new(&arg) == host {
+                    temp_host.display().to_string()
+                } else {
+                    arg
+                }
+            })
+            .collect::<Vec<_>>();
+        out.push("--crate-type=bin".to_owned());
+        out
+    } else {
+        args
+    };
+
+    if let Err(payload) = std::panic::catch_unwind(|| compile_co2_file(mode, &co2_file, args)) {
         if co2_ast::is_diagnostic_abort(payload.as_ref()) {
             return std::process::ExitCode::from(5);
         }
@@ -57,6 +96,181 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     }
 
     std::process::ExitCode::SUCCESS
+}
+
+fn write_test_host(co2_file: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let preprocessed = co2_preprocessor::preprocess(co2_file, &[]);
+    let src_static: &'static str = Box::leak(preprocessed.normalized.to_string().into_boxed_str());
+    let ast = co2_parser::parse_translation_unit(
+        &co2_file.display().to_string(),
+        src_static,
+        Some(&preprocessed),
+        StatelessResolver::new(),
+    );
+
+    let mut source = String::from("#![feature(test)]\n#![language(co2)]\nextern crate test;\n");
+    let mut tests = Vec::new();
+    if let Some(ast) = ast {
+        collect_tests_from_translation_unit(
+            &ast.0,
+            &mut Vec::new(),
+            &root_module_dir(co2_file),
+            &mut tests,
+        );
+        for test in &tests {
+            let _ = writeln!(source, "unsafe extern \"Rust\" {{ fn {}(); }}", test.symbol);
+            let _ = writeln!(
+                source,
+                "fn {}() {{ unsafe {{ {}(); }} }}",
+                test.host_fn, test.symbol
+            );
+        }
+    }
+    source.push_str("fn main() {\n");
+    source.push_str("    test::test_main_static(&[\n");
+    for test in tests {
+        let _ = writeln!(
+            source,
+            "        &test::TestDescAndFn {{ desc: test::TestDesc {{ name: test::StaticTestName({:?}), ignore: false, ignore_message: None, source_file: \"\", start_line: 0, start_col: 0, end_line: 0, end_col: 0, compile_fail: false, no_run: false, should_panic: test::ShouldPanic::No, test_type: test::TestType::UnitTest }}, testfn: test::StaticTestFn(|| test::assert_test_result({}())) }},",
+            test.display_name, test.host_fn
+        );
+    }
+    source.push_str("    ]);\n");
+    source.push_str("}\n");
+
+    let path = std::env::temp_dir().join(format!(
+        "co2-test-host-{}-{}.rs",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::write(&path, source)?;
+    Ok(path)
+}
+
+#[derive(Debug)]
+struct Co2Test {
+    display_name: String,
+    symbol: String,
+    host_fn: String,
+}
+
+fn collect_tests_from_translation_unit(
+    ast: &co2_ast::TranslationUnit<StatelessResolver>,
+    module_path: &mut Vec<String>,
+    module_dir: &std::path::Path,
+    tests: &mut Vec<Co2Test>,
+) {
+    for (item, _) in &ast.items {
+        let co2_ast::Declaration::FunctionDefinition { signature, .. } = item else {
+            continue;
+        };
+        let co2_ast::FunctionDefinitionSignature::Rust(sig) = signature else {
+            continue;
+        };
+        if !sig.attrs.iter().any(|(attr, _)| attr.is_word("test")) {
+            continue;
+        }
+        let name = sig.name.0.clone();
+        let symbol = co2_test_symbol_name(module_path, &name);
+        tests.push(Co2Test {
+            display_name: co2_test_display_name(module_path, &name),
+            host_fn: format!("__co2_host{}", co2_test_symbol_suffix(module_path, &name)),
+            symbol,
+        });
+    }
+
+    for (mod_item, _) in &ast.rust_mod_items {
+        module_path.push(mod_item.name.0.clone());
+        if let Some((tokens, end_span)) = &mod_item.inline_content {
+            let source_name = format!("<inline module '{}'>", mod_item.name.0);
+            let child = co2_parser::parse_translation_unit_from_tokens(
+                tokens,
+                &source_name,
+                "",
+                *end_span,
+                StatelessResolver::new(),
+            )
+            .0;
+            collect_tests_from_translation_unit(
+                &child,
+                module_path,
+                &module_dir.join(&mod_item.name.0),
+                tests,
+            );
+        } else if let Some(module_path_on_disk) =
+            resolve_module_source(module_dir, &mod_item.name.0)
+        {
+            let preprocessed = co2_preprocessor::preprocess(&module_path_on_disk, &[]);
+            let source: &'static str =
+                Box::leak(preprocessed.normalized.to_string().into_boxed_str());
+            let source_name = module_path_on_disk.to_string_lossy().into_owned();
+            if let Some(child) = co2_parser::parse_translation_unit(
+                &source_name,
+                source,
+                Some(&preprocessed),
+                StatelessResolver::new(),
+            ) {
+                collect_tests_from_translation_unit(
+                    &child.0,
+                    module_path,
+                    &child_module_dir(&module_path_on_disk),
+                    tests,
+                );
+            }
+        }
+        module_path.pop();
+    }
+}
+
+fn co2_test_display_name(module_path: &[String], name: &str) -> String {
+    if module_path.is_empty() {
+        return name.to_owned();
+    }
+    let mut display = module_path.join("::");
+    display.push_str("::");
+    display.push_str(name);
+    display
+}
+
+fn root_module_dir(source_path: &std::path::Path) -> std::path::PathBuf {
+    source_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf()
+}
+
+fn child_module_dir(source_path: &std::path::Path) -> std::path::PathBuf {
+    if source_path.file_stem().and_then(|stem| stem.to_str()) == Some("mod") {
+        source_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf()
+    } else {
+        source_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(source_path.file_stem().unwrap_or_default())
+    }
+}
+
+fn resolve_module_source(
+    module_dir: &std::path::Path,
+    module_name: &str,
+) -> Option<std::path::PathBuf> {
+    let direct = module_dir.join(format!("{module_name}.co2"));
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let nested = module_dir.join(module_name).join("mod.co2");
+    if nested.is_file() {
+        return Some(nested);
+    }
+
+    None
 }
 
 fn take_unpretty_ast_tree_flag(args: Vec<String>) -> (Vec<String>, bool) {

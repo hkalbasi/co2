@@ -649,7 +649,7 @@ fn rewrite_main_source_for_preprocess(source: &str) -> MappedText {
         let has_newline = raw_line.ends_with('\n');
         let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
         let line_end = line_start + line.len();
-        if line.trim_start().starts_with('#') {
+        if line.trim_start().starts_with('#') && !line.trim_start().starts_with("#[") {
             rewrite_hidden_macros_in_directive(line, line_start, &mut rewritten, &mut boundaries);
         } else {
             rewritten.push_str(line);

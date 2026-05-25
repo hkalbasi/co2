@@ -2,6 +2,11 @@ use rustc_public::ty::{AdtDef, FnDef, Span};
 
 use crate::{DefId, HirLifetime, HirTy};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedAttr {
+    pub path: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct HirStructure {
     pub no_main: bool,
@@ -20,6 +25,7 @@ pub enum HirModuleItem {
         name: String,
         id: FnDef,
         sig: FunctionSignature,
+        attrs: Vec<GeneratedAttr>,
         no_mangle: bool,
         span: Span,
     },

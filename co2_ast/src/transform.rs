@@ -492,6 +492,7 @@ impl<A: TypeResolver> DoTransform for RustFunctionSignature<A> {
 
     fn transform<B: Transformable<A>>(&self, b: &B) -> RustFunctionSignature<B> {
         RustFunctionSignature {
+            attrs: self.attrs.clone(),
             name: (B::transform_decl_ident(&self.name.0), self.name.1),
             params: self.params.transform(b),
             ret_ty: self.ret_ty.transform(b),
@@ -604,7 +605,13 @@ impl<A: TypeResolver> DoTransform for Declaration<A> {
                 declaration_specifiers: declaration_specifiers.transform(b),
                 declarators: declarators.transform(b),
             },
-            Declaration::RustTypeAlias { ident, ty, is_pub } => Declaration::RustTypeAlias {
+            Declaration::RustTypeAlias {
+                attrs,
+                ident,
+                ty,
+                is_pub,
+            } => Declaration::RustTypeAlias {
+                attrs: attrs.clone(),
                 ident: (B::transform_decl_ident(&ident.0), ident.1),
                 ty: ty.transform(b),
                 is_pub: *is_pub,

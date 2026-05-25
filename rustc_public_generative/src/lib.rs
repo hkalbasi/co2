@@ -35,8 +35,8 @@ mod hir_ty;
 mod internal;
 
 pub use hir_structure::{
-    AdtRepr, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind, HirImplItem,
-    HirImplItemKind, HirModule, HirModuleItem, HirSelfKind, HirStructure, StructField,
+    AdtRepr, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr, HirAdtKind,
+    HirImplItem, HirImplItemKind, HirModule, HirModuleItem, HirSelfKind, HirStructure, StructField,
 };
 pub use hir_ty::{HirGenericArg, HirLifetime, HirTy, HirTyConst, HirTyKind};
 
@@ -335,6 +335,10 @@ fn erase_bound_regions_in_ty(ty: rustc_public::ty::Ty) -> rustc_public::ty::Ty {
 }
 
 pub trait CrateGeneratorState: Sync + Send + Any + Sized {
+    fn force_no_main_attr() -> bool {
+        false
+    }
+
     fn hir_structure(ctx: HirStructureCtx) -> (Self, HirStructure);
     fn emit_mir(&mut self, ctx: HirStructureCtx, def: DefId) -> rustc_public::mir::Body;
 }

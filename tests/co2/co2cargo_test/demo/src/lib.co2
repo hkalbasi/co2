@@ -1,0 +1,17 @@
+mod foo;
+
+#[test]
+fn smoke_test() {
+    helper();
+}
+
+#[test]
+fn second_test() {}
+
+#[test]
+fn failing_test() {
+    std::vec::Vec<i32> values = std::vec::Vec<i32>::new();
+    values.pop().unwrap();
+}
+
+fn helper() {}

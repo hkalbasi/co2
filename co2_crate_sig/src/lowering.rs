@@ -11,15 +11,15 @@ use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Designator, DoTransform as _,
     Expression, FunctionDefinitionSignature, InitDeclarator, Initializer, IntegerSuffix, ModItem,
     Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit,
-    TypeQualifier, TypeResolver,
+    TypeQualifier, TypeResolver, co2_test_symbol_name,
 };
 use co2_parser::{
     parse_compound_statement, parse_translation_unit, parse_translation_unit_from_tokens,
 };
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
-    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, HirAdtKind,
-    HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
+    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
+    HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
     HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind,
     rustc_public::{
         DefId,
@@ -60,6 +60,16 @@ fn has_const_qualifier_in_decl_specs(
             DeclarationSpecifier::TypeQualifier((TypeQualifier::Const, _))
         )
     })
+}
+
+fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> Vec<GeneratedAttr> {
+    attrs
+        .iter()
+        .filter(|(attr, _)| attr.args.is_empty())
+        .map(|(attr, _)| GeneratedAttr {
+            path: attr.path.iter().map(|seg| seg.0.clone()).collect(),
+        })
+        .collect()
 }
 
 fn constexpr_decl_span(
@@ -199,6 +209,18 @@ fn declarator_contains_local(declarator: &Declarator<LocalResolver>) -> bool {
             declarator,
             subscription: _,
         } => declarator_contains_local(&declarator.0),
+    }
+}
+
+fn declarator_ident_span<R: co2_ast::TypeResolver>(
+    declarator: &co2_ast::Spanned<Declarator<R>>,
+) -> Option<co2_ast::Span> {
+    match &declarator.0 {
+        Declarator::Identifier((_, span)) => Some(*span),
+        Declarator::FunctionDeclarator { declarator, .. }
+        | Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::ArrayDeclarator { declarator, .. } => declarator_ident_span(declarator),
+        Declarator::Abstract => None,
     }
 }
 
@@ -460,11 +482,25 @@ fn build_module_data_tree(
     ctx: &HirStructureCtx<'_>,
     module: &LoadedModule,
     foreign_mod: DefId,
+    module_path: &[String],
+    test: bool,
 ) -> ModuleData {
-    let mut data =
-        ModuleData::forward_pass_parsed_module(ctx, &module.tu, module.def_id, foreign_mod, false);
+    let mut data = ModuleData::forward_pass_parsed_module(
+        ctx,
+        &module.tu,
+        module.def_id,
+        foreign_mod,
+        module_path,
+        false,
+        test,
+    );
     for child in &module.children {
-        data.insert_alias(&child.name, build_module_data_tree(ctx, child, foreign_mod));
+        let mut child_path = module_path.to_vec();
+        child_path.push(child.name.clone());
+        data.insert_alias(
+            &child.name,
+            build_module_data_tree(ctx, child, foreign_mod, &child_path, test),
+        );
     }
     data
 }
@@ -505,6 +541,8 @@ fn lower_translation_unit_items(
     source: &'static str,
     foreign_mod: DefId,
     foreign_items: &mut Vec<ForeignModItem>,
+    no_main: bool,
+    test: bool,
 ) -> Vec<HirModuleItem> {
     _ = foreign_mod;
     let mut hir_items = Vec::new();
@@ -515,6 +553,7 @@ fn lower_translation_unit_items(
         let item = item.transform(&resolver);
         match item {
             Declaration::RustTypeAlias {
+                attrs: _,
                 ident,
                 ty,
                 is_pub: _,
@@ -529,7 +568,7 @@ fn lower_translation_unit_items(
                 });
             }
             Declaration::FunctionDefinition { signature, body } => {
-                let (name, sig, param_names, no_mangle) = match signature {
+                let (name, sig, param_names, attrs, no_mangle) = match signature {
                     FunctionDefinitionSignature::C {
                         declaration_specifiers,
                         declarator,
@@ -539,27 +578,43 @@ fn lower_translation_unit_items(
                         let transformed_specs = declaration_specifiers;
                         let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
                         let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
+                        let ident_span = declarator_ident_span(&declarator).unwrap_or(parser_span);
                         let (name, sig, param_names) = ctx
                             .lower_function_signature(base, base_const, declarator)
                             .unwrap_or_else(|err| {
                                 CrateSigCtx::<'_>::terminate_with_spanned_error(err)
                             });
-                        (name, sig, param_names, !is_static)
+                        if !no_main && module_path.is_empty() && name == "main" {
+                            CrateSigCtx::<'_>::terminate_with_error(
+                                ident_span,
+                                "Main function with C ABI is not accepted in cargo projects. Use `fn main()` or `#![no_main]`.",
+                            );
+                        }
+                        (name, sig, param_names, Vec::new(), !is_static)
                     }
                     FunctionDefinitionSignature::Rust(sig) => {
-                        let (name, lower_sig, param_names) = ctx.lower_rust_function_signature(sig);
-                        (name, lower_sig, param_names, false)
+                        let attrs = lower_generated_attrs(&sig.attrs);
+                        let (name, lower_sig, param_names) =
+                            ctx.lower_rust_function_signature(sig.clone());
+                        (name, lower_sig, param_names, attrs, false)
                     }
                 };
 
+                let is_test = test && attrs.iter().any(|attr| attr.path.as_slice() == ["test"]);
+                let item_name = if is_test {
+                    co2_test_symbol_name(module_path, &name)
+                } else {
+                    name.clone()
+                };
                 let id = resolve_in_module(ctx, module_path, &name).0;
                 let function_name = name.clone();
                 let id = FnDef(id);
                 hir_items.push(HirModuleItem::Function {
-                    name,
+                    name: item_name,
                     id,
                     sig,
-                    no_mangle,
+                    attrs,
+                    no_mangle: no_mangle || is_test,
                     span,
                 });
                 resolver = resolver.start_new_scope().with_owner(id.0);
@@ -893,6 +948,8 @@ fn lower_translation_unit_items(
             module.source,
             foreign_mod,
             foreign_items,
+            no_main,
+            test,
         );
         let span = ctx.co2_span_to_rustc(module.decl_span);
         hir_items.push(HirModuleItem::Module {
@@ -915,6 +972,7 @@ pub fn lower_crate_sig(
     file_ids: &mut HashMap<co2_ast::FileId, FileId, RandomState>,
     source_files: &mut HashMap<co2_ast::FileId, (String, Arc<str>), RandomState>,
     no_main: bool,
+    test: bool,
 ) -> (HirStructure, HashMap<DefId, MirOwnerInfo>, WellknownDefs) {
     let span = ctx.span_in_file(file_id, 0, 0);
     let deps = ctx.dependencies();
@@ -943,11 +1001,16 @@ pub fn lower_crate_sig(
         files: Arc::new(source_files.clone()),
     }));
 
-    let foreign_mod = ctx.allocate_def_id(ctx.root_crate_def_id(), &DefData::ForeignMod);
+    let foreign_mod_kind = if test {
+        DefData::TypeNs("__co2_foreign_mod".to_owned())
+    } else {
+        DefData::ForeignMod
+    };
+    let foreign_mod = ctx.allocate_def_id(ctx.root_crate_def_id(), &foreign_mod_kind);
     let mut foreign_items = Vec::new();
 
     let ctx = &*Box::leak(Box::new(ctx));
-    let mut resolver = Resolver::new(ctx, deps, &tu, foreign_mod);
+    let mut resolver = Resolver::new(ctx, deps, &tu, foreign_mod, test);
 
     let loaded_modules = match loaded_modules {
         Ok(l) => l,
@@ -958,10 +1021,11 @@ pub fn lower_crate_sig(
     };
 
     for module in &loaded_modules {
+        let module_path = vec![module.name.clone()];
         resolver.insert_module_data(
             &[],
             &module.name,
-            build_module_data_tree(ctx, module, foreign_mod),
+            build_module_data_tree(ctx, module, foreign_mod, &module_path, test),
         );
     }
     resolver.import_use_items(&[], &tu);
@@ -1032,6 +1096,8 @@ pub fn lower_crate_sig(
         src_static,
         foreign_mod,
         &mut foreign_items,
+        no_main,
+        test,
     );
     ctx.hir_items.extend(root_items);
 
