@@ -411,6 +411,8 @@ version = "0.1.0"
 dependencies = [
  "co2_ast",
  "co2_driver_lib",
+ "co2_parser",
+ "co2_preprocessor",
  "itertools",
 ]
 

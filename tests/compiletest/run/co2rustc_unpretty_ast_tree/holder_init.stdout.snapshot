@@ -1,0 +1,48 @@
+TranslationUnit
+  Declaration@src/holder_init.co2:0..50
+    StorageSpecifier@src/holder_init.co2:0..7
+      Typedef@src/holder_init.co2:0..7
+    TypeSpecifier@src/holder_init.co2:8..41
+      Union@src/holder_init.co2:8..41
+        Specifier@src/holder_init.co2:14..41 Defined { ident: ("Payload", 14..21), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Int, 24..27)), 24..27)], declarators: [(StructDeclarator { declarator: (Identifier(("i", 28..29)), 28..29), bits: None }, 28..29)] }, 24..30), (StructOrUnionField { specifiers: [(TypeSpecifier((Float, 31..36)), 31..36)], declarators: [(StructDeclarator { declarator: (Identifier(("f", 37..38)), 37..38), bits: None }, 37..38)] }, 31..39)] }
+    InitDeclarator@src/holder_init.co2:42..49
+      Identifier@src/holder_init.co2:42..49 "Payload"
+  Declaration@src/holder_init.co2:51..120
+    TypeSpecifier@src/holder_init.co2:51..119
+      Struct@src/holder_init.co2:51..119
+        Specifier@src/holder_init.co2:58..119 Defined { ident: ("Holder", 58..64), fields: [(StructOrUnionField { specifiers: [(TypeQualifier((Const, 67..72)), 67..72), (TypeSpecifier((Int, 73..76)), 73..76)], declarators: [(StructDeclarator { declarator: (Identifier(("head", 77..81)), 77..81), bits: None }, 77..81)] }, 67..82), (StructOrUnionField { specifiers: [(TypeSpecifier((TypedefName((RustPath { segments: [(Ident("Payload"), 83..90)] }, 83..90)), 83..90)), 83..90)], declarators: [(StructDeclarator { declarator: (Identifier(("payload", 91..98)), 91..98), bits: None }, 91..98)] }, 83..99), (StructOrUnionField { specifiers: [(TypeSpecifier((Unsigned, 100..108)), 100..108)], declarators: [(StructDeclarator { declarator: (Identifier(("bits", 109..113)), 109..113), bits: Some(("4", 115..116)) }, 109..116)] }, 100..117)] }
+  Declaration@src/holder_init.co2:121..225
+    TypeSpecifier@src/holder_init.co2:121..134
+      Struct@src/holder_init.co2:121..134
+        Specifier@src/holder_init.co2:128..134 Declared { ident: ("Holder", 128..134) }
+    InitDeclarator@src/holder_init.co2:135..224
+      Identifier@src/holder_init.co2:135..141 "holder"
+      List@src/holder_init.co2:144..224
+        InitializerItem@src/holder_init.co2:146..155
+          Field@src/holder_init.co2:146..151 head
+          Expr@src/holder_init.co2:154..155
+            Constant@src/holder_init.co2:154..155
+              Int 4
+        InitializerItem@src/holder_init.co2:157..210
+          Field@src/holder_init.co2:157..165 payload
+          List@src/holder_init.co2:168..210
+            InitializerItem@src/holder_init.co2:170..208
+              Field@src/holder_init.co2:170..172 i
+              Expr@src/holder_init.co2:175..208
+                GenericSelection@src/holder_init.co2:175..208
+                  Constant@src/holder_init.co2:184..185
+                    Int 3
+                  Type@src/holder_init.co2:187..194
+                    TypeName
+                      TypeSpecifier@src/holder_init.co2:187..190
+                        Int@src/holder_init.co2:187..190
+                    Constant@src/holder_init.co2:192..194
+                      Int 11
+                  Default@src/holder_init.co2:196..207
+                    Constant@src/holder_init.co2:205..207
+                      Int 17
+        InitializerItem@src/holder_init.co2:212..221
+          Field@src/holder_init.co2:212..217 bits
+          Expr@src/holder_init.co2:220..221
+            Constant@src/holder_init.co2:220..221
+              Int 3

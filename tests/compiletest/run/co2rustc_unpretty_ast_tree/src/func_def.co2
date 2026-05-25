@@ -1,0 +1,1 @@
+int declared(_Bool cond, int lhs, int rhs) { return cond ? lhs : rhs; }

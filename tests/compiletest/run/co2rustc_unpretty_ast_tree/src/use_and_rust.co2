@@ -1,0 +1,7 @@
+use ::core::{ffi::c_void, mem as memory, ptr::*};
+use std::{slice, vec::Vec as ByteVec};
+mod externs;
+mod inline_mod { type NestedBytes = [u8; 2 + 2]; }
+type PairView = (&mut [u8], *const i32, !);
+pub type Matrix = [[u8; 2 + 3]; 1 + 1];
+pub fn rust_entry() -> i32 {}

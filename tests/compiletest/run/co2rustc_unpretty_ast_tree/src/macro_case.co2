@@ -1,0 +1,10 @@
+#define BASE 3
+#define WIDTH (BASE + 1)
+#define NEXT(value) ((value) + 1)
+#define PICK(cond, yes, no) ((cond) ? (yes) : (no))
+#define FIELD(name) name
+int width_value = WIDTH;
+int next_value = NEXT(BASE);
+int pick_value = PICK(BASE, BASE, WIDTH);
+int field_value = point.FIELD(x);
+int arrow_value = point_ptr->FIELD(y);

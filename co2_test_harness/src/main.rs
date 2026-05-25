@@ -46,7 +46,7 @@ fn run_main() -> Result<()> {
     )?;
 
     if let Some(dir) = coverage_dir {
-        generate_coverage_report(&root, &dir)?;
+        generate_coverage_report(&root, &dir);
     }
 
     eprintln!(
@@ -60,7 +60,7 @@ fn run_main() -> Result<()> {
     Ok(())
 }
 
-fn generate_coverage_report(root: &std::path::Path, dir: &std::path::Path) -> Result<()> {
+fn generate_coverage_report(root: &std::path::Path, dir: &std::path::Path) {
     use std::process::Command;
 
     eprintln!("generating coverage report...");
@@ -83,14 +83,14 @@ fn generate_coverage_report(root: &std::path::Path, dir: &std::path::Path) -> Re
 
     if !found_any {
         eprintln!("no .profraw files found in {}", dir.display());
-        return Ok(());
+        return;
     }
 
     let status = cmd.arg("-o").arg(&merged_data).status();
 
     if let Err(e) = status {
         eprintln!("failed to run llvm-profdata: {e}. Ensure llvm-tools are installed.");
-        return Ok(());
+        return;
     }
 
     let report_dir = dir.join("report");
@@ -120,7 +120,10 @@ fn generate_coverage_report(root: &std::path::Path, dir: &std::path::Path) -> Re
     if let Ok(s) = status
         && s.success()
     {
-        eprintln!("coverage report generated at: {}/index.html", report_dir.display());
+        eprintln!(
+            "coverage report generated at: {}/index.html",
+            report_dir.display()
+        );
 
         // Also show a summary report in the terminal
         let mut report_cmd = Command::new("llvm-cov");
@@ -156,6 +159,4 @@ fn generate_coverage_report(root: &std::path::Path, dir: &std::path::Path) -> Re
     } else {
         eprintln!("failed to generate coverage report with llvm-cov");
     }
-
-    Ok(())
 }

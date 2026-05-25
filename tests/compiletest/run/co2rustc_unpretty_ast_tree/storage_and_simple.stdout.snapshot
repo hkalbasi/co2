@@ -1,0 +1,267 @@
+TranslationUnit
+  Declaration@src/storage_and_simple.co2:0..23
+    StorageSpecifier@src/storage_and_simple.co2:0..7
+      Typedef@src/storage_and_simple.co2:0..7
+    TypeSpecifier@src/storage_and_simple.co2:8..16
+      Unsigned@src/storage_and_simple.co2:8..16
+    InitDeclarator@src/storage_and_simple.co2:17..22
+      Identifier@src/storage_and_simple.co2:17..22 "Index"
+  Declaration@src/storage_and_simple.co2:24..43
+    TypeSpecifier@src/storage_and_simple.co2:24..42
+      Struct@src/storage_and_simple.co2:24..42
+        Specifier@src/storage_and_simple.co2:31..42 Declared { ident: ("PackedPoint", 31..42) }
+  Declaration@src/storage_and_simple.co2:44..70
+    StorageSpecifier@src/storage_and_simple.co2:44..50
+      Extern@src/storage_and_simple.co2:44..50
+    TypeSpecifier@src/storage_and_simple.co2:51..54
+      Int@src/storage_and_simple.co2:51..54
+    InitDeclarator@src/storage_and_simple.co2:55..69
+      Identifier@src/storage_and_simple.co2:55..69 "imported_value"
+  Declaration@src/storage_and_simple.co2:71..95
+    StorageSpecifier@src/storage_and_simple.co2:71..75
+      Auto@src/storage_and_simple.co2:71..75
+    TypeSpecifier@src/storage_and_simple.co2:76..79
+      Int@src/storage_and_simple.co2:76..79
+    InitDeclarator@src/storage_and_simple.co2:80..94
+      Identifier@src/storage_and_simple.co2:80..90 "auto_value"
+      Expr@src/storage_and_simple.co2:93..94
+        Constant@src/storage_and_simple.co2:93..94
+          Int 7
+  Declaration@src/storage_and_simple.co2:96..153
+    StorageSpecifier@src/storage_and_simple.co2:96..102
+      Static@src/storage_and_simple.co2:96..102
+    FunctionSpecifier@src/storage_and_simple.co2:103..109
+      Inline@src/storage_and_simple.co2:103..109
+    TypeSpecifier@src/storage_and_simple.co2:110..113
+      Int@src/storage_and_simple.co2:110..113
+    InitDeclarator@src/storage_and_simple.co2:114..152
+      FunctionDeclarator@src/storage_and_simple.co2:114..152
+        Identifier@src/storage_and_simple.co2:114..122 "declared"
+        ParameterList
+          Param
+            TypeSpecifier@src/storage_and_simple.co2:123..128
+              Bool@src/storage_and_simple.co2:123..128
+            Identifier@src/storage_and_simple.co2:129..133 "cond"
+          Param
+            TypeSpecifier@src/storage_and_simple.co2:135..138
+              Int@src/storage_and_simple.co2:135..138
+            Identifier@src/storage_and_simple.co2:139..142 "lhs"
+          Param
+            TypeSpecifier@src/storage_and_simple.co2:144..147
+              Int@src/storage_and_simple.co2:144..147
+            Identifier@src/storage_and_simple.co2:148..151 "rhs"
+          empty_is_variadic
+  Declaration@src/storage_and_simple.co2:154..183
+    TypeSpecifier@src/storage_and_simple.co2:154..157
+      Int@src/storage_and_simple.co2:154..157
+    InitDeclarator@src/storage_and_simple.co2:158..182
+      FunctionDeclarator@src/storage_and_simple.co2:158..182
+        Identifier@src/storage_and_simple.co2:158..166 "variadic"
+        ParameterList
+          Param
+            TypeSpecifier@src/storage_and_simple.co2:167..170
+              Int@src/storage_and_simple.co2:167..170
+            Identifier@src/storage_and_simple.co2:171..176 "first"
+          ...
+          empty_is_variadic
+  Declaration@src/storage_and_simple.co2:184..200
+    TypeSpecifier@src/storage_and_simple.co2:184..187
+      Int@src/storage_and_simple.co2:184..187
+    InitDeclarator@src/storage_and_simple.co2:188..199
+      FunctionDeclarator@src/storage_and_simple.co2:188..199
+        Identifier@src/storage_and_simple.co2:188..197 "old_style"
+        ParameterList
+          empty_is_variadic
+  Declaration@src/storage_and_simple.co2:201..241
+    StorageSpecifier@src/storage_and_simple.co2:201..209
+      Register@src/storage_and_simple.co2:201..209
+    TypeSpecifier@src/storage_and_simple.co2:210..216
+      Signed@src/storage_and_simple.co2:210..216
+    TypeSpecifier@src/storage_and_simple.co2:217..221
+      Long@src/storage_and_simple.co2:217..221
+    TypeSpecifier@src/storage_and_simple.co2:222..226
+      Long@src/storage_and_simple.co2:222..226
+    InitDeclarator@src/storage_and_simple.co2:227..240
+      Identifier@src/storage_and_simple.co2:227..234 "counter"
+      Expr@src/storage_and_simple.co2:237..240
+        Constant@src/storage_and_simple.co2:237..240
+          Int 1ll
+  Declaration@src/storage_and_simple.co2:242..299
+    StorageSpecifier@src/storage_and_simple.co2:242..251
+      Constexpr@src/storage_and_simple.co2:242..251
+    TypeSpecifier@src/storage_and_simple.co2:252..255
+      Int@src/storage_and_simple.co2:252..255
+    InitDeclarator@src/storage_and_simple.co2:256..298
+      Identifier@src/storage_and_simple.co2:256..262 "cached"
+      Expr@src/storage_and_simple.co2:265..298
+        GenericSelection@src/storage_and_simple.co2:265..298
+          Constant@src/storage_and_simple.co2:274..275
+            Int 3
+          Type@src/storage_and_simple.co2:277..284
+            TypeName
+              TypeSpecifier@src/storage_and_simple.co2:277..280
+                Int@src/storage_and_simple.co2:277..280
+            Constant@src/storage_and_simple.co2:282..284
+              Int 11
+          Default@src/storage_and_simple.co2:286..297
+            Constant@src/storage_and_simple.co2:295..297
+              Int 17
+  Declaration@src/storage_and_simple.co2:300..329
+    TypeQualifier@src/storage_and_simple.co2:300..308
+      Volatile@src/storage_and_simple.co2:300..308
+    TypeSpecifier@src/storage_and_simple.co2:309..312
+      Int@src/storage_and_simple.co2:309..312
+    InitDeclarator@src/storage_and_simple.co2:313..328
+      PointerDeclarator@src/storage_and_simple.co2:314..324
+        Identifier@src/storage_and_simple.co2:314..324 "global_ptr"
+      Expr@src/storage_and_simple.co2:327..328
+        Constant@src/storage_and_simple.co2:327..328
+          Int 0
+  Declaration@src/storage_and_simple.co2:330..364
+    TypeSpecifier@src/storage_and_simple.co2:330..348
+      Struct@src/storage_and_simple.co2:330..348
+        Specifier@src/storage_and_simple.co2:337..348 Declared { ident: ("PackedPoint", 337..348) }
+    InitDeclarator@src/storage_and_simple.co2:349..363
+      PointerDeclarator@src/storage_and_simple.co2:350..359
+        Identifier@src/storage_and_simple.co2:350..359 "point_ptr"
+      Expr@src/storage_and_simple.co2:362..363
+        Constant@src/storage_and_simple.co2:362..363
+          Int 0
+  Declaration@src/storage_and_simple.co2:365..394
+    TypeQualifier@src/storage_and_simple.co2:365..372
+      Atomic@src/storage_and_simple.co2:365..372
+    TypeSpecifier@src/storage_and_simple.co2:373..376
+      Int@src/storage_and_simple.co2:373..376
+    InitDeclarator@src/storage_and_simple.co2:377..393
+      Identifier@src/storage_and_simple.co2:377..389 "atomic_value"
+      Expr@src/storage_and_simple.co2:392..393
+        Constant@src/storage_and_simple.co2:392..393
+          Int 4
+  Declaration@src/storage_and_simple.co2:395..418
+    TypeSpecifier@src/storage_and_simple.co2:395..400
+      TypedefName@src/storage_and_simple.co2:395..400 RustPath { segments: [(Ident("Index"), 395..400)] }
+    InitDeclarator@src/storage_and_simple.co2:401..417
+      Identifier@src/storage_and_simple.co2:401..412 "typed_index"
+      Expr@src/storage_and_simple.co2:415..417
+        Constant@src/storage_and_simple.co2:415..417
+          Int 1u
+  Declaration@src/storage_and_simple.co2:419..445
+    TypeSpecifier@src/storage_and_simple.co2:419..433
+      TypeofType@src/storage_and_simple.co2:419..433
+        TypeName
+          TypeSpecifier@src/storage_and_simple.co2:426..432
+            TypedefName@src/storage_and_simple.co2:426..432 RustPath { segments: [(Ident("cached"), 426..432)] }
+    InitDeclarator@src/storage_and_simple.co2:434..444
+      Identifier@src/storage_and_simple.co2:434..440 "mirror"
+      Expr@src/storage_and_simple.co2:443..444
+        Constant@src/storage_and_simple.co2:443..444
+          Int 4
+  Declaration@src/storage_and_simple.co2:446..472
+    TypeSpecifier@src/storage_and_simple.co2:446..457
+      TypeofType@src/storage_and_simple.co2:446..457
+        TypeName
+          TypeSpecifier@src/storage_and_simple.co2:453..456
+            Int@src/storage_and_simple.co2:453..456
+    InitDeclarator@src/storage_and_simple.co2:458..471
+      Identifier@src/storage_and_simple.co2:458..467 "from_type"
+      Expr@src/storage_and_simple.co2:470..471
+        Constant@src/storage_and_simple.co2:470..471
+          Int 2
+  Declaration@src/storage_and_simple.co2:473..495
+    TypeSpecifier@src/storage_and_simple.co2:473..478
+      Short@src/storage_and_simple.co2:473..478
+    InitDeclarator@src/storage_and_simple.co2:479..494
+      Identifier@src/storage_and_simple.co2:479..490 "short_value"
+      Expr@src/storage_and_simple.co2:493..494
+        Constant@src/storage_and_simple.co2:493..494
+          Int 3
+  Declaration@src/storage_and_simple.co2:496..517
+    TypeSpecifier@src/storage_and_simple.co2:496..500
+      Long@src/storage_and_simple.co2:496..500
+    InitDeclarator@src/storage_and_simple.co2:501..516
+      Identifier@src/storage_and_simple.co2:501..511 "long_value"
+      Expr@src/storage_and_simple.co2:514..516
+        Constant@src/storage_and_simple.co2:514..516
+          Int 4l
+  Declaration@src/storage_and_simple.co2:518..547
+    TypeSpecifier@src/storage_and_simple.co2:518..526
+      Unsigned@src/storage_and_simple.co2:518..526
+    TypeSpecifier@src/storage_and_simple.co2:527..531
+      Long@src/storage_and_simple.co2:527..531
+    InitDeclarator@src/storage_and_simple.co2:532..546
+      Identifier@src/storage_and_simple.co2:532..540 "ul_value"
+      Expr@src/storage_and_simple.co2:543..546
+        Constant@src/storage_and_simple.co2:543..546
+          Int 5ul
+  Declaration@src/storage_and_simple.co2:548..584
+    TypeSpecifier@src/storage_and_simple.co2:548..556
+      Unsigned@src/storage_and_simple.co2:548..556
+    TypeSpecifier@src/storage_and_simple.co2:557..561
+      Long@src/storage_and_simple.co2:557..561
+    TypeSpecifier@src/storage_and_simple.co2:562..566
+      Long@src/storage_and_simple.co2:562..566
+    InitDeclarator@src/storage_and_simple.co2:567..583
+      Identifier@src/storage_and_simple.co2:567..576 "ull_value"
+      Expr@src/storage_and_simple.co2:579..583
+        Constant@src/storage_and_simple.co2:579..583
+          Int 6ull
+  Declaration@src/storage_and_simple.co2:585..605
+    TypeSpecifier@src/storage_and_simple.co2:585..590
+      Float@src/storage_and_simple.co2:585..590
+    InitDeclarator@src/storage_and_simple.co2:591..604
+      Identifier@src/storage_and_simple.co2:591..597 "finite"
+      Expr@src/storage_and_simple.co2:600..604
+        Constant@src/storage_and_simple.co2:600..604
+          Float 1f
+  Declaration@src/storage_and_simple.co2:606..629
+    TypeSpecifier@src/storage_and_simple.co2:606..612
+      Double@src/storage_and_simple.co2:606..612
+    InitDeclarator@src/storage_and_simple.co2:613..628
+      Identifier@src/storage_and_simple.co2:613..621 "extended"
+      Expr@src/storage_and_simple.co2:624..628
+        Constant@src/storage_and_simple.co2:624..628
+          Float 2l
+  Declaration@src/storage_and_simple.co2:630..649
+    TypeSpecifier@src/storage_and_simple.co2:630..634
+      Char@src/storage_and_simple.co2:630..634
+    InitDeclarator@src/storage_and_simple.co2:635..648
+      Identifier@src/storage_and_simple.co2:635..641 "letter"
+      Expr@src/storage_and_simple.co2:644..648
+        Constant@src/storage_and_simple.co2:644..648
+          Char '\n'
+  Declaration@src/storage_and_simple.co2:650..683
+    TypeSpecifier@src/storage_and_simple.co2:650..655
+      Float@src/storage_and_simple.co2:650..655
+    InitDeclarator@src/storage_and_simple.co2:656..682
+      Identifier@src/storage_and_simple.co2:656..661 "ratio"
+      Expr@src/storage_and_simple.co2:664..682
+        Constant@src/storage_and_simple.co2:664..682
+          Float NaN
+  Declaration@src/storage_and_simple.co2:684..715
+    TypeSpecifier@src/storage_and_simple.co2:684..690
+      Double@src/storage_and_simple.co2:684..690
+    InitDeclarator@src/storage_and_simple.co2:691..714
+      Identifier@src/storage_and_simple.co2:691..696 "limit"
+      Expr@src/storage_and_simple.co2:699..714
+        Constant@src/storage_and_simple.co2:699..714
+          Float inf
+  Declaration@src/storage_and_simple.co2:716..737
+    TypeSpecifier@src/storage_and_simple.co2:716..720
+      Void@src/storage_and_simple.co2:716..720
+    InitDeclarator@src/storage_and_simple.co2:721..736
+      PointerDeclarator@src/storage_and_simple.co2:722..732
+        Identifier@src/storage_and_simple.co2:722..732 "opaque_ptr"
+      Expr@src/storage_and_simple.co2:735..736
+        Constant@src/storage_and_simple.co2:735..736
+          Int 0
+  Declaration@src/storage_and_simple.co2:738..777
+    TypeQualifier@src/storage_and_simple.co2:738..743
+      Const@src/storage_and_simple.co2:738..743
+    TypeSpecifier@src/storage_and_simple.co2:744..748
+      Char@src/storage_and_simple.co2:744..748
+    InitDeclarator@src/storage_and_simple.co2:749..776
+      PointerDeclarator@src/storage_and_simple.co2:750..757
+        Identifier@src/storage_and_simple.co2:750..757 "message"
+      Expr@src/storage_and_simple.co2:760..776
+        Constant@src/storage_and_simple.co2:760..776
+          String "macro coverage"

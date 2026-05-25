@@ -1,0 +1,245 @@
+TranslationUnit
+  Declaration@src/exprs.co2:0..35
+    TypeSpecifier@src/exprs.co2:0..3
+      Int@src/exprs.co2:0..3
+    InitDeclarator@src/exprs.co2:4..34
+      Identifier@src/exprs.co2:4..19 "subscript_value"
+      Expr@src/exprs.co2:22..34
+        Subscript@src/exprs.co2:22..34
+          Identifier@src/exprs.co2:22..27 RustPath { segments: [(Ident("table"), 22..27)] }
+          BinOp@src/exprs.co2:28..33
+            Constant@src/exprs.co2:28..29
+              Int 3
+            Sub
+            Constant@src/exprs.co2:32..33
+              Int 1
+  Declaration@src/exprs.co2:36..71
+    TypeSpecifier@src/exprs.co2:36..39
+      Int@src/exprs.co2:36..39
+    InitDeclarator@src/exprs.co2:40..70
+      Identifier@src/exprs.co2:40..50 "call_value"
+      Expr@src/exprs.co2:53..70
+        Call@src/exprs.co2:53..70
+          Identifier@src/exprs.co2:53..61 RustPath { segments: [(Ident("declared"), 53..61)] }
+          Constant@src/exprs.co2:62..63
+            Int 1
+          Constant@src/exprs.co2:65..66
+            Int 3
+          Constant@src/exprs.co2:68..69
+            Int 4
+  Declaration@src/exprs.co2:72..101
+    TypeSpecifier@src/exprs.co2:72..75
+      Int@src/exprs.co2:72..75
+    InitDeclarator@src/exprs.co2:76..100
+      Identifier@src/exprs.co2:76..88 "update_value"
+      Expr@src/exprs.co2:91..100
+        Update@src/exprs.co2:91..100
+          Identifier@src/exprs.co2:91..98 RustPath { segments: [(Ident("counter"), 91..98)] }
+          Inc
+          IsPostfix true
+  Declaration@src/exprs.co2:102..136
+    TypeSpecifier@src/exprs.co2:102..105
+      Int@src/exprs.co2:102..105
+    InitDeclarator@src/exprs.co2:106..135
+      Identifier@src/exprs.co2:106..118 "assign_value"
+      Expr@src/exprs.co2:121..135
+        AssignWithOp@src/exprs.co2:121..135
+          Identifier@src/exprs.co2:122..129 RustPath { segments: [(Ident("counter"), 122..129)] }
+          Add
+          Constant@src/exprs.co2:133..134
+            Int 1
+  Declaration@src/exprs.co2:137..169
+    TypeSpecifier@src/exprs.co2:137..140
+      Int@src/exprs.co2:137..140
+    InitDeclarator@src/exprs.co2:141..168
+      Identifier@src/exprs.co2:141..151 "cast_value"
+      Expr@src/exprs.co2:154..168
+        Cast@src/exprs.co2:154..168
+          TypeName
+            TypeSpecifier@src/exprs.co2:155..158
+              Int@src/exprs.co2:155..158
+          Cast@src/exprs.co2:159..168
+            TypeName
+              TypeSpecifier@src/exprs.co2:160..166
+                Double@src/exprs.co2:160..166
+            Constant@src/exprs.co2:167..168
+              Int 4
+  Declaration@src/exprs.co2:170..216
+    TypeSpecifier@src/exprs.co2:170..173
+      Int@src/exprs.co2:170..173
+    InitDeclarator@src/exprs.co2:174..215
+      Identifier@src/exprs.co2:174..191 "sizeof_type_value"
+      Expr@src/exprs.co2:194..215
+        SizeofType@src/exprs.co2:194..215
+          TypeName
+            TypeSpecifier@src/exprs.co2:201..214
+              Struct@src/exprs.co2:201..214
+                Specifier@src/exprs.co2:208..214 Declared { ident: ("Holder", 208..214) }
+  Declaration@src/exprs.co2:217..255
+    TypeSpecifier@src/exprs.co2:217..220
+      Int@src/exprs.co2:217..220
+    InitDeclarator@src/exprs.co2:221..254
+      Identifier@src/exprs.co2:221..238 "sizeof_expr_value"
+      Expr@src/exprs.co2:241..254
+        SizeofType@src/exprs.co2:241..254
+          TypeName
+            TypeSpecifier@src/exprs.co2:248..253
+              TypedefName@src/exprs.co2:248..253 RustPath { segments: [(Ident("point"), 248..253)] }
+  Declaration@src/exprs.co2:256..305
+    TypeSpecifier@src/exprs.co2:256..259
+      Int@src/exprs.co2:256..259
+    InitDeclarator@src/exprs.co2:260..304
+      Identifier@src/exprs.co2:260..278 "alignof_type_value"
+      Expr@src/exprs.co2:281..304
+        AlignofType@src/exprs.co2:281..304
+          TypeName
+            TypeSpecifier@src/exprs.co2:290..303
+              Struct@src/exprs.co2:290..303
+                Specifier@src/exprs.co2:297..303 Declared { ident: ("Holder", 297..303) }
+  Declaration@src/exprs.co2:306..347
+    TypeSpecifier@src/exprs.co2:306..309
+      Int@src/exprs.co2:306..309
+    InitDeclarator@src/exprs.co2:310..346
+      Identifier@src/exprs.co2:310..328 "alignof_expr_value"
+      Expr@src/exprs.co2:331..346
+        AlignofType@src/exprs.co2:331..346
+          TypeName
+            TypeSpecifier@src/exprs.co2:340..345
+              TypedefName@src/exprs.co2:340..345 RustPath { segments: [(Ident("point"), 340..345)] }
+  Declaration@src/exprs.co2:348..409
+    TypeSpecifier@src/exprs.co2:348..351
+      Int@src/exprs.co2:348..351
+    InitDeclarator@src/exprs.co2:352..408
+      Identifier@src/exprs.co2:352..364 "offset_value"
+      Expr@src/exprs.co2:367..408
+        Offsetof@src/exprs.co2:367..408
+          TypeName
+            TypeSpecifier@src/exprs.co2:386..404
+              Struct@src/exprs.co2:386..404
+                Specifier@src/exprs.co2:393..404 Declared { ident: ("PackedPoint", 393..404) }
+          Field@src/exprs.co2:406..407 y
+  Declaration@src/exprs.co2:410..431
+    TypeSpecifier@src/exprs.co2:410..413
+      Int@src/exprs.co2:410..413
+    InitDeclarator@src/exprs.co2:414..430
+      Identifier@src/exprs.co2:414..425 "unary_value"
+      Expr@src/exprs.co2:428..430
+        UnaryOp@src/exprs.co2:428..430
+          Com
+          Constant@src/exprs.co2:429..430
+            Int 3
+  Declaration@src/exprs.co2:432..457
+    TypeSpecifier@src/exprs.co2:432..435
+      Int@src/exprs.co2:432..435
+    InitDeclarator@src/exprs.co2:436..456
+      Identifier@src/exprs.co2:436..448 "binary_value"
+      Expr@src/exprs.co2:451..456
+        BinOp@src/exprs.co2:451..456
+          Constant@src/exprs.co2:451..452
+            Int 3
+          Add
+          Constant@src/exprs.co2:455..456
+            Int 4
+  Declaration@src/exprs.co2:458..512
+    TypeSpecifier@src/exprs.co2:458..461
+      Int@src/exprs.co2:458..461
+    InitDeclarator@src/exprs.co2:462..511
+      Identifier@src/exprs.co2:462..479 "conditional_value"
+      Expr@src/exprs.co2:482..511
+        Conditional@src/exprs.co2:482..511
+          Constant@src/exprs.co2:483..486
+            Int 3
+          Field@src/exprs.co2:489..498
+            Identifier@src/exprs.co2:490..495 RustPath { segments: [(Ident("point"), 490..495)] }
+            FieldName@src/exprs.co2:496..497 x
+          Field@src/exprs.co2:501..510
+            Identifier@src/exprs.co2:502..507 RustPath { segments: [(Ident("point"), 502..507)] }
+            FieldName@src/exprs.co2:508..509 y
+  Declaration@src/exprs.co2:513..573
+    TypeSpecifier@src/exprs.co2:513..516
+      Int@src/exprs.co2:513..516
+    InitDeclarator@src/exprs.co2:517..572
+      Identifier@src/exprs.co2:517..530 "generic_value"
+      Expr@src/exprs.co2:533..572
+        GenericSelection@src/exprs.co2:533..572
+          Field@src/exprs.co2:542..549
+            Identifier@src/exprs.co2:542..547 RustPath { segments: [(Ident("point"), 542..547)] }
+            FieldName@src/exprs.co2:548..549 x
+          Type@src/exprs.co2:551..558
+            TypeName
+              TypeSpecifier@src/exprs.co2:551..554
+                Int@src/exprs.co2:551..554
+            Constant@src/exprs.co2:556..558
+              Int 11
+          Default@src/exprs.co2:560..571
+            Constant@src/exprs.co2:569..571
+              Int 17
+  Declaration@src/exprs.co2:574..619
+    TypeSpecifier@src/exprs.co2:574..577
+      Int@src/exprs.co2:574..577
+    InitDeclarator@src/exprs.co2:578..618
+      Identifier@src/exprs.co2:578..592 "constant_value"
+      Expr@src/exprs.co2:595..618
+        BuiltinConstantP@src/exprs.co2:595..618
+          Constant@src/exprs.co2:616..617
+            Int 4
+  Declaration@src/exprs.co2:620..686
+    TypeSpecifier@src/exprs.co2:620..623
+      Int@src/exprs.co2:620..623
+    InitDeclarator@src/exprs.co2:624..685
+      Identifier@src/exprs.co2:624..635 "types_value"
+      Expr@src/exprs.co2:638..685
+        BuiltinTypesCompatibleP@src/exprs.co2:638..685
+          TypeName
+            TypeSpecifier@src/exprs.co2:667..670
+              Int@src/exprs.co2:667..670
+          TypeName
+            TypeSpecifier@src/exprs.co2:672..680
+              Unsigned@src/exprs.co2:672..680
+            TypeSpecifier@src/exprs.co2:681..684
+              Int@src/exprs.co2:681..684
+  Declaration@src/exprs.co2:687..746
+    TypeSpecifier@src/exprs.co2:687..690
+      Int@src/exprs.co2:687..690
+    InitDeclarator@src/exprs.co2:691..745
+      Identifier@src/exprs.co2:691..705 "va_start_value"
+      Expr@src/exprs.co2:708..745
+        VaStart@src/exprs.co2:708..745
+          Field@src/exprs.co2:727..736
+            Identifier@src/exprs.co2:727..734 RustPath { segments: [(Ident("payload"), 727..734)] }
+            FieldName@src/exprs.co2:735..736 i
+          LastParam@src/exprs.co2:738..744 mirror
+  Declaration@src/exprs.co2:747..799
+    TypeSpecifier@src/exprs.co2:747..750
+      Int@src/exprs.co2:747..750
+    InitDeclarator@src/exprs.co2:751..798
+      Identifier@src/exprs.co2:751..763 "va_arg_value"
+      Expr@src/exprs.co2:766..798
+        VaArg@src/exprs.co2:766..798
+          Field@src/exprs.co2:783..792
+            Identifier@src/exprs.co2:783..790 RustPath { segments: [(Ident("payload"), 783..790)] }
+            FieldName@src/exprs.co2:791..792 i
+          TypeName
+            TypeSpecifier@src/exprs.co2:794..797
+              Int@src/exprs.co2:794..797
+  Declaration@src/exprs.co2:800..858
+    TypeSpecifier@src/exprs.co2:800..803
+      Int@src/exprs.co2:800..803
+    InitDeclarator@src/exprs.co2:804..857
+      Identifier@src/exprs.co2:804..817 "va_copy_value"
+      Expr@src/exprs.co2:820..857
+        VaCopy@src/exprs.co2:820..857
+          Field@src/exprs.co2:838..847
+            Identifier@src/exprs.co2:838..845 RustPath { segments: [(Ident("payload"), 838..845)] }
+            FieldName@src/exprs.co2:846..847 i
+          Identifier@src/exprs.co2:849..856 RustPath { segments: [(Ident("counter"), 849..856)] }
+  Declaration@src/exprs.co2:859..906
+    TypeSpecifier@src/exprs.co2:859..862
+      Int@src/exprs.co2:859..862
+    InitDeclarator@src/exprs.co2:863..905
+      Identifier@src/exprs.co2:863..875 "va_end_value"
+      Expr@src/exprs.co2:878..905
+        VaEnd@src/exprs.co2:878..905
+          Field@src/exprs.co2:895..904
+            Identifier@src/exprs.co2:895..902 RustPath { segments: [(Ident("payload"), 895..902)] }
+            FieldName@src/exprs.co2:903..904 i

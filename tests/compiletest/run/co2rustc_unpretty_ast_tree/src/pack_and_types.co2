@@ -1,0 +1,16 @@
+__ccc_pack_push_only;
+__ccc_pack_set_2;
+struct PackedByTwo { char c; int value; };
+__ccc_pack_push_1;
+struct PackedPoint { int x; int y: 4; };
+__ccc_pack_pop;
+__ccc_pack_reset;
+struct ResetPack { char c; int value; };
+typedef unsigned Index;
+typedef union Payload { int i; float f; } Payload;
+struct Forward;
+union ForwardUnion;
+enum ForwardMode;
+enum Mode { MODE_A = 3, MODE_B = 4 };
+struct Holder { const int head; Payload payload; unsigned bits: 4; };
+enum { ANON_ONE = 1, ANON_TWO = 2 } anonymous_mode = ANON_TWO;

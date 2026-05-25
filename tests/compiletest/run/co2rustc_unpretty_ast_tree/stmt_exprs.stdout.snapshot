@@ -1,0 +1,239 @@
+TranslationUnit
+  Declaration@src/stmt_exprs.co2:0..50
+    TypeSpecifier@src/stmt_exprs.co2:0..3
+      Int@src/stmt_exprs.co2:0..3
+    InitDeclarator@src/stmt_exprs.co2:4..49
+      Identifier@src/stmt_exprs.co2:4..19 "decl_stmt_value"
+      Expr@src/stmt_exprs.co2:22..49
+        GnuStatementExpr@src/stmt_exprs.co2:22..49
+          CompoundStatement@src/stmt_exprs.co2:23..48
+            Declaration@src/stmt_exprs.co2:25..39
+              Declaration@src/stmt_exprs.co2:25..39
+                TypeSpecifier@src/stmt_exprs.co2:25..28
+                  Int@src/stmt_exprs.co2:25..28
+                InitDeclarator@src/stmt_exprs.co2:29..38
+                  Identifier@src/stmt_exprs.co2:29..34 "local"
+                  Expr@src/stmt_exprs.co2:37..38
+                    Constant@src/stmt_exprs.co2:37..38
+                      Int 3
+            Declaration@src/stmt_exprs.co2:40..46
+              Declaration@src/stmt_exprs.co2:40..46
+                TypeSpecifier@src/stmt_exprs.co2:40..45
+                  TypedefName@src/stmt_exprs.co2:40..45 RustPath { segments: [(Ident("local"), 40..45)] }
+  Declaration@src/stmt_exprs.co2:51..85
+    TypeSpecifier@src/stmt_exprs.co2:51..54
+      Int@src/stmt_exprs.co2:51..54
+    InitDeclarator@src/stmt_exprs.co2:55..84
+      Identifier@src/stmt_exprs.co2:55..71 "empty_stmt_value"
+      Expr@src/stmt_exprs.co2:74..84
+        GnuStatementExpr@src/stmt_exprs.co2:74..84
+          CompoundStatement@src/stmt_exprs.co2:75..83
+            Statement@src/stmt_exprs.co2:77..78
+              Empty@src/stmt_exprs.co2:77..78
+            Statement@src/stmt_exprs.co2:79..81
+              Expression@src/stmt_exprs.co2:79..81
+                Constant@src/stmt_exprs.co2:79..80
+                  Int 0
+  Declaration@src/stmt_exprs.co2:86..133
+    TypeSpecifier@src/stmt_exprs.co2:86..89
+      Int@src/stmt_exprs.co2:86..89
+    InitDeclarator@src/stmt_exprs.co2:90..132
+      Identifier@src/stmt_exprs.co2:90..98 "if_value"
+      Expr@src/stmt_exprs.co2:101..132
+        GnuStatementExpr@src/stmt_exprs.co2:101..132
+          CompoundStatement@src/stmt_exprs.co2:102..131
+            Statement@src/stmt_exprs.co2:104..129
+              If@src/stmt_exprs.co2:104..129
+                Constant@src/stmt_exprs.co2:108..109
+                  Int 3
+                Compound@src/stmt_exprs.co2:111..117
+                  CompoundStatement@src/stmt_exprs.co2:111..117
+                    Statement@src/stmt_exprs.co2:113..115
+                      Expression@src/stmt_exprs.co2:113..115
+                        Constant@src/stmt_exprs.co2:113..114
+                          Int 2
+                Compound@src/stmt_exprs.co2:123..129
+                  CompoundStatement@src/stmt_exprs.co2:123..129
+                    Statement@src/stmt_exprs.co2:125..127
+                      Expression@src/stmt_exprs.co2:125..127
+                        Constant@src/stmt_exprs.co2:125..126
+                          Int 3
+  Declaration@src/stmt_exprs.co2:134..185
+    TypeSpecifier@src/stmt_exprs.co2:134..137
+      Int@src/stmt_exprs.co2:134..137
+    InitDeclarator@src/stmt_exprs.co2:138..184
+      Identifier@src/stmt_exprs.co2:138..149 "while_value"
+      Expr@src/stmt_exprs.co2:152..184
+        GnuStatementExpr@src/stmt_exprs.co2:152..184
+          CompoundStatement@src/stmt_exprs.co2:153..183
+            Statement@src/stmt_exprs.co2:155..178
+              While@src/stmt_exprs.co2:155..178
+                Constant@src/stmt_exprs.co2:162..163
+                  Int 0
+                Compound@src/stmt_exprs.co2:165..178
+                  CompoundStatement@src/stmt_exprs.co2:165..178
+                    Statement@src/stmt_exprs.co2:167..176
+                      Continue@src/stmt_exprs.co2:167..176
+            Statement@src/stmt_exprs.co2:179..181
+              Expression@src/stmt_exprs.co2:179..181
+                Constant@src/stmt_exprs.co2:179..180
+                  Int 1
+  Declaration@src/stmt_exprs.co2:186..235
+    TypeSpecifier@src/stmt_exprs.co2:186..189
+      Int@src/stmt_exprs.co2:186..189
+    InitDeclarator@src/stmt_exprs.co2:190..234
+      Identifier@src/stmt_exprs.co2:190..198 "do_value"
+      Expr@src/stmt_exprs.co2:201..234
+        GnuStatementExpr@src/stmt_exprs.co2:201..234
+          CompoundStatement@src/stmt_exprs.co2:202..233
+            Statement@src/stmt_exprs.co2:204..228
+              DoWhile@src/stmt_exprs.co2:204..228
+                Compound@src/stmt_exprs.co2:207..217
+                  CompoundStatement@src/stmt_exprs.co2:207..217
+                    Statement@src/stmt_exprs.co2:209..215
+                      Break@src/stmt_exprs.co2:209..215
+                Constant@src/stmt_exprs.co2:225..226
+                  Int 0
+            Statement@src/stmt_exprs.co2:229..231
+              Expression@src/stmt_exprs.co2:229..231
+                Constant@src/stmt_exprs.co2:229..230
+                  Int 1
+  Declaration@src/stmt_exprs.co2:236..304
+    TypeSpecifier@src/stmt_exprs.co2:236..239
+      Int@src/stmt_exprs.co2:236..239
+    InitDeclarator@src/stmt_exprs.co2:240..303
+      Identifier@src/stmt_exprs.co2:240..254 "for_decl_value"
+      Expr@src/stmt_exprs.co2:257..303
+        GnuStatementExpr@src/stmt_exprs.co2:257..303
+          CompoundStatement@src/stmt_exprs.co2:258..302
+            Statement@src/stmt_exprs.co2:260..297
+              For@src/stmt_exprs.co2:260..297
+                Declaration
+                  Declaration@src/stmt_exprs.co2:265..275
+                    TypeSpecifier@src/stmt_exprs.co2:265..268
+                      Int@src/stmt_exprs.co2:265..268
+                    InitDeclarator@src/stmt_exprs.co2:269..274
+                      Identifier@src/stmt_exprs.co2:269..270 "i"
+                      Expr@src/stmt_exprs.co2:273..274
+                        Constant@src/stmt_exprs.co2:273..274
+                          Int 0
+                BinOp@src/stmt_exprs.co2:276..281
+                  Identifier@src/stmt_exprs.co2:276..277 RustPath { segments: [(Ident("i"), 276..277)] }
+                  Lt
+                  Constant@src/stmt_exprs.co2:280..281
+                    Int 2
+                AssignWithOp@src/stmt_exprs.co2:283..289
+                  Identifier@src/stmt_exprs.co2:283..284 RustPath { segments: [(Ident("i"), 283..284)] }
+                  Add
+                  Constant@src/stmt_exprs.co2:288..289
+                    Int 1
+                Compound@src/stmt_exprs.co2:291..297
+                  CompoundStatement@src/stmt_exprs.co2:291..297
+                    Statement@src/stmt_exprs.co2:293..295
+                      Expression@src/stmt_exprs.co2:293..295
+                        Constant@src/stmt_exprs.co2:293..294
+                          Int 1
+            Statement@src/stmt_exprs.co2:298..300
+              Expression@src/stmt_exprs.co2:298..300
+                Constant@src/stmt_exprs.co2:298..299
+                  Int 0
+  Declaration@src/stmt_exprs.co2:305..380
+    TypeSpecifier@src/stmt_exprs.co2:305..308
+      Int@src/stmt_exprs.co2:305..308
+    InitDeclarator@src/stmt_exprs.co2:309..379
+      Identifier@src/stmt_exprs.co2:309..323 "for_expr_value"
+      Expr@src/stmt_exprs.co2:326..379
+        GnuStatementExpr@src/stmt_exprs.co2:326..379
+          CompoundStatement@src/stmt_exprs.co2:327..378
+            Declaration@src/stmt_exprs.co2:329..339
+              Declaration@src/stmt_exprs.co2:329..339
+                TypeSpecifier@src/stmt_exprs.co2:329..332
+                  Int@src/stmt_exprs.co2:329..332
+                InitDeclarator@src/stmt_exprs.co2:333..338
+                  Identifier@src/stmt_exprs.co2:333..334 "i"
+                  Expr@src/stmt_exprs.co2:337..338
+                    Constant@src/stmt_exprs.co2:337..338
+                      Int 0
+            Statement@src/stmt_exprs.co2:340..373
+              For@src/stmt_exprs.co2:340..373
+                Expression
+                  BinOp@src/stmt_exprs.co2:345..350
+                    Identifier@src/stmt_exprs.co2:345..346 RustPath { segments: [(Ident("i"), 345..346)] }
+                    Assign
+                    Constant@src/stmt_exprs.co2:349..350
+                      Int 0
+                BinOp@src/stmt_exprs.co2:352..357
+                  Identifier@src/stmt_exprs.co2:352..353 RustPath { segments: [(Ident("i"), 352..353)] }
+                  Lt
+                  Constant@src/stmt_exprs.co2:356..357
+                    Int 2
+                AssignWithOp@src/stmt_exprs.co2:359..365
+                  Identifier@src/stmt_exprs.co2:359..360 RustPath { segments: [(Ident("i"), 359..360)] }
+                  Add
+                  Constant@src/stmt_exprs.co2:364..365
+                    Int 1
+                Compound@src/stmt_exprs.co2:367..373
+                  CompoundStatement@src/stmt_exprs.co2:367..373
+                    Statement@src/stmt_exprs.co2:369..371
+                      Expression@src/stmt_exprs.co2:369..371
+                        Constant@src/stmt_exprs.co2:369..370
+                          Int 1
+            Statement@src/stmt_exprs.co2:374..376
+              Expression@src/stmt_exprs.co2:374..376
+                Constant@src/stmt_exprs.co2:374..375
+                  Int 0
+  Declaration@src/stmt_exprs.co2:381..451
+    TypeSpecifier@src/stmt_exprs.co2:381..384
+      Int@src/stmt_exprs.co2:381..384
+    InitDeclarator@src/stmt_exprs.co2:385..450
+      Identifier@src/stmt_exprs.co2:385..397 "switch_value"
+      Expr@src/stmt_exprs.co2:400..450
+        GnuStatementExpr@src/stmt_exprs.co2:400..450
+          CompoundStatement@src/stmt_exprs.co2:401..449
+            Statement@src/stmt_exprs.co2:403..444
+              Switch@src/stmt_exprs.co2:403..444
+                Constant@src/stmt_exprs.co2:411..412
+                  Int 1
+                Compound@src/stmt_exprs.co2:414..444
+                  CompoundStatement@src/stmt_exprs.co2:414..444
+                    Statement@src/stmt_exprs.co2:416..430
+                      Case@src/stmt_exprs.co2:416..430
+                        Constant@src/stmt_exprs.co2:421..422
+                          Int 0
+                        Break@src/stmt_exprs.co2:424..430
+                    Statement@src/stmt_exprs.co2:431..442
+                      Default@src/stmt_exprs.co2:431..442
+                        Expression@src/stmt_exprs.co2:440..442
+                          Constant@src/stmt_exprs.co2:440..441
+                            Int 2
+            Statement@src/stmt_exprs.co2:445..447
+              Expression@src/stmt_exprs.co2:445..447
+                Constant@src/stmt_exprs.co2:445..446
+                  Int 0
+  Declaration@src/stmt_exprs.co2:452..499
+    TypeSpecifier@src/stmt_exprs.co2:452..455
+      Int@src/stmt_exprs.co2:452..455
+    InitDeclarator@src/stmt_exprs.co2:456..498
+      Identifier@src/stmt_exprs.co2:456..470 "indirect_value"
+      Expr@src/stmt_exprs.co2:473..498
+        GnuStatementExpr@src/stmt_exprs.co2:473..498
+          CompoundStatement@src/stmt_exprs.co2:474..497
+            Statement@src/stmt_exprs.co2:476..492
+              IndirectGoto@src/stmt_exprs.co2:476..492
+                Identifier@src/stmt_exprs.co2:482..491 RustPath { segments: [(Ident("point_ptr"), 482..491)] }
+            Statement@src/stmt_exprs.co2:493..495
+              Expression@src/stmt_exprs.co2:493..495
+                Constant@src/stmt_exprs.co2:493..494
+                  Int 0
+  Declaration@src/stmt_exprs.co2:500..535
+    TypeSpecifier@src/stmt_exprs.co2:500..503
+      Int@src/stmt_exprs.co2:500..503
+    InitDeclarator@src/stmt_exprs.co2:504..534
+      Identifier@src/stmt_exprs.co2:504..516 "return_value"
+      Expr@src/stmt_exprs.co2:519..534
+        GnuStatementExpr@src/stmt_exprs.co2:519..534
+          CompoundStatement@src/stmt_exprs.co2:520..533
+            Statement@src/stmt_exprs.co2:522..531
+              Return@src/stmt_exprs.co2:522..531
+                Constant@src/stmt_exprs.co2:529..530
+                  Int 3

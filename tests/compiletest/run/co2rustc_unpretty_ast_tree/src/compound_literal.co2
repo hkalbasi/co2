@@ -1,0 +1,3 @@
+typedef union Payload { int i; float f; } Payload;
+struct Holder { const int head; Payload payload; unsigned bits: 4; };
+struct Holder literal_holder = (struct Holder){ .head = 3, .payload = { .i = 9 }, .bits = 2 };

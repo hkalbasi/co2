@@ -9,7 +9,6 @@ enum CargoInitError {
     RunCargoInit(std::io::Error),
     CargoInitFailed(String),
     CurrentDir(std::io::Error),
-    ProjectNameFromCurrentDirectory,
     MissingExpectedFile(PathBuf),
     WriteFile {
         path: PathBuf,
@@ -23,9 +22,6 @@ impl fmt::Display for CargoInitError {
             Self::RunCargoInit(err) => write!(f, "failed to run cargo init: {err}"),
             Self::CargoInitFailed(stderr) => write!(f, "cargo init failed: {stderr}"),
             Self::CurrentDir(err) => write!(f, "get current dir: {err}"),
-            Self::ProjectNameFromCurrentDirectory => {
-                f.write_str("could not determine project name from current directory")
-            }
             Self::MissingExpectedFile(path) => {
                 write!(f, "expected file {} does not exist", path.display())
             }
@@ -206,13 +202,7 @@ fn determine_project_dir(args: &[String]) -> Result<PathBuf, CargoInitError> {
         }
     }
 
-    let cwd = env::current_dir().map_err(CargoInitError::CurrentDir)?;
-    let name = cwd
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or(CargoInitError::ProjectNameFromCurrentDirectory)?;
-
-    Ok(cwd.join(name))
+    env::current_dir().map_err(CargoInitError::CurrentDir)
 }
 
 fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), CargoInitError> {

@@ -1,0 +1,66 @@
+TranslationUnit
+  PragmaPack@src/pack_and_types.co2:0..21
+    PushOnly
+  PragmaPack@src/pack_and_types.co2:22..39
+    Set(2)
+  Declaration@src/pack_and_types.co2:40..82
+    TypeSpecifier@src/pack_and_types.co2:40..81
+      Struct@src/pack_and_types.co2:40..81
+        Specifier@src/pack_and_types.co2:47..81 Defined { ident: ("PackedByTwo", 47..58), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Char, 61..65)), 61..65)], declarators: [(StructDeclarator { declarator: (Identifier(("c", 66..67)), 66..67), bits: None }, 66..67)] }, 61..68), (StructOrUnionField { specifiers: [(TypeSpecifier((Int, 69..72)), 69..72)], declarators: [(StructDeclarator { declarator: (Identifier(("value", 73..78)), 73..78), bits: None }, 73..78)] }, 69..79)] }
+  PragmaPack@src/pack_and_types.co2:83..101
+    PushSet(1)
+  Declaration@src/pack_and_types.co2:102..142
+    TypeSpecifier@src/pack_and_types.co2:102..141
+      Struct@src/pack_and_types.co2:102..141
+        Specifier@src/pack_and_types.co2:109..141 Defined { ident: ("PackedPoint", 109..120), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Int, 123..126)), 123..126)], declarators: [(StructDeclarator { declarator: (Identifier(("x", 127..128)), 127..128), bits: None }, 127..128)] }, 123..129), (StructOrUnionField { specifiers: [(TypeSpecifier((Int, 130..133)), 130..133)], declarators: [(StructDeclarator { declarator: (Identifier(("y", 134..135)), 134..135), bits: Some(("4", 137..138)) }, 134..138)] }, 130..139)] }
+  PragmaPack@src/pack_and_types.co2:143..158
+    Pop
+  PragmaPack@src/pack_and_types.co2:159..176
+    Reset
+  Declaration@src/pack_and_types.co2:177..217
+    TypeSpecifier@src/pack_and_types.co2:177..216
+      Struct@src/pack_and_types.co2:177..216
+        Specifier@src/pack_and_types.co2:184..216 Defined { ident: ("ResetPack", 184..193), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Char, 196..200)), 196..200)], declarators: [(StructDeclarator { declarator: (Identifier(("c", 201..202)), 201..202), bits: None }, 201..202)] }, 196..203), (StructOrUnionField { specifiers: [(TypeSpecifier((Int, 204..207)), 204..207)], declarators: [(StructDeclarator { declarator: (Identifier(("value", 208..213)), 208..213), bits: None }, 208..213)] }, 204..214)] }
+  Declaration@src/pack_and_types.co2:218..241
+    StorageSpecifier@src/pack_and_types.co2:218..225
+      Typedef@src/pack_and_types.co2:218..225
+    TypeSpecifier@src/pack_and_types.co2:226..234
+      Unsigned@src/pack_and_types.co2:226..234
+    InitDeclarator@src/pack_and_types.co2:235..240
+      Identifier@src/pack_and_types.co2:235..240 "Index"
+  Declaration@src/pack_and_types.co2:242..292
+    StorageSpecifier@src/pack_and_types.co2:242..249
+      Typedef@src/pack_and_types.co2:242..249
+    TypeSpecifier@src/pack_and_types.co2:250..283
+      Union@src/pack_and_types.co2:250..283
+        Specifier@src/pack_and_types.co2:256..283 Defined { ident: ("Payload", 256..263), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Int, 266..269)), 266..269)], declarators: [(StructDeclarator { declarator: (Identifier(("i", 270..271)), 270..271), bits: None }, 270..271)] }, 266..272), (StructOrUnionField { specifiers: [(TypeSpecifier((Float, 273..278)), 273..278)], declarators: [(StructDeclarator { declarator: (Identifier(("f", 279..280)), 279..280), bits: None }, 279..280)] }, 273..281)] }
+    InitDeclarator@src/pack_and_types.co2:284..291
+      Identifier@src/pack_and_types.co2:284..291 "Payload"
+  Declaration@src/pack_and_types.co2:293..308
+    TypeSpecifier@src/pack_and_types.co2:293..307
+      Struct@src/pack_and_types.co2:293..307
+        Specifier@src/pack_and_types.co2:300..307 Declared { ident: ("Forward", 300..307) }
+  Declaration@src/pack_and_types.co2:309..328
+    TypeSpecifier@src/pack_and_types.co2:309..327
+      Union@src/pack_and_types.co2:309..327
+        Specifier@src/pack_and_types.co2:315..327 Declared { ident: ("ForwardUnion", 315..327) }
+  Declaration@src/pack_and_types.co2:329..346
+    TypeSpecifier@src/pack_and_types.co2:329..345
+      Enum@src/pack_and_types.co2:329..345
+        Specifier@src/pack_and_types.co2:334..345 Declared { ident: ("ForwardMode", 334..345) }
+  Declaration@src/pack_and_types.co2:347..384
+    TypeSpecifier@src/pack_and_types.co2:347..383
+      Enum@src/pack_and_types.co2:347..383
+        Specifier@src/pack_and_types.co2:352..383 Defined { ident: ("Mode", 352..356), enumerators: [(Enumerator { ident: ("MODE_A", 359..365), value: Some((Constant(Int(3, None)), 368..369)) }, 359..369), (Enumerator { ident: ("MODE_B", 371..377), value: Some((Constant(Int(4, None)), 380..381)) }, 371..381)] }
+  Declaration@src/pack_and_types.co2:385..454
+    TypeSpecifier@src/pack_and_types.co2:385..453
+      Struct@src/pack_and_types.co2:385..453
+        Specifier@src/pack_and_types.co2:392..453 Defined { ident: ("Holder", 392..398), fields: [(StructOrUnionField { specifiers: [(TypeQualifier((Const, 401..406)), 401..406), (TypeSpecifier((Int, 407..410)), 407..410)], declarators: [(StructDeclarator { declarator: (Identifier(("head", 411..415)), 411..415), bits: None }, 411..415)] }, 401..416), (StructOrUnionField { specifiers: [(TypeSpecifier((TypedefName((RustPath { segments: [(Ident("Payload"), 417..424)] }, 417..424)), 417..424)), 417..424)], declarators: [(StructDeclarator { declarator: (Identifier(("payload", 425..432)), 425..432), bits: None }, 425..432)] }, 417..433), (StructOrUnionField { specifiers: [(TypeSpecifier((Unsigned, 434..442)), 434..442)], declarators: [(StructDeclarator { declarator: (Identifier(("bits", 443..447)), 443..447), bits: Some(("4", 449..450)) }, 443..450)] }, 434..451)] }
+  Declaration@src/pack_and_types.co2:455..517
+    TypeSpecifier@src/pack_and_types.co2:455..490
+      Enum@src/pack_and_types.co2:455..490
+        Specifier@src/pack_and_types.co2:460..490 Anonymous { enumerators: [(Enumerator { ident: ("ANON_ONE", 462..470), value: Some((Constant(Int(1, None)), 473..474)) }, 462..474), (Enumerator { ident: ("ANON_TWO", 476..484), value: Some((Constant(Int(2, None)), 487..488)) }, 476..488)] }
+    InitDeclarator@src/pack_and_types.co2:491..516
+      Identifier@src/pack_and_types.co2:491..505 "anonymous_mode"
+      Expr@src/pack_and_types.co2:508..516
+        Identifier@src/pack_and_types.co2:508..516 RustPath { segments: [(Ident("ANON_TWO"), 508..516)] }

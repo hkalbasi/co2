@@ -9,6 +9,8 @@ workspace = true
 [dependencies]
 co2_ast = { path = "../co2_ast" }
 co2_driver_lib = { path = "../co2_driver_lib" }
+co2_parser = { path = "../co2_parser" }
+co2_preprocessor = { path = "../co2_preprocessor" }
 itertools = "0.14.0"
 
 [package.metadata.rust-analyzer]

@@ -1,0 +1,51 @@
+TranslationUnit
+  UseItem@src/use_and_rust.co2:0..49
+    Segment@src/use_and_rust.co2:6..10 core
+    Segment@src/use_and_rust.co2:13..16 ffi
+    Segment@src/use_and_rust.co2:18..24 c_void
+  UseItem@src/use_and_rust.co2:0..49
+    Segment@src/use_and_rust.co2:6..10 core
+    Segment@src/use_and_rust.co2:26..29 mem
+    Alias@src/use_and_rust.co2:33..39 memory
+  UseItem@src/use_and_rust.co2:0..49
+    Segment@src/use_and_rust.co2:6..10 core
+    Segment@src/use_and_rust.co2:41..44 ptr
+    Segment@src/use_and_rust.co2:46..47 *
+  UseItem@src/use_and_rust.co2:50..88
+    Segment@src/use_and_rust.co2:54..57 std
+    Segment@src/use_and_rust.co2:60..65 slice
+  UseItem@src/use_and_rust.co2:50..88
+    Segment@src/use_and_rust.co2:54..57 std
+    Segment@src/use_and_rust.co2:67..70 vec
+    Segment@src/use_and_rust.co2:72..75 Vec
+    Alias@src/use_and_rust.co2:79..86 ByteVec
+  ModItem@src/use_and_rust.co2:89..101
+    Name@src/use_and_rust.co2:93..100 externs
+  ModItem@src/use_and_rust.co2:102..152
+    Name@src/use_and_rust.co2:106..116 inline_mod
+    InlineContent@src/use_and_rust.co2:117..152 11 tokens
+  RustTypeAlias@src/use_and_rust.co2:153..195
+    Ident@src/use_and_rust.co2:158..166 "PairView"
+    Tuple@src/use_and_rust.co2:169..195
+      RefMut@src/use_and_rust.co2:170..179
+        Slice@src/use_and_rust.co2:175..179
+          Path@src/use_and_rust.co2:176..178 RustPath { segments: [(Ident("u8"), 176..178)] }
+      Ptr@src/use_and_rust.co2:181..191
+        Path@src/use_and_rust.co2:188..191 RustPath { segments: [(Ident("i32"), 188..191)] }
+      Never@src/use_and_rust.co2:193..194
+  RustTypeAlias@src/use_and_rust.co2:197..235
+    Ident@src/use_and_rust.co2:206..212 "Matrix"
+    Array@src/use_and_rust.co2:215..235
+      Array@src/use_and_rust.co2:216..227
+        Path@src/use_and_rust.co2:217..219 RustPath { segments: [(Ident("u8"), 217..219)] }
+        LazyRustConstExpr@src/use_and_rust.co2:219..226 3 tokens
+      LazyRustConstExpr@src/use_and_rust.co2:227..234 3 tokens
+    pub
+  FunctionDefinition@src/use_and_rust.co2:237..266
+    Rust
+      RustFunctionSignature
+        Name@src/use_and_rust.co2:244..254 "rust_entry"
+        ReturnType@src/use_and_rust.co2:260..263
+          Path@src/use_and_rust.co2:260..263 RustPath { segments: [(Ident("i32"), 260..263)] }
+        pub
+    LazyCompoundStatement@src/use_and_rust.co2:264..266 2 tokens

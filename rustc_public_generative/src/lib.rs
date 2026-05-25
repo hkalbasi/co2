@@ -188,13 +188,6 @@ impl HirStructureCtx<'_> {
     ) -> rustc_public::ty::Ty {
         internal::normalize_ty_for_owner_with_self(self.tcx, owner, ty, self_ty)
     }
-
-    pub fn erase_late_bound_regions_in_fn_sig(
-        &self,
-        sig: rustc_public::ty::Binder<rustc_public::ty::FnSig>,
-    ) -> rustc_public::ty::FnSig {
-        erase_late_bound_regions_in_fn_sig(sig)
-    }
 }
 
 pub fn erase_late_bound_regions_in_fn_sig(

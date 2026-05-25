@@ -1,0 +1,45 @@
+TranslationUnit
+  Declaration@src/designators.co2:0..40
+    TypeSpecifier@src/designators.co2:0..39
+      Struct@src/designators.co2:0..39
+        Specifier@src/designators.co2:7..39 Defined { ident: ("PackedPoint", 7..18), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Int, 21..24)), 21..24)], declarators: [(StructDeclarator { declarator: (Identifier(("x", 25..26)), 25..26), bits: None }, 25..26)] }, 21..27), (StructOrUnionField { specifiers: [(TypeSpecifier((Int, 28..31)), 28..31)], declarators: [(StructDeclarator { declarator: (Identifier(("y", 32..33)), 32..33), bits: Some(("4", 35..36)) }, 32..36)] }, 28..37)] }
+  Declaration@src/designators.co2:41..149
+    TypeSpecifier@src/designators.co2:41..44
+      Int@src/designators.co2:41..44
+    InitDeclarator@src/designators.co2:45..148
+      ArrayDeclarator@src/designators.co2:45..53
+        Subscription@src/designators.co2:50..53 opaque
+        Identifier@src/designators.co2:45..50 "table"
+      List@src/designators.co2:56..148
+        InitializerItem@src/designators.co2:58..71
+          Range@src/designators.co2:58..67
+            Constant@src/designators.co2:59..60
+              Int 0
+            Constant@src/designators.co2:65..66
+              Int 1
+          Expr@src/designators.co2:70..71
+            Constant@src/designators.co2:70..71
+              Int 3
+        InitializerItem@src/designators.co2:73..120
+          Subscript@src/designators.co2:73..76
+            Constant@src/designators.co2:74..75
+              Int 4
+          Expr@src/designators.co2:79..120
+            Offsetof@src/designators.co2:79..120
+              TypeName
+                TypeSpecifier@src/designators.co2:98..116
+                  Struct@src/designators.co2:98..116
+                    Specifier@src/designators.co2:105..116 Declared { ident: ("PackedPoint", 105..116) }
+              Field@src/designators.co2:118..119 y
+        InitializerItem@src/designators.co2:122..145
+          Subscript@src/designators.co2:122..125
+            Constant@src/designators.co2:123..124
+              Int 5
+          Expr@src/designators.co2:128..145
+            Conditional@src/designators.co2:128..145
+              Constant@src/designators.co2:129..132
+                Int 3
+              Constant@src/designators.co2:135..138
+                Int 3
+              Constant@src/designators.co2:141..144
+                Int 4

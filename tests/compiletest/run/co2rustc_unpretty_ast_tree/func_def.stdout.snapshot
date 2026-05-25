@@ -1,0 +1,22 @@
+TranslationUnit
+  FunctionDefinition@src/func_def.co2:0..71
+    C
+      TypeSpecifier@src/func_def.co2:0..3
+        Int@src/func_def.co2:0..3
+      FunctionDeclarator@src/func_def.co2:4..42
+        Identifier@src/func_def.co2:4..12 "declared"
+        ParameterList
+          Param
+            TypeSpecifier@src/func_def.co2:13..18
+              Bool@src/func_def.co2:13..18
+            Identifier@src/func_def.co2:19..23 "cond"
+          Param
+            TypeSpecifier@src/func_def.co2:25..28
+              Int@src/func_def.co2:25..28
+            Identifier@src/func_def.co2:29..32 "lhs"
+          Param
+            TypeSpecifier@src/func_def.co2:34..37
+              Int@src/func_def.co2:34..37
+            Identifier@src/func_def.co2:38..41 "rhs"
+          empty_is_variadic
+    LazyCompoundStatement@src/func_def.co2:43..71 9 tokens
