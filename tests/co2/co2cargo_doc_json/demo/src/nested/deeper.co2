@@ -1,0 +1,5 @@
+pub type Flag = i32;
+
+pub fn deep_value() -> i32 {
+    return 5;
+}

@@ -101,3 +101,41 @@ if ($env_dump | str contains "--cfg demo -C opt-level=1") == false {
     print $"co2cargo miri dropped unrelated RUSTFLAGS: ($env_dump)"
     exit 1
 }
+
+let cargo = ($fake_bin | path join "cargo")
+[
+    "#!/bin/sh"
+    "printf '%s\\n' \"$@\" > cargo.args"
+    "printf 'RUSTDOC=%s\\nRUSTC=%s\\nCARGO_INCREMENTAL=%s\\n' \"${RUSTDOC-}\" \"${RUSTC-}\" \"${CARGO_INCREMENTAL-}\" > cargo.env"
+] | str join "\n" | save -f $cargo
+chmod +x $cargo
+
+let doc = (do {
+    with-env {
+        PATH: ($"($fake_bin):($env.PATH)")
+    } { ^$co2cargo_bin doc --no-deps }
+} | complete)
+if $doc.exit_code != 0 {
+    print $"co2cargo doc wrapper failed: ($doc.stderr)"
+    exit 1
+}
+
+let cargo_args = (open cargo.args)
+if ($cargo_args | str contains "doc\n--no-deps") == false {
+    print $"unexpected cargo doc args: ($cargo_args)"
+    exit 1
+}
+
+let cargo_env = (open cargo.env)
+if ($cargo_env | str contains "RUSTC=co2rustc") == false {
+    print $"co2cargo doc did not force RUSTC=co2rustc: ($cargo_env)"
+    exit 1
+}
+if ($cargo_env | str contains "CARGO_INCREMENTAL=0") == false {
+    print $"co2cargo doc did not force CARGO_INCREMENTAL=0: ($cargo_env)"
+    exit 1
+}
+if ($cargo_env | str contains "co2rustdoc") == false {
+    print $"co2cargo doc did not force RUSTDOC=co2rustdoc: ($cargo_env)"
+    exit 1
+}

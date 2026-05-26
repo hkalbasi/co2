@@ -568,7 +568,7 @@ fn lower_translation_unit_items(
                 });
             }
             Declaration::FunctionDefinition { signature, body } => {
-                let (name, sig, param_names, attrs, no_mangle) = match signature {
+                let (name, sig, attrs, no_mangle) = match signature {
                     FunctionDefinitionSignature::C {
                         declaration_specifiers,
                         declarator,
@@ -579,7 +579,7 @@ fn lower_translation_unit_items(
                         let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
                         let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
                         let ident_span = declarator_ident_span(&declarator).unwrap_or(parser_span);
-                        let (name, sig, param_names) = ctx
+                        let (name, sig) = ctx
                             .lower_function_signature(base, base_const, declarator)
                             .unwrap_or_else(|err| {
                                 CrateSigCtx::<'_>::terminate_with_spanned_error(err)
@@ -590,13 +590,12 @@ fn lower_translation_unit_items(
                                 "Main function with C ABI is not accepted in cargo projects. Use `fn main()` or `#![no_main]`.",
                             );
                         }
-                        (name, sig, param_names, Vec::new(), !is_static)
+                        (name, sig, Vec::new(), !is_static)
                     }
                     FunctionDefinitionSignature::Rust(sig) => {
                         let attrs = lower_generated_attrs(&sig.attrs);
-                        let (name, lower_sig, param_names) =
-                            ctx.lower_rust_function_signature(sig.clone());
-                        (name, lower_sig, param_names, attrs, false)
+                        let (name, lower_sig) = ctx.lower_rust_function_signature(sig.clone());
+                        (name, lower_sig, attrs, false)
                     }
                 };
 
@@ -606,6 +605,12 @@ fn lower_translation_unit_items(
                 } else {
                     name.clone()
                 };
+                let body_param_names = sig
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, input)| input.name.clone().unwrap_or_else(|| format!("arg{idx}")))
+                    .collect::<Vec<_>>();
                 let id = resolve_in_module(ctx, module_path, &name).0;
                 let function_name = name.clone();
                 let id = FnDef(id);
@@ -618,7 +623,7 @@ fn lower_translation_unit_items(
                     span,
                 });
                 resolver = resolver.start_new_scope().with_owner(id.0);
-                let param_names = param_names
+                let param_names = body_param_names
                     .into_iter()
                     .map(|name| {
                         let id = resolver.add_local(name.clone());

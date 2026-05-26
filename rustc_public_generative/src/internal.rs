@@ -31,7 +31,7 @@ use rustc_middle::query::Providers as QueryProviders;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::util::Providers as UtilProviders;
 use rustc_public::rustc_internal::internal;
-use rustc_session::config::EntryFnType;
+use rustc_session::config::{CrateType, EntryFnType};
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
 use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
@@ -113,9 +113,14 @@ impl Context {
                 continue;
             }
             let filename = if file.path.exists() {
+                let display_path = source_map
+                    .working_dir()
+                    .local_path()
+                    .and_then(|working_dir| file.path.strip_prefix(working_dir).ok())
+                    .unwrap_or(file.path.as_path());
                 let real = source_map
                     .path_mapping()
-                    .to_real_filename(source_map.working_dir(), file.path.as_path());
+                    .to_real_filename(source_map.working_dir(), display_path);
                 rustc_span::FileName::Real(real)
             } else {
                 rustc_span::FileName::Custom(file.path.display().to_string())
@@ -416,7 +421,14 @@ impl DefinedCrateInfo {
                 ident: Ident::from_str(name),
                 kind: hir::ForeignItemKind::Fn(
                     fn_sig,
-                    leak(vec![None; 0].into_boxed_slice()),
+                    leak(
+                        foreign
+                            .inputs
+                            .iter()
+                            .map(|input| Some(input_ident(input)))
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ),
                     hir::Generics::empty(),
                 ),
                 owner_id: OwnerId { def_id },
@@ -521,8 +533,8 @@ impl DefinedCrateInfo {
         }
 
         let mut module_items_hir = Vec::new();
-        for my_def_id in signatures.iter().filter_map(|item| match item.kind {
-            ItemSignatureKind::Module => Some(item.id),
+        for (my_def_id, span) in signatures.iter().filter_map(|item| match item.kind {
+            ItemSignatureKind::Module => Some((item.id, item.span)),
             _ => None,
         }) {
             let name = &self
@@ -532,6 +544,7 @@ impl DefinedCrateInfo {
                 .unwrap()
                 .name;
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+            let span = internal(tcx, span);
             let child_item_ids = self
                 .items
                 .iter()
@@ -550,14 +563,14 @@ impl DefinedCrateInfo {
                     Ident::from_str(name),
                     leak(hir::Mod {
                         spans: hir::ModSpans {
-                            inner_span: DUMMY_SP,
+                            inner_span: span,
                             inject_use_span: DUMMY_SP,
                         },
                         item_ids: leak(child_item_ids.into_boxed_slice()),
                     }),
                 ),
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
+                span,
+                vis_span: span,
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -566,17 +579,18 @@ impl DefinedCrateInfo {
 
         let mut impl_items_hir = Vec::new();
         let mut impl_item_fns_hir = Vec::new();
-        for (my_def_id, self_ty, trait_def, items) in
+        for (my_def_id, self_ty, trait_def, items, span) in
             signatures.iter().filter_map(|item| match &item.kind {
                 ItemSignatureKind::Impl {
                     self_ty,
                     trait_def,
                     items,
-                } => Some((item.id, self_ty, *trait_def, items)),
+                } => Some((item.id, self_ty, *trait_def, items, item.span)),
                 _ => None,
             })
         {
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
+            let span = internal(tcx, span);
             let mut item_allocator = HirItemAllocator::new(def_id);
             let self_ty_hir = leak(hir_ty_to_rustc(tcx, def_id, self_ty, &mut item_allocator));
             let impl_item_ids = leak(
@@ -616,8 +630,8 @@ impl DefinedCrateInfo {
                     items: impl_item_ids,
                     constness: hir::Constness::NotConst,
                 }),
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
+                span,
+                vis_span: span,
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -626,6 +640,7 @@ impl DefinedCrateInfo {
             for item in items {
                 let item_def_id = my_def_id_to_rustc_def_id(tcx, item.id).expect_local();
                 let mut item_allocator = HirItemAllocator::new(item_def_id);
+                let item_span = internal(tcx, item.span);
 
                 let impl_kind = if trait_def.is_some() {
                     let trait_item_def_id = match &item.kind {
@@ -656,18 +671,24 @@ impl DefinedCrateInfo {
                             *self_kind,
                             &mut item_allocator,
                         );
-                        let params = if matches!(self_kind, crate::hir_structure::HirSelfKind::None)
-                        {
-                            Vec::new()
-                        } else {
-                            vec![make_self_param(&mut item_allocator)]
-                        };
+                        let mut params =
+                            if matches!(self_kind, crate::hir_structure::HirSelfKind::None) {
+                                Vec::new()
+                            } else {
+                                vec![make_self_param(&mut item_allocator)]
+                            };
+                        params.extend(sig.inputs.iter().map(|input| {
+                            make_named_param(&mut item_allocator, input.name.as_deref())
+                        }));
+                        if sig.c_variadic {
+                            params.push(make_c_variadic_param(&mut item_allocator));
+                        }
                         let loop_expr = leak(hir::Block {
                             stmts: &[],
                             expr: None,
                             hir_id: item_allocator.new_item(),
                             rules: rustc_hir::BlockCheckMode::DefaultBlock,
-                            span: DUMMY_SP,
+                            span: item_span,
                             targeted_by_break: false,
                         });
                         let body_kind = hir::ExprKind::Loop(
@@ -679,7 +700,7 @@ impl DefinedCrateInfo {
                         let body_expr = leak(hir::Expr {
                             hir_id: body_hir_id,
                             kind: body_kind,
-                            span: DUMMY_SP,
+                            span: item_span,
                         });
                         item_allocator.set_node(
                             body_expr.hir_id.local_id,
@@ -715,7 +736,7 @@ impl DefinedCrateInfo {
                     generics: fn_generics,
                     kind: hir::ImplItemKind::Fn(fn_sig, body.id()),
                     impl_kind,
-                    span: DUMMY_SP,
+                    span: item_span,
                     has_delayed_lints: false,
                 };
                 item_allocator.set_root_node(hir::Node::ImplItem(leak(impl_item)));
@@ -724,8 +745,8 @@ impl DefinedCrateInfo {
         }
 
         let mut items_hir = Vec::new();
-        for (my_def_id, alias_ty) in signatures.iter().filter_map(|item| match &item.kind {
-            ItemSignatureKind::TypeDef(ty) => Some((item.id, ty)),
+        for (my_def_id, alias_ty, span) in signatures.iter().filter_map(|item| match &item.kind {
+            ItemSignatureKind::TypeDef(ty) => Some((item.id, ty, item.span)),
             _ => None,
         }) {
             let name = &self
@@ -736,6 +757,7 @@ impl DefinedCrateInfo {
                 .name;
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
+            let span = internal(tcx, span);
             let item = hir::Item {
                 owner_id: OwnerId { def_id },
                 kind: hir::ItemKind::TyAlias(
@@ -743,8 +765,8 @@ impl DefinedCrateInfo {
                     hir::Generics::empty(),
                     leak(hir_ty_to_rustc(tcx, def_id, alias_ty, &mut item_allocator)),
                 ),
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
+                span,
+                vis_span: span,
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -752,8 +774,8 @@ impl DefinedCrateInfo {
             items_hir.push((def_id, item_allocator));
         }
 
-        for (my_def_id, function) in signatures.iter().filter_map(|item| match &item.kind {
-            ItemSignatureKind::Function(sig) => Some((item.id, sig)),
+        for (my_def_id, function, span) in signatures.iter().filter_map(|item| match &item.kind {
+            ItemSignatureKind::Function(sig) => Some((item.id, sig, item.span)),
             _ => None,
         }) {
             let name = &self
@@ -765,6 +787,7 @@ impl DefinedCrateInfo {
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
             let body_hir_id = item_allocator.new_item();
+            let span = internal(tcx, span);
 
             let fn_sig = generate_sig(tcx, def_id, function, &mut item_allocator);
             let loop_expr = leak(hir::Block {
@@ -772,7 +795,7 @@ impl DefinedCrateInfo {
                 expr: None,
                 hir_id: item_allocator.new_item(),
                 rules: rustc_hir::BlockCheckMode::DefaultBlock,
-                span: DUMMY_SP,
+                span,
                 targeted_by_break: false,
             });
             let body_kind =
@@ -780,7 +803,7 @@ impl DefinedCrateInfo {
             let body_expr = leak(hir::Expr {
                 hir_id: body_hir_id,
                 kind: body_kind,
-                span: DUMMY_SP,
+                span,
             });
             item_allocator.set_node(
                 body_expr.hir_id.local_id,
@@ -792,7 +815,11 @@ impl DefinedCrateInfo {
                 hir::Node::Block(loop_expr),
                 body_expr.hir_id.local_id,
             );
-            let mut params = vec![];
+            let mut params = function
+                .inputs
+                .iter()
+                .map(|input| make_named_param(&mut item_allocator, input.name.as_deref()))
+                .collect::<Vec<_>>();
 
             if function.c_variadic {
                 params.push(make_c_variadic_param(&mut item_allocator));
@@ -815,8 +842,8 @@ impl DefinedCrateInfo {
                     body: body.id(),
                     has_body: true,
                 },
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
+                span,
+                vis_span: span,
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -824,9 +851,11 @@ impl DefinedCrateInfo {
             items_hir.push((def_id, item_allocator));
         }
 
-        for (my_def_id, static_ty, mutable) in
+        for (my_def_id, static_ty, mutable, span) in
             signatures.iter().filter_map(|item| match &item.kind {
-                ItemSignatureKind::Static { ty, mutable } => Some((item.id, ty, *mutable)),
+                ItemSignatureKind::Static { ty, mutable } => {
+                    Some((item.id, ty, *mutable, item.span))
+                }
                 _ => None,
             })
         {
@@ -839,13 +868,14 @@ impl DefinedCrateInfo {
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
             let body_hir_id = item_allocator.new_item();
+            let span = internal(tcx, span);
 
             let loop_expr = leak(hir::Block {
                 stmts: &[],
                 expr: None,
                 hir_id: item_allocator.new_item(),
                 rules: rustc_hir::BlockCheckMode::DefaultBlock,
-                span: DUMMY_SP,
+                span,
                 targeted_by_break: false,
             });
             let body_kind =
@@ -853,7 +883,7 @@ impl DefinedCrateInfo {
             let body_expr = leak(hir::Expr {
                 hir_id: body_hir_id,
                 kind: body_kind,
-                span: DUMMY_SP,
+                span,
             });
             item_allocator.set_node(
                 body_expr.hir_id.local_id,
@@ -882,8 +912,8 @@ impl DefinedCrateInfo {
                     leak(hir_ty_to_rustc(tcx, def_id, static_ty, &mut item_allocator)),
                     body.id(),
                 ),
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
+                span,
+                vis_span: span,
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -891,9 +921,11 @@ impl DefinedCrateInfo {
             items_hir.push((def_id, item_allocator));
         }
 
-        for (my_def_id, static_ty, mutable) in
+        for (my_def_id, static_ty, mutable, span) in
             signatures.iter().filter_map(|item| match &item.kind {
-                ItemSignatureKind::ForeignStatic { ty, mutable } => Some((item.id, ty, *mutable)),
+                ItemSignatureKind::ForeignStatic { ty, mutable } => {
+                    Some((item.id, ty, *mutable, item.span))
+                }
                 _ => None,
             })
         {
@@ -905,6 +937,7 @@ impl DefinedCrateInfo {
                 .name;
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
+            let span = internal(tcx, span);
 
             let foreign_item_id = hir::ForeignItemId {
                 owner_id: OwnerId { def_id },
@@ -923,8 +956,8 @@ impl DefinedCrateInfo {
                     hir::Safety::Safe,
                 ),
                 owner_id: OwnerId { def_id },
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
+                span,
+                vis_span: span,
                 has_delayed_lints: false,
             };
             item_allocator.set_root_node(hir::Node::ForeignItem(leak(foreign_item)));
@@ -978,10 +1011,12 @@ impl DefinedCrateInfo {
         };
         let foreign_mod_item = leak(foreign_mod_item);
 
-        for (my_def_id, const_ty, rhs) in signatures.iter().filter_map(|item| match &item.kind {
-            ItemSignatureKind::Const { ty, rhs } => Some((item.id, ty, *rhs)),
-            _ => None,
-        }) {
+        for (my_def_id, const_ty, rhs, span) in
+            signatures.iter().filter_map(|item| match &item.kind {
+                ItemSignatureKind::Const { ty, rhs } => Some((item.id, ty, *rhs, item.span)),
+                _ => None,
+            })
+        {
             let name = &self
                 .items
                 .iter()
@@ -991,6 +1026,7 @@ impl DefinedCrateInfo {
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
             let body_hir_id = item_allocator.new_item();
+            let span = internal(tcx, span);
 
             let anon_const_def_id = my_def_id_to_rustc_def_id(tcx, rhs).expect_local();
             let anon_const_hir_id = item_allocator.new_item();
@@ -1000,7 +1036,7 @@ impl DefinedCrateInfo {
                 expr: None,
                 hir_id: item_allocator.new_item(),
                 rules: rustc_hir::BlockCheckMode::DefaultBlock,
-                span: DUMMY_SP,
+                span,
                 targeted_by_break: false,
             });
             let body_kind =
@@ -1008,7 +1044,7 @@ impl DefinedCrateInfo {
             let body_expr = leak(hir::Expr {
                 hir_id: body_hir_id,
                 kind: body_kind,
-                span: DUMMY_SP,
+                span,
             });
             item_allocator.set_node(
                 body_expr.hir_id.local_id,
@@ -1030,7 +1066,7 @@ impl DefinedCrateInfo {
                 hir_id: anon_const_hir_id,
                 def_id: anon_const_def_id,
                 body: body.id(),
-                span: DUMMY_SP,
+                span,
             });
             insert_non_owner(
                 &mut owners,
@@ -1039,7 +1075,7 @@ impl DefinedCrateInfo {
             );
             let const_arg = leak(hir::ConstArg {
                 hir_id: item_allocator.new_item(),
-                span: DUMMY_SP,
+                span,
                 kind: hir::ConstArgKind::Anon(anon_const),
             });
             item_allocator.set_node(
@@ -1061,8 +1097,8 @@ impl DefinedCrateInfo {
                     leak(hir_ty_to_rustc(tcx, def_id, const_ty, &mut item_allocator)),
                     rustc_hir::ConstItemRhs::TypeConst(const_arg),
                 ),
-                span: DUMMY_SP,
-                vis_span: DUMMY_SP,
+                span,
+                vis_span: span,
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -1353,6 +1389,7 @@ impl DefinedCrateInfo {
             &mut items,
             &mut the_foreign_def,
         );
+
         (
             Self {
                 items,
@@ -1374,7 +1411,7 @@ fn generate_sig(
             function
                 .inputs
                 .iter()
-                .map(|ty| hir_ty_to_rustc(tcx, owner, ty, item_allocator))
+                .map(|input| hir_ty_to_rustc(tcx, owner, &input.ty, item_allocator))
                 .collect::<Vec<_>>(),
         ),
         output: hir::FnRetTy::Return(leak(hir_ty_to_rustc(
@@ -1447,7 +1484,7 @@ fn generate_sig_with_self(
     inputs.extend(
         sig.inputs
             .iter()
-            .map(|ty| hir_ty_to_rustc(tcx, owner, ty, item_allocator)),
+            .map(|input| hir_ty_to_rustc(tcx, owner, &input.ty, item_allocator)),
     );
     let fn_decl = leak(hir::FnDecl {
         inputs: leak(inputs),
@@ -1727,9 +1764,7 @@ pub fn generate_with_args<S: CrateGeneratorState>(mut args: Vec<String>) {
 }
 
 struct GenerateCallbacks<S: CrateGeneratorState> {
-    context: Context,
-    gate: Arc<GenerateGate>,
-    phantom: PhantomData<S>,
+    interface: InterfaceCallbacks<S>,
     after_analysis_hook:
         Option<Box<dyn for<'tcx> FnOnce(TyCtxt<'tcx>) -> rustc_driver::Compilation + Send>>,
 }
@@ -1748,6 +1783,8 @@ struct GenerateState {
     original: Option<OriginalProviders>,
     original_owners: Option<IndexVec<LocalDefId, hir::MaybeOwner<'static>>>,
     context: Option<Context>,
+    prior_override_queries: Option<fn(&rustc_session::Session, &mut UtilProviders)>,
+    use_generated_hir_owner_queries: bool,
 }
 
 struct GenerateGate {
@@ -1758,6 +1795,11 @@ struct GenerateGate {
 struct OriginalProviders {
     hir_crate: for<'tcx> fn(TyCtxt<'tcx>, ()) -> hir::Crate<'tcx>,
     resolutions: for<'tcx> fn(TyCtxt<'tcx>, ()) -> &'tcx rustc_middle::ty::ResolverGlobalCtxt,
+    effective_visibilities:
+        for<'tcx> fn(
+            TyCtxt<'tcx>,
+            (),
+        ) -> &'tcx rustc_middle::middle::privacy::EffectiveVisibilities,
     entry_fn: for<'tcx> fn(TyCtxt<'tcx>, ()) -> Option<(RustcDefId, EntryFnType)>,
     def_kind: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> DefKind,
     // def_span: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> RustcSpan,
@@ -1780,13 +1822,17 @@ struct OriginalProviders {
 static GENERATE_STATE: OnceLock<Arc<GenerateGate>> = OnceLock::new();
 static MIR_STATE: OnceLock<Mutex<MirState>> = OnceLock::new();
 
-struct MirState(Box<dyn Any>, Context);
+struct MirState(Box<dyn Any + Send + Sync>, Context);
 
-// TODO: these are very wrong
-unsafe impl Sync for MirState {}
-unsafe impl Send for MirState {}
 unsafe impl Sync for GenerateGate {}
 unsafe impl Send for GenerateGate {}
+
+pub(crate) struct InterfaceCallbacks<S: CrateGeneratorState> {
+    context: Context,
+    gate: Arc<GenerateGate>,
+    capture_original_owners: bool,
+    phantom: PhantomData<S>,
+}
 
 fn with_generated_and_original<R>(
     _tcx: TyCtxt<'_>,
@@ -1885,11 +1931,7 @@ fn rustc_def_to_my_def(_tcx: TyCtxt<'_>, def_id: RustcDefId) -> DefId {
 impl<S: CrateGeneratorState> GenerateCallbacks<S> {
     fn new() -> Self {
         Self {
-            context: Context::new(),
-            gate: Arc::new(GenerateGate {
-                state: Mutex::new(GenerateState::default()),
-            }),
-            phantom: PhantomData,
+            interface: InterfaceCallbacks::new(),
             after_analysis_hook: None,
         }
     }
@@ -1903,8 +1945,26 @@ impl<S: CrateGeneratorState> GenerateCallbacks<S> {
     }
 }
 
-impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
-    fn config(&mut self, config: &mut rustc_interface::Config) {
+impl<S: CrateGeneratorState> InterfaceCallbacks<S> {
+    pub(crate) fn new() -> Self {
+        Self {
+            context: Context::new(),
+            gate: Arc::new(GenerateGate {
+                state: Mutex::new(GenerateState::default()),
+            }),
+            capture_original_owners: true,
+            phantom: PhantomData,
+        }
+    }
+
+    pub(crate) fn new_without_original_owners() -> Self {
+        Self {
+            capture_original_owners: false,
+            ..Self::new()
+        }
+    }
+
+    pub(crate) fn config(&mut self, config: &mut rustc_interface::Config) {
         if std::env::var("GEN_DEBUG").is_ok() {
             eprintln!("callbacks.config");
         }
@@ -1915,22 +1975,21 @@ impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
             ("nonstandard_style".to_owned(), Level::Allow),
             ("arithmetic_overflow".to_owned(), Level::Warn),
         ]);
-        config.override_queries = Some(override_queries::<S>);
 
         if let Some(gate) = GENERATE_STATE.get() {
             let mut guard = gate.state.try_lock().unwrap();
+            guard.prior_override_queries = config.override_queries;
+            guard.use_generated_hir_owner_queries = !self.capture_original_owners;
             if std::env::var("GEN_DEBUG").is_ok() {
                 eprintln!("callbacks.config: storing callback");
             }
             guard.context = Some(self.context.clone());
         }
+
+        config.override_queries = Some(override_queries::<S>);
     }
 
-    fn after_crate_root_parsing(
-        &mut self,
-        _compiler: &rustc_interface::interface::Compiler,
-        krate: &mut rustc_ast::Crate,
-    ) -> rustc_driver::Compilation {
+    pub(crate) fn after_crate_root_parsing(&mut self, krate: &mut rustc_ast::Crate) {
         let is_co2 = krate.attrs.iter().any(|attr| {
             let Some(meta) = attr.meta() else {
                 return false;
@@ -2047,33 +2106,27 @@ impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
                 span: DUMMY_SP,
             });
         }
-        rustc_driver::Compilation::Continue
     }
 
-    fn after_expansion(
-        &mut self,
-        _compiler: &rustc_interface::interface::Compiler,
-        tcx: TyCtxt<'_>,
-    ) -> rustc_driver::Compilation {
+    pub(crate) fn after_expansion(&mut self, tcx: TyCtxt<'_>) {
         _ = rustc_public::rustc_internal::run(tcx, || {
             let gate = GENERATE_STATE.get().unwrap();
             let context = {
                 let guard = gate.state.try_lock().unwrap();
-
                 guard.context.clone().unwrap()
             };
             let original = {
                 let guard = gate.state.try_lock().unwrap();
                 guard.original.expect("original providers missing")
             };
-            let original_crate = (original.hir_crate)(tcx, ());
-            let original_owners = unsafe {
-                std::mem::transmute::<
-                    IndexVec<LocalDefId, hir::MaybeOwner<'_>>,
-                    IndexVec<LocalDefId, hir::MaybeOwner<'static>>,
-                >(original_crate.owners.clone())
-            };
-            {
+            if self.capture_original_owners {
+                let original_crate = (original.hir_crate)(tcx, ());
+                let original_owners = unsafe {
+                    std::mem::transmute::<
+                        IndexVec<LocalDefId, hir::MaybeOwner<'_>>,
+                        IndexVec<LocalDefId, hir::MaybeOwner<'static>>,
+                    >(original_crate.owners.clone())
+                };
                 let mut guard = gate.state.try_lock().unwrap();
                 guard.original_owners = Some(original_owners);
             }
@@ -2100,10 +2153,37 @@ impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
                     context.clone(),
                 );
             }
+            if should_patch_cached_resolutions(tcx) {
+                augment_cached_generated_resolutions(tcx);
+            }
             defined_crate.owners(tcx, &sigs, foreign_mod_def);
-
-            _ = tcx.hir_crate(());
+            if self.capture_original_owners {
+                _ = tcx.hir_crate(());
+            }
         });
+    }
+}
+
+impl<S: CrateGeneratorState> rustc_driver::Callbacks for GenerateCallbacks<S> {
+    fn config(&mut self, config: &mut rustc_interface::Config) {
+        self.interface.config(config);
+    }
+
+    fn after_crate_root_parsing(
+        &mut self,
+        _compiler: &rustc_interface::interface::Compiler,
+        krate: &mut rustc_ast::Crate,
+    ) -> rustc_driver::Compilation {
+        self.interface.after_crate_root_parsing(krate);
+        rustc_driver::Compilation::Continue
+    }
+
+    fn after_expansion(
+        &mut self,
+        _compiler: &rustc_interface::interface::Compiler,
+        tcx: TyCtxt<'_>,
+    ) -> rustc_driver::Compilation {
+        self.interface.after_expansion(tcx);
         rustc_driver::Compilation::Continue
     }
     fn after_analysis(
@@ -2135,6 +2215,7 @@ pub fn generate_with_args_and_after_analysis<S: CrateGeneratorState>(
 
 pub fn collect_dependency_info(tcx: rustc_middle::ty::TyCtxt<'_>) -> DependencyInfo {
     let mut info = DependencyInfo::default();
+    let _ = tcx.resolutions(());
 
     for &krate in tcx.crates(()) {
         let name = tcx.crate_name(krate).to_string();
@@ -2442,13 +2523,16 @@ fn normalize_generic_args_defaults_to_rustc<'tcx>(
 }
 
 fn override_queries<S: CrateGeneratorState>(
-    _sess: &rustc_session::Session,
+    sess: &rustc_session::Session,
     providers: &mut UtilProviders,
 ) {
     if std::env::var("GEN_DEBUG").is_ok() {
         eprintln!("override_queries");
     }
     if let Some(gate) = GENERATE_STATE.get() {
+        if let Some(previous) = gate.state.try_lock().unwrap().prior_override_queries {
+            previous(sess, providers);
+        }
         override_providers::<S>(&mut providers.queries, gate);
     } else if std::env::var("GEN_DEBUG").is_ok() {
         eprintln!("override_queries: no state");
@@ -2461,6 +2545,7 @@ fn override_providers<S: CrateGeneratorState>(providers: &mut QueryProviders, ga
         guard.original = Some(OriginalProviders {
             hir_crate: providers.hir_crate,
             resolutions: providers.resolutions,
+            effective_visibilities: providers.effective_visibilities,
             entry_fn: providers.entry_fn,
             def_kind: providers.def_kind,
             // def_span: providers.def_span,
@@ -2481,10 +2566,42 @@ fn override_providers<S: CrateGeneratorState>(providers: &mut QueryProviders, ga
 
     providers.hir_crate = generated_hir_crate;
     providers.resolutions = generated_resolutions;
+    providers.effective_visibilities = generated_effective_visibilities;
     // Leave hir_crate_items/hir_module_items to the original providers.
-    // providers.local_def_id_to_hir_id = generated_local_def_id_to_hir_id;
-    // providers.opt_hir_owner_nodes = generated_opt_hir_owner_nodes;
-    // providers.hir_owner_parent_q = generated_hir_owner_parent_q;
+    let use_generated_hir_owner_queries = gate
+        .state
+        .try_lock()
+        .unwrap()
+        .use_generated_hir_owner_queries;
+    if use_generated_hir_owner_queries {
+        providers.local_def_id_to_hir_id = |tcx, def_id| match tcx.hir_crate(()).owners[def_id] {
+            hir::MaybeOwner::Owner(_) => HirId::make_owner(def_id),
+            hir::MaybeOwner::NonOwner(hir_id) => hir_id,
+            hir::MaybeOwner::Phantom => panic!("No HirId for {def_id:?}"),
+        };
+        providers.opt_hir_owner_nodes = |tcx, id| {
+            tcx.hir_crate(())
+                .owners
+                .get(id)?
+                .as_owner()
+                .map(|i| &i.nodes)
+        };
+        providers.hir_owner_parent_q = |tcx, owner_id| {
+            tcx.opt_local_parent(owner_id.def_id)
+                .map_or(hir::CRATE_HIR_ID, |parent_def_id| {
+                    let parent_owner_id = tcx.local_def_id_to_hir_id(parent_def_id).owner;
+                    HirId {
+                        owner: parent_owner_id,
+                        local_id: tcx.hir_crate(()).owners[parent_owner_id.def_id]
+                            .unwrap()
+                            .parenting
+                            .get(&owner_id.def_id)
+                            .copied()
+                            .unwrap_or(ItemLocalId::ZERO),
+                    }
+                })
+        };
+    }
     providers.hir_attr_map = generated_hir_attr_map;
     providers.opt_ast_lowering_delayed_lints = generated_opt_ast_lowering_delayed_lints;
     providers.entry_fn = generated_entry_fn;
@@ -2493,9 +2610,10 @@ fn override_providers<S: CrateGeneratorState>(providers: &mut QueryProviders, ga
     providers.def_ident_span = generated_def_ident_span;
     providers.visibility = generated_visibility;
     providers.reachable_set = generated_reachable_set;
+    providers.all_local_trait_impls = generated_all_local_trait_impls;
+    providers.local_trait_impls = generated_local_trait_impls;
     // providers.impl_parent = generated_impl_parent;
     // providers.specialization_graph_of = generated_specialization_graph_of;
-    // providers.all_local_trait_impls = generated_all_local_trait_impls;
     // providers.impl_trait_header = generated_impl_trait_header;
     // providers.is_copy_raw = generated_is_copy_raw;
     // providers.trait_impls_of = generated_trait_impls_of;
@@ -2524,8 +2642,7 @@ fn generated_hir_crate(tcx: TyCtxt<'_>, key: ()) -> hir::Crate<'_> {
 }
 
 fn generated_resolutions(tcx: TyCtxt<'_>, (): ()) -> &rustc_middle::ty::ResolverGlobalCtxt {
-    // Avoid holding the generate mutex while calling the original provider.
-    let (original, items, trait_impl_pairs) = {
+    let (original, items) = {
         let state = GENERATE_STATE
             .get()
             .cloned()
@@ -2536,34 +2653,82 @@ fn generated_resolutions(tcx: TyCtxt<'_>, (): ()) -> &rustc_middle::ty::Resolver
             DefinedCrateState::Stage2(defined_crate, _, _, ()) => defined_crate.items.clone(),
             _ => Vec::new(),
         };
-        // Collect (trait_def_id, impl_local_def_id) for generated trait impls so we
-        // can register them in resolutions().trait_impls.  This is what feeds
-        // local_trait_impls / all_local_trait_impls / specialization_graph_of, so
-        // the generated impls become visible to those queries without overriding them.
-        let trait_impl_pairs: Vec<(DefId, DefId)> = match &guard.defined_crate {
-            DefinedCrateState::Stage2(_, signatures, _, ()) => signatures
-                .iter()
-                .filter_map(|item| match &item.kind {
-                    ItemSignatureKind::Impl {
-                        trait_def: Some(trait_def),
-                        ..
-                    } => Some((*trait_def, item.id)),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        (original, items, trait_impl_pairs)
+        (original, items)
     };
-
-    let r = (original.resolutions)(tcx, ());
+    let mut resolutions = clone_resolver_global_ctxt((original.resolutions)(tcx, ()));
     if items.is_empty() {
-        return r;
+        return tcx.arena.alloc(resolutions);
     }
 
+    augment_resolutions_with_items(&mut resolutions, &items, tcx);
+
+    tcx.arena.alloc(resolutions)
+}
+
+fn generated_effective_visibilities(
+    tcx: TyCtxt<'_>,
+    (): (),
+) -> &rustc_middle::middle::privacy::EffectiveVisibilities {
+    let (original, items) = {
+        let state = GENERATE_STATE
+            .get()
+            .cloned()
+            .expect("generate state missing");
+        let guard = state.state.try_lock().unwrap();
+        let original = guard.original.expect("original providers missing");
+        let items = match &guard.defined_crate {
+            DefinedCrateState::Stage2(defined_crate, _, _, ()) => defined_crate.items.clone(),
+            _ => Vec::new(),
+        };
+        (original, items)
+    };
+    let mut vis = (original.effective_visibilities)(tcx, ()).clone();
+    if items.is_empty() {
+        return tcx.arena.alloc(vis);
+    }
+
+    augment_effective_visibilities_with_items(&mut vis, &items, tcx);
+
+    tcx.arena.alloc(vis)
+}
+
+#[allow(invalid_reference_casting)]
+fn augment_cached_generated_resolutions(tcx: TyCtxt<'_>) {
+    let items = {
+        let state = GENERATE_STATE
+            .get()
+            .cloned()
+            .expect("generate state missing");
+        let guard = state.state.try_lock().unwrap();
+        match &guard.defined_crate {
+            DefinedCrateState::Stage2(defined_crate, _, _, ()) => defined_crate.items.clone(),
+            _ => Vec::new(),
+        }
+    };
+    if items.is_empty() {
+        return;
+    }
+    let resolutions = tcx.resolutions(());
+    let resolutions = unsafe {
+        &mut *std::ptr::from_ref::<rustc_middle::ty::ResolverGlobalCtxt>(resolutions).cast_mut()
+    };
+    augment_resolutions_with_items(resolutions, &items, tcx);
+}
+
+fn should_patch_cached_resolutions(tcx: TyCtxt<'_>) -> bool {
+    tcx.crate_types()
+        .iter()
+        .any(|crate_type| !matches!(crate_type, CrateType::Executable))
+}
+
+fn augment_resolutions_with_items(
+    resolutions: &mut rustc_middle::ty::ResolverGlobalCtxt,
+    items: &[DefinedItemInfo],
+    tcx: TyCtxt<'_>,
+) {
     let mut module_children: HashMap<LocalDefId, Vec<rustc_middle::metadata::ModChild>> =
         HashMap::new();
-    for item in &items {
+    for item in items {
         let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() else {
             continue;
         };
@@ -2598,41 +2763,142 @@ fn generated_resolutions(tcx: TyCtxt<'_>, (): ()) -> &rustc_middle::ty::Resolver
             .unwrap_or(CRATE_DEF_ID);
         module_children.entry(parent).or_default().push(child);
     }
-
-    unsafe {
-        let r_ptr = std::ptr::from_ref::<rustc_middle::ty::ResolverGlobalCtxt>(r).cast_mut();
-        for (module, children) in module_children {
-            (*r_ptr).module_children.insert(module, children);
-        }
-        (*r_ptr).effective_visibilities =
-            rustc_middle::middle::privacy::EffectiveVisibilities::default();
-        (*r_ptr).effective_visibilities.update_root();
-        for item in &items {
-            let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local()
-            else {
-                continue;
-            };
-            (*r_ptr)
-                .effective_visibilities
-                .public_at_level(local_def_id);
-        }
-        // Register generated trait impls into resolutions().trait_impls so that
-        // local_trait_impls / all_local_trait_impls / specialization_graph_of all
-        // see them without any additional query overrides.
-        for (trait_def, impl_def) in &trait_impl_pairs {
-            let trait_rustc = my_def_id_to_rustc_def_id(tcx, *trait_def);
-            let impl_local = my_def_id_to_rustc_def_id(tcx, *impl_def)
-                .as_local()
-                .expect("generated impl must be local");
-            (*r_ptr)
-                .trait_impls
-                .entry(trait_rustc)
-                .or_default()
-                .push(impl_local);
+    for (module, children) in module_children {
+        let existing = resolutions.module_children.entry(module).or_default();
+        for child in children {
+            let child_def_id = child.res.def_id();
+            if !existing
+                .iter()
+                .any(|existing_child| existing_child.res.def_id() == child_def_id)
+            {
+                existing.push(child);
+            }
         }
     }
+    let mut vis = resolutions.effective_visibilities.clone();
+    augment_effective_visibilities_with_items(&mut vis, items, tcx);
+    resolutions.effective_visibilities = vis;
+}
 
-    r
+fn augment_effective_visibilities_with_items(
+    vis: &mut rustc_middle::middle::privacy::EffectiveVisibilities,
+    items: &[DefinedItemInfo],
+    tcx: TyCtxt<'_>,
+) {
+    vis.update_root();
+    for item in items {
+        let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() else {
+            continue;
+        };
+        vis.update_eff_vis(
+            local_def_id,
+            &rustc_middle::middle::privacy::EffectiveVisibility::from_vis(ty::Visibility::Public),
+            tcx,
+        );
+    }
+}
+
+fn clone_resolver_global_ctxt(
+    original: &rustc_middle::ty::ResolverGlobalCtxt,
+) -> rustc_middle::ty::ResolverGlobalCtxt {
+    rustc_middle::ty::ResolverGlobalCtxt {
+        visibilities_for_hashing: original.visibilities_for_hashing.clone(),
+        expn_that_defined: original.expn_that_defined.clone(),
+        effective_visibilities: original.effective_visibilities.clone(),
+        extern_crate_map: original.extern_crate_map.clone(),
+        maybe_unused_trait_imports: original.maybe_unused_trait_imports.clone(),
+        module_children: original
+            .module_children
+            .items()
+            .map(|(def_id, children)| {
+                (
+                    *def_id,
+                    children.iter().map(clone_mod_child).collect::<Vec<_>>(),
+                )
+            })
+            .collect(),
+        ambig_module_children: original
+            .ambig_module_children
+            .items()
+            .map(|(def_id, children)| {
+                (
+                    *def_id,
+                    children
+                        .iter()
+                        .map(|child| rustc_middle::metadata::AmbigModChild {
+                            main: clone_mod_child(&child.main),
+                            second: clone_mod_child(&child.second),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect(),
+        glob_map: original.glob_map.clone(),
+        main_def: original.main_def,
+        trait_impls: original.trait_impls.clone(),
+        proc_macros: original.proc_macros.clone(),
+        confused_type_with_std_module: original.confused_type_with_std_module.clone(),
+        doc_link_resolutions: original.doc_link_resolutions.clone(),
+        doc_link_traits_in_scope: original.doc_link_traits_in_scope.clone(),
+        all_macro_rules: original.all_macro_rules.clone(),
+        stripped_cfg_items: original.stripped_cfg_items.clone(),
+    }
+}
+
+fn clone_mod_child(child: &rustc_middle::metadata::ModChild) -> rustc_middle::metadata::ModChild {
+    rustc_middle::metadata::ModChild {
+        ident: child.ident,
+        res: child.res,
+        vis: child.vis,
+        reexport_chain: child.reexport_chain.clone(),
+    }
+}
+
+fn generated_trait_impl_map(tcx: TyCtxt<'_>) -> FxIndexMap<RustcDefId, Vec<LocalDefId>> {
+    let (original, generated_pairs) = {
+        let state = GENERATE_STATE
+            .get()
+            .cloned()
+            .expect("generate state missing");
+        let guard = state.state.try_lock().unwrap();
+        let original = guard.original.expect("original providers missing");
+        let generated_pairs: Vec<(RustcDefId, LocalDefId)> = match &guard.defined_crate {
+            DefinedCrateState::Stage2(_, signatures, _, ()) => signatures
+                .iter()
+                .filter_map(|item| match &item.kind {
+                    ItemSignatureKind::Impl {
+                        trait_def: Some(trait_def),
+                        ..
+                    } => Some((
+                        my_def_id_to_rustc_def_id(tcx, *trait_def),
+                        my_def_id_to_rustc_def_id(tcx, item.id).as_local()?,
+                    )),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        (original, generated_pairs)
+    };
+
+    let mut trait_impls = (original.resolutions)(tcx, ()).trait_impls.clone();
+    for (trait_def, impl_def) in generated_pairs {
+        trait_impls.entry(trait_def).or_default().push(impl_def);
+    }
+    trait_impls
+}
+
+fn generated_all_local_trait_impls(
+    tcx: TyCtxt<'_>,
+    (): (),
+) -> &FxIndexMap<RustcDefId, Vec<LocalDefId>> {
+    leak(generated_trait_impl_map(tcx))
+}
+
+fn generated_local_trait_impls(tcx: TyCtxt<'_>, trait_id: RustcDefId) -> &[LocalDefId] {
+    generated_all_local_trait_impls(tcx, ())
+        .get(&trait_id)
+        .map_or(&[], |impls| leak(impls.clone().into_boxed_slice()))
 }
 
 fn generated_hir_attr_map(tcx: TyCtxt<'_>, key: OwnerId) -> &hir::AttributeMap<'_> {
@@ -2904,6 +3170,42 @@ fn make_c_variadic_param(item_allocator: &mut HirItemAllocator) -> hir::Param<'s
             hir::BindingMode(hir::ByRef::No, hir::Mutability::Mut),
             pat_hir_id,
             Ident::from_str("__co2_c_varargs"),
+            None,
+        ),
+        span: DUMMY_SP,
+        default_binding_modes: false,
+    };
+    let param_hir_id = item_allocator.new_item();
+    let pat = leak(pat);
+    item_allocator.set_node(
+        pat_hir_id.local_id,
+        hir::Node::Pat(pat),
+        param_hir_id.local_id,
+    );
+    hir::Param {
+        hir_id: param_hir_id,
+        pat,
+        ty_span: DUMMY_SP,
+        span: DUMMY_SP,
+    }
+}
+
+fn input_ident(input: &crate::FunctionInput) -> Ident {
+    Ident::from_str(input.name.as_deref().unwrap_or("_"))
+}
+
+fn make_named_param(
+    item_allocator: &mut HirItemAllocator,
+    name: Option<&str>,
+) -> hir::Param<'static> {
+    let pat_hir_id = item_allocator.new_item();
+    let ident = Ident::from_str(name.unwrap_or("_"));
+    let pat = hir::Pat {
+        hir_id: pat_hir_id,
+        kind: hir::PatKind::Binding(
+            hir::BindingMode(hir::ByRef::No, hir::Mutability::Not),
+            pat_hir_id,
+            ident,
             None,
         ),
         span: DUMMY_SP,
@@ -3848,7 +4150,7 @@ fn hir_ty_to_rustc(
                 inputs: leak(
                     sig.inputs
                         .iter()
-                        .map(|ty| hir_ty_to_rustc(tcx, owner, ty, item_allocator))
+                        .map(|input| hir_ty_to_rustc(tcx, owner, &input.ty, item_allocator))
                         .collect::<Vec<_>>(),
                 ),
                 output: hir::FnRetTy::Return(leak(hir_ty_to_rustc(
@@ -3861,7 +4163,12 @@ fn hir_ty_to_rustc(
                 implicit_self: hir::ImplicitSelfKind::None,
                 lifetime_elision_allowed: true,
             });
-            let param_idents = leak(vec![None; sig.inputs.len()]);
+            let param_idents = leak(
+                sig.inputs
+                    .iter()
+                    .map(|input| Some(input_ident(input)))
+                    .collect::<Vec<_>>(),
+            );
             let safety = if sig.is_unsafe {
                 hir::Safety::Unsafe
             } else {

@@ -1,0 +1,2 @@
+[env]
+DOC_RUST_LANG_ORG_CHANNEL = "nightly"

@@ -166,9 +166,15 @@ pub enum ForeignModItem {
 }
 
 #[derive(Debug, Clone)]
+pub struct FunctionInput {
+    pub name: Option<String>,
+    pub ty: HirTy,
+}
+
+#[derive(Debug, Clone)]
 pub struct FunctionSignature {
     pub lifetimes: Vec<DefId>,
-    pub inputs: Vec<HirTy>,
+    pub inputs: Vec<FunctionInput>,
     pub output: HirTy,
     pub abi: FunctionAbi,
     pub is_unsafe: bool,

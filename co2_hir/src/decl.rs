@@ -1442,9 +1442,12 @@ impl HirCtx<'_> {
                 } else {
                     Safety::Safe
                 };
-                // Convert inputs (HirTy) to Ty and add output at the end
-                let mut inputs_and_output: Vec<Ty> =
-                    sig.inputs.iter().map(Self::hir_ty_to_ty).collect();
+                // Convert inputs to Ty and add output at the end
+                let mut inputs_and_output: Vec<Ty> = sig
+                    .inputs
+                    .iter()
+                    .map(|input| Self::hir_ty_to_ty(&input.ty))
+                    .collect();
                 inputs_and_output.push(Self::hir_ty_to_ty(&sig.output));
                 CTy::Function(FnSig {
                     inputs_and_output,
@@ -1516,7 +1519,11 @@ pub(crate) fn hir_ty_to_ty(hir_ty: &HirTy) -> Ty {
             } else {
                 Safety::Safe
             };
-            let mut inputs_and_output: Vec<Ty> = sig.inputs.iter().map(hir_ty_to_ty).collect();
+            let mut inputs_and_output: Vec<Ty> = sig
+                .inputs
+                .iter()
+                .map(|input| hir_ty_to_ty(&input.ty))
+                .collect();
             inputs_and_output.push(hir_ty_to_ty(&sig.output));
             Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(FnSig {
                 inputs_and_output,

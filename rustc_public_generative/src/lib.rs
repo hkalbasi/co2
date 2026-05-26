@@ -35,8 +35,9 @@ mod hir_ty;
 mod internal;
 
 pub use hir_structure::{
-    AdtRepr, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr, HirAdtKind,
-    HirImplItem, HirImplItemKind, HirModule, HirModuleItem, HirSelfKind, HirStructure, StructField,
+    AdtRepr, ForeignModItem, FunctionAbi, FunctionInput, FunctionSignature, GeneratedAttr,
+    HirAdtKind, HirImplItem, HirImplItemKind, HirModule, HirModuleItem, HirSelfKind, HirStructure,
+    StructField,
 };
 pub use hir_ty::{HirGenericArg, HirLifetime, HirTy, HirTyConst, HirTyKind};
 
@@ -341,6 +342,42 @@ pub trait CrateGeneratorState: Sync + Send + Any + Sized {
 
     fn hir_structure(ctx: HirStructureCtx) -> (Self, HirStructure);
     fn emit_mir(&mut self, ctx: HirStructureCtx, def: DefId) -> rustc_public::mir::Body;
+}
+
+pub struct InterfaceCallbacks<S: CrateGeneratorState> {
+    inner: internal::InterfaceCallbacks<S>,
+}
+
+impl<S: CrateGeneratorState> Default for InterfaceCallbacks<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S: CrateGeneratorState> InterfaceCallbacks<S> {
+    pub fn new() -> Self {
+        Self {
+            inner: internal::InterfaceCallbacks::new(),
+        }
+    }
+
+    pub fn new_without_original_owners() -> Self {
+        Self {
+            inner: internal::InterfaceCallbacks::new_without_original_owners(),
+        }
+    }
+
+    pub fn config(&mut self, config: &mut rustc_interface::Config) {
+        self.inner.config(config);
+    }
+
+    pub fn after_crate_root_parsing(&mut self, krate: &mut rustc_ast::Crate) {
+        self.inner.after_crate_root_parsing(krate);
+    }
+
+    pub fn after_expansion(&mut self, tcx: TyCtxt<'_>) {
+        self.inner.after_expansion(tcx);
+    }
 }
 
 pub fn generate_with_args<S: CrateGeneratorState>(args: Vec<String>) {

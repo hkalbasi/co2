@@ -1,0 +1,5 @@
+mod math;
+
+pub fn documented() -> i32 {
+    return 42;
+}

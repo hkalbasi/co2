@@ -43,6 +43,7 @@ pub fn main_with_args(args: &[String]) -> i32 {
         println!("Common Cargo Commands (forwarded with RUSTC=co2rustc):");
         println!("    build, b    Compile the current package");
         println!("    check, c    Analyze the current package and report errors");
+        println!("    doc         Build this package's documentation");
         println!("    run, r      Run a binary or example of the local package");
         println!("    test, t     Run the tests");
         println!("    add         Add dependencies to a manifest file");
@@ -75,6 +76,8 @@ pub fn main_with_args(args: &[String]) -> i32 {
                     1
                 }
             };
+        } else if subcommand == "doc" {
+            return run_doc(subcommand_args);
         } else if subcommand == "miri" {
             return run_miri(subcommand_args);
         }
@@ -92,6 +95,8 @@ pub fn main_with_args(args: &[String]) -> i32 {
                 1
             }
         }
+    } else if subcommand == "doc" {
+        run_doc(subcommand_args)
     } else if subcommand == "miri" {
         run_miri(subcommand_args)
     } else {
@@ -100,17 +105,7 @@ pub fn main_with_args(args: &[String]) -> i32 {
 }
 
 fn run_miri(args: &[String]) -> i32 {
-    // Find co2miri: prefer a sibling to this binary (installed bundle), fall back to PATH.
-    let self_path = std::env::current_exe().ok();
-    let bin_dir = self_path.as_deref().and_then(|p| p.parent());
-
-    let co2miri_path = bin_dir
-        .map(|d| d.join("co2miri"))
-        .filter(|p| p.exists())
-        .map_or_else(
-            || "co2miri".to_owned(),
-            |p| p.to_string_lossy().into_owned(),
-        );
+    let co2miri_path = bundled_applet_path("co2miri");
 
     let mut cmd = Command::new("cargo-miri");
     // cargo-miri is invoked by cargo as `cargo-miri miri <subcommand> [args...]`.
@@ -121,6 +116,7 @@ fn run_miri(args: &[String]) -> i32 {
     cmd.env("MIRI", &co2miri_path);
     // Forward RUSTC so cargo-miri's rustc queries also go through co2rustc.
     cmd.env("RUSTC", "co2rustc");
+    cmd.env("RUSTDOC", bundled_applet_path("co2rustdoc"));
     cmd.env("CARGO_INCREMENTAL", "0");
 
     // The co2 bundle wrapper sets RUSTFLAGS="--sysroot=<cache> ..." so that
@@ -136,6 +132,18 @@ fn run_miri(args: &[String]) -> i32 {
     }
 
     let status = cmd.status().expect("failed to execute cargo-miri");
+    status.code().unwrap_or(1)
+}
+
+fn run_doc(args: &[String]) -> i32 {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("doc");
+    cmd.args(args);
+    cmd.env("RUSTC", "co2rustc");
+    cmd.env("RUSTDOC", bundled_applet_path("co2rustdoc"));
+    cmd.env("CARGO_INCREMENTAL", "0");
+
+    let status = cmd.status().expect("failed to execute cargo");
     status.code().unwrap_or(1)
 }
 
@@ -160,11 +168,25 @@ fn run_cargo(args: &[String]) -> i32 {
     let mut cmd = Command::new("cargo");
     cmd.args(args);
     cmd.env("RUSTC", "co2rustc");
+    cmd.env("RUSTDOC", bundled_applet_path("co2rustdoc"));
     cmd.env("CARGO_INCREMENTAL", "0");
 
     let status = cmd.status().expect("failed to execute cargo");
 
     status.code().unwrap_or(1)
+}
+
+fn bundled_applet_path(applet: &str) -> String {
+    let self_path = std::env::current_exe().ok();
+    let bin_dir = self_path.as_deref().and_then(|p| p.parent());
+
+    bin_dir
+        .map(|dir| dir.join(applet))
+        .filter(|path| path.exists())
+        .map_or_else(
+            || applet.to_owned(),
+            |path| path.to_string_lossy().into_owned(),
+        )
 }
 
 fn cargo_init(args: &[String]) -> Result<(), CargoInitError> {

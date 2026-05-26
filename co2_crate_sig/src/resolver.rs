@@ -349,59 +349,38 @@ impl Resolver {
             true,
             test,
         );
-        this.current.insert_path(
-            ["__builtin_bswap16"].into_iter(),
-            Some(
-                this.resolve_in_deps("std", ["num", "<impl u16>", "swap_bytes"])
-                    .unwrap(),
-            ),
-        );
-        this.current.insert_path(
-            ["__builtin_bswap32"].into_iter(),
-            Some(
-                this.resolve_in_deps("std", ["num", "<impl u32>", "swap_bytes"])
-                    .unwrap(),
-            ),
-        );
-        this.current.insert_path(
-            ["__builtin_bswap64"].into_iter(),
-            Some(
-                this.resolve_in_deps("std", ["num", "<impl u64>", "swap_bytes"])
-                    .unwrap(),
-            ),
-        );
+        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u16>", "swap_bytes"]) {
+            this.current
+                .insert_path(["__builtin_bswap16"].into_iter(), Some(def));
+        }
+        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u32>", "swap_bytes"]) {
+            this.current
+                .insert_path(["__builtin_bswap32"].into_iter(), Some(def));
+        }
+        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u64>", "swap_bytes"]) {
+            this.current
+                .insert_path(["__builtin_bswap64"].into_iter(), Some(def));
+        }
         // __builtin_clz: count leading zeros for unsigned int (u32)
-        this.current.insert_path(
-            ["__builtin_clz"].into_iter(),
-            Some(
-                this.resolve_in_deps("std", ["num", "<impl u32>", "leading_zeros"])
-                    .unwrap(),
-            ),
-        );
+        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u32>", "leading_zeros"]) {
+            this.current
+                .insert_path(["__builtin_clz"].into_iter(), Some(def));
+        }
         // __builtin_clzll: count leading zeros for unsigned long long (u64)
-        this.current.insert_path(
-            ["__builtin_clzll"].into_iter(),
-            Some(
-                this.resolve_in_deps("std", ["num", "<impl u64>", "leading_zeros"])
-                    .unwrap(),
-            ),
-        );
+        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u64>", "leading_zeros"]) {
+            this.current
+                .insert_path(["__builtin_clzll"].into_iter(), Some(def));
+        }
         // __builtin_ctz: count trailing zeros for unsigned int (u32)
-        this.current.insert_path(
-            ["__builtin_ctz"].into_iter(),
-            Some(
-                this.resolve_in_deps("std", ["num", "<impl u32>", "trailing_zeros"])
-                    .unwrap(),
-            ),
-        );
+        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u32>", "trailing_zeros"]) {
+            this.current
+                .insert_path(["__builtin_ctz"].into_iter(), Some(def));
+        }
         // __builtin_ctzll: count trailing zeros for unsigned long long (u64)
-        this.current.insert_path(
-            ["__builtin_ctzll"].into_iter(),
-            Some(
-                this.resolve_in_deps("std", ["num", "<impl u64>", "trailing_zeros"])
-                    .unwrap(),
-            ),
-        );
+        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u64>", "trailing_zeros"]) {
+            this.current
+                .insert_path(["__builtin_ctzll"].into_iter(), Some(def));
+        }
         this.rebuild_method_receivers();
         this
     }
@@ -617,6 +596,14 @@ impl Resolver {
         normalize_crate_name(&mut crate_name);
         let crate_data = self.dependencies.get(crate_name)?;
         crate_data.resolve_path_or_unique_leaf(path.into_iter())
+    }
+
+    fn resolve_builtin_dep<const N: usize>(
+        &self,
+        path: [&str; N],
+    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
+        self.resolve_in_deps("std", path)
+            .or_else(|| self.resolve_in_deps("core", path))
     }
 
     pub(crate) fn resolve_in_current<'a>(

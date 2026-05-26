@@ -4,10 +4,8 @@ set -e
 BUNDLE="target/co2-multicall.run"
 STABLE_CARGO=$(rustup which --toolchain stable cargo)
 
-if [ ! -f "$BUNDLE" ]; then
-    echo "Bundle $BUNDLE not found. Running ./create_bundle.sh first..."
-    ./create_bundle.sh
-fi
+echo "Rebuilding bundle..."
+./create_bundle.sh --zstd
 
 echo "Testing bundle in bwrap container..."
 
@@ -77,7 +75,7 @@ fn smoke_test() {
     super::helper();
 }
 EOF
-    co2cargo test smoke_test
+    co2cargo test
     cd ..
     echo "Bundle test PASSED"
 INNER_EOF

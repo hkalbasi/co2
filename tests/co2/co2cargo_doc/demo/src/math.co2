@@ -1,0 +1,3 @@
+pub fn nested() -> i32 {
+    return 7;
+}

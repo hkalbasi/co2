@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 co2rustc = { path = "../co2rustc" }
+co2rustdoc = { path = "../co2rustdoc" }
 co2cc = { path = "../co2cc" }
 co2cargo = { path = "../co2cargo" }
 co2miri = { path = "../co2miri" }

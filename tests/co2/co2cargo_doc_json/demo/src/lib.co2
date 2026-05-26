@@ -1,0 +1,37 @@
+mod nested;
+mod ffi;
+
+pub type Counter = i32;
+
+typedef struct {
+    int x;
+    int y;
+} Point;
+
+typedef union {
+    int whole;
+    float frac;
+} Number;
+
+const int MAGIC = 7;
+int MUTABLE = 11;
+
+pub fn public_value() -> i32 {
+    return 2;
+}
+
+int c_abi_value(void) {
+    return 9;
+}
+
+int *c_abi_with_args(int n, int* p) {
+    return p;
+}
+
+void c_abi_with_args_unnamed(int, int*, int named, int) {
+    return;
+}
+
+int c_abi_variadic(int n, int* p, ...) {
+    return 9;
+}

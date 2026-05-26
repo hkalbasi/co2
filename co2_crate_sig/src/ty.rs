@@ -5,7 +5,9 @@ use co2_ast::{
     IntegerSuffix, Span, Spanned, StorageClassSpecifier, StringLiteralPrefix, StructOrUnionKind,
     TypeName, TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp,
 };
-use rustc_public_generative::{FunctionAbi, FunctionSignature, HirTy, HirTyConst, HirTyKind};
+use rustc_public_generative::{
+    FunctionAbi, FunctionInput, FunctionSignature, HirTy, HirTyConst, HirTyKind,
+};
 use rustc_public_generative::{
     HirGenericArg,
     rustc_public::{
@@ -284,7 +286,7 @@ impl CrateSigCtx<'_> {
         base: CTy,
         base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> Result<(String, FunctionSignature, Vec<String>), (co2_ast::Span, String)> {
+    ) -> Result<(String, FunctionSignature), (co2_ast::Span, String)> {
         self.resolver
             .borrow_mut()
             .lower_function_signature(base, base_const, declarator)
@@ -371,7 +373,10 @@ impl CrateSigCtx<'_> {
                                 HirTy::new_ptr(elem, Mutability::Mut, span)
                             }
                         };
-                        inputs.push(param_ty);
+                        inputs.push(FunctionInput {
+                            name: None,
+                            ty: param_ty,
+                        });
                     }
                 }
                 let function_ty = match current {
@@ -487,14 +492,15 @@ impl CrateSigCtx<'_> {
     pub(crate) fn lower_rust_function_signature(
         &mut self,
         sig: co2_ast::RustFunctionSignature<LocalResolver>,
-    ) -> (String, FunctionSignature, Vec<String>) {
+    ) -> (String, FunctionSignature) {
         let name = sig.name.0.1;
         let output = self.lower_rust_ty(sig.ret_ty);
         let mut inputs = Vec::new();
-        let mut param_names = Vec::new();
         for param in sig.params {
-            inputs.push(self.lower_rust_ty(param.ty));
-            param_names.push(param.name.0.1);
+            inputs.push(FunctionInput {
+                name: Some(param.name.0.1),
+                ty: self.lower_rust_ty(param.ty),
+            });
         }
         (
             name,
@@ -506,7 +512,6 @@ impl CrateSigCtx<'_> {
                 is_unsafe: false,
                 c_variadic: false,
             },
-            param_names,
         )
     }
 
@@ -815,7 +820,10 @@ impl LocalResolverBase {
             co2_ast::RustTy::BareFn { params, ret_ty } => {
                 let inputs = params
                     .into_iter()
-                    .map(|param| self.hir_ty_of_rust_ty(param))
+                    .map(|param| FunctionInput {
+                        name: None,
+                        ty: self.hir_ty_of_rust_ty(param),
+                    })
                     .collect();
                 let output = self.hir_ty_of_rust_ty(*ret_ty);
                 HirTy {
@@ -1756,21 +1764,19 @@ impl LocalResolverBase {
         base: CTy,
         base_const: bool,
         declarator: Spanned<Declarator<LocalResolver>>,
-    ) -> Result<(String, FunctionSignature, Vec<String>), (co2_ast::Span, String)> {
+    ) -> Result<(String, FunctionSignature), (co2_ast::Span, String)> {
         let span = declarator.1;
         let parsed_param_names = function_param_names(&declarator.0);
         let (decl_ty, name) = self.extract_decl_type(base, base_const, declarator)?;
         let name = name.ok_or_else(|| spanned_error(span, "missing function name"))?;
-        let CTy::Function(sig) = decl_ty else {
+        let CTy::Function(mut sig) = decl_ty else {
             return Err(spanned_error(span, "it wasn't function"));
         };
-        let names = parsed_param_names
-            .unwrap_or_else(|| vec![None; sig.inputs.len()])
-            .into_iter()
-            .enumerate()
-            .map(|(idx, n)| n.unwrap_or_else(|| format!("arg{idx}")))
-            .collect();
-        Ok((name, sig, names))
+        let names = parsed_param_names.unwrap_or_else(|| vec![None; sig.inputs.len()]);
+        for (input, name) in sig.inputs.iter_mut().zip(names) {
+            input.name = name;
+        }
+        Ok((name, sig))
     }
 
     pub(crate) fn lower_value_decl_type_maybe_unsized(
@@ -1902,7 +1908,10 @@ impl LocalResolverBase {
                                 HirTy::new_ptr(elem, Mutability::Mut, span)
                             }
                         };
-                        inputs.push(param_ty);
+                        inputs.push(FunctionInput {
+                            name: None,
+                            ty: param_ty,
+                        });
                     }
                 }
                 let function_ty = match current {

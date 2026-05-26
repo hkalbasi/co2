@@ -8,7 +8,7 @@ CO2 uses Cargo as the build system, which solves these problems with C system:
 * Managing dependencies per project, having multiple versions of a dependency in a single project
 * Cross compilation
 * Link time optimization between dependencies
-* Minimal build system configuration, but maximal features (testing, benchmarking, ...)
+* Minimal build system configuration, but maximal features (testing, doc generation, benchmarking, ...)
 
 C can not have a Cargo-like build system with all features, because you will hit duplicate symbols with any non trivial dependency tree.
 CO2 supports functions with mangled symbols, so you can use cargo with arbitrary complex trees.

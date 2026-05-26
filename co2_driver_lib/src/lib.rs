@@ -1,6 +1,8 @@
 #![feature(rustc_private)]
 
+extern crate rustc_ast;
 extern crate rustc_driver;
+extern crate rustc_interface;
 extern crate rustc_middle;
 
 use std::collections::{BTreeMap, HashMap};
@@ -39,6 +41,10 @@ struct PendingCompile {
     mode: CompileMode,
     source_path: PathBuf,
     preprocessed: Arc<PreprocessedSource>,
+}
+
+pub struct Co2RustdocCallbacks {
+    inner: rustc_gen::InterfaceCallbacks<Co2GeneratorState>,
 }
 
 struct Co2SourceMap {
@@ -617,12 +623,7 @@ pub fn compile_co2_file_for_miri(
     >,
 ) {
     let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &Vec::new()));
-    co2_ast::reset_diagnostic_state();
-    *pending_compile_cell().try_lock().unwrap() = Some(PendingCompile {
-        mode: CompileMode::RUST,
-        source_path: co2_file.to_path_buf(),
-        preprocessed,
-    });
+    install_pending_compile(CompileMode::RUST, co2_file.to_path_buf(), preprocessed);
     rustc_gen::generate_with_args_and_after_analysis::<Co2GeneratorState>(
         rustc_args,
         after_analysis,
@@ -638,15 +639,45 @@ pub fn compile_co2_source(
     preprocessed: Arc<PreprocessedSource>,
     rustc_args: Vec<String>,
 ) {
+    install_pending_compile(mode, source_path, preprocessed);
+
+    rustc_gen::generate_with_args::<Co2GeneratorState>(rustc_args);
+    if co2_ast::diagnostics_were_emitted() {
+        co2_ast::panic_with_diagnostic_abort();
+    }
+}
+
+impl Co2RustdocCallbacks {
+    pub fn new(co2_file: &Path) -> Self {
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &Vec::new()));
+        install_pending_compile(CompileMode::RUST, co2_file.to_path_buf(), preprocessed);
+        Self {
+            inner: rustc_gen::InterfaceCallbacks::new_without_original_owners(),
+        }
+    }
+
+    pub fn config(&mut self, config: &mut rustc_interface::Config) {
+        self.inner.config(config);
+    }
+
+    pub fn after_crate_root_parsing(&mut self, krate: &mut rustc_ast::Crate) {
+        self.inner.after_crate_root_parsing(krate);
+    }
+
+    pub fn after_expansion(&mut self, tcx: rustc_middle::ty::TyCtxt<'_>) {
+        self.inner.after_expansion(tcx);
+    }
+}
+
+fn install_pending_compile(
+    mode: CompileMode,
+    source_path: PathBuf,
+    preprocessed: Arc<PreprocessedSource>,
+) {
     co2_ast::reset_diagnostic_state();
     *pending_compile_cell().try_lock().unwrap() = Some(PendingCompile {
         mode,
         source_path,
         preprocessed,
     });
-
-    rustc_gen::generate_with_args::<Co2GeneratorState>(rustc_args);
-    if co2_ast::diagnostics_were_emitted() {
-        co2_ast::panic_with_diagnostic_abort();
-    }
 }

@@ -1,0 +1,13 @@
+mod deeper;
+
+typedef struct {
+    int value;
+} Nested;
+
+pub fn nested_value() -> i32 {
+    return 3;
+}
+
+pub fn nested_value_with_args(input: *mut Nested) -> i32 {
+    return input->value;
+}

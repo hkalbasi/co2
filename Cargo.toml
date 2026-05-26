@@ -7,6 +7,7 @@ members = [
   "co2_mir",
   "co2_driver_lib",
   "co2rustc",
+  "co2rustdoc",
   "co2cc",
   "co2cargo",
   "co2miri",

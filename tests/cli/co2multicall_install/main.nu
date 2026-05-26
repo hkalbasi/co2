@@ -15,7 +15,7 @@ if $install.exit_code != 0 or ($install.stdout | str contains "Successfully inst
     exit 1
 }
 
-for name in ["co2-multicall" "co2cc" "co2cargo" "co2miri" "co2rustc"] {
+for name in ["co2-multicall" "co2cc" "co2cargo" "co2miri" "co2rustc" "co2rustdoc"] {
     let path = ($install_dir | path join $name)
     if ($path | path exists) == false {
         print $"missing installed applet: ($path)"
