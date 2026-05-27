@@ -66,6 +66,7 @@ jobs:
           cat > /tmp/rust-fork/config.toml << 'EOF'
           [llvm]
           ninja = true
+          download-ci-llvm = false
 
           [build]
           profiler = true
