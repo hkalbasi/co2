@@ -9,4 +9,4 @@ workspace = true
 [dependencies]
 co2_ast = { path = "../co2_ast" }
 co2_driver_lib = { path = "../co2_driver_lib" }
-rustdoc = { path = "../../oss/rust/src/librustdoc" }
+rustdoc = { git = "https://github.com/HKalbasi/rust", branch = "co2-changes" }
