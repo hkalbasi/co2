@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/co2-toolchain
-          key: co2-toolchain-ubuntu22-${{ steps.rustc-sha.outputs.sha }}
+          key: co2-toolchain-v2-ubuntu22-${{ steps.rustc-sha.outputs.sha }}
 
       - name: Install rustc build dependencies
         if: steps.cache-rustc.outputs.cache-hit != 'true'
@@ -87,7 +87,7 @@ jobs:
       - name: Build and install custom rustc toolchain
         if: steps.cache-rustc.outputs.cache-hit != 'true'
         working-directory: /tmp/rust-fork
-        run: python3 x.py install --stage 2 compiler library rustc-dev
+        run: python3 x.py install --stage 2 compiler library rustc-dev cargo rustdoc miri rust-src
 
       - name: Copy toolchain to cache location
         if: steps.cache-rustc.outputs.cache-hit != 'true'
