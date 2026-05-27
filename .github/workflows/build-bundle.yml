@@ -1,19 +1,25 @@
-name: Build Self-Extracting Binary
+name: CI
 
 on:
   workflow_call:
   workflow_dispatch:
   pull_request:
-    paths:
-      - '.github/workflows/build-bundle.yml'
+  merge_group:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout co2
         uses: actions/checkout@v4
+
+      - name: Setup Nushell
+        uses: hustcer/setup-nu@v3
+        with:
+          version: "0.110.0"
 
       - name: Get co2-changes commit SHA
         id: rustc-sha
@@ -27,7 +33,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/co2-toolchain
-          key: co2-toolchain-ubuntu20-${{ steps.rustc-sha.outputs.sha }}
+          key: co2-toolchain-ubuntu22-${{ steps.rustc-sha.outputs.sha }}
 
       - name: Install rustc build dependencies
         if: steps.cache-rustc.outputs.cache-hit != 'true'
@@ -38,6 +44,11 @@ jobs:
             libssl-dev pkg-config \
             gcc g++ \
             curl
+
+      - name: Install bundle test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
 
       - name: Install bootstrap Rust (for building the fork)
         if: steps.cache-rustc.outputs.cache-hit != 'true'
@@ -91,13 +102,21 @@ jobs:
           # searches by default, so we add it to RUSTFLAGS for all subsequent steps.
           echo "RUSTFLAGS=-L $HOME/co2-toolchain/lib" >> "$GITHUB_ENV"
 
-      - name: Build co2-multicall
+      - name: Run test harness
+        run: |
+          source "$HOME/.cargo/env"
+          cargo run -q --locked -p co2_test_harness
+
+      - name: Run bundle test
+        run: |
+          source "$HOME/.cargo/env"
+          bash ./test_bundle.sh
+
+      - name: Create release bundle artifact
         run: |
           source "$HOME/.cargo/env"
           cargo +co2 build -p co2-multicall --release
-
-      - name: Create self-extracting bundle
-        run: bash create_bundle.sh
+          bash create_bundle.sh
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
