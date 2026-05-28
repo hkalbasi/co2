@@ -84,6 +84,13 @@ jobs:
           incremental = false
           EOF
 
+      - name: Seed rust bootstrap doc directories
+        if: steps.cache-rustc.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p \
+            /tmp/rust-fork/build/x86_64-unknown-linux-gnu/doc \
+            /tmp/rust-fork/build/x86_64-unknown-linux-gnu/json-doc
+
       - name: Build and install custom rustc toolchain
         if: steps.cache-rustc.outputs.cache-hit != 'true'
         working-directory: /tmp/rust-fork
