@@ -408,11 +408,51 @@ mod tests {
     }
 }
 
+fn discover_system_include_paths() -> Vec<PathBuf> {
+    let Ok(output) = std::process::Command::new("gcc")
+        .args(["-E", "-Wp,-v", "-"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut paths = Vec::new();
+    let mut in_system_section = false;
+
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("#include <...> search starts here:") {
+            in_system_section = true;
+            continue;
+        }
+        if trimmed == "End of search list." {
+            break;
+        }
+        if in_system_section && !trimmed.is_empty() {
+            paths.push(PathBuf::from(trimmed));
+        }
+    }
+
+    paths
+}
+
 fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_args: &[String]) {
     let input_str = input.to_string_lossy().into_owned();
     preprocessor.set_filename(&input_str);
     configure_target(preprocessor);
-    add_discovered_system_include_paths(preprocessor);
+
+    let nostdinc = cpp_args.iter().any(|arg| arg == "-nostdinc");
+    if !nostdinc {
+        preprocessor.system_include_paths = discover_system_include_paths();
+    }
 
     let mut i = 0usize;
     while i < cpp_args.len() {
@@ -449,7 +489,8 @@ fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_arg
                 preprocessor
                     .add_quote_include_path(cpp_args.get(i).expect("missing -iquote value"));
             }
-            "-nostdinc" | "-undef" => {}
+            "-nostdinc" => {}
+            "-undef" => {}
             _ if arg.starts_with("-I") && arg.len() > 2 => {
                 preprocessor.add_include_path(&arg[2..]);
             }
@@ -480,35 +521,6 @@ fn configure_target(preprocessor: &mut Preprocessor) {
         _ => {}
     }
     preprocessor.set_sse_macros(false);
-}
-
-fn add_discovered_system_include_paths(preprocessor: &mut Preprocessor) {
-    for pattern_root in ["/usr/lib/gcc", "/usr/local/lib/gcc", "/usr/lib/clang"] {
-        let root = Path::new(pattern_root);
-        let Ok(first_level) = fs::read_dir(root) else {
-            continue;
-        };
-        for entry in first_level.flatten() {
-            let path = entry.path();
-            if pattern_root.ends_with("/clang") {
-                let include = path.join("include");
-                if include.is_dir() {
-                    preprocessor.add_system_include_path(&include.to_string_lossy());
-                }
-                continue;
-            }
-            let Ok(second_level) = fs::read_dir(&path) else {
-                continue;
-            };
-            for sub in second_level.flatten() {
-                for include_dir in [sub.path().join("include"), sub.path().join("include-fixed")] {
-                    if include_dir.is_dir() {
-                        preprocessor.add_system_include_path(&include_dir.to_string_lossy());
-                    }
-                }
-            }
-        }
-    }
 }
 
 fn define_macro(preprocessor: &mut Preprocessor, raw: &str) {

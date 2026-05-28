@@ -564,8 +564,15 @@ impl Preprocessor {
                 Err(_) => None,
             }
         } else {
-            // Fall back to regular include if include_next can't find it
-            self.handle_include(path, range)
+            self.errors.push(super::pipeline::PreprocessorDiagnostic {
+                file: self.current_file(),
+                range,
+                message: format!(
+                    "'{include_path}' not found via #include_next \
+                     (no system header after the compiler's wrapper)"
+                ),
+            });
+            None
         }
     }
 
