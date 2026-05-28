@@ -28,9 +28,9 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Rust fork SHA: $SHA"
 
-      - name: Cache custom rustc toolchain
+      - name: Restore custom rustc toolchain cache
         id: cache-rustc
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/co2-toolchain
           key: co2-toolchain-v2-ubuntu22-${{ steps.rustc-sha.outputs.sha }}
@@ -45,10 +45,10 @@ jobs:
             gcc g++ \
             curl
 
-      - name: Install bundle test dependency
+      - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap gcc
 
       - name: Install bootstrap Rust (for building the fork)
         if: steps.cache-rustc.outputs.cache-hit != 'true'
@@ -99,6 +99,13 @@ jobs:
       - name: Copy toolchain to cache location
         if: steps.cache-rustc.outputs.cache-hit != 'true'
         run: cp -a /tmp/rust-install ~/co2-toolchain
+
+      - name: Save custom rustc toolchain cache
+        if: steps.cache-rustc.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/co2-toolchain
+          key: co2-toolchain-v2-ubuntu22-${{ steps.rustc-sha.outputs.sha }}
 
       - name: Link custom toolchain via rustup
         run: |
