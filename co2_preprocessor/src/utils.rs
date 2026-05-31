@@ -85,9 +85,35 @@ pub fn copy_literal_bytes_raw(
     let mut i = start + 1;
     while i < len {
         if bytes[i] == b'\\' && i + 1 < len {
-            result.push(bytes[i]);
-            result.push(bytes[i + 1]);
-            i += 2;
+            if bytes[i + 1] == b'\n' {
+                // \<newline>: C phase 2 line continuation, skip both
+                i += 2;
+            } else if bytes[i + 1] == b'\r' && i + 2 < len && bytes[i + 2] == b'\n' {
+                // \<CR><LF>: line continuation, skip all three
+                i += 3;
+            } else if bytes[i + 1] == b'\\' {
+                // \\ followed by something: could be \\<newline>
+                result.push(b'\\');
+                if i + 2 < len && bytes[i + 2] == b'\n' {
+                    // \\<newline>: first \ survives, second \ spliced with newline
+                    i += 3;
+                } else if i + 2 < len
+                    && bytes[i + 2] == b'\r'
+                    && i + 3 < len
+                    && bytes[i + 3] == b'\n'
+                {
+                    i += 4;
+                } else {
+                    // \\<other>: literal backslash escape, output second backslash too
+                    result.push(b'\\');
+                    i += 2;
+                }
+            } else {
+                // any other escape sequence: output both bytes
+                result.push(bytes[i]);
+                result.push(bytes[i + 1]);
+                i += 2;
+            }
         } else if bytes[i] == quote {
             result.push(bytes[i]);
             return i + 1;

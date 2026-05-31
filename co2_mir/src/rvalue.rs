@@ -81,9 +81,7 @@ impl Builder<'_, '_> {
         span: RustSpan,
     ) -> MirOperand {
         let mut bytes = s.to_vec();
-        if bytes.last().copied() != Some(0) {
-            bytes.push(0);
-        }
+        bytes.push(0);
 
         // Allocate string bytes in static (rodata) memory via a &'static str constant.
         // TODO: This unsafe is super invalid. C allow arbitrary string literal, not just utf8.

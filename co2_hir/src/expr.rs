@@ -888,15 +888,15 @@ impl HirCtx<'_> {
                     generic_args,
                 } => {
                     if self.function_name.is_none() && self.decl_resolver.is_constexpr_def(def_id) {
-                        let value =
-                            self.decl_resolver
-                                .local_const_int_value(def_id, parser_span)
-                                .map_err(|_| {
-                                    spanned_error(
-                                        parser_span,
-                                        format!("missing scalar constant value for def {def_id:?}"),
-                                    )
-                                })?;
+                        let value = self
+                            .decl_resolver
+                            .local_const_int_value(def_id, parser_span)
+                            .map_err(|_| {
+                                spanned_error(
+                                    parser_span,
+                                    format!("missing scalar constant value for def {def_id:?}"),
+                                )
+                            })?;
                         return Ok(HirExpr {
                             kind: HirExprKind::ConstInt(value),
                             ty: Ty::signed_ty(IntTy::I32),
@@ -913,12 +913,14 @@ impl HirCtx<'_> {
                 co2_crate_sig::DefOrLocal::Const(def_id) => {
                     let resolver = &self.decl_resolver;
                     if resolver.has_local_const_value(def_id) {
-                        let value = resolver.local_const_int_value(def_id, parser_span).map_err(|_| {
-                            spanned_error(
-                                parser_span,
-                                format!("missing scalar constant value for def {def_id:?}"),
-                            )
-                        })?;
+                        let value = resolver
+                            .local_const_int_value(def_id, parser_span)
+                            .map_err(|_| {
+                                spanned_error(
+                                    parser_span,
+                                    format!("missing scalar constant value for def {def_id:?}"),
+                                )
+                            })?;
                         Ok(HirExpr {
                             kind: HirExprKind::ConstInt(value),
                             ty: Ty::signed_ty(IntTy::I32),
@@ -953,15 +955,15 @@ impl HirCtx<'_> {
                 }
                 co2_crate_sig::DefOrLocal::LocalConst(l) => {
                     let Some(&local) = local_map.get(&(l as usize)) else {
-                        let value =
-                            self.decl_resolver
-                                .local_constexpr_int_value(l, parser_span)
-                                .map_err(|_| {
-                                    spanned_error(
-                                        parser_span,
-                                        format!("missing scalar constant value for local {l}"),
-                                    )
-                                })?;
+                        let value = self
+                            .decl_resolver
+                            .local_constexpr_int_value(l, parser_span)
+                            .map_err(|_| {
+                                spanned_error(
+                                    parser_span,
+                                    format!("missing scalar constant value for local {l}"),
+                                )
+                            })?;
                         return Ok(HirExpr {
                             kind: HirExprKind::ConstInt(value),
                             ty: Ty::signed_ty(IntTy::I32),

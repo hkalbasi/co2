@@ -281,7 +281,11 @@ impl LocalResolver {
         self.base.borrow().hir_ctx.dependency_const_value(def_id)
     }
 
-    pub fn local_const_int_value(&self, def_id: DefId, span: co2_ast::Span) -> Result<i128, (co2_ast::Span, String)> {
+    pub fn local_const_int_value(
+        &self,
+        def_id: DefId,
+        span: co2_ast::Span,
+    ) -> Result<i128, (co2_ast::Span, String)> {
         self.base.borrow_mut().eval_local_const(def_id, span)
     }
 
@@ -289,7 +293,11 @@ impl LocalResolver {
         self.base.borrow().has_local_const_value(def_id)
     }
 
-    pub fn local_constexpr_int_value(&self, local: u32, span: co2_ast::Span) -> Result<i128, (co2_ast::Span, String)> {
+    pub fn local_constexpr_int_value(
+        &self,
+        local: u32,
+        span: co2_ast::Span,
+    ) -> Result<i128, (co2_ast::Span, String)> {
         self.base.borrow_mut().eval_local_constexpr(local, span)
     }
 

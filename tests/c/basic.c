@@ -865,7 +865,9 @@ int main24()
 }
 
 typedef struct {
-	int a;
+	int a, e;
+	int;
+	;
 	union {
 		int b1;
 		int b2;
@@ -887,12 +889,19 @@ int main25()
 
 	if (v.a != 1)
 		return 1;
-	if (v.b1 != 2 && v.b2 != 2)
+	if (v.b1 != 2 || v.b2 != 2)
 		return 2;
 	if (v.c != 3)
 		return 3;
 	if (v.d != 4)
 		return 4;
+
+	v.e = 5;
+	if (v.e != 5 || v.a != 1)
+		return 5;
+
+	if (sizeof(v) != sizeof(int) * 5)
+		return 6;
 
 	return 0;
 }

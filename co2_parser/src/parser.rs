@@ -1536,7 +1536,7 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    let single = left_recursion(
+    let normal = left_recursion(
         struct_declarator(declarator_rec)
             .separated_by(just(Token::Comma))
             .collect()
@@ -1552,10 +1552,54 @@ where
         declarators,
     })
     .map_with(|r, e| (r, e.span()));
+
+    // GCC extension: accept bare `;` as an empty struct/union member declaration.
+    let bare_semicolon = just(Token::Semicolon).map_with(|_, e| {
+        let span = e.span();
+        (
+            StructOrUnionField {
+                specifiers: vec![],
+                declarators: vec![],
+            },
+            span,
+        )
+    });
+
+    let single = choice((normal, bare_semicolon));
     single
         .repeated()
         .collect()
         .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        .map(|fields: Vec<Spanned<StructOrUnionField<R>>>| {
+            fields
+                .into_iter()
+                .filter(|(field, _)| {
+                    // Filter out empty declarations: GCC allows `int;` and bare `;`
+                    // which should not produce any field. Anonymous struct/union members
+                    // have a struct-or-union specifier and must be kept.
+                    if field.specifiers.is_empty() && field.declarators.is_empty() {
+                        return false;
+                    }
+                    if !field.declarators.is_empty()
+                        && field.declarators.iter().all(|(d, _)| {
+                            matches!(d.declarator.0, Declarator::Abstract) && d.bits.is_none()
+                        })
+                    {
+                        let has_anon_struct_union = field.specifiers.iter().any(|(s, _)| {
+                            matches!(
+                                s,
+                                SpecifierQualifier::TypeSpecifier((
+                                    TypeSpecifier::StructOrUnion { .. },
+                                    _,
+                                ))
+                            )
+                        });
+                        return has_anon_struct_union;
+                    }
+                    true
+                })
+                .collect()
+        })
 }
 
 fn type_specifier<'src, I, R: TypeResolver>(

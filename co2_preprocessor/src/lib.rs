@@ -1062,8 +1062,58 @@ fn strip_extension_keywords_mapped(src: &MappedText) -> MappedText {
     let mut out = String::with_capacity(src.text.len());
     let mut boundaries = vec![0];
     let mut i = 0usize;
+    let mut in_string = false;
+    let mut in_char = false;
     while i < bytes.len() {
-        if is_ident_start(bytes[i]) {
+        if in_string {
+            let c = src.text[i..].chars().next().unwrap();
+            let consumed = c.len_utf8();
+            out.push(c);
+            i += consumed;
+            for _ in 0..consumed {
+                boundaries.push(i);
+            }
+            if c == '\\' && i < bytes.len() {
+                let c2 = src.text[i..].chars().next().unwrap();
+                let consumed2 = c2.len_utf8();
+                out.push(c2);
+                i += consumed2;
+                for _ in 0..consumed2 {
+                    boundaries.push(i);
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+        } else if in_char {
+            let c = src.text[i..].chars().next().unwrap();
+            let consumed = c.len_utf8();
+            out.push(c);
+            i += consumed;
+            for _ in 0..consumed {
+                boundaries.push(i);
+            }
+            if c == '\\' && i < bytes.len() {
+                let c2 = src.text[i..].chars().next().unwrap();
+                let consumed2 = c2.len_utf8();
+                out.push(c2);
+                i += consumed2;
+                for _ in 0..consumed2 {
+                    boundaries.push(i);
+                }
+            } else if c == '\'' {
+                in_char = false;
+            }
+        } else if bytes[i] == b'"' {
+            in_string = true;
+            out.push('"');
+            i += 1;
+            boundaries.push(i);
+        } else if bytes[i] == b'\'' {
+            in_char = true;
+            out.push('\'');
+            i += 1;
+            boundaries.push(i);
+        } else if is_ident_start(bytes[i]) {
             let start = i;
             i += 1;
             while i < bytes.len() && is_ident_continue_local(bytes[i]) {
