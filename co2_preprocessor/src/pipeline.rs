@@ -195,7 +195,7 @@ impl Preprocessor {
             include_paths: Vec::new(),
             quote_include_paths: Vec::new(),
             isystem_include_paths: Vec::new(),
-            system_include_paths: Self::default_system_include_paths(),
+            system_include_paths: Vec::new(),
             include_stack: Vec::new(),
             pragma_once_files: HashSet::new(),
             pending_injections: Vec::new(),

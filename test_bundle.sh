@@ -12,6 +12,7 @@ echo "Testing bundle in bwrap container..."
 bwrap \
   --ro-bind /usr /usr \
   --ro-bind /lib /lib \
+  --ro-bind /etc /etc \
   --ro-bind /lib64 /lib64 \
   --ro-bind /bin /bin \
   --dev /dev \

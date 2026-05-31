@@ -93,7 +93,7 @@ fn cargo_miri_available() -> bool {
 pub fn build_compilers(root: &Path, coverage: bool) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root)
-        .args(["build", "-q", "--locked", "-p", "co2-multicall"]);
+        .args(["build", "--locked", "-p", "co2-multicall"]);
 
     if coverage {
         cmd.env("RUSTFLAGS", "-C instrument-coverage");

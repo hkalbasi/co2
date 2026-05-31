@@ -192,6 +192,8 @@ fn run_nu_dir_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) ->
     cmd.arg(&main_nu)
         .current_dir(&temp_path)
         .env("PATH", merged_path)
+        .env("NO_COLOR", "1")
+        .env("CARGO_TERM_COLOR", "never")
         .env("CO2_WORKSPACE_ROOT", root)
         .env("CO2_TEST_DIR", &temp_path)
         .env("CO2_BIN_DIR", &compiler_bin);

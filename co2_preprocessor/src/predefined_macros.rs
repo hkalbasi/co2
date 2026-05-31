@@ -4,8 +4,6 @@
 //! type limits, float characteristics, etc.) and architecture-specific
 //! setup for aarch64 and riscv64.
 
-use std::path::PathBuf;
-
 use super::macro_defs::MacroDef;
 use super::pipeline::Preprocessor;
 
@@ -308,69 +306,6 @@ impl Preprocessor {
         });
     }
 
-    /// Locate the bundled `include/` directory shipped alongside the binary.
-    ///
-    /// Walks up to 5 parent directories from the canonicalized executable path
-    /// looking for an `include/` directory that contains `emmintrin.h`.
-    /// Falls back to the compile-time `CARGO_MANIFEST_DIR/include` path.
-    /// Returns `Some(path)` when a valid bundled include directory is found.
-    pub fn bundled_include_dir() -> Option<PathBuf> {
-        // Try to find the include dir relative to the running binary.
-        if let Ok(exe) = std::env::current_exe()
-            && let Ok(canonical) = exe.canonicalize()
-        {
-            let mut dir = canonical.as_path().parent();
-            for _ in 0..5 {
-                if let Some(d) = dir {
-                    let candidate = d.join("include");
-                    if candidate.join("emmintrin.h").is_file() {
-                        return Some(candidate);
-                    }
-                    dir = d.parent();
-                } else {
-                    break;
-                }
-            }
-        }
-
-        // Compile-time fallback: CARGO_MANIFEST_DIR/include
-        let fallback = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("include");
-        if fallback.join("emmintrin.h").is_file() {
-            return Some(fallback);
-        }
-
-        None
-    }
-
-    /// Get default system include paths (arch-neutral only).
-    pub(super) fn default_system_include_paths() -> Vec<PathBuf> {
-        let mut paths = Vec::new();
-        // Bundled include directory takes priority over system GCC headers
-        if let Some(bundled) = Self::bundled_include_dir() {
-            paths.push(bundled);
-        }
-        // Only include arch-neutral paths here; arch-specific paths are added by set_target
-        let candidates = [
-            "/usr/local/include",
-            // x86_64 multiarch (default, removed by set_target for other arches)
-            "/usr/include/x86_64-linux-gnu",
-            // GCC headers (common versions)
-            "/usr/lib/gcc/x86_64-linux-gnu/12/include",
-            "/usr/lib/gcc/x86_64-linux-gnu/11/include",
-            "/usr/lib/gcc/x86_64-linux-gnu/13/include",
-            "/usr/lib/gcc/x86_64-linux-gnu/14/include",
-            "/usr/lib/gcc/x86_64-linux-gnu/10/include",
-            "/usr/include",
-        ];
-        for candidate in &candidates {
-            let path = PathBuf::from(candidate);
-            if path.is_dir() {
-                paths.push(path);
-            }
-        }
-        paths
-    }
-
     /// Define x86/x86_64 SIMD feature macros (__SSE__, __SSE2__, __MMX__, etc.).
     ///
     /// GCC/Clang always define these for x86_64 (SSE2 is baseline for the ISA).
@@ -450,20 +385,6 @@ impl Preprocessor {
                 self.define_simple_macro("__AARCH64_CMODEL_SMALL__", "1");
                 // ARM: char is unsigned by default
                 self.define_simple_macro("__CHAR_UNSIGNED__", "1");
-                // Replace x86 include paths with aarch64 paths
-                self.system_include_paths.retain(|p| {
-                    let s = p.to_string_lossy();
-                    !s.contains("x86_64")
-                });
-                let aarch64_paths = [
-                    "/usr/lib/gcc-cross/aarch64-linux-gnu/11/include",
-                    "/usr/lib/gcc-cross/aarch64-linux-gnu/12/include",
-                    "/usr/lib/gcc-cross/aarch64-linux-gnu/13/include",
-                    "/usr/lib/gcc-cross/aarch64-linux-gnu/14/include",
-                    "/usr/aarch64-linux-gnu/include",
-                    "/usr/include/aarch64-linux-gnu",
-                ];
-                self.insert_arch_paths_after_bundled(&aarch64_paths);
                 // AArch64 uses IEEE 754 binary128 for long double (not x87 80-bit)
                 self.override_ldbl_binary128();
             }
@@ -504,20 +425,6 @@ impl Preprocessor {
                 self.define_simple_macro("__riscv_zifencei", "2000000");
                 self.define_simple_macro("__riscv_arch_test", "1");
                 self.define_simple_macro("__riscv_cmodel_medany", "1");
-                // Replace x86 include paths with riscv64 paths
-                self.system_include_paths.retain(|p| {
-                    let s = p.to_string_lossy();
-                    !s.contains("x86_64")
-                });
-                let riscv_paths = [
-                    "/usr/lib/gcc-cross/riscv64-linux-gnu/11/include",
-                    "/usr/lib/gcc-cross/riscv64-linux-gnu/12/include",
-                    "/usr/lib/gcc-cross/riscv64-linux-gnu/13/include",
-                    "/usr/lib/gcc-cross/riscv64-linux-gnu/14/include",
-                    "/usr/riscv64-linux-gnu/include",
-                    "/usr/include/riscv64-linux-gnu",
-                ];
-                self.insert_arch_paths_after_bundled(&riscv_paths);
                 // RISC-V uses IEEE 754 binary128 for long double (not x87 80-bit)
                 self.override_ldbl_binary128();
             }
@@ -590,24 +497,6 @@ impl Preprocessor {
                 self.define_simple_macro("__INT_FAST64_TYPE__", "long long int");
                 self.define_simple_macro("__UINT_FAST16_TYPE__", "unsigned int");
                 self.define_simple_macro("__UINT_FAST64_TYPE__", "long long unsigned int");
-                // Replace x86-64 include paths with i686 paths
-                self.system_include_paths.retain(|p| {
-                    let s = p.to_string_lossy();
-                    !s.contains("x86_64")
-                });
-                let i686_paths = [
-                    "/usr/lib/gcc-cross/i686-linux-gnu/11/include",
-                    "/usr/lib/gcc-cross/i686-linux-gnu/12/include",
-                    "/usr/lib/gcc-cross/i686-linux-gnu/13/include",
-                    "/usr/lib/gcc-cross/i686-linux-gnu/14/include",
-                    "/usr/lib/gcc/i686-linux-gnu/11/include",
-                    "/usr/lib/gcc/i686-linux-gnu/12/include",
-                    "/usr/lib/gcc/i686-linux-gnu/13/include",
-                    "/usr/lib/gcc/i686-linux-gnu/14/include",
-                    "/usr/i686-linux-gnu/include",
-                    "/usr/include/i386-linux-gnu",
-                ];
-                self.insert_arch_paths_after_bundled(&i686_paths);
                 // Override width macros for ILP32 (pointer/long/size_t/ptrdiff are 32-bit)
                 self.define_simple_macro("__LONG_WIDTH__", "32");
                 self.define_simple_macro("__PTRDIFF_WIDTH__", "32");
@@ -620,30 +509,6 @@ impl Preprocessor {
             }
             _ => {
                 // x86_64 is already the default
-            }
-        }
-    }
-
-    /// Insert architecture-specific include paths, keeping the bundled include
-    /// directory first so our simplified SSE/intrinsic headers take priority over
-    /// the system GCC cross-compiler headers (which use unsupported builtins).
-    fn insert_arch_paths_after_bundled(&mut self, arch_paths: &[&str]) {
-        // Find the index after the bundled include dir (if present).
-        // The bundled dir is always the first entry added by default_system_include_paths().
-        let insert_pos = if let Some(bundled) = Self::bundled_include_dir() {
-            self.system_include_paths
-                .iter()
-                .position(|p| *p == bundled)
-                .map_or(0, |i| i + 1)
-        } else {
-            0
-        };
-        let mut offset = 0;
-        for p in arch_paths {
-            let path = PathBuf::from(p);
-            if path.is_dir() {
-                self.system_include_paths.insert(insert_pos + offset, path);
-                offset += 1;
             }
         }
     }

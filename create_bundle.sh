@@ -35,8 +35,9 @@ checkpoint Prepared payload dir
 # 3. Collect libs
 SYSROOT=$(rustc --print sysroot)
 mkdir -p "$PAYLOAD_DIR/lib"
+ldd "$SYSROOT"/lib/librustc_driver-*.so
 cp "$SYSROOT"/lib/librustc_driver-*.so "$PAYLOAD_DIR/lib/"
-cp "$SYSROOT"/lib/libLLVM*.so* "$PAYLOAD_DIR/lib/"
+cp "$SYSROOT"/lib/libLLVM*.so* "$PAYLOAD_DIR/lib/" || true
 
 checkpoint Collected libs
 
