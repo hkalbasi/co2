@@ -43,14 +43,6 @@ fn spanned_error(span: Span, msg: impl Into<String>) -> (Span, String) {
     (span, msg.into())
 }
 
-fn invalid_span() -> Span {
-    Span {
-        start: 0,
-        end: 0,
-        context: co2_ast::FileId::INVALID,
-    }
-}
-
 impl CompressedTypeSpecifier {
     pub fn build(
         specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
@@ -915,7 +907,7 @@ impl LocalResolverBase {
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Const(def_id) => {
                     if self.has_local_const_value(*def_id) {
-                        self.eval_local_const(*def_id)
+                        self.eval_local_const(*def_id, *span)
                     } else if let Some(val) = self.hir_ctx.dependency_const_value(*def_id) {
                         match val {
                             rustc_public_generative::DependencyConstValue::Bool(b) => {
@@ -962,8 +954,8 @@ impl LocalResolverBase {
                         ))
                     }
                 }
-                crate::DefOrLocal::Def { def_id, .. } => self.eval_local_const(*def_id),
-                crate::DefOrLocal::LocalConst(local) => self.eval_local_constexpr(*local),
+                crate::DefOrLocal::Def { def_id, .. } => self.eval_local_const(*def_id, *span),
+                crate::DefOrLocal::LocalConst(local) => self.eval_local_constexpr(*local, *span),
                 _ => Err(spanned_error(
                     *span,
                     format!("unsupported identifier in constant expression: {resolved:?}"),
@@ -1020,11 +1012,11 @@ impl LocalResolverBase {
             Expression::Cast { type_name, expr } => {
                 let value = self.eval_const_expr(expr)?;
                 let target_ty = self.lower_type_name_for_const(*type_name.clone(), *span);
-                self.cast_const_int(value, &target_ty)
+                self.cast_const_int(value, &target_ty, *span)
             }
             Expression::SizeofType(type_name) => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span);
-                Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
+                Ok(self.sizeof_hir_ty(&ty, *span)?.0 as i128)
             }
             Expression::Offsetof {
                 ty: type_name,
@@ -1036,15 +1028,15 @@ impl LocalResolverBase {
             }
             Expression::Sizeof(expr) => {
                 let ty = self.type_of_expr_for_sizeof(expr);
-                Ok(self.sizeof_hir_ty(&ty)?.0 as i128)
+                Ok(self.sizeof_hir_ty(&ty, *span)?.0 as i128)
             }
             Expression::AlignofType(type_name) => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span);
-                Ok(self.sizeof_hir_ty(&ty)?.1 as i128)
+                Ok(self.sizeof_hir_ty(&ty, *span)?.1 as i128)
             }
             Expression::Alignof(expr) => {
                 let ty = self.type_of_expr_for_sizeof(expr);
-                Ok(self.sizeof_hir_ty(&ty)?.1 as i128)
+                Ok(self.sizeof_hir_ty(&ty, *span)?.1 as i128)
             }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
                 let t1 = self.lower_type_name_for_const(*ty1.clone(), *span);
@@ -1094,6 +1086,7 @@ impl LocalResolverBase {
     pub(crate) fn eval_local_const(
         &mut self,
         def_id: DefId,
+        span: Span,
     ) -> Result<i128, (co2_ast::Span, String)> {
         if let Some(expr) = self.constexpr_def_exprs.get(&def_id).cloned() {
             return self.eval_const_expr(&expr);
@@ -1110,10 +1103,7 @@ impl LocalResolverBase {
             .find(|e| e.def_id == def_id)
             .map(|e| &e.mir_info)
             .ok_or_else(|| {
-                spanned_error(
-                    invalid_span(),
-                    format!("could not find enum constant {def_id:?}"),
-                )
+                spanned_error(span, format!("could not find enum constant {def_id:?}"))
             })?;
 
         let value = match &mir_info {
@@ -1123,11 +1113,11 @@ impl LocalResolverBase {
             }
             crate::MirOwnerInfo::EnumConstPrevPlus(prev_id, _) => {
                 let prev_id = *prev_id;
-                self.eval_local_const(prev_id)? + 1
+                self.eval_local_const(prev_id, span)? + 1
             }
             _ => {
                 return Err(spanned_error(
-                    invalid_span(),
+                    span,
                     format!("def {def_id:?} is not an enum constant"),
                 ));
             }
@@ -1140,6 +1130,7 @@ impl LocalResolverBase {
     pub(crate) fn eval_local_constexpr(
         &mut self,
         local: u32,
+        span: Span,
     ) -> Result<i128, (co2_ast::Span, String)> {
         let expr = self
             .constexpr_local_exprs
@@ -1147,7 +1138,7 @@ impl LocalResolverBase {
             .cloned()
             .ok_or_else(|| {
                 spanned_error(
-                    invalid_span(),
+                    span,
                     format!("missing constexpr initializer for local {local}"),
                 )
             })?;
@@ -1244,23 +1235,21 @@ impl LocalResolverBase {
         &self,
         value: i128,
         target_ty: &HirTy,
+        span: co2_ast::Span,
     ) -> Result<i128, (co2_ast::Span, String)> {
         if let HirTyKind::Adt(def, _) = target_ty.kind
             && self.is_enum_def(def)
         {
-            return self.cast_const_int(value, &HirTy::signed_ty(IntTy::I32, target_ty.span));
+            return self.cast_const_int(value, &HirTy::signed_ty(IntTy::I32, target_ty.span), span);
         }
         match target_ty.kind {
             HirTyKind::Bool => Ok(i128::from(value != 0)),
             HirTyKind::Char => {
-                let codepoint = u32::try_from(value).map_err(|_| {
-                    spanned_error(invalid_span(), format!("invalid char cast value {value}"))
-                })?;
+                let codepoint = u32::try_from(value)
+                    .map_err(|_| spanned_error(span, format!("invalid char cast value {value}")))?;
                 char::from_u32(codepoint)
                     .map(|ch| ch as i128)
-                    .ok_or_else(|| {
-                        spanned_error(invalid_span(), format!("invalid char cast value {value}"))
-                    })
+                    .ok_or_else(|| spanned_error(span, format!("invalid char cast value {value}")))
             }
             HirTyKind::Int(IntTy::I8) => Ok(i128::from(value as i8)),
             HirTyKind::Int(IntTy::I16) => Ok(i128::from(value as i16)),
@@ -1274,8 +1263,19 @@ impl LocalResolverBase {
             HirTyKind::Uint(UintTy::U64) => Ok(i128::from(value as u64)),
             HirTyKind::Uint(UintTy::U128) => Ok((value as u128) as i128),
             HirTyKind::Uint(UintTy::Usize) => Ok((value as usize) as i128),
+            HirTyKind::Adt(def, ref args) => {
+                if args.is_empty()
+                    && let Some(ty) = self.typedef_tys.get(&def)
+                {
+                    return self.cast_const_int(value, ty, span);
+                }
+                Err(spanned_error(
+                    span,
+                    format!("unsupported adt target in constant expression: {def:?}"),
+                ))
+            }
             _ => Err(spanned_error(
-                invalid_span(),
+                span,
                 format!(
                     "unsupported cast target in constant expression: {:?}",
                     target_ty.kind
@@ -1568,13 +1568,13 @@ impl LocalResolverBase {
                 co2_ast::StructOrUnionKind::Struct => {
                     let mut running_offset = 0usize;
                     for prev_field in fields.iter().take(field_idx) {
-                        let (field_size, field_align) = self.sizeof_hir_ty(prev_field)?;
+                        let (field_size, field_align) = self.sizeof_hir_ty(prev_field, span)?;
                         let field_align =
                             pack_align.map_or(field_align, |pack| field_align.min(pack));
                         running_offset = round_up(running_offset, field_align);
                         running_offset += field_size;
                     }
-                    let (_, field_align) = self.sizeof_hir_ty(&field_ty)?;
+                    let (_, field_align) = self.sizeof_hir_ty(&field_ty, span)?;
                     let field_align = pack_align.map_or(field_align, |pack| field_align.min(pack));
                     round_up(running_offset, field_align)
                 }
@@ -1672,7 +1672,11 @@ impl LocalResolverBase {
         }
     }
 
-    fn sizeof_hir_ty(&mut self, ty: &HirTy) -> Result<(usize, usize), (co2_ast::Span, String)> {
+    fn sizeof_hir_ty(
+        &mut self,
+        ty: &HirTy,
+        span: Span,
+    ) -> Result<(usize, usize), (co2_ast::Span, String)> {
         match &ty.kind {
             HirTyKind::Bool
             | HirTyKind::Char
@@ -1695,15 +1699,15 @@ impl LocalResolverBase {
             | HirTyKind::Float(FloatTy::F128) => Ok((16, 16)),
             HirTyKind::Tuple(inner) if inner.is_empty() => Ok((0, 1)),
             HirTyKind::Array(HirTyConst::Literal(len), inner) => {
-                let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
+                let (elem_size, elem_align) = self.sizeof_hir_ty(inner, span)?;
                 Ok((elem_size * len, elem_align))
             }
             HirTyKind::Array(HirTyConst::ConstDef(def_id), inner) => {
                 let registered = self.lookup_array_len_const_by_def(*def_id).ok_or_else(|| {
-                    spanned_error(invalid_span(), "unsupported array length const in sizeof")
+                    spanned_error(span, "unsupported array length const in sizeof")
                 })?;
                 let len = self.eval_array_len_expr(&registered.expr)?;
-                let (elem_size, elem_align) = self.sizeof_hir_ty(inner)?;
+                let (elem_size, elem_align) = self.sizeof_hir_ty(inner, span)?;
                 Ok((elem_size * len, elem_align))
             }
             HirTyKind::Adt(def, args) => {
@@ -1713,7 +1717,7 @@ impl LocalResolverBase {
                     match kind {
                         co2_ast::StructOrUnionKind::Struct => {
                             for field in fields {
-                                let (field_size, field_align) = self.sizeof_hir_ty(&field)?;
+                                let (field_size, field_align) = self.sizeof_hir_ty(&field, span)?;
                                 align = align.max(field_align);
                                 size = round_up(size, field_align);
                                 size += field_size;
@@ -1721,7 +1725,7 @@ impl LocalResolverBase {
                         }
                         co2_ast::StructOrUnionKind::Union => {
                             for field in fields {
-                                let (field_size, field_align) = self.sizeof_hir_ty(&field)?;
+                                let (field_size, field_align) = self.sizeof_hir_ty(&field, span)?;
                                 align = align.max(field_align);
                                 size = size.max(field_size);
                             }
@@ -1729,7 +1733,7 @@ impl LocalResolverBase {
                     }
                     Ok((round_up(size, align), align))
                 } else if let Some(ty) = self.typedef_tys.get(def).cloned() {
-                    self.sizeof_hir_ty(&ty)
+                    self.sizeof_hir_ty(&ty, span)
                 } else if self
                     .resolver
                     .resolve("core::mem::MaybeUninit")
@@ -1738,22 +1742,22 @@ impl LocalResolverBase {
                 {
                     // MaybeUninit<T> has the same size and alignment as T.
                     if let Some(HirGenericArg::Ty(inner)) = args.first() {
-                        self.sizeof_hir_ty(inner)
+                        self.sizeof_hir_ty(inner, span)
                     } else {
                         Err(spanned_error(
-                            invalid_span(),
+                            span,
                             "unsupported ADT in sizeof(array size expr)",
                         ))
                     }
                 } else {
                     Err(spanned_error(
-                        invalid_span(),
+                        span,
                         "unsupported ADT in sizeof(array size expr)",
                     ))
                 }
             }
             _ => Err(spanned_error(
-                invalid_span(),
+                span,
                 "unsupported type in sizeof(array size expr)",
             )),
         }

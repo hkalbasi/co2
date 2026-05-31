@@ -892,7 +892,7 @@ impl HirCtx<'_> {
             Expression::Identifier((resolved, _)) => match resolved {
                 co2_crate_sig::DefOrLocal::Const(def_id) => {
                     if self.decl_resolver.has_local_const_value(*def_id) {
-                        self.decl_resolver.local_const_int_value(*def_id)
+                        self.decl_resolver.local_const_int_value(*def_id, *span)
                     } else if let Some(value) = self.decl_resolver.dependency_const_value(*def_id) {
                         dependency_const_value_to_i128(&value)
                     } else {
@@ -903,10 +903,10 @@ impl HirCtx<'_> {
                     }
                 }
                 co2_crate_sig::DefOrLocal::Def { def_id, .. } => {
-                    self.decl_resolver.local_const_int_value(*def_id)
+                    self.decl_resolver.local_const_int_value(*def_id, *span)
                 }
                 co2_crate_sig::DefOrLocal::LocalConst(local) => {
-                    self.decl_resolver.local_constexpr_int_value(*local)
+                    self.decl_resolver.local_constexpr_int_value(*local, *span)
                 }
                 _ => Err(spanned_error(
                     *span,
