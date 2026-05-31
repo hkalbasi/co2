@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 
 use rustc_abi::ExternAbi;
-use rustc_ast::token::Token;
+use rustc_ast::token::{CommentKind, DocFragmentKind, Token};
 use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_ast::{Attribute, FloatTy, IntTy, UintTy};
 use rustc_data_structures::fingerprint::Fingerprint;
@@ -36,7 +36,7 @@ use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
 use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
 
-use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, StructField};
+use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, StructField};
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{
@@ -207,6 +207,7 @@ impl ItemSignatureInfo {
                         span,
                         ty,
                         name: _,
+                        attrs: _,
                     } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
@@ -220,6 +221,7 @@ impl ItemSignatureInfo {
                         ty,
                         rhs,
                         name: _,
+                        attrs: _,
                     } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
@@ -237,6 +239,7 @@ impl ItemSignatureInfo {
                         mutable,
                         no_mangle: _,
                         name: _,
+                        attrs: _,
                     } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
@@ -355,6 +358,7 @@ pub enum ItemSignatureKind {
 #[derive(Debug, Clone)]
 pub struct DefinedCrateInfo {
     pub items: Vec<DefinedItemInfo>,
+    pub attrs: Vec<GeneratedAttr>,
     pub no_main: bool,
 }
 
@@ -1130,13 +1134,17 @@ impl DefinedCrateInfo {
         item_allocator.set_root_node(hir::Node::Crate(root_mod));
 
         let crate_owner_nodes = item_allocator.into_owner_nodes();
-        let crate_attrs = self
-            .no_main
-            .then(|| vec![hir::Attribute::Parsed(hir::attrs::AttributeKind::NoMain)]);
+        let mut crate_attrs = generated_attrs(&self.attrs);
+        if self.no_main {
+            crate_attrs.push(hir::Attribute::Parsed(hir::attrs::AttributeKind::NoMain));
+        }
         insert_owner(
             &mut owners,
             crate_def,
-            leak(make_owner_info_with_attrs(crate_owner_nodes, crate_attrs)),
+            leak(make_owner_info_with_attrs(
+                crate_owner_nodes,
+                (!crate_attrs.is_empty()).then_some(crate_attrs),
+            )),
         );
         owner_parents.insert(crate_def, HirId::make_owner(crate_def));
 
@@ -1234,6 +1242,7 @@ impl DefinedCrateInfo {
                         items.push(DefinedItemInfo {
                             name: String::new(),
                             kind: DefinedItemKind::AnonConst(rhs),
+                            attrs: Vec::new(),
                             span: DUMMY_SP,
                             parent: Some(id),
                         });
@@ -1265,6 +1274,7 @@ impl DefinedCrateInfo {
                                     items.push(DefinedItemInfo {
                                         name: field.name,
                                         kind: DefinedItemKind::Field(field.id),
+                                        attrs: Vec::new(),
                                         span: internal(tcx, field.span),
                                         parent: Some(id.0),
                                     });
@@ -1285,6 +1295,7 @@ impl DefinedCrateInfo {
                                 def_id: id,
                                 of_trait: trait_def.is_some(),
                             },
+                            attrs: Vec::new(),
                             span: DUMMY_SP,
                             parent,
                         });
@@ -1294,6 +1305,7 @@ impl DefinedCrateInfo {
                                     items.push(DefinedItemInfo {
                                         name: item.name.clone(),
                                         kind: DefinedItemKind::ImplItemFn(item.id),
+                                        attrs: Vec::new(),
                                         span: DUMMY_SP,
                                         parent: Some(id),
                                     });
@@ -1306,11 +1318,13 @@ impl DefinedCrateInfo {
                         name,
                         id,
                         module,
+                        attrs,
                         span,
                     } => {
                         items.push(DefinedItemInfo {
                             name,
                             kind: DefinedItemKind::Module(id),
+                            attrs,
                             span: internal(tcx, span),
                             parent,
                         });
@@ -1326,6 +1340,7 @@ impl DefinedCrateInfo {
                         items.push(DefinedItemInfo {
                             name: String::new(),
                             kind: DefinedItemKind::ForeignMod(foreign_mod_id),
+                            attrs: Vec::new(),
                             span: DUMMY_SP,
                             parent,
                         });
@@ -1339,6 +1354,7 @@ impl DefinedCrateInfo {
                                 } => items.push(DefinedItemInfo {
                                     name,
                                     kind: DefinedItemKind::ForeignFunction(id),
+                                    attrs: Vec::new(),
                                     span: DUMMY_SP,
                                     parent: Some(foreign_mod_id),
                                 }),
@@ -1349,6 +1365,7 @@ impl DefinedCrateInfo {
                                 } => items.push(DefinedItemInfo {
                                     name,
                                     kind: DefinedItemKind::ForeignType(id),
+                                    attrs: Vec::new(),
                                     span: DUMMY_SP,
                                     parent: Some(foreign_mod_id),
                                 }),
@@ -1364,6 +1381,7 @@ impl DefinedCrateInfo {
                                         def_id: id,
                                         no_mangle: false,
                                     },
+                                    attrs: Vec::new(),
                                     span: DUMMY_SP,
                                     parent: Some(foreign_mod_id),
                                 }),
@@ -1375,6 +1393,7 @@ impl DefinedCrateInfo {
                 items.push(DefinedItemInfo {
                     name: hir_item.name().unwrap().to_owned(),
                     kind,
+                    attrs: hir_item.attrs().to_vec(),
                     span: hir_item.span().map_or(DUMMY_SP, |s| internal(tcx, s)),
                     parent,
                 });
@@ -1393,6 +1412,7 @@ impl DefinedCrateInfo {
         (
             Self {
                 items,
+                attrs: hir_structure.root.attrs.clone(),
                 no_main: hir_structure.no_main,
             },
             the_foreign_def.expect("missing foreign mod"),
@@ -1698,6 +1718,7 @@ impl DefinedCrateState {
 pub struct DefinedItemInfo {
     pub name: String,
     pub kind: DefinedItemKind,
+    pub attrs: Vec<GeneratedAttr>,
     pub span: RustcSpan,
     pub parent: Option<DefId>,
 }
@@ -2908,16 +2929,15 @@ fn generated_hir_attr_map(tcx: TyCtxt<'_>, key: OwnerId) -> &hir::AttributeMap<'
         };
         let key = key.to_def_id();
         if key.is_crate_root() {
-            if let DefinedCrateState::Stage2(items, _, _, ()) = generated
-                && items.no_main
-            {
+            let mut attrs = generated_attrs(&items.attrs);
+            if items.no_main {
+                attrs.push(hir::Attribute::Parsed(hir::attrs::AttributeKind::NoMain));
+            }
+            if !attrs.is_empty() {
                 return leak(hir::AttributeMap {
                     map: [(
                         ItemLocalId::ZERO,
-                        leak(
-                            vec![hir::Attribute::Parsed(hir::attrs::AttributeKind::NoMain)]
-                                .into_boxed_slice(),
-                        ) as &[hir::Attribute],
+                        leak(attrs.into_boxed_slice()) as &[hir::Attribute],
                     )]
                     .into_iter()
                     .collect(),
@@ -2931,7 +2951,8 @@ fn generated_hir_attr_map(tcx: TyCtxt<'_>, key: OwnerId) -> &hir::AttributeMap<'
         let Some(info) = items.items.iter().find(|item| item.def_id() == key) else {
             return hir::AttributeMap::EMPTY;
         };
-        let Some(attrs) = generated_item_attrs(info.kind) else {
+        let attrs = generated_item_attrs(info);
+        if attrs.is_empty() {
             return hir::AttributeMap::EMPTY;
         };
         leak(hir::AttributeMap {
@@ -2947,7 +2968,16 @@ fn generated_hir_attr_map(tcx: TyCtxt<'_>, key: OwnerId) -> &hir::AttributeMap<'
     })
 }
 
-fn generated_item_attrs(kind: DefinedItemKind) -> Option<Vec<hir::Attribute>> {
+fn generated_item_attrs(info: &DefinedItemInfo) -> Vec<hir::Attribute> {
+    let mut attrs = generated_attrs(&info.attrs);
+    let Some(attr) = generated_builtin_item_attr(info.kind) else {
+        return attrs;
+    };
+    attrs.push(hir::Attribute::Parsed(attr));
+    attrs
+}
+
+fn generated_builtin_item_attr(kind: DefinedItemKind) -> Option<hir::attrs::AttributeKind> {
     let attr = match kind {
         DefinedItemKind::Function {
             no_mangle: true, ..
@@ -2977,7 +3007,31 @@ fn generated_item_attrs(kind: DefinedItemKind) -> Option<Vec<hir::Attribute>> {
         }
         _ => return None,
     };
-    Some(vec![hir::Attribute::Parsed(attr)])
+    Some(attr)
+}
+
+fn generated_attrs(attrs: &[GeneratedAttr]) -> Vec<hir::Attribute> {
+    attrs.iter().filter_map(generated_attr).collect()
+}
+
+fn generated_attr(attr: &GeneratedAttr) -> Option<hir::Attribute> {
+    let kind = match attr {
+        GeneratedAttr::DocComment { comment, inner } => hir::attrs::AttributeKind::DocComment {
+            style: if *inner {
+                rustc_ast::AttrStyle::Inner
+            } else {
+                rustc_ast::AttrStyle::Outer
+            },
+            kind: DocFragmentKind::Sugared(CommentKind::Line),
+            span: DUMMY_SP,
+            comment: Symbol::intern(comment),
+        },
+        GeneratedAttr::Word { path } if path.as_slice() == ["no_main"] => {
+            hir::attrs::AttributeKind::NoMain
+        }
+        GeneratedAttr::Word { .. } => return None,
+    };
+    Some(hir::Attribute::Parsed(kind))
 }
 
 fn generated_opt_ast_lowering_delayed_lints(

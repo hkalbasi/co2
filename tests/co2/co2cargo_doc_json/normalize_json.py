@@ -81,6 +81,8 @@ def summarize_item(item_id: int) -> dict:
         "visibility": item["visibility"],
         "filename": item.get("span", {}).get("filename"),
     }
+    if item.get("docs") is not None:
+        summary["docs"] = item["docs"]
 
     if kind == "module":
         summary["items"] = sorted(

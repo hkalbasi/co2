@@ -115,9 +115,17 @@ impl Preprocessor {
                     }
                 }
                 b'/' if i + 1 < len && bytes[i + 1] == b'/' => {
-                    i += 2;
-                    while i < len && bytes[i] != b'\n' {
-                        i += 1;
+                    if i + 2 < len && matches!(bytes[i + 2], b'/' | b'!') {
+                        while i < len && bytes[i] != b'\n' {
+                            out.push(bytes[i]);
+                            i += 1;
+                            boundaries.push(i);
+                        }
+                    } else {
+                        i += 2;
+                        while i < len && bytes[i] != b'\n' {
+                            i += 1;
+                        }
                     }
                 }
                 b'/' if i + 1 < len && bytes[i + 1] == b'*' => {

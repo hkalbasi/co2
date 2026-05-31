@@ -664,6 +664,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                 next
             }
             Declaration::Declaration {
+                attrs: _,
                 declaration_specifiers,
                 declarators,
             } => {

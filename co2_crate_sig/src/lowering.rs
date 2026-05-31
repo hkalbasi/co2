@@ -65,11 +65,53 @@ fn has_const_qualifier_in_decl_specs(
 fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> Vec<GeneratedAttr> {
     attrs
         .iter()
-        .filter(|(attr, _)| attr.args.is_empty())
-        .map(|(attr, _)| GeneratedAttr {
-            path: attr.path.iter().map(|seg| seg.0.clone()).collect(),
+        .filter_map(|(attr, _)| {
+            let path = attr
+                .path
+                .iter()
+                .map(|seg| seg.0.clone())
+                .collect::<Vec<_>>();
+            if path == ["doc"] {
+                let doc_text = match attr.args.as_slice() {
+                    [(co2_ast::Token::StringLit(lit), _)] => Some(lit.bytes.clone()),
+                    [
+                        (co2_ast::Token::Assign, _),
+                        (co2_ast::Token::StringLit(lit), _),
+                    ] => Some(lit.bytes.clone()),
+                    _ => None,
+                }?;
+                Some(GeneratedAttr::DocComment {
+                    comment: String::from_utf8_lossy(&doc_text).into_owned(),
+                    inner: attr.is_inner(),
+                })
+            } else if attr.args.is_empty() {
+                Some(GeneratedAttr::Word { path })
+            } else {
+                None
+            }
         })
         .collect()
+}
+
+fn lower_module_file_attrs_for_decl_item(
+    attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>],
+) -> Vec<GeneratedAttr> {
+    lower_generated_attrs(attrs)
+        .into_iter()
+        .map(|attr| match attr {
+            GeneratedAttr::DocComment { comment, .. } => GeneratedAttr::DocComment {
+                comment,
+                inner: false,
+            },
+            GeneratedAttr::Word { path } => GeneratedAttr::Word { path },
+        })
+        .collect()
+}
+
+fn has_word_attr(attrs: &[GeneratedAttr], word: &str) -> bool {
+    attrs
+        .iter()
+        .any(|attr| matches!(attr, GeneratedAttr::Word { path } if path.as_slice() == [word]))
 }
 
 fn constexpr_decl_span(
@@ -243,6 +285,7 @@ fn deduplicate_tu_items(
                 tu_item_id += 1;
             }
             Declaration::Declaration {
+                attrs: _,
                 declaration_specifiers,
                 declarators,
             } => {
@@ -285,6 +328,7 @@ fn deduplicate_tu_items(
             true
         }
         Declaration::Declaration {
+            attrs: _,
             declaration_specifiers: _,
             declarators,
         } => {
@@ -306,6 +350,7 @@ fn deduplicate_tu_items(
 struct LoadedModule {
     name: String,
     def_id: DefId,
+    attrs: Vec<co2_ast::Spanned<co2_ast::RustAttribute>>,
     decl_span: co2_ast::Span,
     source_name: String,
     source: &'static str,
@@ -418,6 +463,7 @@ fn load_modules(
             modules.push(LoadedModule {
                 name: mod_item.name.0.clone(),
                 def_id,
+                attrs: mod_item.attrs.clone(),
                 decl_span: *mod_span,
                 source_name,
                 source: "",
@@ -466,6 +512,7 @@ fn load_modules(
             modules.push(LoadedModule {
                 name: mod_item.name.0.clone(),
                 def_id,
+                attrs: mod_item.attrs.clone(),
                 decl_span: *mod_span,
                 source_name,
                 source,
@@ -553,7 +600,7 @@ fn lower_translation_unit_items(
         let item = item.transform(&resolver);
         match item {
             Declaration::RustTypeAlias {
-                attrs: _,
+                attrs,
                 ident,
                 ty,
                 is_pub: _,
@@ -564,10 +611,15 @@ fn lower_translation_unit_items(
                     name,
                     id,
                     ty: ctx.lower_rust_ty(ty),
+                    attrs: lower_generated_attrs(&attrs),
                     span,
                 });
             }
-            Declaration::FunctionDefinition { signature, body } => {
+            Declaration::FunctionDefinition {
+                attrs: decl_attrs,
+                signature,
+                body,
+            } => {
                 let (name, sig, attrs, no_mangle) = match signature {
                     FunctionDefinitionSignature::C {
                         declaration_specifiers,
@@ -590,7 +642,7 @@ fn lower_translation_unit_items(
                                 "Main function with C ABI is not accepted in cargo projects. Use `fn main()` or `#![no_main]`.",
                             );
                         }
-                        (name, sig, Vec::new(), !is_static)
+                        (name, sig, lower_generated_attrs(&decl_attrs), !is_static)
                     }
                     FunctionDefinitionSignature::Rust(sig) => {
                         let attrs = lower_generated_attrs(&sig.attrs);
@@ -599,7 +651,7 @@ fn lower_translation_unit_items(
                     }
                 };
 
-                let is_test = test && attrs.iter().any(|attr| attr.path.as_slice() == ["test"]);
+                let is_test = test && has_word_attr(&attrs, "test");
                 let item_name = if is_test {
                     co2_test_symbol_name(module_path, &name)
                 } else {
@@ -663,9 +715,11 @@ fn lower_translation_unit_items(
                 ctx.mir_owners.insert(id.0, mir_owner);
             }
             Declaration::Declaration {
+                attrs,
                 declaration_specifiers,
                 declarators,
             } => {
+                let attrs = lower_generated_attrs(&attrs);
                 let original_specs = declaration_specifiers.clone();
                 let mut is_typedef = false;
                 let mut is_extern = false;
@@ -749,6 +803,7 @@ fn lower_translation_unit_items(
                         hir_items.push(HirModuleItem::TypeDef {
                             name,
                             id: type_def,
+                            attrs: attrs.clone(),
                             span,
                             ty,
                         });
@@ -823,6 +878,7 @@ fn lower_translation_unit_items(
                                     id,
                                     ty,
                                     rhs,
+                                    attrs: attrs.clone(),
                                     span,
                                 });
                             } else {
@@ -851,6 +907,7 @@ fn lower_translation_unit_items(
                                     ty,
                                     mutable: false,
                                     no_mangle: !is_static,
+                                    attrs: attrs.clone(),
                                     span,
                                 });
                             }
@@ -894,6 +951,7 @@ fn lower_translation_unit_items(
                                     ty,
                                     mutable: false,
                                     no_mangle: !is_static,
+                                    attrs: attrs.clone(),
                                     span,
                                 });
                             } else if is_extern {
@@ -957,10 +1015,17 @@ fn lower_translation_unit_items(
             test,
         );
         let span = ctx.co2_span_to_rustc(module.decl_span);
+        let mut module_item_attrs = lower_generated_attrs(&module.attrs);
+        module_item_attrs.extend(lower_module_file_attrs_for_decl_item(&module.tu.attrs));
         hir_items.push(HirModuleItem::Module {
             name: module.name.clone(),
             id: module.def_id,
-            module: HirModule { span, items },
+            module: HirModule {
+                span,
+                attrs: lower_generated_attrs(&module.tu.attrs),
+                items,
+            },
+            attrs: module_item_attrs,
             span,
         });
     }
@@ -1086,6 +1151,7 @@ pub fn lower_crate_sig(
             ctx.hir_items.push(HirModuleItem::TypeDef {
                 name: name.to_owned(),
                 id,
+                attrs: Vec::new(),
                 span,
                 ty: ty.clone(),
             });
@@ -1126,8 +1192,13 @@ pub fn lower_crate_sig(
         if is_transparent_union {
             ctx.resolver.borrow_mut().mark_transparent_union(&ty);
         }
-        ctx.hir_items
-            .push(HirModuleItem::TypeDef { name, id, ty, span });
+        ctx.hir_items.push(HirModuleItem::TypeDef {
+            name,
+            id,
+            ty,
+            attrs: Vec::new(),
+            span,
+        });
     }
 
     let pending_static = std::mem::take(&mut ctx.resolver.borrow_mut().pending_static);
@@ -1174,6 +1245,7 @@ pub fn lower_crate_sig(
                     span,
                     mutable: !is_constexpr,
                     no_mangle: false,
+                    attrs: Vec::new(),
                 });
                 if let Some(initializer) = declarator.initializer {
                     ctx.mir_owners.insert(
@@ -1221,6 +1293,7 @@ pub fn lower_crate_sig(
                     span,
                     mutable: !is_constexpr,
                     no_mangle: false,
+                    attrs: Vec::new(),
                 });
                 ctx.mir_owners.insert(
                     id,
@@ -1271,6 +1344,7 @@ pub fn lower_crate_sig(
                 name,
                 id: def,
                 ty: typedef_hir_ty,
+                attrs: Vec::new(),
                 span,
             });
             continue;
@@ -1356,6 +1430,7 @@ pub fn lower_crate_sig(
                 ty: HirTy::signed_ty(IntTy::I32, span),
                 mutable: false,
                 no_mangle: false,
+                attrs: Vec::new(),
                 span,
             });
         ctx.mir_owners.insert(def_id, mir_info);
@@ -1386,6 +1461,7 @@ pub fn lower_crate_sig(
             id: registered.def_id,
             ty: HirTy::usize_ty(span),
             rhs: registered.rhs,
+            attrs: Vec::new(),
             span,
         });
         ctx.mir_owners.insert(
@@ -1433,6 +1509,7 @@ pub fn lower_crate_sig(
         HirStructure {
             root: HirModule {
                 span,
+                attrs: lower_module_file_attrs_for_decl_item(&tu.attrs),
                 items: ctx.hir_items,
             },
             no_main,

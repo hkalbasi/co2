@@ -592,16 +592,21 @@ impl<A: TypeResolver> DoTransform for Declaration<A> {
 
     fn transform<B: Transformable<A>>(&self, b: &B) -> Declaration<B> {
         match self {
-            Declaration::FunctionDefinition { signature, body } => {
-                Declaration::FunctionDefinition {
-                    signature: signature.transform(b),
-                    body: body.clone(),
-                }
-            }
+            Declaration::FunctionDefinition {
+                attrs,
+                signature,
+                body,
+            } => Declaration::FunctionDefinition {
+                attrs: attrs.clone(),
+                signature: signature.transform(b),
+                body: body.clone(),
+            },
             Declaration::Declaration {
+                attrs,
                 declaration_specifiers,
                 declarators,
             } => Declaration::Declaration {
+                attrs: attrs.clone(),
                 declaration_specifiers: declaration_specifiers.transform(b),
                 declarators: declarators.transform(b),
             },

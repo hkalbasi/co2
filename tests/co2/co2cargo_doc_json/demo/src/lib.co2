@@ -1,8 +1,16 @@
+//! Crate docs
+
+/// nested module outer docs
 mod nested;
 mod ffi;
 
+/// Docs for Counter type alias
 pub type Counter = i32;
 
+/// Docs for Point typedef.
+/// Point has these fields:
+/// * `x`: position in the x-axis
+/// * `y`: position in the x-axis
 typedef struct {
     int x;
     int y;
@@ -13,13 +21,24 @@ typedef union {
     float frac;
 } Number;
 
+/// Docs for MAGIC static
+
+
+/// With some intentional spaces
 const int MAGIC = 7;
+
+    /// Docs for MUTABLE static
 int MUTABLE = 11;
 
+/// Docs for
+#[doc = "Rust-like"]
+/// fn
 pub fn public_value() -> i32 {
     return 2;
 }
 
+/// Docs for C-like
+/// function
 int c_abi_value(void) {
     return 9;
 }

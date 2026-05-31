@@ -8,12 +8,12 @@ use co2_ast::{
     EnumSpecifier, Enumerator, Expression, FileId, ForInit, FunctionDefinitionSignature,
     FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
     LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
-    RustAttribute, RustFunctionParam, RustFunctionSignature, RustPath, RustPathSegment, RustTy,
-    Span, Spanned, SpecifierQualifier, StatelessResolver, Statement, StatementOrDeclaration,
-    StorageClassSpecifier, StringLiteral, StringLiteralPrefix, StructDeclarator,
-    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token, TranslationUnit,
-    TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp, UseItem,
-    parse_unsigned_integer_constant,
+    RustAttribute, RustAttributeStyle, RustFunctionParam, RustFunctionSignature, RustPath,
+    RustPathSegment, RustTy, Span, Spanned, SpecifierQualifier, StatelessResolver, Statement,
+    StatementOrDeclaration, StorageClassSpecifier, StringLiteral, StringLiteralPrefix,
+    StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token,
+    TranslationUnit, TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp,
+    UseItem, parse_unsigned_integer_constant,
 };
 
 fn join_spans(start: Span, end: Span) -> Span {
@@ -133,6 +133,7 @@ fn parse_rust_attr(
     Ok(RustAttribute {
         path,
         args: tokens[idx..].to_vec(),
+        style: RustAttributeStyle::Outer,
     })
 }
 
@@ -147,13 +148,45 @@ where
         .try_map(|(tokens, span), _| parse_rust_attr(tokens, span).map(|attr| (attr, span)))
 }
 
+fn doc_attr<'src, I>()
+-> impl Parser<'src, I, Spanned<RustAttribute>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    select! {
+        Token::DocComment { inner, text } => (inner, text),
+    }
+    .map_with(|(inner, text), e| {
+        let span = e.span();
+        (
+            RustAttribute {
+                path: vec![("doc".to_owned(), span)],
+                args: vec![(
+                    Token::StringLit(StringLiteral {
+                        prefix: StringLiteralPrefix::None,
+                        bytes: text.into_bytes(),
+                    }),
+                    span,
+                )],
+                style: if inner {
+                    RustAttributeStyle::Inner
+                } else {
+                    RustAttributeStyle::Outer
+                },
+            },
+            span,
+        )
+    })
+}
+
 fn rust_attrs<'src, I>()
 -> impl Parser<'src, I, Vec<Spanned<RustAttribute>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    rust_attr().repeated().collect()
+    choice((rust_attr(), doc_attr())).repeated().collect()
 }
 
 fn rust_path_span<R: TypeResolver>(path: &RustPath<R>, fallback: Span) -> Span {
@@ -2117,6 +2150,7 @@ where
             move |((((is_pub, name), params), ret_ty), body)| {
                 let name_span = name.1;
                 Declaration::FunctionDefinition {
+                    attrs: Vec::new(),
                     signature: FunctionDefinitionSignature::Rust(RustFunctionSignature {
                         attrs: attrs.clone(),
                         name: (resolver.register_ident(name.0), name_span),
@@ -2440,6 +2474,7 @@ where
     )
     .map(
         |(declaration_specifiers, (declarator, body))| Declaration::FunctionDefinition {
+            attrs: Vec::new(),
             signature: FunctionDefinitionSignature::C {
                 declaration_specifiers,
                 declarator,
@@ -2454,6 +2489,7 @@ where
     )
     .map(
         |(declaration_specifiers, declarators)| Declaration::Declaration {
+            attrs: Vec::new(),
             declaration_specifiers,
             declarators,
         },
@@ -2738,6 +2774,29 @@ where
     })
 }
 
+fn attach_attrs_to_declaration<R: TypeResolver>(
+    mut decl: Declaration<R>,
+    attrs: Vec<Spanned<RustAttribute>>,
+) -> Declaration<R> {
+    match &mut decl {
+        Declaration::FunctionDefinition {
+            attrs: decl_attrs, ..
+        }
+        | Declaration::Declaration {
+            attrs: decl_attrs, ..
+        }
+        | Declaration::RustTypeAlias {
+            attrs: decl_attrs, ..
+        } => *decl_attrs = attrs,
+        Declaration::PragmaPack { .. } => {}
+    }
+    decl
+}
+
+fn attrs_are_outer(attrs: &[Spanned<RustAttribute>]) -> bool {
+    attrs.iter().all(|(attr, _)| !attr.is_inner())
+}
+
 pub fn translation_unit<'src, I, R: TypeResolver>(
     resolver: R,
 ) -> impl Parser<'src, I, Spanned<TranslationUnit<R>>, extra::Err<Rich<'src, Token, Span>>> + Clone
@@ -2756,6 +2815,7 @@ where
     custom(move |inp| {
         let mut current_resolver = resolver.clone();
         let mut items = Vec::new();
+        let mut tu_attrs = Vec::new();
 
         loop {
             let checkpoint = inp.save();
@@ -2765,9 +2825,30 @@ where
             }
             inp.rewind(checkpoint);
 
-            let attrs = inp.parse(rust_attrs())?;
+            let mut attrs = inp.parse(rust_attrs())?;
+            if let Some(first_outer) = attrs.iter().position(|(attr, _)| !attr.is_inner())
+                && first_outer > 0
+            {
+                tu_attrs.extend(attrs.drain(..first_outer));
+            }
 
             let item = if !attrs.is_empty() {
+                if attrs.iter().all(|(attr, _)| attr.is_inner()) {
+                    tu_attrs.extend(attrs);
+                    continue;
+                }
+                if !attrs_are_outer(&attrs) {
+                    let attr_span = attrs
+                        .first()
+                        .zip(attrs.last())
+                        .map_or(Span::new(FileId::INVALID, 0..0), |(first, last)| {
+                            join_spans(first.1, last.1)
+                        });
+                    return Err(Rich::custom(
+                        attr_span,
+                        "inner doc comments are only supported before module contents",
+                    ));
+                }
                 if let Ok(use_items) = inp.parse(use_item_with_attrs(attrs.clone())) {
                     for item in use_items {
                         items.push(TranslationUnitItem::Use(item));
@@ -2791,6 +2872,13 @@ where
                         ((v, e.span()), nr)
                     }),
                 ) {
+                    current_resolver = next_resolver;
+                    TranslationUnitItem::Declaration(decl)
+                } else if let Ok((decl, next_resolver)) = inp.parse(declaration(
+                    current_resolver.clone(),
+                    statement(current_resolver.clone()),
+                )) {
+                    let decl = (attach_attrs_to_declaration(decl.0, attrs.clone()), decl.1);
                     current_resolver = next_resolver;
                     TranslationUnitItem::Declaration(decl)
                 } else {
@@ -2830,9 +2918,9 @@ where
             items.push(item);
         }
 
-        Ok(items)
+        Ok((items, tu_attrs))
     })
-    .map_with(|items, e| {
+    .map_with(|(items, tu_attrs), e| {
         let mut rust_use_items = Vec::new();
         let mut rust_mod_items = Vec::new();
         let mut declarations = Vec::new();
@@ -2846,6 +2934,7 @@ where
         }
         (
             TranslationUnit {
+                attrs: tu_attrs,
                 rust_use_items,
                 rust_mod_items,
                 items: declarations,

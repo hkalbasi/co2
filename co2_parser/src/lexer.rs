@@ -216,9 +216,23 @@ pub fn lexer<'src>()
 -> impl Parser<'src, &'src str, Vec<(Token, SimpleSpan<usize>)>, LexerExtra<'src>> {
     // ----- Comments -----
     let line_comment = just("//")
+        .then(choice((just('!'), just('/'))))
+        .not()
+        .ignore_then(just("//"))
         .then(any().and_is(just('\n').not()).repeated())
         .to_slice()
         .ignored();
+    let doc_comment = just("//")
+        .ignore_then(choice((just('!'), just('/'))))
+        .then(any().and_is(just('\n').not()).repeated())
+        .to_slice()
+        .map(|comment: &str| {
+            let inner = comment.as_bytes()[2] == b'!';
+            Token::DocComment {
+                inner,
+                text: comment[3..].to_owned(),
+            }
+        });
 
     let block_comment = just("/*")
         .then(any().and_is(just("*/").not()).repeated())
@@ -532,6 +546,7 @@ pub fn lexer<'src>()
         decimal_integer,
         char_literal,
         string_literal,
+        doc_comment,
         transparent_union_attr,
         operators,
         ident,

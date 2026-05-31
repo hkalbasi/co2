@@ -809,17 +809,28 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Declaration<R>> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         let sp = fmt_span(&self.1, pp.config);
         match &self.0 {
-            Declaration::FunctionDefinition { signature, body } => {
+            Declaration::FunctionDefinition {
+                attrs,
+                signature,
+                body,
+            } => {
                 pp.node("FunctionDefinition", &sp, |pp| {
+                    for attr in attrs {
+                        attr.pretty_print(pp);
+                    }
                     signature.pretty_print(pp);
                     body.pretty_print(pp);
                 });
             }
             Declaration::Declaration {
+                attrs,
                 declaration_specifiers,
                 declarators,
             } => {
                 pp.node("Declaration", &sp, |pp| {
+                    for attr in attrs {
+                        attr.pretty_print(pp);
+                    }
                     for spec in declaration_specifiers {
                         spec.pretty_print(pp);
                     }
@@ -1210,6 +1221,9 @@ impl<R: TypeResolver> PrettyPrint for Spanned<EnumSpecifier<R>> {
 impl<R: TypeResolver> PrettyPrint for TranslationUnit<R> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         pp.node("TranslationUnit", "", |pp| {
+            for attr in &self.attrs {
+                attr.pretty_print(pp);
+            }
             for item in &self.rust_use_items {
                 item.pretty_print(pp);
             }
@@ -1231,6 +1245,7 @@ impl PrettyPrint for Spanned<RustAttribute> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         let sp = fmt_span(&self.1, pp.config);
         pp.node("RustAttribute", &sp, |pp| {
+            pp.leaf_data("Style", "", format_args!("{:?}", self.0.style));
             for segment in &self.0.path {
                 pp.leaf_data("Segment", &fmt_span(&segment.1, pp.config), &segment.0);
             }

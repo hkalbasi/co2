@@ -1,5 +1,7 @@
 pub type Handle = *mut u8;
 
+#[doc = "doc for make_handle function"]
+#[doc = "using only attribute"]
 pub fn make_handle() -> Handle {
     return (Handle)0;
 }

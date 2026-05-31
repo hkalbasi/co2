@@ -468,6 +468,7 @@ impl HirCtx<'_> {
             Declaration::Declaration {
                 declaration_specifiers,
                 declarators,
+                ..
             } => {
                 if declarators.is_empty() {
                     let parser_span = declaration_specifiers

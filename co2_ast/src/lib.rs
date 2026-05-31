@@ -536,6 +536,9 @@ pub enum Token {
     // Identifiers
     Ident(String),
 
+    // Documentation comments
+    DocComment { inner: bool, text: String },
+
     // Constants
     Integer(String, IntegerSuffix),
     FloatLit(String, FloatSuffix),
@@ -781,6 +784,13 @@ impl Display for Token {
             Token::TransparentUnionAttr => write!(f, "__attribute__((__transparent_union__))"),
 
             Token::Ident(s) => write!(f, "{s}"),
+            Token::DocComment { inner, text } => {
+                if *inner {
+                    write!(f, "//!{text}")
+                } else {
+                    write!(f, "///{text}")
+                }
+            }
 
             Token::Integer(num, suffix) => {
                 write!(f, "{num}")?;
@@ -896,10 +906,12 @@ pub enum PackAction {
 #[derive(Debug, Clone)]
 pub enum Declaration<R: TypeResolver> {
     FunctionDefinition {
+        attrs: Vec<Spanned<RustAttribute>>,
         signature: FunctionDefinitionSignature<R>,
         body: Spanned<LazyCompoundStatement>,
     },
     Declaration {
+        attrs: Vec<Spanned<RustAttribute>>,
         declaration_specifiers: Vec<Spanned<DeclarationSpecifier<R>>>,
         declarators: Vec<Spanned<InitDeclarator<R>>>,
     },
@@ -980,12 +992,23 @@ pub struct LazyRustConstExpr {
 pub struct RustAttribute {
     pub path: Vec<Spanned<String>>,
     pub args: Vec<Spanned<Token>>,
+    pub style: RustAttributeStyle,
 }
 
 impl RustAttribute {
     pub fn is_word(&self, name: &str) -> bool {
         self.args.is_empty() && matches!(self.path.as_slice(), [(segment, _)] if segment == name)
     }
+
+    pub fn is_inner(&self) -> bool {
+        self.style == RustAttributeStyle::Inner
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RustAttributeStyle {
+    Outer,
+    Inner,
 }
 
 impl LazyRustConstExpr {
@@ -1235,6 +1258,7 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
 
 #[derive(Debug, Clone)]
 pub struct TranslationUnit<R: TypeResolver> {
+    pub attrs: Vec<Spanned<RustAttribute>>,
     pub rust_use_items: Vec<Spanned<UseItem>>,
     pub rust_mod_items: Vec<Spanned<ModItem>>,
     pub items: Vec<Spanned<Declaration<R>>>,

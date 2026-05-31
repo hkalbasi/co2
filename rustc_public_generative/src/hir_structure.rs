@@ -3,8 +3,9 @@ use rustc_public::ty::{AdtDef, FnDef, Span};
 use crate::{DefId, HirLifetime, HirTy};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GeneratedAttr {
-    pub path: Vec<String>,
+pub enum GeneratedAttr {
+    Word { path: Vec<String> },
+    DocComment { comment: String, inner: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,7 @@ pub struct HirStructure {
 #[derive(Debug, Clone)]
 pub struct HirModule {
     pub span: Span,
+    pub attrs: Vec<GeneratedAttr>,
     pub items: Vec<HirModuleItem>,
 }
 
@@ -40,6 +42,7 @@ pub enum HirModuleItem {
         name: String,
         id: DefId,
         ty: HirTy,
+        attrs: Vec<GeneratedAttr>,
         span: Span,
     },
     Static {
@@ -48,6 +51,7 @@ pub enum HirModuleItem {
         ty: HirTy,
         mutable: bool,
         no_mangle: bool,
+        attrs: Vec<GeneratedAttr>,
         span: Span,
     },
     Const {
@@ -55,6 +59,7 @@ pub enum HirModuleItem {
         id: DefId,
         ty: HirTy,
         rhs: DefId,
+        attrs: Vec<GeneratedAttr>,
         span: Span,
     },
     Impl {
@@ -68,6 +73,7 @@ pub enum HirModuleItem {
         name: String,
         id: DefId,
         module: HirModule,
+        attrs: Vec<GeneratedAttr>,
         span: Span,
     },
     ForeignMod {
@@ -99,6 +105,19 @@ impl HirModuleItem {
             | HirModuleItem::Impl { span, .. }
             | HirModuleItem::Module { span, .. } => Some(*span),
             HirModuleItem::ForeignMod { .. } => None,
+        }
+    }
+
+    pub fn attrs(&self) -> &[GeneratedAttr] {
+        match self {
+            HirModuleItem::Function { attrs, .. }
+            | HirModuleItem::TypeDef { attrs, .. }
+            | HirModuleItem::Const { attrs, .. }
+            | HirModuleItem::Static { attrs, .. }
+            | HirModuleItem::Module { attrs, .. } => attrs,
+            HirModuleItem::Adt { .. }
+            | HirModuleItem::Impl { .. }
+            | HirModuleItem::ForeignMod { .. } => &[],
         }
     }
 }

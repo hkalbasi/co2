@@ -30,6 +30,7 @@
       "kind": "type_alias",
       "visibility": "public",
       "filename": "src/lib.co2",
+      "docs": "Docs for Counter type alias",
       "type": {
         "primitive": "i32"
       }
@@ -39,6 +40,7 @@
       "kind": "static",
       "visibility": "public",
       "filename": "src/lib.co2",
+      "docs": "Docs for MAGIC static\nWith some intentional spaces",
       "type": {
         "primitive": "i32"
       },
@@ -50,6 +52,7 @@
       "kind": "static",
       "visibility": "public",
       "filename": "src/lib.co2",
+      "docs": "Docs for MUTABLE static",
       "type": {
         "primitive": "i32"
       },
@@ -73,6 +76,7 @@
       "kind": "type_alias",
       "visibility": "public",
       "filename": "src/lib.co2",
+      "docs": "Docs for Point typedef.\nPoint has these fields:\n* `x`: position in the x-axis\n* `y`: position in the x-axis",
       "type": {
         "resolved_path": {
           "path": "__co2_c_adt__0",
@@ -144,6 +148,7 @@
       "kind": "function",
       "visibility": "public",
       "filename": "src/lib.co2",
+      "docs": "Docs for C-like\nfunction",
       "sig": {
         "inputs": [],
         "output": {
@@ -333,6 +338,7 @@
       "kind": "function",
       "visibility": "public",
       "filename": "src/ffi.co2",
+      "docs": "doc for make_handle function\nusing only attribute",
       "sig": {
         "inputs": [],
         "output": {
@@ -356,6 +362,7 @@
       "kind": "module",
       "visibility": "public",
       "filename": "src/lib.co2",
+      "docs": "nested module outer docs\nNested module inner docs",
       "items": [
         "demo::nested::Nested",
         "demo::nested::deeper",
@@ -475,6 +482,7 @@
       "kind": "function",
       "visibility": "public",
       "filename": "src/lib.co2",
+      "docs": " Docs for\nRust-like\n fn",
       "sig": {
         "inputs": [],
         "output": {

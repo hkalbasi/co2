@@ -1,3 +1,5 @@
+//! Nested module inner docs
+
 mod deeper;
 
 typedef struct {

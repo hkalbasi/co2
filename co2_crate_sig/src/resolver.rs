@@ -171,6 +171,7 @@ impl ModuleData {
                     this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));
                 }
                 Declaration::Declaration {
+                    attrs: _,
                     declaration_specifiers,
                     declarators,
                 } => {
