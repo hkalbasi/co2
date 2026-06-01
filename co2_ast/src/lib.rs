@@ -8,24 +8,8 @@ use itertools::Itertools;
 mod diagnostic;
 mod pretty;
 mod resolver;
+mod span;
 mod transform;
-
-// Type definitions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FileId(u32);
-
-impl FileId {
-    pub const INVALID: Self = Self(u32::MAX);
-}
-
-impl From<usize> for FileId {
-    fn from(value: usize) -> Self {
-        FileId(value as u32)
-    }
-}
-
-pub type Span = chumsky::span::SimpleSpan<usize, FileId>;
-pub type Spanned<T> = (T, Span);
 
 pub use chumsky::prelude::Rich;
 pub use diagnostic::{
@@ -36,6 +20,7 @@ pub use diagnostic::{
 };
 pub use pretty::{PrettyConfig, PrettyPrint, PrettyPrinter, pretty_print_compound};
 pub use resolver::{StatelessResolver, TypeResolver};
+pub use span::{FileId, Span, SpanData, Spanned};
 pub use transform::{DoTransform, Transformable};
 
 #[derive(Debug, Clone)]

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use co2_ast::{
-    BinOp as ParsedBinOp, Constant, Expression, GenericAssociation, IntegerSuffix, Spanned,
+    BinOp as ParsedBinOp, Constant, Expression, GenericAssociation, IntegerSuffix, Span, Spanned,
     Statement, StatementOrDeclaration, StringLiteral, StringLiteralPrefix,
     UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
@@ -31,12 +31,8 @@ fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span,
     (span, msg.into())
 }
 
-fn invalid_span() -> co2_ast::Span {
-    co2_ast::Span {
-        start: 0,
-        end: 0,
-        context: co2_ast::FileId::INVALID,
-    }
+fn invalid_span() -> Span {
+    Span::from_parts(co2_ast::FileId::INVALID, 0..0)
 }
 
 fn string_literal_ptr_ty(literal: &StringLiteral) -> Ty {

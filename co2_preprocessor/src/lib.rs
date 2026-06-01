@@ -7,7 +7,6 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
-use chumsky::span::Span as _;
 mod builtin_macros;
 mod conditionals;
 mod expr_eval;
@@ -75,11 +74,7 @@ impl PreprocessedSource {
                 start.saturating_sub(chunk.output_range.start),
                 end.saturating_sub(chunk.output_range.start),
             );
-            return co2_ast::Span {
-                start: mapped.start,
-                end: mapped.end,
-                context: chunk.file_idx,
-            };
+            return Span::from_parts(chunk.file_idx, mapped.start..mapped.end);
         }
 
         let start_mapped = self.map_offset(start);
@@ -89,26 +84,14 @@ impl PreprocessedSource {
             && let Some(end) = end_mapped.as_ref()
             && start.file_idx == end.file_idx
         {
-            return co2_ast::Span {
-                start: start.start,
-                end: end.end.max(start.start),
-                context: start.file_idx,
-            };
+            return Span::from_parts(start.file_idx, start.start..end.end.max(start.start));
         }
 
         if let Some(start) = start_mapped.as_ref() {
-            return co2_ast::Span {
-                start: start.start,
-                end: start.end,
-                context: start.file_idx,
-            };
+            return Span::from_parts(start.file_idx, start.start..start.end);
         }
 
-        co2_ast::Span {
-            start,
-            end,
-            context: self.main_file_idx,
-        }
+        Span::from_parts(self.main_file_idx, start..end)
     }
 
     fn map_offset(&self, output_offset: usize) -> Option<MappedSpan> {
@@ -263,7 +246,7 @@ fn preprocessor_diagnostic_span(
         .iter()
         .find(|(_, file)| file.path == wanted_path)
     else {
-        return Span::new(preprocessed.main_file_idx, 0..0);
+        return Span::from_parts(preprocessed.main_file_idx, 0..0);
     };
 
     let remap: &[usize] = if *file_id == preprocessed.main_file_idx {
@@ -293,7 +276,7 @@ fn preprocessor_diagnostic_span(
     if end == start && start < file.source.len() {
         end += 1;
     }
-    Span::new(*file_id, start..end)
+    Span::from_parts(*file_id, start..end)
 }
 
 #[cfg(test)]
@@ -330,8 +313,8 @@ mod tests {
         assert_eq!(diagnostics[0].to_string(), "#warning keep going");
 
         let span = *diagnostics[0].span();
-        let file = source.files().get(&span.context).unwrap();
-        assert_eq!(&file.source[span.start..span.end], "warning");
+        let file = source.files().get(&span.data().context).unwrap();
+        assert_eq!(&file.source[span.data().start..span.data().end], "warning");
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -489,8 +472,7 @@ fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_arg
                 preprocessor
                     .add_quote_include_path(cpp_args.get(i).expect("missing -iquote value"));
             }
-            "-nostdinc" => {}
-            "-undef" => {}
+            "-nostdinc" | "-undef" => {}
             _ if arg.starts_with("-I") && arg.len() > 2 => {
                 preprocessor.add_include_path(&arg[2..]);
             }

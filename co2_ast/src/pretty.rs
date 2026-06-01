@@ -124,12 +124,13 @@ pub trait PrettyPrint {
 // ---------------------------------------------------------------------------
 
 pub fn fmt_span(span: &Span, config: &PrettyConfig) -> String {
+    let span = span.data();
     if config.show_file_name {
         if let Some(ref f) = config.file_name_for_id {
             let name = (f)(span.context);
             format!("@{}:{}..{}", name, span.start, span.end)
         } else {
-            format!("@{}:{}..{}", span.context.0, span.start, span.end)
+            format!("@{:?}:{}..{}", span.context, span.start, span.end)
         }
     } else {
         format!("@{}..{}", span.start, span.end)

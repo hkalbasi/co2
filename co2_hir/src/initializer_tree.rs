@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use co2_ast::{Designator, Expression, Initializer, InitializerItem, Spanned};
+use co2_ast::{Designator, Expression, Initializer, InitializerItem, Span, Spanned};
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{AdtKind, IntTy, RigidTy, Ty, TyKind, UintTy};
@@ -16,12 +16,8 @@ fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span,
     (span, msg.into())
 }
 
-fn invalid_span() -> co2_ast::Span {
-    co2_ast::Span {
-        start: 0,
-        end: 0,
-        context: co2_ast::FileId::INVALID,
-    }
+fn invalid_span() -> Span {
+    Span::from_parts(co2_ast::FileId::INVALID, 0..0)
 }
 
 #[derive(Clone, Debug)]

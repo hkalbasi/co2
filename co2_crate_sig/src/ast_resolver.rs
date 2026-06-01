@@ -561,7 +561,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                 DefOrLocal::UnrepresentableType(ty.clone()),
             ));
         }
-        let (def, class) = match self
+        let Some((def, class)) = self
             .locals
             .borrow()
             .get(&path_pretty)
@@ -634,17 +634,15 @@ impl co2_ast::TypeResolver for LocalResolver {
                     ));
                 }
                 None
-            }) {
-            Some(r) => r,
-            None => {
-                let span = path.segments.first().unwrap().1;
-                return Err((format!("Unresolved name {path}"), span));
-            }
+            })
+        else {
+            let span = path.segments.first().unwrap().1;
+            return Err((format!("Unresolved name {path}"), span));
         };
         if !generic_args.is_empty() && matches!(def, DefOrLocal::Local(_) | DefOrLocal::FuncName) {
             let span = path.segments.last().unwrap().1;
             return Err((
-                format!("type arguments are not allowed on local variable"),
+                "type arguments are not allowed on local variable".to_owned(),
                 span,
             ));
         }

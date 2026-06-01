@@ -195,20 +195,19 @@ fn type_specifier_span(specs: &[Spanned<DeclarationSpecifier<LocalResolver>>]) -
         _ => None,
     });
     let first = spans.next()?;
-    let mut start = first.start;
-    let mut end = first.end;
+    let first_data = first.data();
+    let mut start = first_data.start;
+    let mut end = first_data.end;
+    let first_context = first_data.context;
     for span in spans {
-        if span.context != first.context {
+        let data = span.data();
+        if data.context != first_context {
             continue;
         }
-        start = start.min(span.start);
-        end = end.max(span.end);
+        start = start.min(data.start);
+        end = end.max(data.end);
     }
-    Some(Span {
-        context: first.context,
-        start,
-        end,
-    })
+    Some(Span::from_parts(first_context, start..end))
 }
 
 fn has_constexpr_storage_specifier(specs: &[Spanned<DeclarationSpecifier<LocalResolver>>]) -> bool {

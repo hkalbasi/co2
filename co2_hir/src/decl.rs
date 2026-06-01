@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
-    Initializer, RustTy, Spanned, TypeName, TypeQualifier,
+    Initializer, RustTy, Span, Spanned, TypeName, TypeQualifier,
 };
 use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver, LogicalAdtFieldKind};
 use co2_parser::parse_expression_tokens;
@@ -42,12 +42,8 @@ fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span,
     (span, msg.into())
 }
 
-fn invalid_span() -> co2_ast::Span {
-    co2_ast::Span {
-        start: 0,
-        end: 0,
-        context: co2_ast::FileId::INVALID,
-    }
+fn invalid_span() -> Span {
+    Span::from_parts(co2_ast::FileId::INVALID, 0..0)
 }
 
 fn c_ty_matches_expected(expected: &CTy, actual: &CTy) -> bool {
@@ -1382,11 +1378,7 @@ impl HirCtx<'_> {
                                     &mut local_map,
                                 )
                             }
-                            .unwrap_or_else(|err| {
-                                let mut span = subscription.1;
-                                span.start = span.start.saturating_sub(1);
-                                self.terminate_with_spanned_error((span, err.1))
-                            });
+                            .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                             CTy::Ty(Ty::try_new_array(inner, len as u64).map_err(|e| {
                                 spanned_error(
                                     subscription.1,

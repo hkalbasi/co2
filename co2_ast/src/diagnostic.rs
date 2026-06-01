@@ -38,6 +38,7 @@ pub fn take_errors() -> Vec<Rich<'static, Token, Span>> {
 }
 
 pub fn safe_range(span: Span, src_len: usize) -> std::ops::Range<usize> {
+    let span = span.data();
     let mut start = span.start.min(src_len);
     let mut end = span.end.min(src_len);
     if end < start {
@@ -352,6 +353,7 @@ fn json_span(
 fn get_diagnostic_info(span: Span) -> Option<DiagnosticSpan> {
     let guard = SOURCE_MAP.try_lock().unwrap();
     let sm = guard.as_ref()?;
+    let span = span.data();
     let (file_name, source) = sm.get_file_info(span.context)?;
     Some(DiagnosticSpan {
         file_name,

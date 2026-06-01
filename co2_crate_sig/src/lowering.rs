@@ -74,8 +74,8 @@ fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> 
                 .collect::<Vec<_>>();
             if path == ["doc"] {
                 let doc_text = match attr.args.as_slice() {
-                    [(co2_ast::Token::StringLit(lit), _)] => Some(lit.bytes.clone()),
-                    [
+                    [(co2_ast::Token::StringLit(lit), _)]
+                    | [
                         (co2_ast::Token::Assign, _),
                         (co2_ast::Token::StringLit(lit), _),
                     ] => Some(lit.bytes.clone()),

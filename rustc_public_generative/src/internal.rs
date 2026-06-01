@@ -2954,7 +2954,7 @@ fn generated_hir_attr_map(tcx: TyCtxt<'_>, key: OwnerId) -> &hir::AttributeMap<'
         let attrs = generated_item_attrs(info);
         if attrs.is_empty() {
             return hir::AttributeMap::EMPTY;
-        };
+        }
         leak(hir::AttributeMap {
             map: [(
                 ItemLocalId::ZERO,

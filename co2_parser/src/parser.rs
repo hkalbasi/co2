@@ -17,12 +17,10 @@ use co2_ast::{
 };
 
 fn join_spans(start: Span, end: Span) -> Span {
-    if start.context == end.context {
-        Span {
-            start: start.start,
-            end: end.end,
-            context: start.context,
-        }
+    let start_data = start.data();
+    let end_data = end.data();
+    if start_data.context == end_data.context {
+        Span::from_parts(start_data.context, start_data.start..end_data.end)
     } else {
         start
     }
@@ -1403,14 +1401,12 @@ where
                 .into_iter()
                 .flatten()
                 .collect::<Vec<Spanned<RustPathSegment<R>>>>();
-            let span = segments.first().zip(segments.last()).map_or(
-                Span {
-                    start: 0,
-                    end: 0,
-                    context: FileId::INVALID,
-                },
-                |(first, last)| join_spans(first.1, last.1),
-            );
+            let span = segments
+                .first()
+                .zip(segments.last())
+                .map_or(Span::from_parts(FileId::INVALID, 0..0), |(first, last)| {
+                    join_spans(first.1, last.1)
+                });
             (RustPath { segments }, span)
         }),
     )
@@ -1458,14 +1454,12 @@ where
                 .into_iter()
                 .flatten()
                 .collect::<Vec<Spanned<RustPathSegment<R>>>>();
-            let span = segments.first().zip(segments.last()).map_or(
-                Span {
-                    start: 0,
-                    end: 0,
-                    context: FileId::INVALID,
-                },
-                |(first, last)| join_spans(first.1, last.1),
-            );
+            let span = segments
+                .first()
+                .zip(segments.last())
+                .map_or(Span::from_parts(FileId::INVALID, 0..0), |(first, last)| {
+                    join_spans(first.1, last.1)
+                });
             (RustPath { segments }, span)
         }),
     )
@@ -2048,7 +2042,7 @@ where
                         Some(Token::Ident(s)) => matches!(
                             resolver.classify_path(&RustPath::<StatelessResolver>::from_ident((
                                 s,
-                                Span::new(FileId::INVALID, 0..0)
+                                Span::from_parts(FileId::INVALID, 0..0)
                             ))),
                             Ok((TypeQueryResult::Type | TypeQueryResult::Unsure, _))
                         ),
@@ -2928,89 +2922,88 @@ where
                 tu_attrs.extend(attrs.drain(..first_outer));
             }
 
-            let item = if !attrs.is_empty() {
-                if attrs.iter().all(|(attr, _)| attr.is_inner()) {
-                    tu_attrs.extend(attrs);
-                    continue;
-                }
-                if !attrs_are_outer(&attrs) {
-                    let attr_span = attrs
-                        .first()
-                        .zip(attrs.last())
-                        .map_or(Span::new(FileId::INVALID, 0..0), |(first, last)| {
-                            join_spans(first.1, last.1)
-                        });
-                    return Err(Rich::custom(
-                        attr_span,
-                        "inner doc comments are only supported before module contents",
-                    ));
-                }
-                if let Ok(use_items) = inp.parse(use_item_with_attrs(attrs.clone())) {
+            let item =
+                if !attrs.is_empty() {
+                    if attrs.iter().all(|(attr, _)| attr.is_inner()) {
+                        tu_attrs.extend(attrs);
+                        continue;
+                    }
+                    if !attrs_are_outer(&attrs) {
+                        let attr_span =
+                            attrs.first().zip(attrs.last()).map_or(
+                                Span::from_parts(FileId::INVALID, 0..0),
+                                |(first, last)| join_spans(first.1, last.1),
+                            );
+                        return Err(Rich::custom(
+                            attr_span,
+                            "inner doc comments are only supported before module contents",
+                        ));
+                    }
+                    if let Ok(use_items) = inp.parse(use_item_with_attrs(attrs.clone())) {
+                        for item in use_items {
+                            items.push(TranslationUnitItem::Use(item));
+                        }
+                        TranslationUnitItem::Empty
+                    } else if let Ok(item) = inp.parse(mod_item_with_attrs(attrs.clone())) {
+                        TranslationUnitItem::Mod(item)
+                    } else if let Ok((decl, next_resolver)) = inp.parse(
+                        choice((
+                            rust_style_function_definition_with_attrs(
+                                current_resolver.clone(),
+                                attrs.clone(),
+                            ),
+                            rust_style_type_definition_with_attrs(
+                                current_resolver.clone(),
+                                attrs.clone(),
+                            ),
+                        ))
+                        .map_with(|v, e| {
+                            let nr = current_resolver.register_decl(&v);
+                            ((v, e.span()), nr)
+                        }),
+                    ) {
+                        current_resolver = next_resolver;
+                        TranslationUnitItem::Declaration(decl)
+                    } else if let Ok((decl, next_resolver)) = inp.parse(declaration(
+                        current_resolver.clone(),
+                        statement(current_resolver.clone()),
+                    )) {
+                        let decl = (attach_attrs_to_declaration(decl.0, attrs.clone()), decl.1);
+                        current_resolver = next_resolver;
+                        TranslationUnitItem::Declaration(decl)
+                    } else {
+                        let attr_span =
+                            attrs.first().zip(attrs.last()).map_or(
+                                Span::from_parts(FileId::INVALID, 0..0),
+                                |(first, last)| join_spans(first.1, last.1),
+                            );
+                        return Err(Rich::custom(
+                            attr_span,
+                            "attributes are only supported on rust items",
+                        ));
+                    }
+                } else if let Ok(use_items) = inp.parse(use_item()) {
                     for item in use_items {
                         items.push(TranslationUnitItem::Use(item));
                     }
                     TranslationUnitItem::Empty
-                } else if let Ok(item) = inp.parse(mod_item_with_attrs(attrs.clone())) {
+                } else if let Ok(item) = inp.parse(mod_item()) {
                     TranslationUnitItem::Mod(item)
-                } else if let Ok((decl, next_resolver)) = inp.parse(
-                    choice((
-                        rust_style_function_definition_with_attrs(
-                            current_resolver.clone(),
-                            attrs.clone(),
-                        ),
-                        rust_style_type_definition_with_attrs(
-                            current_resolver.clone(),
-                            attrs.clone(),
-                        ),
-                    ))
-                    .map_with(|v, e| {
-                        let nr = current_resolver.register_decl(&v);
-                        ((v, e.span()), nr)
-                    }),
-                ) {
+                } else if let Ok((decl, next_resolver)) =
+                    inp.parse(pragma_pack_item(current_resolver.clone()))
+                {
                     current_resolver = next_resolver;
                     TranslationUnitItem::Declaration(decl)
                 } else if let Ok((decl, next_resolver)) = inp.parse(declaration(
                     current_resolver.clone(),
                     statement(current_resolver.clone()),
                 )) {
-                    let decl = (attach_attrs_to_declaration(decl.0, attrs.clone()), decl.1);
                     current_resolver = next_resolver;
                     TranslationUnitItem::Declaration(decl)
                 } else {
-                    let attr_span = attrs
-                        .first()
-                        .zip(attrs.last())
-                        .map_or(Span::new(FileId::INVALID, 0..0), |(first, last)| {
-                            join_spans(first.1, last.1)
-                        });
-                    return Err(Rich::custom(
-                        attr_span,
-                        "attributes are only supported on rust items",
-                    ));
-                }
-            } else if let Ok(use_items) = inp.parse(use_item()) {
-                for item in use_items {
-                    items.push(TranslationUnitItem::Use(item));
-                }
-                TranslationUnitItem::Empty
-            } else if let Ok(item) = inp.parse(mod_item()) {
-                TranslationUnitItem::Mod(item)
-            } else if let Ok((decl, next_resolver)) =
-                inp.parse(pragma_pack_item(current_resolver.clone()))
-            {
-                current_resolver = next_resolver;
-                TranslationUnitItem::Declaration(decl)
-            } else if let Ok((decl, next_resolver)) = inp.parse(declaration(
-                current_resolver.clone(),
-                statement(current_resolver.clone()),
-            )) {
-                current_resolver = next_resolver;
-                TranslationUnitItem::Declaration(decl)
-            } else {
-                inp.parse(just(Token::Semicolon))?;
-                TranslationUnitItem::Empty
-            };
+                    inp.parse(just(Token::Semicolon))?;
+                    TranslationUnitItem::Empty
+                };
             items.push(item);
         }
 
@@ -3044,5 +3037,5 @@ where
 fn parser_is_constructible() {
     use chumsky::input::Input;
     let parser = translation_unit(StatelessResolver::new());
-    parser.parse((&[]).map(Span::new(FileId::from(0), 1..2), |_| unreachable!()));
+    parser.parse((&[]).map(Span::from_parts(FileId::from(0), 1..2), |_| unreachable!()));
 }

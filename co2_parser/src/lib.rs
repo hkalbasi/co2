@@ -25,7 +25,7 @@ fn map_lexer_span(
     if let Some(pp) = pp {
         pp.real_span(span.start, span.end)
     } else {
-        Span::new(FileId::INVALID, span.start..span.end)
+        Span::from_parts(FileId::INVALID, span.start..span.end)
     }
 }
 
@@ -55,7 +55,7 @@ fn map_lexer_tokens(
 
 fn eoi_span_for_tokens(tokens: &[Spanned<Token>], fallback: Span) -> Span {
     tokens.last().map_or(fallback, |(_, span)| {
-        Span::new(span.context, span.end..span.end)
+        Span::from_parts(span.data().context, span.data().end..span.data().end)
     })
 }
 
@@ -93,7 +93,7 @@ fn parse_translation_unit_internal<R: TypeResolver>(
         let fallback_end_span = if let Some(pp) = pp {
             map_lexer_span(SimpleSpan::new((), src.len()..src.len()), Some(pp))
         } else {
-            Span::new(FileId::INVALID, src.len()..src.len())
+            Span::from_parts(FileId::INVALID, src.len()..src.len())
         };
         let end_span = eoi_span_for_tokens(&tokens, fallback_end_span);
         let tokens = tokens.leak();
@@ -212,10 +212,10 @@ fn include_body_lazy_span_uses_header_context() {
         other => panic!("unexpected first item: {other:?}"),
     };
 
-    let body_file = pp.files().get(&body.1.context).unwrap();
+    let body_file = pp.files().get(&body.1.data().context).unwrap();
     assert_eq!(body_file.path.file_name().unwrap(), "include_error.h");
     assert_eq!(
-        &body_file.source[body.1.start..body.1.end],
+        &body_file.source[body.1.data().start..body.1.data().end],
         "{\n    return missing;\n    //     ^^^^^^^ error: Unresolved name missing\n}",
     );
 }
