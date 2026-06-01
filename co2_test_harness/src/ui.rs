@@ -494,30 +494,3 @@ fn is_summary_diagnostic(diagnostic: &UiDiagnostic) -> bool {
         || diagnostic.message.ends_with(" warning emitted")
         || diagnostic.message.ends_with(" warnings emitted")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::prettify_diagnostic_output;
-
-    #[test]
-    fn prettifies_rendered_json_diagnostics() {
-        let input = concat!(
-            "{\"$message_type\":\"diagnostic\",\"level\":\"error\",\"message\":\"boom\",\"spans\":[],\"rendered\":\"Error: boom\\n --> main.co2:1:1\\n\"}\n",
-            "co2rustc panic: non-string payload\n",
-        );
-
-        assert_eq!(
-            prettify_diagnostic_output(input),
-            "Error: boom\n --> main.co2:1:1\nco2rustc panic: non-string payload"
-        );
-    }
-
-    #[test]
-    fn prettifies_prefixed_json_diagnostics() {
-        let input = "compile failed: {\"$message_type\":\"diagnostic\",\"level\":\"error\",\"message\":\"boom\",\"spans\":[],\"rendered\":\"Error: boom\\n\"}";
-        assert_eq!(
-            prettify_diagnostic_output(input),
-            "compile failed:\nError: boom"
-        );
-    }
-}

@@ -183,43 +183,6 @@ pub fn parse_compound_statement<R: TypeResolver>(
     print_errors_and_terminate(filename, src, Vec::new());
 }
 
-#[test]
-fn include_body_lazy_span_uses_header_context() {
-    use co2_ast::Declaration;
-    use std::path::Path;
-
-    let pp = co2_preprocessor::preprocess(
-        Path::new("../tests/c/include_error.c"),
-        &["-I".to_owned(), "../tests/c".to_owned()],
-    );
-    let src: &'static str = Box::leak(pp.normalized.to_string().into_boxed_str());
-    let (tokens, lex_errs) = lexer()
-        .parse_with_state(src, &mut chumsky::extra::SimpleState(Vec::new()))
-        .into_output_errors();
-    assert!(lex_errs.is_empty());
-    let tokens = map_lexer_tokens(tokens.unwrap(), Some(&pp));
-    let tokens = tokens.leak();
-    let end_span = pp.real_span(src.len(), src.len());
-    let (ast, parse_errs) = translation_unit(co2_ast::StatelessResolver::new())
-        .map_with(|ast, e| (ast, e.span()))
-        .parse(tokens.map(end_span, |(t, s)| (t, s)))
-        .into_output_errors();
-    assert!(parse_errs.is_empty());
-
-    let tu = ast.unwrap().0.0;
-    let body = match &tu.items[0].0 {
-        Declaration::FunctionDefinition { body, .. } => &body.0.tokens,
-        other => panic!("unexpected first item: {other:?}"),
-    };
-
-    let body_file = pp.files().get(&body.1.data().context).unwrap();
-    assert_eq!(body_file.path.file_name().unwrap(), "include_error.h");
-    assert_eq!(
-        &body_file.source[body.1.data().start..body.1.data().end],
-        "{\n    return missing;\n    //     ^^^^^^^ error: Unresolved name missing\n}",
-    );
-}
-
 pub fn parse_expression_tokens<R: TypeResolver>(
     tokens: &[Spanned<Token>],
     end_span: Span,

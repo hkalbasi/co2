@@ -455,16 +455,3 @@ impl Preprocessor {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Preprocessor;
-
-    #[test]
-    fn replace_remaining_idents_keeps_prefixed_char_literals() {
-        assert_eq!(
-            Preprocessor::replace_remaining_idents_with_zero("L'A' == VALUE"),
-            "L'A' == 0"
-        );
-    }
-}

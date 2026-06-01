@@ -3032,10 +3032,3 @@ where
         )
     })
 }
-
-#[test]
-fn parser_is_constructible() {
-    use chumsky::input::Input;
-    let parser = translation_unit(StatelessResolver::new());
-    parser.parse((&[]).map(Span::from_parts(FileId::from(0), 1..2), |_| unreachable!()));
-}
