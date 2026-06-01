@@ -20,6 +20,7 @@ struct CcArgs {
     emit_obj_only: bool,
     link_kind: LinkOutputKind,
     pic: bool,
+    time_report: bool,
     inputs: Vec<PathBuf>,
     output: Option<PathBuf>,
     opt_level: Option<String>,
@@ -105,7 +106,14 @@ fn run_co2c(args: &CcArgs) {
             .cloned()
             .expect("missing C input file for object emission");
         let resolved = resolve_stdin(&input);
+
+        if args.time_report {
+            co2_driver_lib::time_report::enable_timing();
+        }
         let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, &args.cpp_args));
+        if args.time_report {
+            co2_driver_lib::time_report::mark_preprocess_done();
+        }
         let rustc_args = build_rustc_object_args(
             &resolved,
             args.output.as_deref(),
@@ -114,6 +122,19 @@ fn run_co2c(args: &CcArgs) {
             force_pic,
         );
         compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
+        if args.time_report {
+            co2_driver_lib::time_report::finalize_timing();
+            if let Some(t) = co2_driver_lib::time_report::take_timing() {
+                eprintln!("Time report:");
+                eprintln!("  Preprocess:    {:.3}s", t.preprocess.as_secs_f64());
+                eprintln!("  Parse:         {:.3}s + {:.3}s", t.parse.as_secs_f64(), t.parse_slack.as_secs_f64());
+                eprintln!("  Lowering:      {:.3}s", t.lowering.as_secs_f64());
+                eprintln!("    Body Parse:  {:.3}s", t.body_parse.as_secs_f64());
+                eprintln!("    HIR:         {:.3}s", t.hir_lowering.as_secs_f64());
+                eprintln!("    MIR:         {:.3}s", t.mir_lowering.as_secs_f64());
+                eprintln!("  Codegen:       {:.3}s", t.codegen.as_secs_f64());
+            }
+        }
         if has_stdin {
             let _ = fs::remove_dir_all(&temp_dir);
         }
@@ -142,6 +163,7 @@ fn run_co2c(args: &CcArgs) {
             args.opt_level.as_deref(),
             args.debuginfo,
             force_pic,
+            args.time_report,
         );
         object_paths.push(object_path);
     }
@@ -165,6 +187,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     let mut emit_obj_only = false;
     let mut link_kind = LinkOutputKind::Executable;
     let mut pic = false;
+    let mut time_report = false;
     let mut inputs = Vec::new();
     let mut output = None;
     let mut opt_level = None;
@@ -217,6 +240,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
                 linker_args.push(val.clone());
             }
             "-fPIC" | "-fpic" => pic = true,
+            "-ftime-report" => time_report = true,
             "-g0" => debuginfo = Some(0),
             "-g1" => debuginfo = Some(1),
             "-g" | "-g2" | "-g3" => debuginfo = Some(2),
@@ -274,6 +298,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
         emit_obj_only,
         link_kind,
         pic,
+        time_report,
         inputs,
         output,
         opt_level,
@@ -442,6 +467,7 @@ fn compile_c_to_object(
     opt_level: Option<&str>,
     debuginfo: Option<u8>,
     pic: bool,
+    time_report: bool,
 ) {
     let exe = current_invocation_path()
         .or_else(|| std::env::current_exe().ok())
@@ -456,6 +482,9 @@ fn compile_c_to_object(
     }
     if pic {
         cmd.arg("-fPIC");
+    }
+    if time_report {
+        cmd.arg("-ftime-report");
     }
     for arg in cpp_args {
         cmd.arg(arg);

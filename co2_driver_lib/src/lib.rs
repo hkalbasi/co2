@@ -10,6 +10,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use co2_ast::Initializer;
 use co2_crate_sig::{LocalResolver, MirOwnerInfo, WellknownDefs};
@@ -33,8 +34,10 @@ use rustc_public_generative::rustc_public::{
 };
 use rustc_public_generative::{self as rustc_gen, HirStructureCtx};
 
+pub mod time_report;
 mod types;
 
+pub use time_report::PhaseTiming;
 pub use types::CompileMode;
 
 struct PendingCompile {
@@ -107,6 +110,15 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             files: Arc::new(source_files.clone()),
         }));
 
+        let mut on_parse: Option<&mut dyn FnMut(std::time::Duration)> = None;
+        let mut record_parse = |d: std::time::Duration| time_report::record_parse(d);
+        let mut on_body: Option<&mut dyn FnMut(std::time::Duration)> = None;
+        let mut record_body = |d: std::time::Duration| time_report::accumulate_body_parse(d);
+        if time_report::timing_enabled() {
+            on_parse = Some(&mut record_parse);
+            on_body = Some(&mut record_body);
+        }
+
         let (result, pending_mirs, wellknown_defs) = co2_crate_sig::lower_crate_sig(
             ctx,
             &pending.source_path,
@@ -118,6 +130,8 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             &mut source_files,
             pending.mode.no_main,
             pending.mode.test,
+            on_parse,
+            on_body,
         );
         let file_ids = Arc::new(file_ids);
         co2_ast::set_source_map(Arc::new(Co2SourceMap {
@@ -211,10 +225,14 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     resolver.clone(),
                 );
 
+                let hir_start = Instant::now();
                 let hir = match std::panic::catch_unwind(AssertUnwindSafe(|| {
                     co2_hir::lower_function_body(body.clone(), def, &param_names, &mut hir_ctx)
                 })) {
-                    Ok(hir) => hir,
+                    Ok(hir) => {
+                        time_report::accumulate_hir_lowering(hir_start.elapsed());
+                        hir
+                    }
                     Err(payload) => {
                         if co2_ast::is_diagnostic_abort(payload.as_ref()) {
                             let hir = build_error_fn_body(
@@ -222,7 +240,8 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                 &def.fn_sig().skip_binder(),
                                 ctx.span_in_file(self.file_id, 0, 0),
                             );
-                            return co2_mir::build_mir_for_body(
+                            let mir_start = Instant::now();
+                            let result = co2_mir::build_mir_for_body(
                                 &hir,
                                 &ctx,
                                 def.0,
@@ -230,19 +249,24 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                 self.wellknown_defs,
                                 Some(resolver),
                             );
+                            time_report::accumulate_mir_lowering(mir_start.elapsed());
+                            return result;
                         }
                         std::panic::resume_unwind(payload);
                     }
                 };
 
-                co2_mir::build_mir_for_body(
+                let mir_start = Instant::now();
+                let result = co2_mir::build_mir_for_body(
                     &hir,
                     &ctx,
                     def.0,
                     self.file_id,
                     self.wellknown_defs,
                     Some(resolver),
-                )
+                );
+                time_report::accumulate_mir_lowering(mir_start.elapsed());
+                result
             }
             MirOwnerInfo::FnBodyError { def, body_span } => {
                 let hir = build_error_fn_body(
@@ -250,14 +274,17 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     &def.fn_sig().skip_binder(),
                     self.map_co2_span(&ctx, body_span),
                 );
-                co2_mir::build_mir_for_body(
+                let mir_start = Instant::now();
+                let result = co2_mir::build_mir_for_body(
                     &hir,
                     &ctx,
                     def.0,
                     self.file_id,
                     self.wellknown_defs,
                     None,
-                )
+                );
+                time_report::accumulate_mir_lowering(mir_start.elapsed());
+                result
             }
         }
     }
@@ -304,16 +331,21 @@ impl Co2GeneratorState {
             ));
         }
 
+        let hir_start = Instant::now();
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx);
+        time_report::accumulate_hir_lowering(hir_start.elapsed());
 
-        co2_mir::build_mir_for_body(
+        let mir_start = Instant::now();
+        let result = co2_mir::build_mir_for_body(
             &hir,
             ctx,
             def,
             self.file_id,
             self.wellknown_defs,
             Some(resolver),
-        )
+        );
+        time_report::accumulate_mir_lowering(mir_start.elapsed());
+        result
     }
 
     fn lower_explicit_static_mir_with_array_len(
@@ -353,15 +385,21 @@ impl Co2GeneratorState {
             target_ty,
             resolver.clone(),
         );
+        let hir_start = Instant::now();
         let hir = lower_static_body_for_ty(initializer, target_ty, &hir_ctx);
-        co2_mir::build_mir_for_body(
+        time_report::accumulate_hir_lowering(hir_start.elapsed());
+
+        let mir_start = Instant::now();
+        let result = co2_mir::build_mir_for_body(
             &hir,
             ctx,
             def,
             self.file_id,
             self.wellknown_defs,
             Some(resolver),
-        )
+        );
+        time_report::accumulate_mir_lowering(mir_start.elapsed());
+        result
     }
 
     fn build_enum_prev_plus_body(
@@ -393,7 +431,11 @@ impl Co2GeneratorState {
             span,
         )];
 
-        co2_mir::build_mir_for_body(&hir, ctx, prev, self.file_id, self.wellknown_defs, None)
+        let mir_start = Instant::now();
+        let result =
+            co2_mir::build_mir_for_body(&hir, ctx, prev, self.file_id, self.wellknown_defs, None);
+        time_report::accumulate_mir_lowering(mir_start.elapsed());
+        result
     }
 }
 
@@ -641,7 +683,20 @@ pub fn compile_co2_source(
 ) {
     install_pending_compile(mode, source_path, preprocessed);
 
-    rustc_gen::generate_with_args::<Co2GeneratorState>(rustc_args);
+    if time_report::timing_enabled() {
+        let after_hook: Box<
+            dyn for<'tcx> FnOnce(rustc_middle::ty::TyCtxt<'tcx>) -> rustc_driver::Compilation
+                + Send,
+        > = Box::new(|_tcx| {
+            time_report::mark_codegen_start();
+            rustc_driver::Compilation::Continue
+        });
+        rustc_gen::generate_with_args_and_after_analysis::<Co2GeneratorState>(
+            rustc_args, after_hook,
+        );
+    } else {
+        rustc_gen::generate_with_args::<Co2GeneratorState>(rustc_args);
+    }
     if co2_ast::diagnostics_were_emitted() {
         co2_ast::panic_with_diagnostic_abort();
     }

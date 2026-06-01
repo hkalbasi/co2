@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use co2_ast::{
@@ -590,6 +591,7 @@ fn lower_translation_unit_items(
     foreign_items: &mut Vec<ForeignModItem>,
     no_main: bool,
     test: bool,
+    on_body_parsed: &mut Option<&mut dyn FnMut(Duration)>,
 ) -> Vec<HirModuleItem> {
     _ = foreign_mod;
     let mut hir_items = Vec::new();
@@ -682,6 +684,7 @@ fn lower_translation_unit_items(
                         (id, name)
                     })
                     .collect();
+                let parse_body_start = Instant::now();
                 let parsed_body = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     parse_compound_statement(
                         &body.0.tokens.0,
@@ -691,6 +694,9 @@ fn lower_translation_unit_items(
                         resolver.clone(),
                     )
                 }));
+                if let Some(cb) = on_body_parsed {
+                    cb(parse_body_start.elapsed());
+                }
 
                 let mir_owner = match parsed_body {
                     Ok(body) => MirOwnerInfo::Fn {
@@ -1013,6 +1019,7 @@ fn lower_translation_unit_items(
             foreign_items,
             no_main,
             test,
+            on_body_parsed,
         );
         let span = ctx.co2_span_to_rustc(module.decl_span);
         let mut module_item_attrs = lower_generated_attrs(&module.attrs);
@@ -1043,10 +1050,13 @@ pub fn lower_crate_sig(
     source_files: &mut HashMap<co2_ast::FileId, (String, Arc<str>), RandomState>,
     no_main: bool,
     test: bool,
+    on_parse_done: Option<&mut dyn FnMut(Duration)>,
+    mut on_body_parsed: Option<&mut dyn FnMut(Duration)>,
 ) -> (HirStructure, HashMap<DefId, MirOwnerInfo>, WellknownDefs) {
     let span = ctx.span_in_file(file_id, 0, 0);
     let deps = ctx.dependencies();
 
+    let parse_start = Instant::now();
     let tu = co2_parser::parse_translation_unit(
         source_name,
         src_static,
@@ -1055,6 +1065,9 @@ pub fn lower_crate_sig(
     )
     .expect("failed to parse co2 source")
     .0;
+    if let Some(cb) = on_parse_done {
+        cb(parse_start.elapsed());
+    }
 
     let tu = deduplicate_tu_items(tu);
     let mut loaded_paths = HashSet::new();
@@ -1169,6 +1182,7 @@ pub fn lower_crate_sig(
         &mut foreign_items,
         no_main,
         test,
+        &mut on_body_parsed,
     );
     ctx.hir_items.extend(root_items);
 
