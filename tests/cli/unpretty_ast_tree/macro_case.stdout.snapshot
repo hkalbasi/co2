@@ -16,29 +16,29 @@ TranslationUnit
       Int@src/macro_case.co2:176..179
     InitDeclarator@src/macro_case.co2:180..203
       Identifier@src/macro_case.co2:180..190 "next_value"
-      Expr@src/macro_case.co2:197..203
-        BinOp@src/macro_case.co2:197..203
-          Constant@src/macro_case.co2:197..203
+      Expr@src/macro_case.co2:193..203
+        BinOp@src/macro_case.co2:193..203
+          Constant@src/macro_case.co2:193..203
             Int 3
           Add
-          Constant@src/macro_case.co2:198..202
+          Constant@src/macro_case.co2:193..203
             Int 1
   Declaration@src/macro_case.co2:205..246
     TypeSpecifier@src/macro_case.co2:205..208
       Int@src/macro_case.co2:205..208
     InitDeclarator@src/macro_case.co2:209..245
       Identifier@src/macro_case.co2:209..219 "pick_value"
-      Expr@src/macro_case.co2:226..245
-        Conditional@src/macro_case.co2:226..245
-          Constant@src/macro_case.co2:226..245
+      Expr@src/macro_case.co2:222..245
+        Conditional@src/macro_case.co2:222..245
+          Constant@src/macro_case.co2:222..245
             Int 3
-          Constant@src/macro_case.co2:226..245
+          Constant@src/macro_case.co2:222..245
             Int 3
-          BinOp@src/macro_case.co2:226..245
-            Constant@src/macro_case.co2:233..237
+          BinOp@src/macro_case.co2:222..245
+            Constant@src/macro_case.co2:222..245
               Int 3
             Add
-            Constant@src/macro_case.co2:239..244
+            Constant@src/macro_case.co2:222..245
               Int 1
   Declaration@src/macro_case.co2:247..280
     TypeSpecifier@src/macro_case.co2:247..250

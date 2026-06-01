@@ -15,6 +15,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
+use super::macro_token::{MacroBodyToken, resolve_params, tokenize_macro_body};
 use super::utils::{
     bytes_to_str, copy_literal_bytes_to_string, is_ident_cont_byte, is_ident_start_byte,
     skip_literal_bytes,
@@ -41,6 +42,7 @@ fn would_paste_tokens(last: u8, first: u8) -> bool {
 
 /// Represents a macro definition.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct MacroDef {
     /// Name of the macro
     pub name: String,
@@ -56,6 +58,13 @@ pub struct MacroDef {
     pub has_named_variadic: bool,
     /// The replacement body (as raw text)
     pub body: String,
+    /// The replacement body tokenized at definition time.
+    /// Used by `handle_stringify_and_paste` to avoid re-scanning the body
+    /// text for `#` and `##` operators and identifier boundaries.
+    pub tokenized_body: Vec<MacroBodyToken>,
+    /// Whether the body contains `#` (stringify) or `##` (paste) operators.
+    /// When false, `handle_stringify_and_paste` can be skipped.
+    pub has_stringify_or_paste: bool,
 }
 
 /// Marker byte used to "blue paint" tokens that were suppressed due to
@@ -64,14 +73,8 @@ pub struct MacroDef {
 /// stripped from the final output in `expand_line()`.
 const BLUE_PAINT_MARKER: u8 = 0x01;
 
-/// Sentinel markers used to protect text injected by `##` token-paste operations
-/// from further parameter substitution in `substitute_params`. The pasted result
-/// is wrapped in START..END so that `substitute_params` copies it verbatim.
-/// These markers are stripped by `substitute_params` itself and never reach
-/// `expand_line`, but `expand_line` strips them defensively as well.
-/// Uses 0x02/0x03 to avoid collision with BLUE_PAINT_MARKER (0x01).
-const PASTE_PROTECT_START: u8 = 0x02;
-const PASTE_PROTECT_END: u8 = 0x03;
+// (PASTE_PROTECT_START/END at 0x02/0x03 were removed when handle_stringify_and_paste
+// and substitute_params were merged into expand_body in Step 3+4.)
 
 /// Strip all blue-paint markers from a string.
 /// Used when substituting arguments into ## token paste operations,
@@ -140,17 +143,20 @@ impl MacroTable {
     pub fn set_file(&mut self, body: String) {
         if let Some(existing) = self.macros.get_mut("__FILE__") {
             existing.body = body;
+            existing.tokenized_body = tokenize_macro_body(&existing.body);
+            existing.has_stringify_or_paste = has_stringify_or_paste(&existing.tokenized_body);
+            // No params to resolve for __FILE__ (object-like)
         } else {
             self.macros.insert(
                 "__FILE__".to_string(),
-                MacroDef {
-                    name: "__FILE__".to_string(),
-                    is_function_like: false,
-                    params: Vec::new(),
-                    is_variadic: false,
-                    has_named_variadic: false,
+                macro_def_from_parts(
+                    "__FILE__".to_string(),
+                    false,
+                    Vec::new(),
+                    false,
+                    false,
                     body,
-                },
+                ),
             );
         }
     }
@@ -175,23 +181,10 @@ impl MacroTable {
     pub fn expand_line_reuse(&self, line: &str, expanding: &mut HashSet<String>) -> String {
         expanding.clear();
         let result = self.expand_text(line, expanding);
-        // Strip internal marker bytes from the final output:
-        // - 0x01 (BLUE_PAINT_MARKER): prevents re-expansion per C11 §6.10.3.4
-        // - 0x02/0x03 (PASTE_PROTECT_START/END): should already be consumed by
-        //   substitute_params, but strip defensively in case any leak through.
-        if result
-            .as_bytes()
-            .iter()
-            .any(|&b| b == BLUE_PAINT_MARKER || b == PASTE_PROTECT_START || b == PASTE_PROTECT_END)
-        {
-            result.replace(
-                [
-                    BLUE_PAINT_MARKER as char,
-                    PASTE_PROTECT_START as char,
-                    PASTE_PROTECT_END as char,
-                ],
-                "",
-            )
+        // Strip blue paint markers from the final output.
+        // BLUE_PAINT_MARKER (0x01) prevents re-expansion per C11 §6.10.3.4.
+        if result.as_bytes().contains(&BLUE_PAINT_MARKER) {
+            result.replace(BLUE_PAINT_MARKER as char, "")
         } else {
             result
         }
@@ -546,14 +539,19 @@ impl MacroTable {
 
         // Object-like macro
         expanding.insert(ident.to_string());
-        let body = self.handle_stringify_and_paste(
-            &mac.body,
-            &mac.params,
-            &[],
-            mac.is_variadic,
-            mac.has_named_variadic,
-        );
-        let expanded = self.expand_text(&body, expanding);
+        let expanded = if mac.has_stringify_or_paste {
+            let body = self.expand_body(
+                &mac.tokenized_body,
+                &mac.params,
+                &[], // raw args (none for object-like)
+                &[], // expanded args (none for object-like)
+                mac.is_variadic,
+                mac.has_named_variadic,
+            );
+            self.expand_text(&body, expanding)
+        } else {
+            self.expand_text(&mac.body, expanding)
+        };
         expanding.remove(ident);
 
         if let Some((func_expanded, end_pos)) =
@@ -724,25 +722,19 @@ impl MacroTable {
             .map(|arg| self.expand_text(arg, expanding))
             .collect();
 
-        // Step 3: Handle stringification (#param) and token pasting (##).
-        // Returns Cow::Borrowed(&mac.body) when the body has no '#' (common case),
-        // avoiding a String clone.
-        let body = self.handle_stringify_and_paste(
-            &mac.body,
-            &mac.params,
-            args,
-            mac.is_variadic,
-            mac.has_named_variadic,
-        );
-
-        // Step 4: Substitute parameters with expanded arguments
-        let body = self.substitute_params(
-            &body,
-            &mac.params,
-            &expanded_args,
-            mac.is_variadic,
-            mac.has_named_variadic,
-        );
+        // Step 3+4: Expand body — handle #/## and substitute params in one pass.
+        let body = if mac.has_stringify_or_paste || !mac.params.is_empty() {
+            self.expand_body(
+                &mac.tokenized_body,
+                &mac.params,
+                args,
+                &expanded_args,
+                mac.is_variadic,
+                mac.has_named_variadic,
+            )
+        } else {
+            mac.body.clone()
+        };
 
         // Check if the substituted body (before rescan) ends with a function-like
         // macro identifier. Per C11 §6.10.3.4, the rescan processes the replacement
@@ -807,310 +799,300 @@ impl MacroTable {
         (result, result_ends_with_func_ident)
     }
 
-    /// Handle # (stringify) and ## (token paste) operators.
-    /// Returns `Cow::Borrowed` when the body has no `#` (the common case),
-    /// avoiding a String allocation.
-    fn handle_stringify_and_paste<'a>(
+    /// Expand a macro body: handle # (stringify), ## (paste), and substitute
+    /// standalone parameters (all in one pass using pre-resolved `Param(idx)`
+    /// and `VaArgs` tokens).
+    fn expand_body(
         &self,
-        body: &'a str,
+        tokens: &[MacroBodyToken],
         params: &[String],
-        args: &[String],
-        is_variadic: bool,
-        has_named_variadic: bool,
-    ) -> std::borrow::Cow<'a, str> {
-        let bytes = body.as_bytes();
-        let len = bytes.len();
-
-        // Short-circuit: if body contains no '#', nothing to do
-        if !body.contains('#') {
-            return std::borrow::Cow::Borrowed(body);
-        }
-
-        let mut result = String::with_capacity(body.len());
-        let mut i = 0;
-
-        while i < len {
-            if bytes[i] == b'#' && i + 1 < len && bytes[i + 1] == b'#' {
-                // Token paste operator ##
-                while result.ends_with(' ') || result.ends_with('\t') {
-                    result.pop();
-                }
-
-                let left_token = extract_trailing_ident(&result);
-                if let Some(ref left_ident) = left_token {
-                    if left_ident == "__VA_ARGS__" && is_variadic {
-                        let va_args_raw = self.get_va_args(params, args);
-                        let va_args = strip_blue_paint(&va_args_raw);
-                        let trim_len = result.len() - "__VA_ARGS__".len();
-                        result.truncate(trim_len);
-                        if va_args.is_empty() {
-                            while result.ends_with(' ') || result.ends_with('\t') {
-                                result.pop();
-                            }
-                            if result.ends_with(',') {
-                                result.pop();
-                            }
-                        } else {
-                            // Wrap in paste-protection markers to prevent
-                            // re-substitution in substitute_params (C11 §6.10.3.3)
-                            result.push(PASTE_PROTECT_START as char);
-                            result.push_str(&va_args);
-                            result.push(PASTE_PROTECT_END as char);
-                        }
-                    } else if let Some(idx) = params.iter().position(|p| p == left_ident.as_str()) {
-                        let trim_len = result.len() - left_ident.len();
-                        result.truncate(trim_len);
-                        let arg = args.get(idx).map_or("", std::string::String::as_str);
-                        // Strip blue paint: ## creates a new token that must be rescanned
-                        // without inheriting blue paint from operands (C11 §6.10.3.3)
-                        let clean_arg = strip_blue_paint(arg);
-                        result.push(PASTE_PROTECT_START as char);
-                        result.push_str(&clean_arg);
-                        result.push(PASTE_PROTECT_END as char);
-                    }
-                }
-
-                i += 2; // skip ##
-
-                while i < len && (bytes[i] == b' ' || bytes[i] == b'\t') {
-                    i += 1;
-                }
-
-                if i < len && is_ident_start_byte(bytes[i]) {
-                    let start = i;
-                    while i < len && is_ident_cont_byte(bytes[i]) {
-                        i += 1;
-                    }
-                    let right_ident = bytes_to_str(bytes, start, i);
-
-                    if right_ident == "__VA_ARGS__" && is_variadic {
-                        let va_args_raw = self.get_va_args(params, args);
-                        let va_args = strip_blue_paint(&va_args_raw);
-                        if va_args.is_empty() {
-                            while result.ends_with(' ') || result.ends_with('\t') {
-                                result.pop();
-                            }
-                            if result.ends_with(',') {
-                                result.pop();
-                            }
-                        } else {
-                            // Wrap in paste-protection markers to prevent
-                            // re-substitution in substitute_params (C11 §6.10.3.3)
-                            result.push(PASTE_PROTECT_START as char);
-                            result.push_str(&va_args);
-                            result.push(PASTE_PROTECT_END as char);
-                        }
-                    } else if let Some(idx) = params.iter().position(|p| p == right_ident) {
-                        let is_named_variadic_param =
-                            is_variadic && has_named_variadic && idx == params.len() - 1;
-                        if is_named_variadic_param {
-                            let va_args_raw = self.get_named_va_args(idx, args);
-                            let va_args = strip_blue_paint(&va_args_raw);
-                            if va_args.is_empty() {
-                                while result.ends_with(' ') || result.ends_with('\t') {
-                                    result.pop();
-                                }
-                                if result.ends_with(',') {
-                                    result.pop();
-                                }
-                            } else {
-                                result.push(PASTE_PROTECT_START as char);
-                                result.push_str(&va_args);
-                                result.push(PASTE_PROTECT_END as char);
-                            }
-                        } else {
-                            let arg = args.get(idx).map_or("", std::string::String::as_str);
-                            // Strip blue paint: ## creates a new token that must be rescanned
-                            // without inheriting blue paint from operands (C11 §6.10.3.3)
-                            let clean_arg = strip_blue_paint(arg);
-                            if clean_arg.is_empty() {
-                                if i < len && !result.is_empty() {
-                                    result.push(' ');
-                                }
-                            } else {
-                                result.push(PASTE_PROTECT_START as char);
-                                result.push_str(&clean_arg);
-                                result.push(PASTE_PROTECT_END as char);
-                            }
-                        }
-                    } else {
-                        // Wrap non-parameter literal tokens in paste-protection markers
-                        // so that the next ##'s extract_trailing_ident won't greedily
-                        // absorb them and accidentally form a parameter name.
-                        // e.g. _name##_##div##_div with _name=foo,_div=2:
-                        //   without protection: _ and div merge into _div matching param
-                        //   with protection: each literal is isolated by markers
-                        result.push(PASTE_PROTECT_START as char);
-                        result.push_str(right_ident);
-                        result.push(PASTE_PROTECT_END as char);
-                    }
-                } else if i < len {
-                    let c = std::str::from_utf8(&bytes[i..])
-                        .unwrap()
-                        .chars()
-                        .next()
-                        .unwrap();
-                    result.push(c);
-                    i += c.len_utf8();
-                }
-                continue;
-            }
-
-            if bytes[i] == b'#' && i + 1 < len && bytes[i + 1] != b'#' {
-                // Stringification operator #
-                i += 1;
-                while i < len && (bytes[i] == b' ' || bytes[i] == b'\t') {
-                    i += 1;
-                }
-                if i < len && is_ident_start_byte(bytes[i]) {
-                    let start = i;
-                    while i < len && is_ident_cont_byte(bytes[i]) {
-                        i += 1;
-                    }
-                    let param_name = bytes_to_str(bytes, start, i);
-
-                    if param_name == "__VA_ARGS__" && is_variadic {
-                        let va_args = self.get_va_args(params, args);
-                        result.push('"');
-                        result.push_str(&stringify_arg(&va_args));
-                        result.push('"');
-                    } else if let Some(idx) = params.iter().position(|p| p == param_name) {
-                        let arg_str =
-                            if is_variadic && has_named_variadic && idx == params.len() - 1 {
-                                self.get_named_va_args(idx, args)
-                            } else {
-                                args.get(idx).cloned().unwrap_or_default()
-                            };
-                        result.push('"');
-                        result.push_str(&stringify_arg(&arg_str));
-                        result.push('"');
-                    } else {
-                        result.push('#');
-                        result.push_str(param_name);
-                    }
-                    continue;
-                }
-                result.push('#');
-                continue;
-            }
-
-            // Regular byte
-            if bytes[i] < 0x80 {
-                result.push(bytes[i] as char);
-            } else {
-                let s = std::str::from_utf8(&bytes[i..])
-                    .expect("stringify/paste: source text is not valid UTF-8");
-                let ch = s.chars().next().unwrap();
-                result.push(ch);
-                i += ch.len_utf8();
-                continue;
-            }
-            i += 1;
-        }
-
-        std::borrow::Cow::Owned(result)
-    }
-
-    /// Substitute parameter names with argument values in macro body.
-    fn substitute_params(
-        &self,
-        body: &str,
-        params: &[String],
-        args: &[String],
+        args: &[String],          // raw (unexpanded) args for #/##
+        expanded_args: &[String], // expanded args for standalone params
         is_variadic: bool,
         has_named_variadic: bool,
     ) -> String {
-        let mut result = String::with_capacity(body.len() + 32);
-        let bytes = body.as_bytes();
-        let len = bytes.len();
+        let mut result = String::new();
+        let len = tokens.len();
         let mut i = 0;
+        let mut pending_param_idx: Option<usize> = None;
+        let mut pending_va_args: bool = false;
 
         while i < len {
-            // Skip over paste-protected regions (text injected by ## paste).
-            // These regions must not be subject to further parameter substitution
-            // per C11 §6.10.3.3 — the result of ## is a new token sequence that
-            // only undergoes rescanning, not parameter replacement.
-            if bytes[i] == PASTE_PROTECT_START {
-                i += 1; // skip the start marker
-                let start = i;
-                while i < len && bytes[i] != PASTE_PROTECT_END {
-                    i += 1;
-                }
-                // Copy the protected region as-is (UTF-8 safe via str slice)
-                result.push_str(&body[start..i]);
-                if i < len {
-                    i += 1; // skip the end marker
-                }
-                continue;
-            }
-
-            if bytes[i] == b'"' || bytes[i] == b'\'' {
-                i = copy_literal_bytes_to_string(bytes, i, bytes[i], &mut result);
-                continue;
-            }
-
-            if is_ident_start_byte(bytes[i]) {
-                let start = i;
-                i += 1;
-                while i < len && is_ident_cont_byte(bytes[i]) {
-                    i += 1;
-                }
-                let ident = bytes_to_str(bytes, start, i);
-
-                // Check if this identifier is a pp-number suffix (e.g., the "L"
-                // in "10L", "ULL" in "0xFFULL"). Per C11 §6.4.8, pp-numbers are
-                // single tokens and their suffixes must not be treated as macro
-                // parameters even if they happen to share a name.
-                if Self::is_ppnumber_suffix(result.as_bytes(), ident) {
-                    result.push_str(ident);
-                    continue;
-                }
-
-                if ident == "__VA_ARGS__" && is_variadic {
-                    let va_args = self.get_va_args(params, args);
-                    let next = if i < len { Some(bytes[i]) } else { None };
-                    Self::append_with_paste_guard(&mut result, &va_args, next);
-                } else if let Some(idx) = params.iter().position(|p| p == ident) {
-                    if is_variadic && has_named_variadic && idx == params.len() - 1 {
-                        let va_args = self.get_named_va_args(idx, args);
-                        let next = if i < len { Some(bytes[i]) } else { None };
-                        Self::append_with_paste_guard(&mut result, &va_args, next);
+            match &tokens[i] {
+                MacroBodyToken::HashHash => {
+                    // ── Token Paste ────────────────────────────────────
+                    // Left side: check pending resolved param first
+                    if pending_va_args {
+                        pending_va_args = false;
+                        let va_args_raw = self.get_va_args(params, args);
+                        let va_args = strip_blue_paint(&va_args_raw);
+                        if va_args.is_empty() {
+                            while result.ends_with(' ') || result.ends_with('\t') {
+                                result.pop();
+                            }
+                            if result.ends_with(',') {
+                                result.pop();
+                            }
+                        } else {
+                            result.push_str(&va_args);
+                        }
+                    } else if let Some(idx) = pending_param_idx.take() {
+                        self.paste_left_param(
+                            &mut result,
+                            idx,
+                            args,
+                            is_variadic,
+                            has_named_variadic,
+                            params,
+                        );
                     } else {
-                        let arg = args.get(idx).map_or("", std::string::String::as_str);
-                        let next = if i < len { Some(bytes[i]) } else { None };
-                        Self::append_with_paste_guard(&mut result, arg, next);
+                        // Fallback: trailing ident in result buffer
+                        while result.ends_with(' ') || result.ends_with('\t') {
+                            result.pop();
+                        }
+                        if let Some(ref left_ident) = extract_trailing_ident(&result) {
+                            if left_ident == "__VA_ARGS__" && is_variadic {
+                                let va_args_raw = self.get_va_args(params, args);
+                                let va_args = strip_blue_paint(&va_args_raw);
+                                let trim_len = result.len() - "__VA_ARGS__".len();
+                                result.truncate(trim_len);
+                                if va_args.is_empty() {
+                                    while result.ends_with(' ') || result.ends_with('\t') {
+                                        result.pop();
+                                    }
+                                    if result.ends_with(',') {
+                                        result.pop();
+                                    }
+                                } else {
+                                    result.push_str(&va_args);
+                                }
+                            } else if let Some(idx) =
+                                params.iter().position(|p| p == left_ident.as_str())
+                            {
+                                let trim_len = result.len() - left_ident.len();
+                                result.truncate(trim_len);
+                                let arg = args.get(idx).map_or("", std::string::String::as_str);
+                                let clean_arg = strip_blue_paint(arg);
+                                result.push_str(&clean_arg);
+                            }
+                        }
                     }
-                } else {
-                    result.push_str(ident);
-                }
-                continue;
-            }
 
-            if bytes[i] < 0x80 {
-                // Batch consecutive non-special ASCII bytes
-                let start = i;
-                i += 1;
-                while i < len
-                    && bytes[i] < 0x80
-                    && bytes[i] != PASTE_PROTECT_START
-                    && bytes[i] != b'"'
-                    && bytes[i] != b'\''
-                    && !is_ident_start_byte(bytes[i])
-                {
+                    i += 1; // skip HashHash
+
+                    // Skip whitespace after ##
+                    while i < len && is_whitespace_token(&tokens[i]) {
+                        i += 1;
+                    }
+
+                    // Right side
+                    if i < len {
+                        match &tokens[i] {
+                            MacroBodyToken::Param(idx) => {
+                                self.paste_right_param(
+                                    &mut result,
+                                    *idx,
+                                    args,
+                                    len,
+                                    i,
+                                    is_variadic,
+                                    has_named_variadic,
+                                    params,
+                                );
+                            }
+                            MacroBodyToken::VaArgs => {
+                                let va_args_raw = self.get_va_args(params, args);
+                                let va_args = strip_blue_paint(&va_args_raw);
+                                if va_args.is_empty() {
+                                    while result.ends_with(' ') || result.ends_with('\t') {
+                                        result.pop();
+                                    }
+                                    if result.ends_with(',') {
+                                        result.pop();
+                                    }
+                                } else {
+                                    result.push_str(&va_args);
+                                }
+                            }
+                            _ => {
+                                let text = super::macro_token::token_text(&tokens[i]);
+                                result.push_str(text);
+                            }
+                        }
+                        i += 1;
+                    }
+                }
+
+                MacroBodyToken::Hash => {
+                    // ── Stringification ────────────────────────────────
+                    let mut j = i + 1;
+                    while j < len && is_whitespace_token(&tokens[j]) {
+                        j += 1;
+                    }
+                    if j < len {
+                        match &tokens[j] {
+                            MacroBodyToken::Param(idx) => {
+                                let arg_str = if is_variadic
+                                    && has_named_variadic
+                                    && *idx == params.len() - 1
+                                {
+                                    self.get_named_va_args(*idx, args)
+                                } else {
+                                    args.get(*idx).cloned().unwrap_or_default()
+                                };
+                                result.push('"');
+                                result.push_str(&stringify_arg(&arg_str));
+                                result.push('"');
+                                i = j + 1;
+                                continue;
+                            }
+                            MacroBodyToken::VaArgs => {
+                                let va_args = self.get_va_args(params, args);
+                                result.push('"');
+                                result.push_str(&stringify_arg(&va_args));
+                                result.push('"');
+                                i = j + 1;
+                                continue;
+                            }
+                            _ if let MacroBodyToken::Ident(param_name) = &tokens[j] => {
+                                // Not a resolved param, output #name as-is
+                                result.push('#');
+                                result.push_str(param_name);
+                                i = j + 1;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                    result.push('#');
                     i += 1;
                 }
-                let slice = std::str::from_utf8(&bytes[start..i]).unwrap_or("");
-                result.push_str(slice);
-            } else {
-                let s = std::str::from_utf8(&bytes[i..])
-                    .expect("substitute_params: source text is not valid UTF-8");
-                let ch = s.chars().next().unwrap();
-                result.push(ch);
-                i += ch.len_utf8();
+
+                MacroBodyToken::Param(idx) => {
+                    // ── Standalone param (not in # or ## context) ─────
+                    // Look ahead for ## to detect left-side paste
+                    let mut lookahead = i + 1;
+                    while lookahead < len && is_whitespace_token(&tokens[lookahead]) {
+                        lookahead += 1;
+                    }
+                    if lookahead < len && matches!(tokens[lookahead], MacroBodyToken::HashHash) {
+                        pending_param_idx = Some(*idx);
+                    } else {
+                        let arg = if is_variadic && has_named_variadic && *idx == params.len() - 1 {
+                            self.get_named_va_args(*idx, expanded_args)
+                        } else {
+                            expanded_args.get(*idx).cloned().unwrap_or_default()
+                        };
+                        let next_byte = tokens.get(i + 1).and_then(|t| {
+                            let s = super::macro_token::token_text(t);
+                            s.as_bytes().first().copied()
+                        });
+                        Self::append_with_paste_guard(&mut result, &arg, next_byte);
+                    }
+                    i += 1;
+                }
+
+                MacroBodyToken::VaArgs => {
+                    // ── Standalone __VA_ARGS__ (not in # or ## context) ─
+                    let mut lookahead = i + 1;
+                    while lookahead < len && is_whitespace_token(&tokens[lookahead]) {
+                        lookahead += 1;
+                    }
+                    if lookahead < len && matches!(tokens[lookahead], MacroBodyToken::HashHash) {
+                        pending_va_args = true;
+                    } else {
+                        let va_args = self.get_va_args(params, expanded_args);
+                        let next_byte = tokens.get(i + 1).and_then(|t| {
+                            let s = super::macro_token::token_text(t);
+                            s.as_bytes().first().copied()
+                        });
+                        Self::append_with_paste_guard(&mut result, &va_args, next_byte);
+                    }
+                    i += 1;
+                }
+
+                MacroBodyToken::Ident(s) => {
+                    result.push_str(s);
+                    i += 1;
+                }
+
+                _ => {
+                    let text = super::macro_token::token_text(&tokens[i]);
+                    result.push_str(text);
+                    i += 1;
+                }
             }
         }
 
         result
+    }
+
+    /// Paste the left side: a resolved param immediately before `##`.
+    fn paste_left_param(
+        &self,
+        result: &mut String,
+        idx: usize,
+        args: &[String],
+        is_variadic: bool,
+        has_named_variadic: bool,
+        params: &[String],
+    ) {
+        if is_variadic && has_named_variadic && idx == params.len() - 1 {
+            let va_args_raw = self.get_named_va_args(idx, args);
+            let va_args = strip_blue_paint(&va_args_raw);
+            if va_args.is_empty() {
+                while result.ends_with(' ') || result.ends_with('\t') {
+                    result.pop();
+                }
+                if result.ends_with(',') {
+                    result.pop();
+                }
+            } else {
+                result.push_str(&va_args);
+            }
+        } else {
+            let arg = args.get(idx).map_or("", std::string::String::as_str);
+            let clean_arg = strip_blue_paint(arg);
+            result.push_str(&clean_arg);
+        }
+    }
+
+    /// Paste the right side: a resolved param immediately after `##`.
+    fn paste_right_param(
+        &self,
+        result: &mut String,
+        idx: usize,
+        args: &[String],
+        len: usize,
+        i: usize,
+        is_variadic: bool,
+        has_named_variadic: bool,
+        params: &[String],
+    ) {
+        if is_variadic && has_named_variadic && idx == params.len() - 1 {
+            let va_args_raw = self.get_named_va_args(idx, args);
+            let va_args = strip_blue_paint(&va_args_raw);
+            if va_args.is_empty() {
+                while result.ends_with(' ') || result.ends_with('\t') {
+                    result.pop();
+                }
+                if result.ends_with(',') {
+                    result.pop();
+                }
+            } else {
+                result.push_str(&va_args);
+            }
+        } else {
+            let arg = args.get(idx).map_or("", std::string::String::as_str);
+            let clean_arg = strip_blue_paint(arg);
+            if clean_arg.is_empty() {
+                if i + 1 < len && !result.is_empty() {
+                    result.push(' ');
+                }
+            } else {
+                result.push_str(&clean_arg);
+            }
+        }
     }
 
     /// Get variadic arguments (__VA_ARGS__) as a comma-separated string.
@@ -1136,6 +1118,37 @@ impl MacroTable {
 impl Default for MacroTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Check whether a tokenized macro body contains `#` or `##` operators.
+fn has_stringify_or_paste(tokens: &[MacroBodyToken]) -> bool {
+    tokens
+        .iter()
+        .any(|t| matches!(t, MacroBodyToken::Hash | MacroBodyToken::HashHash))
+}
+
+/// Quick helper for callers that construct a MacroDef.
+pub(crate) fn macro_def_from_parts(
+    name: String,
+    is_function_like: bool,
+    params: Vec<String>,
+    is_variadic: bool,
+    has_named_variadic: bool,
+    body: String,
+) -> MacroDef {
+    let raw_tokens = tokenize_macro_body(&body);
+    let tokenized_body = resolve_params(&raw_tokens, &params, is_variadic);
+    let has_sp = has_stringify_or_paste(&raw_tokens);
+    MacroDef {
+        name,
+        is_function_like,
+        params,
+        is_variadic,
+        has_named_variadic,
+        body,
+        tokenized_body,
+        has_stringify_or_paste: has_sp,
     }
 }
 
@@ -1220,6 +1233,14 @@ fn contains_standalone_ident(s: &str, ident: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// Check if a `MacroBodyToken` is purely whitespace text.
+fn is_whitespace_token(token: &MacroBodyToken) -> bool {
+    match token {
+        MacroBodyToken::Other(s) => s.chars().all(|c| c.is_ascii_whitespace()),
+        _ => false,
+    }
 }
 
 /// Stringify a macro argument per C11 6.10.3.2.
@@ -1420,6 +1441,9 @@ pub fn parse_define(line: &str) -> Option<MacroDef> {
             String::new()
         };
 
+        let raw_tokens = tokenize_macro_body(&body);
+        let tokenized_body = resolve_params(&raw_tokens, &params, is_variadic);
+        let has_sp = has_stringify_or_paste(&raw_tokens);
         Some(MacroDef {
             name,
             is_function_like: true,
@@ -1427,6 +1451,8 @@ pub fn parse_define(line: &str) -> Option<MacroDef> {
             is_variadic,
             has_named_variadic,
             body,
+            tokenized_body,
+            has_stringify_or_paste: has_sp,
         })
     } else {
         // Object-like macro
@@ -1436,6 +1462,9 @@ pub fn parse_define(line: &str) -> Option<MacroDef> {
             String::new()
         };
 
+        let raw_tokens = tokenize_macro_body(&body);
+        let tokenized_body = resolve_params(&raw_tokens, &[], false);
+        let has_sp = has_stringify_or_paste(&raw_tokens);
         Some(MacroDef {
             name,
             is_function_like: false,
@@ -1443,6 +1472,8 @@ pub fn parse_define(line: &str) -> Option<MacroDef> {
             is_variadic: false,
             has_named_variadic: false,
             body,
+            tokenized_body,
+            has_stringify_or_paste: has_sp,
         })
     }
 }

@@ -31,15 +31,13 @@ impl Preprocessor {
             return None;
         }
 
-        // Handle #pragma weak symbol [= alias]
-        if let Some(weak_content) = rest.strip_prefix("weak") {
-            self.handle_pragma_weak(weak_content.trim());
+        // Handle #pragma weak symbol [= alias] — silently ignored
+        if rest.strip_prefix("weak").is_some() {
             return None;
         }
 
-        // Handle #pragma redefine_extname old new
-        if let Some(redefine_content) = rest.strip_prefix("redefine_extname") {
-            self.handle_pragma_redefine_extname(redefine_content.trim());
+        // Handle #pragma redefine_extname old new — silently ignored
+        if rest.strip_prefix("redefine_extname").is_some() {
             return None;
         }
 
@@ -111,42 +109,6 @@ impl Preprocessor {
             return None;
         }
         Some(name.to_string())
-    }
-
-    /// Handle #pragma weak directives.
-    /// Forms:
-    ///   #pragma weak symbol         - mark symbol as weak
-    ///   #pragma weak symbol = target - symbol becomes a weak alias for target
-    fn handle_pragma_weak(&mut self, content: &str) {
-        let content = content.trim();
-        if content.is_empty() {
-            return;
-        }
-        if let Some(eq_pos) = content.find('=') {
-            let symbol = content[..eq_pos].trim().to_string();
-            let target = content[eq_pos + 1..].trim().to_string();
-            if !symbol.is_empty() && !target.is_empty() {
-                self.weak_pragmas.push((symbol, Some(target)));
-            }
-        } else {
-            // Just mark the symbol as weak
-            let symbol = content.split_whitespace().next().unwrap_or("").to_string();
-            if !symbol.is_empty() {
-                self.weak_pragmas.push((symbol, None));
-            }
-        }
-    }
-
-    /// Handle #pragma redefine_extname old new
-    /// Redirects external symbol 'old' to 'new' (non-weak alias).
-    fn handle_pragma_redefine_extname(&mut self, content: &str) {
-        let parts: Vec<&str> = content.split_whitespace().collect();
-        if parts.len() >= 2 {
-            let old_name = parts[0].to_string();
-            let new_name = parts[1].to_string();
-            // Redirect external references from old_name to new_name.
-            self.redefine_extname_pragmas.push((old_name, new_name));
-        }
     }
 
     /// Handle #pragma pack directives and emit synthetic tokens for the parser.

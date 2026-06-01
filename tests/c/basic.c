@@ -1980,8 +1980,18 @@ int main88() {
 
 void foo89(void) {}
 static void take_ptr89(const void *p) { (void)p; }
-int main89(void) {
+int main89() {
     take_ptr89(foo89);
+    return 0;
+}
+
+int main90() {
+    float x = 0x1.8p1;
+
+    if (x < 2.9f || x > 3.1f) {
+        return 1;
+    }
+
     return 0;
 }
 
@@ -2007,7 +2017,7 @@ int main() {
 		main71, main72, main73, main74, main75,
 		main76, main77, main78, main79, main80,
 		main81, main82, main83, main84, main85,
-		main86, main87, main88,
+		main86, main87, main88, main89, main90,
 	};
 	
 	int i;

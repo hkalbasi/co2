@@ -100,11 +100,9 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
 
 fn write_test_host(co2_file: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
     let preprocessed = co2_preprocessor::preprocess(co2_file, &[]);
-    let src_static: &'static str = Box::leak(preprocessed.normalized.to_string().into_boxed_str());
-    let ast = co2_parser::parse_translation_unit(
+    let ast = co2_parser::parse_translation_unit_from_preprocessed(
         &co2_file.display().to_string(),
-        src_static,
-        Some(&preprocessed),
+        &preprocessed,
         StatelessResolver::new(),
     );
 
@@ -204,13 +202,10 @@ fn collect_tests_from_translation_unit(
             resolve_module_source(module_dir, &mod_item.name.0)
         {
             let preprocessed = co2_preprocessor::preprocess(&module_path_on_disk, &[]);
-            let source: &'static str =
-                Box::leak(preprocessed.normalized.to_string().into_boxed_str());
             let source_name = module_path_on_disk.to_string_lossy().into_owned();
-            if let Some(child) = co2_parser::parse_translation_unit(
+            if let Some(child) = co2_parser::parse_translation_unit_from_preprocessed(
                 &source_name,
-                source,
-                Some(&preprocessed),
+                &preprocessed,
                 StatelessResolver::new(),
             ) {
                 collect_tests_from_translation_unit(
@@ -304,12 +299,10 @@ fn take_unpretty_ast_tree_flag(args: Vec<String>) -> (Vec<String>, bool) {
 
 fn dump_ast_tree_for_file(co2_file: &std::path::Path) -> std::process::ExitCode {
     let preprocessed = co2_preprocessor::preprocess(co2_file, &[]);
-    let src_static: &'static str = Box::leak(preprocessed.normalized.to_string().into_boxed_str());
     let filename = co2_file.display().to_string();
-    let Some(ast) = co2_parser::parse_translation_unit(
+    let Some(ast) = co2_parser::parse_translation_unit_from_preprocessed(
         &filename,
-        src_static,
-        Some(&preprocessed),
+        &preprocessed,
         StatelessResolver::new(),
     ) else {
         return std::process::ExitCode::from(5);

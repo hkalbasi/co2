@@ -4,7 +4,7 @@
 //! type limits, float characteristics, etc.) and architecture-specific
 //! setup for aarch64 and riscv64.
 
-use super::macro_defs::MacroDef;
+use super::macro_defs::macro_def_from_parts;
 use super::pipeline::Preprocessor;
 
 impl Preprocessor {
@@ -280,30 +280,30 @@ impl Preprocessor {
         }
 
         for &(name, params, body) in PREDEFINED_FUNC_MACROS {
-            self.macros.define(MacroDef {
-                name: name.to_string(),
-                is_function_like: true,
-                params: params
+            self.macros.define(macro_def_from_parts(
+                name.to_string(),
+                true,
+                params
                     .iter()
                     .map(std::string::ToString::to_string)
                     .collect(),
-                is_variadic: false,
-                has_named_variadic: false,
-                body: body.to_string(),
-            });
+                false,
+                false,
+                body.to_string(),
+            ));
         }
     }
 
     /// Helper to define a simple object-like macro.
     pub(super) fn define_simple_macro(&mut self, name: &str, body: &str) {
-        self.macros.define(MacroDef {
-            name: name.to_string(),
-            is_function_like: false,
-            params: Vec::new(),
-            is_variadic: false,
-            has_named_variadic: false,
-            body: body.to_string(),
-        });
+        self.macros.define(macro_def_from_parts(
+            name.to_string(),
+            false,
+            Vec::new(),
+            false,
+            false,
+            body.to_string(),
+        ));
     }
 
     /// Define x86/x86_64 SIMD feature macros (__SSE__, __SSE2__, __MMX__, etc.).

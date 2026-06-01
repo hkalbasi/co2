@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::macro_defs::{MacroDef, parse_define};
-use super::pipeline::Preprocessor;
+use super::macro_defs::{macro_def_from_parts, parse_define};
+use super::pipeline::{Preprocessor, PreprocessorDiagnostic};
 
 /// Maximum recursive inclusion depth, matching GCC's default of 200.
 /// Prevents infinite inclusion loops in files without `#pragma once`.
@@ -294,12 +294,8 @@ fn normalize_include_path(path: String) -> String {
 }
 
 impl Preprocessor {
-    /// Handle #include directive.
-    pub(super) fn handle_include(
-        &mut self,
-        path: &str,
-        range: std::ops::Range<usize>,
-    ) -> Option<super::pipeline::PreprocessOutput> {
+    /// Handle #include directive. Returns `true` if content was accumulated.
+    pub(super) fn handle_include(&mut self, path: &str, range: std::ops::Range<usize>) -> bool {
         let path = path.trim();
 
         // Expand macros in include path (for computed includes)
@@ -340,7 +336,7 @@ impl Preprocessor {
         if let Some(resolved_path) = self.resolve_include_path(&include_path, is_system) {
             // Check for #pragma once
             if self.pragma_once_files.contains(&resolved_path) {
-                return Some(super::pipeline::PreprocessOutput::default());
+                return false;
             }
 
             // Check for include guard: if this file has a known guard macro and
@@ -348,7 +344,7 @@ impl Preprocessor {
             if let Some(guard) = self.include_guard_macros.get(&resolved_path)
                 && self.macros.is_defined(guard)
             {
-                return Some(super::pipeline::PreprocessOutput::default());
+                return false;
             }
 
             // Check for excessive recursive inclusion.
@@ -362,7 +358,7 @@ impl Preprocessor {
                     .filter(|p| *p == &resolved_path)
                     .count();
                 if depth >= MAX_INCLUDE_DEPTH {
-                    return Some(super::pipeline::PreprocessOutput::default());
+                    return false;
                 }
             }
 
@@ -385,7 +381,7 @@ impl Preprocessor {
                     .map(std::string::ToString::to_string);
                 self.macros.set_file(format!("\"{display_path}\""));
 
-                let result = self.preprocess_included(&content);
+                self.preprocess_included(&content);
 
                 // Restore __FILE__
                 if let Some(old) = old_file {
@@ -407,70 +403,69 @@ impl Preprocessor {
                 // any definitions from the system header that use unsupported builtins
                 // like __builtin_isinf_sign and __builtin_isnan
                 if include_path == "math.h" {
-                    self.macros.define(MacroDef {
-                        name: "isinf".to_string(),
-                        is_function_like: true,
-                        params: vec!["x".to_string()],
-                        is_variadic: false,
-                        has_named_variadic: false,
-                        body: "((x) == __builtin_inf() || (x) == -__builtin_inf())".to_string(),
-                    });
-                    self.macros.define(MacroDef {
-                        name: "isfinite".to_string(),
-                        is_function_like: true,
-                        params: vec!["x".to_string()],
-                        is_variadic: false,
-                        has_named_variadic: false,
-                        body: "((x) != __builtin_inf() && (x) != -__builtin_inf())".to_string(),
-                    });
-                    self.macros.define(MacroDef {
-                        name: "isnan".to_string(),
-                        is_function_like: true,
-                        params: vec!["x".to_string()],
-                        is_variadic: false,
-                        has_named_variadic: false,
-                        body: "((x) != (x))".to_string(),
-                    });
-                    self.macros.define(MacroDef {
-                        name: "signbit".to_string(),
-                        is_function_like: true,
-                        params: vec!["x".to_string()],
-                        is_variadic: false,
-                        has_named_variadic: false,
-                        body: "(((x) < 0) || ((x) == 0 && (1.0 / (x)) < 0))".to_string(),
-                    });
+                    self.macros.define(macro_def_from_parts(
+                        "isinf".to_string(),
+                        true,
+                        vec!["x".to_string()],
+                        false,
+                        false,
+                        "((x) == __builtin_inf() || (x) == -__builtin_inf())".to_string(),
+                    ));
+                    self.macros.define(macro_def_from_parts(
+                        "isfinite".to_string(),
+                        true,
+                        vec!["x".to_string()],
+                        false,
+                        false,
+                        "((x) != __builtin_inf() && (x) != -__builtin_inf())".to_string(),
+                    ));
+                    self.macros.define(macro_def_from_parts(
+                        "isnan".to_string(),
+                        true,
+                        vec!["x".to_string()],
+                        false,
+                        false,
+                        "((x) != (x))".to_string(),
+                    ));
+                    self.macros.define(macro_def_from_parts(
+                        "signbit".to_string(),
+                        true,
+                        vec!["x".to_string()],
+                        false,
+                        false,
+                        "(((x) < 0) || ((x) == 0 && (1.0 / (x)) < 0))".to_string(),
+                    ));
                 }
 
-                Some(result)
+                true
             } else {
                 // Silently skip unresolvable includes (many system headers
                 // may not be needed if builtins provide their macros).
                 // Inject fallback declarations since the real header failed to load.
                 self.inject_fallback_declarations_for_header(&include_path);
-                None
+                false
             }
         } else {
             // Header not found - inject fallback type/extern declarations for
             // well-known standard headers so compilation can still proceed.
             self.inject_fallback_declarations_for_header(&include_path);
 
-            self.errors.push(super::pipeline::PreprocessorDiagnostic {
+            self.errors.push(PreprocessorDiagnostic {
                 file: self.current_file(),
                 range,
                 message: format!("{include_path}: No such file or directory"),
             });
-            None
+            false
         }
     }
 
     /// Handle #include_next directive (GCC extension).
-    /// Searches for the header starting from the next include path after the one
-    /// that contained the current file.
+    /// Returns `true` if content was accumulated.
     pub(super) fn handle_include_next(
         &mut self,
         path: &str,
         range: std::ops::Range<usize>,
-    ) -> Option<super::pipeline::PreprocessOutput> {
+    ) -> bool {
         let path = path.trim();
 
         // Parse the include path
@@ -510,14 +505,14 @@ impl Preprocessor {
         {
             // Check for #pragma once
             if self.pragma_once_files.contains(&resolved_path) {
-                return Some(super::pipeline::PreprocessOutput::default());
+                return false;
             }
 
             // Check for include guard
             if let Some(guard) = self.include_guard_macros.get(&resolved_path)
                 && self.macros.is_defined(guard)
             {
-                return Some(super::pipeline::PreprocessOutput::default());
+                return false;
             }
 
             // Check for excessive recursive inclusion
@@ -528,7 +523,7 @@ impl Preprocessor {
                     .filter(|p| *p == &resolved_path)
                     .count();
                 if depth >= MAX_INCLUDE_DEPTH {
-                    return Some(super::pipeline::PreprocessOutput::default());
+                    return false;
                 }
             }
 
@@ -547,7 +542,7 @@ impl Preprocessor {
                         .map(std::string::ToString::to_string);
                     self.macros.set_file(format!("\"{display_path}\""));
 
-                    let result = self.preprocess_included(&content);
+                    self.preprocess_included(&content);
 
                     if let Some(old) = old_file {
                         self.macros.set_file(old);
@@ -559,12 +554,12 @@ impl Preprocessor {
                         self.include_guard_macros.insert(resolved_path, guard);
                     }
 
-                    Some(result)
+                    true
                 }
-                Err(_) => None,
+                Err(_) => false,
             }
         } else {
-            self.errors.push(super::pipeline::PreprocessorDiagnostic {
+            self.errors.push(PreprocessorDiagnostic {
                 file: self.current_file(),
                 range,
                 message: format!(
@@ -572,7 +567,7 @@ impl Preprocessor {
                      (no system header after the compiler's wrapper)"
                 ),
             });
-            None
+            false
         }
     }
 
@@ -780,53 +775,53 @@ impl Preprocessor {
                 // typedef text via pending_injections would break if stdarg.h is included
                 // from within a nested header, since the injected text gets emitted at
                 // the include boundary -- potentially in the middle of an initializer.
-                self.macros.define(MacroDef {
-                    name: "va_start".to_string(),
-                    is_function_like: true,
-                    params: vec!["ap".to_string(), "last".to_string()],
-                    is_variadic: false,
-                    has_named_variadic: false,
-                    body: "__builtin_va_start(ap,last)".to_string(),
-                });
-                self.macros.define(MacroDef {
-                    name: "va_end".to_string(),
-                    is_function_like: true,
-                    params: vec!["ap".to_string()],
-                    is_variadic: false,
-                    has_named_variadic: false,
-                    body: "__builtin_va_end(ap)".to_string(),
-                });
-                self.macros.define(MacroDef {
-                    name: "va_copy".to_string(),
-                    is_function_like: true,
-                    params: vec!["dest".to_string(), "src".to_string()],
-                    is_variadic: false,
-                    has_named_variadic: false,
-                    body: "__builtin_va_copy(dest,src)".to_string(),
-                });
+                self.macros.define(macro_def_from_parts(
+                    "va_start".to_string(),
+                    true,
+                    vec!["ap".to_string(), "last".to_string()],
+                    false,
+                    false,
+                    "__builtin_va_start(ap,last)".to_string(),
+                ));
+                self.macros.define(macro_def_from_parts(
+                    "va_end".to_string(),
+                    true,
+                    vec!["ap".to_string()],
+                    false,
+                    false,
+                    "__builtin_va_end(ap)".to_string(),
+                ));
+                self.macros.define(macro_def_from_parts(
+                    "va_copy".to_string(),
+                    true,
+                    vec!["dest".to_string(), "src".to_string()],
+                    false,
+                    false,
+                    "__builtin_va_copy(dest,src)".to_string(),
+                ));
                 // va_arg is special syntax: __builtin_va_arg(ap, type)
                 // It's handled by the parser as a special built-in, so we define
                 // the macro to expand to __builtin_va_arg which the lexer recognizes.
-                self.macros.define(MacroDef {
-                    name: "va_arg".to_string(),
-                    is_function_like: true,
-                    params: vec!["ap".to_string(), "type".to_string()],
-                    is_variadic: false,
-                    has_named_variadic: false,
-                    body: "__builtin_va_arg(ap,type)".to_string(),
-                });
+                self.macros.define(macro_def_from_parts(
+                    "va_arg".to_string(),
+                    true,
+                    vec!["ap".to_string(), "type".to_string()],
+                    false,
+                    false,
+                    "__builtin_va_arg(ap,type)".to_string(),
+                ));
                 // __gnuc_va_list is also handled natively by the parser/sema/lowerer
                 // (see comment above about not injecting typedef text).
             }
             "stddef.h" => {
-                self.macros.define(MacroDef {
-                    name: "offsetof".to_string(),
-                    is_function_like: true,
-                    params: vec!["type".to_string(), "member".to_string()],
-                    is_variadic: false,
-                    has_named_variadic: false,
-                    body: "__builtin_offsetof(type, member)".to_string(),
-                });
+                self.macros.define(macro_def_from_parts(
+                    "offsetof".to_string(),
+                    true,
+                    vec!["type".to_string(), "member".to_string()],
+                    false,
+                    false,
+                    "__builtin_offsetof(type, member)".to_string(),
+                ));
             }
             "signal.h" => {
                 self.pending_injections
@@ -839,14 +834,14 @@ impl Preprocessor {
             "math.h" => {
                 // isinf will be re-defined after reading the system header
                 // to override any definition that uses unsupported __builtin_isinf_sign
-                self.macros.define(MacroDef {
-                    name: "signbit".to_string(),
-                    is_function_like: true,
-                    params: vec!["x".to_string()],
-                    is_variadic: false,
-                    has_named_variadic: false,
-                    body: "(((x) < 0) || ((x) == 0 && (1.0 / (x)) < 0))".to_string(),
-                });
+                self.macros.define(macro_def_from_parts(
+                    "signbit".to_string(),
+                    true,
+                    vec!["x".to_string()],
+                    false,
+                    false,
+                    "(((x) < 0) || ((x) == 0 && (1.0 / (x)) < 0))".to_string(),
+                ));
             }
             _ => {}
         }

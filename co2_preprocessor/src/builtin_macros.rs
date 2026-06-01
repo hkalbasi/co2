@@ -4,18 +4,18 @@
 //! we define essential macros from <limits.h>, <stdint.h>, <stddef.h>,
 //! <stdbool.h>, <stdatomic.h>, etc. as built-in macros.
 
-use super::macro_defs::{MacroDef, MacroTable};
+use super::macro_defs::{MacroTable, macro_def_from_parts};
 
 /// Helper to define a simple object-like macro.
 fn def(macros: &mut MacroTable, name: &str, body: &str) {
-    macros.define(MacroDef {
-        name: name.to_string(),
-        is_function_like: false,
-        params: Vec::new(),
-        is_variadic: false,
-        has_named_variadic: false,
-        body: body.to_string(),
-    });
+    macros.define(macro_def_from_parts(
+        name.to_string(),
+        false,
+        Vec::new(),
+        false,
+        false,
+        body.to_string(),
+    ));
 }
 
 /// Define all built-in macros that substitute for system header content.
@@ -108,86 +108,86 @@ fn define_stdint_macros(macros: &mut MacroTable) {
     def(macros, "WINT_MAX", "4294967295U");
 
     // Constant macros for fixed-width types
-    macros.define(MacroDef {
-        name: "INT8_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "INT16_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "INT32_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "INT64_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x ## LL".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "UINT8_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "UINT16_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "UINT32_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x ## U".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "UINT64_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x ## ULL".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "INTMAX_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x ## LL".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "UINTMAX_C".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "x ## ULL".to_string(),
-    });
+    macros.define(macro_def_from_parts(
+        "INT8_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "INT16_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "INT32_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "INT64_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x ## LL".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "UINT8_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "UINT16_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "UINT32_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x ## U".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "UINT64_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x ## ULL".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "INTMAX_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x ## LL".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "UINTMAX_C".to_string(),
+        true,
+        vec!["x".to_string()],
+        false,
+        false,
+        "x ## ULL".to_string(),
+    ));
 }
 
 /// Define all stdbool.h macros (called on #include <stdbool.h>).
@@ -441,84 +441,79 @@ fn define_type_traits_macros(macros: &mut MacroTable) {
 
 /// __builtin_expect macros - treated as identity function (ignoring hint)
 fn define_builtin_expect_macros(macros: &mut MacroTable) {
-    macros.define(MacroDef {
-        name: "__builtin_expect".to_string(),
-        is_function_like: true,
-        params: vec!["x".to_string(), "c".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
+    macros.define(macro_def_from_parts(
+        "__builtin_expect".to_string(),
+        true,
+        vec!["x".to_string(), "c".to_string()],
+        false,
+        false,
         // Return just the first argument, ignoring the hint
-        body: "x".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "__atomic_fetch_add".to_string(),
-        is_function_like: true,
-        params: vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) += (arg); __co2_old; })"
-            .to_string(),
-    });
-    macros.define(MacroDef {
-        name: "__atomic_fetch_sub".to_string(),
-        is_function_like: true,
-        params: vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) -= (arg); __co2_old; })"
-            .to_string(),
-    });
-    macros.define(MacroDef {
-        name: "__atomic_fetch_or".to_string(),
-        is_function_like: true,
-        params: vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) |= (arg); __co2_old; })"
-            .to_string(),
-    });
-    macros.define(MacroDef {
-        name: "__atomic_fetch_xor".to_string(),
-        is_function_like: true,
-        params: vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) ^= (arg); __co2_old; })"
-            .to_string(),
-    });
-    macros.define(MacroDef {
-        name: "__atomic_fetch_and".to_string(),
-        is_function_like: true,
-        params: vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) &= (arg); __co2_old; })"
-            .to_string(),
-    });
-    macros.define(MacroDef {
-        name: "__atomic_load_n".to_string(),
-        is_function_like: true,
-        params: vec!["obj".to_string(), "order".to_string()],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "(*(obj))".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "__atomic_store_n".to_string(),
-        is_function_like: true,
-        params: vec![
+        "x".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "__atomic_fetch_add".to_string(),
+        true,
+        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
+        false,
+        false,
+        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) += (arg); __co2_old; })".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "__atomic_fetch_sub".to_string(),
+        true,
+        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
+        false,
+        false,
+        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) -= (arg); __co2_old; })".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "__atomic_fetch_or".to_string(),
+        true,
+        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
+        false,
+        false,
+        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) |= (arg); __co2_old; })".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "__atomic_fetch_xor".to_string(),
+        true,
+        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
+        false,
+        false,
+        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) ^= (arg); __co2_old; })".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "__atomic_fetch_and".to_string(),
+        true,
+        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
+        false,
+        false,
+        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) &= (arg); __co2_old; })".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "__atomic_load_n".to_string(),
+        true,
+        vec!["obj".to_string(), "order".to_string()],
+        false,
+        false,
+        "(*(obj))".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "__atomic_store_n".to_string(),
+        true,
+        vec![
             "obj".to_string(),
             "desired".to_string(),
             "order".to_string(),
         ],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "((*(obj)) = (desired))".to_string(),
-    });
-    macros.define(MacroDef {
-        name: "__atomic_compare_exchange_n".to_string(),
-        is_function_like: true,
-        params: vec![
+        false,
+        false,
+        "((*(obj)) = (desired))".to_string(),
+    ));
+    macros.define(macro_def_from_parts(
+        "__atomic_compare_exchange_n".to_string(),
+        true,
+        vec![
             "obj".to_string(),
             "expected".to_string(),
             "desired".to_string(),
@@ -526,8 +521,8 @@ fn define_builtin_expect_macros(macros: &mut MacroTable) {
             "success".to_string(),
             "failure".to_string(),
         ],
-        is_variadic: false,
-        has_named_variadic: false,
-        body: "({ int __co2_ok = (*(obj)) == (*(expected)); if (__co2_ok) { *(obj) = (desired); } else { *(expected) = *(obj); } __co2_ok; })".to_string(),
-    });
+        false,
+        false,
+        "({ int __co2_ok = (*(obj)) == (*(expected)); if (__co2_ok) { *(obj) = (desired); } else { *(expected) = *(obj); } __co2_ok; })".to_string(),
+    ));
 }

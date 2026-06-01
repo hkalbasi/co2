@@ -1,9 +1,4 @@
-use chumsky::{
-    Parser as _,
-    error::Rich,
-    input::Input as _,
-    span::{SimpleSpan, Span as _},
-};
+use chumsky::{Parser as _, error::Rich, input::Input as _, span::SimpleSpan};
 
 use crate::{lexer::lexer, parser::translation_unit};
 
@@ -18,38 +13,24 @@ pub(crate) use co2_ast::{
 
 pub(crate) use co2_ast::{Span, Spanned};
 
-fn map_lexer_span(
-    span: SimpleSpan<usize>,
-    pp: Option<&co2_preprocessor::PreprocessedSource>,
-) -> Span {
-    if let Some(pp) = pp {
-        pp.real_span(span.start, span.end)
-    } else {
-        Span::from_parts(FileId::INVALID, span.start..span.end)
-    }
+fn map_lexer_span(span: SimpleSpan<usize>) -> Span {
+    Span::from_parts(FileId::INVALID, span.start..span.end)
 }
 
-fn map_lexer_error<'src>(
-    err: &Rich<'src, char, SimpleSpan<usize>>,
-    pp: Option<&co2_preprocessor::PreprocessedSource>,
-) -> Rich<'src, char, Span> {
-    Rich::custom(map_lexer_span(*err.span(), pp), err.to_string())
+fn map_lexer_error<'src>(err: &Rich<'src, char, SimpleSpan<usize>>) -> Rich<'src, char, Span> {
+    Rich::custom(map_lexer_span(*err.span()), err.to_string())
 }
 
 fn map_lexer_warning<'src>(
     warning: &Rich<'src, String, SimpleSpan<usize>>,
-    pp: Option<&co2_preprocessor::PreprocessedSource>,
 ) -> Rich<'src, String, Span> {
-    Rich::custom(map_lexer_span(*warning.span(), pp), warning.to_string())
+    Rich::custom(map_lexer_span(*warning.span()), warning.to_string())
 }
 
-fn map_lexer_tokens(
-    tokens: Vec<(Token, SimpleSpan<usize>)>,
-    pp: Option<&co2_preprocessor::PreprocessedSource>,
-) -> Vec<Spanned<Token>> {
+fn map_lexer_tokens(tokens: Vec<(Token, SimpleSpan<usize>)>) -> Vec<Spanned<Token>> {
     tokens
         .into_iter()
-        .map(|(token, span)| (token, map_lexer_span(span, pp)))
+        .map(|(token, span)| (token, map_lexer_span(span)))
         .collect()
 }
 
@@ -59,19 +40,40 @@ fn eoi_span_for_tokens(tokens: &[Spanned<Token>], fallback: Span) -> Span {
     })
 }
 
+pub fn parse_translation_unit_from_preprocessed<R: TypeResolver>(
+    filename: &str,
+    preprocessed: &co2_preprocessor::PreprocessedSource,
+    resolver: R,
+) -> Option<Spanned<TranslationUnit<R>>> {
+    let src: &'static str = Box::leak(preprocessed.raw_src.to_string().into_boxed_str());
+    let end_span = preprocessed.tokens.last().map_or(
+        Span::from_parts(preprocessed.main_file_idx, src.len()..src.len()),
+        |(_, span)| Span::from_parts(span.data().context, span.data().end..span.data().end),
+    );
+    Some(parse_translation_unit_from_tokens(
+        &preprocessed.tokens,
+        filename,
+        src,
+        end_span,
+        resolver,
+    ))
+}
+
 pub fn parse_translation_unit<R: TypeResolver>(
     filename: &str,
     src: &'static str,
     pp: Option<&co2_preprocessor::PreprocessedSource>,
     resolver: R,
 ) -> Option<Spanned<TranslationUnit<R>>> {
-    Some(parse_translation_unit_internal(filename, src, pp, resolver))
+    if let Some(pp) = pp {
+        return parse_translation_unit_from_preprocessed(filename, pp, resolver);
+    }
+    Some(parse_translation_unit_internal(filename, src, resolver))
 }
 
 fn parse_translation_unit_internal<R: TypeResolver>(
     filename: &str,
     src: &'static str,
-    pp: Option<&co2_preprocessor::PreprocessedSource>,
     resolver: R,
 ) -> Spanned<TranslationUnit<R>> {
     let mut warnings = chumsky::extra::SimpleState(Vec::new());
@@ -83,19 +85,17 @@ fn parse_translation_unit_internal<R: TypeResolver>(
         co2_ast::emit_warnings(
             warnings
                 .iter()
-                .map(|warning| map_lexer_warning(warning, pp))
+                .map(|warning| map_lexer_warning(warning))
                 .collect(),
         );
     }
 
     if let Some(tokens) = tokens {
-        let tokens = map_lexer_tokens(tokens, pp);
-        let fallback_end_span = if let Some(pp) = pp {
-            map_lexer_span(SimpleSpan::new((), src.len()..src.len()), Some(pp))
-        } else {
-            Span::from_parts(FileId::INVALID, src.len()..src.len())
-        };
-        let end_span = eoi_span_for_tokens(&tokens, fallback_end_span);
+        let tokens = map_lexer_tokens(tokens);
+        let end_span = eoi_span_for_tokens(
+            &tokens,
+            Span::from_parts(FileId::INVALID, src.len()..src.len()),
+        );
         let tokens = tokens.leak();
         let (ast, parse_errs) = translation_unit(resolver)
             .map_with(|ast, e| (ast, e.span()))
@@ -119,7 +119,7 @@ fn parse_translation_unit_internal<R: TypeResolver>(
     print_errors_and_terminate(
         filename,
         src,
-        errs.iter().map(|err| map_lexer_error(err, pp)).collect(),
+        errs.iter().map(|err| map_lexer_error(err)).collect(),
     );
 }
 

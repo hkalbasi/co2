@@ -6,14 +6,25 @@
 //! processing (comment stripping, line joining) in `text_processing`.
 
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicU32, Ordering},
+};
+
+use co2_ast::{FileId, Rich, Span, Spanned, Token};
 
 use super::builtin_macros::define_builtin_macros;
 use super::conditionals::{ConditionalStack, evaluate_condition};
-use super::macro_defs::{MacroDef, MacroTable, parse_define};
+use super::macro_defs::{MacroDef, MacroTable, macro_def_from_parts, parse_define};
+use super::macro_token::{resolve_params, tokenize_macro_body};
 use super::text_processing::{LogicalSlice, split_first_word, strip_line_comment};
+use super::tokenizer;
 use super::utils::{is_ident_cont, is_ident_start};
+
+use crate::SourceFile;
 
 /// Maximum number of newlines to accumulate while joining lines for unbalanced
 /// parentheses in macro arguments. Prevents runaway accumulation when a source
@@ -27,37 +38,6 @@ pub struct PreprocessorDiagnostic {
     pub file: String,
     pub range: Range<usize>,
     pub message: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PreprocessOutput {
-    pub(crate) chunks: Vec<PreprocessChunk>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PreprocessChunk {
-    pub(crate) file: PathBuf,
-    pub(crate) raw: String,
-    pub(crate) source_text: String,
-    pub(crate) source_boundaries: Vec<usize>,
-}
-
-impl PreprocessOutput {
-    pub(crate) fn push(&mut self, chunk: PreprocessChunk) {
-        if !chunk.raw.is_empty() {
-            self.chunks.push(chunk);
-        }
-    }
-
-    pub(crate) fn append(&mut self, mut other: PreprocessOutput) {
-        self.chunks.append(&mut other.chunks);
-    }
-
-    pub(crate) fn is_blank(&self) -> bool {
-        self.chunks
-            .iter()
-            .all(|chunk| chunk.raw.chars().all(char::is_whitespace))
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -149,16 +129,6 @@ pub struct Preprocessor {
     /// Stack for #pragma push_macro / pop_macro.
     /// Maps macro name -> stack of saved definitions (None = was undefined).
     pub(super) macro_save_stack: HashMap<String, Vec<Option<MacroDef>>>,
-    /// #pragma weak directives: (symbol, optional_alias_target)
-    /// - (symbol, None) means "mark symbol as weak"
-    /// - (symbol, Some(target)) means "symbol is a weak alias for target"
-    pub weak_pragmas: Vec<(String, Option<String>)>,
-    /// #pragma redefine_extname directives: (old_name, new_name)
-    pub redefine_extname_pragmas: Vec<(String, String)>,
-    /// Accumulated output from force-included files (-include).
-    /// Prepended to the main source's preprocessed output so that pragma
-    /// synthetic tokens (e.g., visibility push/pop) take effect.
-    force_include_output: PreprocessOutput,
     /// Cache for include path resolution.
     /// Maps (include_path, is_system, current_dir_key) to the resolved filesystem path.
     /// This avoids repeated `stat()` calls when the same header is included from
@@ -181,6 +151,22 @@ pub struct Preprocessor {
     /// Reusable set for directive-level macro expansion (handle_if, handle_elif,
     /// #error). Avoids allocating a new set per directive.
     directive_expanding: HashSet<String>,
+
+    // ── Single-pass token output accumulators ──────────────────────────
+    /// Concatenated raw preprocessed text (no normalization), for raw_src.
+    pub(super) raw_text: String,
+    /// Final token stream with spans resolved to original source positions.
+    pub(super) output_tokens: Vec<Spanned<Token>>,
+    /// Source file registry for diagnostics.
+    pub(super) source_files: HashMap<FileId, SourceFile>,
+    /// Path → FileId lookup.
+    pub(super) file_index: HashMap<PathBuf, FileId>,
+    /// Rewrite boundary map for the main source file.
+    pub(super) main_rewrite_boundaries: Vec<usize>,
+    /// Tokenizer warnings, accumulated during emission.
+    pub(super) lexer_warnings: Vec<Rich<'static, String, Span>>,
+    /// Tokenizer errors, accumulated during emission.
+    pub(super) lexer_errors: Vec<Rich<'static, String, Span>>,
 }
 
 impl Preprocessor {
@@ -200,20 +186,26 @@ impl Preprocessor {
             pragma_once_files: HashSet::new(),
             pending_injections: Vec::new(),
             macro_save_stack: HashMap::new(),
-            weak_pragmas: Vec::new(),
-            redefine_extname_pragmas: Vec::new(),
-            force_include_output: PreprocessOutput::default(),
             include_resolve_cache: HashMap::new(),
             include_guard_macros: HashMap::new(),
             directive_expanding: HashSet::new(),
+            raw_text: String::new(),
+            output_tokens: Vec::new(),
+            source_files: HashMap::new(),
+            file_index: HashMap::new(),
+            main_rewrite_boundaries: Vec::new(),
+            lexer_warnings: Vec::new(),
+            lexer_errors: Vec::new(),
         };
         pp.define_predefined_macros();
         define_builtin_macros(&mut pp.macros);
         pp
     }
 
-    pub fn preprocess(&mut self, source: &str) -> PreprocessOutput {
-        let main_output = self.preprocess_source(source, false);
+    /// Preprocess the main source file and return the final PreprocessedSource.
+    pub fn preprocess(&mut self, source: &str, boundaries: &[usize]) -> crate::PreprocessedSource {
+        self.main_rewrite_boundaries = boundaries.to_vec();
+        self.preprocess_source(source, false);
 
         if let Some(range) = self.conditionals.unclosed_range() {
             self.errors.push(PreprocessorDiagnostic {
@@ -223,17 +215,25 @@ impl Preprocessor {
             });
         }
 
-        let mut result = std::mem::take(&mut self.force_include_output);
-        result.append(main_output);
-        result
+        // Emit accumulated lexer diagnostics
+        self.emit_lexer_diagnostics();
+
+        let main_file_idx = self.ensure_file(Path::new(&self.filename.clone()));
+
+        crate::PreprocessedSource {
+            raw_src: Arc::<str>::from(std::mem::take(&mut self.raw_text)),
+            tokens: Arc::new(std::mem::take(&mut self.output_tokens)),
+            main_file_idx,
+            files: Arc::new(std::mem::take(&mut self.source_files)),
+            main_rewrite_boundaries: Arc::new(std::mem::take(&mut self.main_rewrite_boundaries)),
+        }
     }
 
-    pub(super) fn preprocess_included(&mut self, source: &str) -> PreprocessOutput {
-        self.preprocess_source(source, true)
+    pub(super) fn preprocess_included(&mut self, source: &str) {
+        self.preprocess_source(source, true);
     }
 
-    fn preprocess_source(&mut self, source: &str, is_include: bool) -> PreprocessOutput {
-        let mut output = PreprocessOutput::default();
+    fn preprocess_source(&mut self, source: &str, is_include: bool) {
         let saved_conditionals = is_include.then(|| std::mem::take(&mut self.conditionals));
         let mut pending = PendingExpansion::default();
         let mut expanding = HashSet::new();
@@ -263,7 +263,7 @@ impl Preprocessor {
                 if is_conditional_directive || self.conditionals.is_active() {
                     self.process_directive(&slice);
                 }
-                self.emit_blank_slice(&mut output, &slice);
+                self.emit_blank_slice(&slice);
                 continue;
             }
 
@@ -277,47 +277,43 @@ impl Preprocessor {
                             || after_hash.starts_with("undef")
                             || after_hash.starts_with("include")))
                 {
-                    self.flush_pending(&mut output, &mut pending, &mut expanding);
+                    self.flush_pending(&mut pending, &mut expanding);
                 }
 
-                if let Some(included_content) = self.process_directive(&slice) {
-                    output.append(included_content);
-                } else if is_include {
-                    self.emit_blank_slice(&mut output, &slice);
+                let had_content = self.process_directive(&slice);
+                if !had_content && is_include {
+                    self.emit_blank_slice(&slice);
                 }
 
                 if !is_include && !self.pending_injections.is_empty() {
                     for decl in std::mem::take(&mut self.pending_injections) {
-                        self.emit_synthetic_text(&mut output, decl);
+                        self.emit_synthetic_text(decl);
                     }
                 }
 
                 if !is_include {
-                    self.emit_blank_slice(&mut output, &slice);
+                    self.emit_blank_slice(&slice);
                 }
             } else if self.conditionals.is_active() {
-                self.accumulate_and_expand(&slice, &mut pending, &mut output, &mut expanding);
+                self.accumulate_and_expand(&slice, &mut pending, &mut expanding);
             } else if pending.is_empty() {
-                self.emit_blank_slice(&mut output, &slice);
+                self.emit_blank_slice(&slice);
             } else {
                 pending.push_gap(&slice);
             }
         }
 
-        self.flush_pending(&mut output, &mut pending, &mut expanding);
+        self.flush_pending(&mut pending, &mut expanding);
 
         if let Some(saved) = saved_conditionals {
             self.conditionals = saved;
         }
-
-        output
     }
 
     fn accumulate_and_expand(
-        &self,
+        &mut self,
         slice: &LogicalSlice,
         pending: &mut PendingExpansion,
-        output: &mut PreprocessOutput,
         expanding: &mut HashSet<String>,
     ) {
         if pending.is_empty() {
@@ -332,8 +328,8 @@ impl Preprocessor {
             if self.ends_with_funclike_macro(&expanded) {
                 pending.push(slice);
             } else {
-                self.emit_text_from_slice(output, slice, expanded);
-                self.emit_newline(output, slice.newline_boundaries());
+                self.emit_text_from_slice(slice, expanded);
+                self.emit_newline();
             }
             return;
         }
@@ -342,7 +338,7 @@ impl Preprocessor {
         pending.push(slice);
 
         if pending.line_count() > MAX_PENDING_NEWLINES {
-            self.flush_pending(output, pending, expanding);
+            self.flush_pending(pending, expanding);
             return;
         }
 
@@ -351,7 +347,7 @@ impl Preprocessor {
             if !Self::has_unbalanced_parens(pending.text())
                 && !self.ends_with_funclike_macro(&expanded)
             {
-                self.emit_pending_output(output, pending, expanded);
+                self.emit_pending_output(pending, expanded);
                 pending.clear();
             }
             return;
@@ -363,59 +359,43 @@ impl Preprocessor {
 
         let expanded = self.macros.expand_line_reuse(pending.text(), expanding);
         if !self.ends_with_funclike_macro(&expanded) {
-            self.emit_pending_output(output, pending, expanded);
+            self.emit_pending_output(pending, expanded);
             pending.clear();
         }
     }
 
-    fn flush_pending(
-        &self,
-        output: &mut PreprocessOutput,
-        pending: &mut PendingExpansion,
-        expanding: &mut HashSet<String>,
-    ) {
+    fn flush_pending(&mut self, pending: &mut PendingExpansion, expanding: &mut HashSet<String>) {
         if pending.is_empty() {
             return;
         }
         let expanded = self.macros.expand_line_reuse(pending.text(), expanding);
-        self.emit_pending_output(output, pending, expanded);
+        self.emit_pending_output(pending, expanded);
         pending.clear();
     }
 
-    fn emit_pending_output(
-        &self,
-        output: &mut PreprocessOutput,
-        pending: &PendingExpansion,
-        expanded: String,
-    ) {
+    fn emit_pending_output(&mut self, pending: &PendingExpansion, expanded: String) {
         let (source_text, source_boundaries) = pending.joined_source();
-        self.emit_source_text(output, expanded, source_text, source_boundaries);
-        for slice in &pending.slices {
-            self.emit_newline(output, slice.newline_boundaries());
+        self.emit_tokenized_with_remap(expanded, source_text, source_boundaries);
+        for _slice in &pending.slices {
+            self.emit_newline();
         }
     }
 
-    fn emit_blank_slice(&self, output: &mut PreprocessOutput, slice: &LogicalSlice) {
-        self.emit_newline(output, slice.newline_boundaries());
+    fn emit_blank_slice(&mut self, _slice: &LogicalSlice) {
+        self.emit_newline();
     }
 
-    fn emit_text_from_slice(
-        &self,
-        output: &mut PreprocessOutput,
-        slice: &LogicalSlice,
-        raw: String,
-    ) {
-        self.emit_source_text(
-            output,
-            raw,
-            slice.text.clone(),
-            slice.source_boundaries.clone(),
-        );
+    fn emit_text_from_slice(&mut self, slice: &LogicalSlice, raw: String) {
+        self.emit_tokenized_with_remap(raw, slice.text.clone(), slice.source_boundaries.clone());
     }
 
-    fn emit_source_text(
-        &self,
-        output: &mut PreprocessOutput,
+    fn emit_newline(&mut self) {
+        self.raw_text.push('\n');
+    }
+
+    /// Wrapper: remap `source_boundaries` for the main file, then emit.
+    fn emit_tokenized_with_remap(
+        &mut self,
         raw: String,
         source_text: String,
         source_boundaries: Vec<usize>,
@@ -423,32 +403,22 @@ impl Preprocessor {
         if raw.is_empty() {
             return;
         }
-        output.push(PreprocessChunk {
-            file: self.current_path(),
-            raw,
-            source_text,
-            source_boundaries,
-        });
-    }
-
-    fn emit_newline(&self, output: &mut PreprocessOutput, source_boundaries: Vec<usize>) {
-        output.push(PreprocessChunk {
-            file: self.current_path(),
-            raw: "\n".to_string(),
-            source_text: "\n".to_string(),
-            source_boundaries,
-        });
-    }
-
-    fn emit_synthetic_text(&self, output: &mut PreprocessOutput, raw: String) {
-        let base = self.current_offset();
-        let len = raw.len();
-        output.push(PreprocessChunk {
-            file: self.current_path(),
-            raw,
-            source_text: " ".repeat(len),
-            source_boundaries: vec![base; len + 1],
-        });
+        let sb: Vec<usize> = if self.current_path() == Path::new(&self.filename)
+            && !self.main_rewrite_boundaries.is_empty()
+        {
+            source_boundaries
+                .iter()
+                .map(|offset| {
+                    self.main_rewrite_boundaries
+                        .get(*offset)
+                        .copied()
+                        .unwrap_or(*self.main_rewrite_boundaries.last().unwrap_or(&0))
+                })
+                .collect()
+        } else {
+            source_boundaries
+        };
+        self.emit_tokenized_chunk(&raw, &source_text, &sb);
     }
 
     /// Check if a line ends with an identifier that is a defined function-like macro.
@@ -488,14 +458,14 @@ impl Preprocessor {
         self.macros.set_file(format!("\"{filename}\""));
         // __BASE_FILE__ always expands to the main input file name,
         // unlike __FILE__ which changes during #include processing.
-        self.macros.define(MacroDef {
-            name: "__BASE_FILE__".to_string(),
-            is_function_like: false,
-            params: Vec::new(),
-            is_variadic: false,
-            has_named_variadic: false,
-            body: format!("\"{filename}\""),
-        });
+        self.macros.define(macro_def_from_parts(
+            "__BASE_FILE__".to_string(),
+            false,
+            Vec::new(),
+            false,
+            false,
+            format!("\"{filename}\""),
+        ));
         // Push the file path onto the include stack for relative includes.
         // Use make_absolute (not canonicalize) to preserve symlinks, matching GCC
         // behavior: #include "..." searches relative to the directory where the
@@ -529,21 +499,17 @@ impl Preprocessor {
             .unwrap_or_else(|| PathBuf::from(&self.filename))
     }
 
-    fn current_offset(&self) -> usize {
-        0
-    }
-
     /// Define a macro from a command-line -D flag.
     /// Takes a name and value (e.g., name="FOO", value="1").
     pub fn define_macro(&mut self, name: &str, value: &str) {
-        self.macros.define(MacroDef {
-            name: name.to_string(),
-            is_function_like: false,
-            params: Vec::new(),
-            is_variadic: false,
-            has_named_variadic: false,
-            body: value.to_string(),
-        });
+        self.macros.define(macro_def_from_parts(
+            name.to_string(),
+            false,
+            Vec::new(),
+            false,
+            false,
+            value.to_string(),
+        ));
     }
 
     /// Undefine a macro by name.
@@ -599,18 +565,8 @@ impl Preprocessor {
             .map(std::string::ToString::to_string);
         self.macros.set_file(format!("\"{}\"", resolved.display()));
 
-        // Preprocess the included content (macros persist; any pragma synthetic tokens
-        // like __ccc_visibility_push_hidden are collected and prepended to main output)
-        let output = self.preprocess_included(content);
-        if !output.is_blank() {
-            self.force_include_output.append(output);
-            self.force_include_output.push(PreprocessChunk {
-                file: self.current_path(),
-                raw: "\n".to_string(),
-                source_text: "\n".to_string(),
-                source_boundaries: vec![self.current_offset(); 2],
-            });
-        }
+        // Preprocess the included content (accumulated directly into self)
+        self.preprocess_included(content);
 
         // Restore __FILE__
         if let Some(old) = old_file {
@@ -621,7 +577,7 @@ impl Preprocessor {
         self.include_stack.pop();
     }
 
-    fn process_directive(&mut self, slice: &LogicalSlice) -> Option<PreprocessOutput> {
+    fn process_directive(&mut self, slice: &LogicalSlice) -> bool {
         let hash_pos = slice.text.find('#').unwrap_or(0);
         let after_hash_raw = &slice.text[hash_pos + 1..];
         let after_hash = after_hash_raw.trim_start();
@@ -659,21 +615,21 @@ impl Preprocessor {
                     false,
                     self.slice_range(slice, keyword_offset, keyword_offset + keyword.len().max(1)),
                 );
-                return None;
+                return false;
             }
             "elif" => {
                 self.handle_elif(rest);
-                return None;
+                return false;
             }
             "else" => {
                 self.conditionals.handle_else();
-                return None;
+                return false;
             }
             "endif" => {
                 self.conditionals.handle_endif();
-                return None;
+                return false;
             }
-            _ if !self.conditionals.is_active() => return None,
+            _ if !self.conditionals.is_active() => return false,
             _ => {}
         }
 
@@ -708,11 +664,10 @@ impl Preprocessor {
             ),
             "pragma" => {
                 if let Some(raw) = self.handle_pragma(rest) {
-                    let mut output = PreprocessOutput::default();
-                    self.emit_synthetic_text(&mut output, raw);
-                    return Some(output);
+                    self.emit_synthetic_text(raw);
+                    return true;
                 }
-                return None;
+                return false;
             }
             "error" => {
                 let expanded = self
@@ -742,7 +697,7 @@ impl Preprocessor {
             _ => {}
         }
 
-        None
+        false
     }
 
     fn slice_range(&self, slice: &LogicalSlice, start: usize, end: usize) -> Range<usize> {
@@ -757,6 +712,9 @@ impl Preprocessor {
         if let Some(mut def) = parse_define(rest) {
             if def.name == "offsetof" && def.is_function_like && def.params == ["type", "field"] {
                 def.body = "__builtin_offsetof(type, field)".to_string();
+                let raw = tokenize_macro_body(&def.body);
+                def.tokenized_body = resolve_params(&raw, &def.params, def.is_variadic);
+                def.has_stringify_or_paste = false;
             }
             self.macros.define(def);
         }
@@ -803,10 +761,489 @@ impl Preprocessor {
         let condition = evaluate_condition(&final_expr, &self.macros);
         self.conditionals.handle_elif(condition);
     }
+
+    // ── Single-pass emit: normalize-free tokenization & accumulation ──
+
+    /// Emit preprocessed text as tokens directly, accumulating into self.
+    /// `source_boundaries` must already be remapped to original positions.
+    fn emit_tokenized_chunk(&mut self, raw: &str, source_text: &str, source_boundaries: &[usize]) {
+        if should_skip_file(&self.current_path()) {
+            for &b in raw.as_bytes() {
+                if b == b'\n' {
+                    self.raw_text.push('\n');
+                }
+            }
+            return;
+        }
+
+        let file = self.current_path();
+        let file_idx = self.ensure_file(&file);
+
+        let (mut chunk_tokens, warnings, errors) = tokenizer::tokenize_with_diagnostics(raw);
+        Self::filter_gnu_extensions(&mut chunk_tokens);
+
+        let is_macro_expanded = raw != source_text;
+        let change = is_macro_expanded.then(|| changed_range(raw, source_text, source_boundaries));
+        // Tokenize source_text once and reuse for all macro-token span lookups
+        // in this chunk, avoiding repeated retokenization per token.
+        let source_tokens = is_macro_expanded.then(|| tokenizer::tokenize(source_text));
+
+        for (token, tok_start, tok_end) in chunk_tokens {
+            let token_range = if let Some(change) = change
+                .as_ref()
+                .filter(|c| tok_start >= c.raw.start && tok_end <= c.raw.end)
+            {
+                let st = source_tokens.as_ref().unwrap();
+                macro_token_source_span(
+                    &token,
+                    &raw[tok_start..tok_end],
+                    st,
+                    source_text,
+                    source_boundaries,
+                    change.source.clone(),
+                )
+            } else {
+                let source_start =
+                    map_pos_to_source(source_boundaries, source_text, raw, tok_start);
+                let source_end = map_pos_to_source(source_boundaries, source_text, raw, tok_end);
+                source_start..source_end
+            };
+            self.output_tokens
+                .push((token, Span::from_parts(file_idx, token_range)));
+        }
+
+        let map_diag = |range: Range<usize>| -> Range<usize> {
+            let start = map_pos_to_source(source_boundaries, source_text, raw, range.start);
+            let end = map_pos_to_source(source_boundaries, source_text, raw, range.end);
+            start..end.max(start + 1)
+        };
+        for w in warnings {
+            let r = map_diag(w.range);
+            self.lexer_warnings
+                .push(Rich::custom(Span::from_parts(file_idx, r), w.message));
+        }
+        for e in errors {
+            let r = map_diag(e.range);
+            self.lexer_errors
+                .push(Rich::custom(Span::from_parts(file_idx, r), e.message));
+        }
+
+        self.raw_text.push_str(raw);
+    }
+
+    /// Emit synthetic text (from pragma synthetic tokens or pending injections).
+    fn emit_synthetic_text(&mut self, raw: String) {
+        if raw.is_empty() {
+            return;
+        }
+        let source_boundaries = vec![0usize; raw.len() + 1];
+        self.emit_tokenized_chunk(&raw, &raw, &source_boundaries);
+    }
+
+    /// Emit accumulated lexer diagnostics (warnings + errors).
+    fn emit_lexer_diagnostics(&self) {
+        if self.lexer_warnings.is_empty() && self.lexer_errors.is_empty() {
+            return;
+        }
+
+        let files: HashMap<FileId, (String, Arc<str>)> = self
+            .source_files
+            .iter()
+            .map(|(id, file)| (*id, (file.path.display().to_string(), file.source.clone())))
+            .collect();
+        co2_ast::set_source_map(Arc::new(crate::PreprocessorSourceMap {
+            files: Arc::new(files),
+        }));
+
+        if !self.lexer_warnings.is_empty() {
+            co2_ast::emit_warnings(self.lexer_warnings.clone());
+        }
+        if !self.lexer_errors.is_empty() {
+            co2_ast::emit_errors_and_terminate(self.lexer_errors.clone());
+        }
+    }
+
+    /// Ensure a source file is registered, returning its FileId.
+    fn ensure_file(&mut self, path: &Path) -> FileId {
+        if let Some(idx) = self.file_index.get(path).copied() {
+            return idx;
+        }
+        let source = fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read source file {}: {e}", path.display()));
+        let idx = global_file_id(path);
+        self.source_files.insert(
+            idx,
+            SourceFile {
+                path: path.to_path_buf(),
+                source: Arc::<str>::from(source),
+            },
+        );
+        self.file_index.insert(path.to_path_buf(), idx);
+        idx
+    }
 }
 
 impl Default for Preprocessor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ── Token-level GNU extension filter ─────────────────────────────────
+
+/// Filter GNU extensions from the token stream produced by the tokenizer.
+///
+/// Operates on `(Token, start, end)` tuples (start/end are byte offsets in
+/// the raw preprocessed text).  These functions do NOT change the positions:
+/// filtering only *removes* tokens and optionally *replaces* them.
+impl Preprocessor {
+    fn filter_gnu_extensions(tokens: &mut Vec<(Token, usize, usize)>) {
+        let mut i = 0;
+        while i < tokens.len() {
+            let (ref token, start, end) = tokens[i];
+            match token {
+                Token::Ident(name) if name == "__attribute__" || name == "__attribute" => {
+                    // skip attribute call: __attribute__ (( ... ))
+                    // or __attribute (( ... ))
+                    if let Some(body_end) = Self::skip_balanced_parens(tokens, i + 1) {
+                        // Check if body contains __transparent_union__
+                        let has_transparent = tokens[i + 1..body_end]
+                            .iter()
+                            .any(|(t, _, _)| {
+                                matches!(t, Token::Ident(n) if n == "__transparent_union__")
+                            });
+                        if has_transparent {
+                            tokens[i] = (Token::TransparentUnionAttr, start, end);
+                            let _ = tokens.drain(i + 1..body_end);
+                            i += 1;
+                        } else {
+                            let _ = tokens.drain(i..body_end);
+                            // i stays the same — next token shifted to position i
+                        }
+                        continue;
+                    }
+                }
+                Token::Ident(name) if name == "__asm__" || name == "__asm" => {
+                    // skip asm call: __asm__ ( "...string..." )
+                    if let Some(body_end) = Self::skip_balanced_parens(tokens, i + 1) {
+                        let _ = tokens.drain(i..body_end);
+                        continue;
+                    }
+                }
+                Token::Ident(name)
+                    if name == "__extension__" || name == "_Complex" || name == "_Noreturn" =>
+                {
+                    let _ = tokens.remove(i);
+                    continue;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
+    /// Skip a balanced-parentheses group starting at index `start`.
+    /// Returns the index *after* the closing `)` (exclusive end).
+    /// Returns None if unbalanced.
+    fn skip_balanced_parens(tokens: &[(Token, usize, usize)], start: usize) -> Option<usize> {
+        let mut depth: i32 = 0;
+        let mut i = start;
+        while i < tokens.len() {
+            match tokens[i].0 {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return None; // unmatched closing paren
+                    }
+                    if depth == 0 {
+                        return Some(i + 1); // past the closing paren
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None // unbalanced
+    }
+}
+
+// ── Span-mapping utilities (moved from lib.rs, no normalization layer) ──
+
+#[derive(Debug, Clone)]
+struct ChangedRange {
+    raw: Range<usize>,
+    source: Range<usize>,
+}
+
+fn changed_range(raw: &str, source_text: &str, source_boundaries: &[usize]) -> ChangedRange {
+    let prefix = source_text
+        .bytes()
+        .zip(raw.bytes())
+        .take_while(|(source, expanded)| source == expanded)
+        .count();
+    let suffix = source_text[prefix..]
+        .bytes()
+        .rev()
+        .zip(raw[prefix.min(raw.len())..].bytes().rev())
+        .take_while(|(source, expanded)| source == expanded)
+        .count();
+    let start = prefix.min(source_text.len());
+    let mut end = source_text.len().saturating_sub(suffix).max(start);
+    let raw_start = prefix.min(raw.len());
+    let raw_end = raw.len().saturating_sub(suffix).max(raw_start);
+    let source_bytes = source_text.as_bytes();
+    if source_bytes[start..end].contains(&b'(') {
+        while end < source_bytes.len() && source_bytes[end] == b')' {
+            end += 1;
+        }
+    }
+    let source_start = source_boundaries
+        .get(start.min(source_boundaries.len().saturating_sub(1)))
+        .copied()
+        .unwrap_or_else(|| *source_boundaries.last().unwrap_or(&0));
+    let source_end = source_boundaries
+        .get(end.min(source_boundaries.len().saturating_sub(1)))
+        .copied()
+        .unwrap_or_else(|| *source_boundaries.last().unwrap_or(&source_start))
+        .max(source_start);
+    ChangedRange {
+        raw: raw_start..raw_end,
+        source: source_start..source_end,
+    }
+}
+
+/// Map a byte offset in tokenized (raw) text to the corresponding byte offset
+/// in the original source text. Uses linear interpolation for macro-expanded
+/// regions.
+fn raw_to_source_text_pos(raw_offset: usize, raw: &str, source_text: &str) -> usize {
+    if raw == source_text {
+        return raw_offset.min(source_text.len());
+    }
+    if raw_offset >= raw.len() {
+        return source_text.len();
+    }
+    let source_len = source_text.len();
+    let raw_len = raw.len();
+    let prefix = source_text
+        .bytes()
+        .zip(raw.bytes())
+        .take_while(|(s, r)| s == r)
+        .count();
+    if raw_offset <= prefix {
+        return raw_offset;
+    }
+    let suffix = source_text
+        .bytes()
+        .rev()
+        .zip(raw.bytes().rev())
+        .take_while(|(s, r)| s == r)
+        .count();
+    if raw_offset > raw_len - suffix {
+        let adj = source_len - (raw_len - raw_offset);
+        return adj.min(source_len);
+    }
+    let exp_raw = raw_len - prefix - suffix;
+    let exp_src = source_len - prefix - suffix;
+    if exp_raw == 0 {
+        return prefix;
+    }
+    let pos = raw_offset - prefix;
+    let scaled = pos * exp_src / exp_raw;
+    (prefix + scaled).min(source_len)
+}
+
+/// Map a raw-text position through source boundaries to the original source
+/// file position (no normalization layer).
+fn map_pos_to_source(
+    source_boundaries: &[usize],
+    source_text: &str,
+    raw: &str,
+    offset: usize,
+) -> usize {
+    let source_pos = raw_to_source_text_pos(offset, raw, source_text);
+    source_boundaries
+        .get(source_pos.min(source_boundaries.len().saturating_sub(1)))
+        .copied()
+        .unwrap_or_else(|| *source_boundaries.last().unwrap_or(&0))
+}
+
+/// Try to map a macro-expanded token's span back to the original source
+/// position by matching against pre-tokenized source text.
+/// `source_tokens` must be the cached result of `tokenizer::tokenize(source_text)`.
+fn macro_token_source_span(
+    token: &Token,
+    token_text: &str,
+    source_tokens: &[(Token, usize, usize)],
+    source_text: &str,
+    source_boundaries: &[usize],
+    default_range: Range<usize>,
+) -> Range<usize> {
+    if !matches!(token, Token::Ident(_)) {
+        return default_range;
+    }
+
+    let mut matches = source_tokens
+        .iter()
+        .filter(|(_, start, end)| source_text[*start..*end] == *token_text)
+        .filter_map(|(_, start, end)| {
+            let start = *start;
+            let end = *end;
+            let source_start = source_boundaries
+                .get(start.min(source_boundaries.len().saturating_sub(1)))
+                .copied()?;
+            let source_end = source_boundaries
+                .get(end.min(source_boundaries.len().saturating_sub(1)))
+                .copied()
+                .unwrap_or(source_start);
+            (source_start >= default_range.start && source_end <= default_range.end)
+                .then_some(source_start..source_end)
+        });
+
+    let Some(first) = matches.next() else {
+        return generated_identifier_source_span(
+            token_text,
+            source_tokens,
+            source_text,
+            source_boundaries,
+            default_range,
+        );
+    };
+    if matches.next().is_some() {
+        default_range
+    } else {
+        first
+    }
+}
+
+fn generated_identifier_source_span(
+    token_text: &str,
+    source_tokens: &[(Token, usize, usize)],
+    source_text: &str,
+    source_boundaries: &[usize],
+    default_range: Range<usize>,
+) -> Range<usize> {
+    let mut matches = source_tokens
+        .iter()
+        .filter_map(|(source_token, start, end)| {
+            let start = *start;
+            let end = *end;
+            match source_token {
+                Token::Ident(source_ident)
+                    if token_text != source_ident.as_str()
+                        && token_text.ends_with(source_ident.as_str()) =>
+                {
+                    let source_start = source_boundaries
+                        .get(start.min(source_boundaries.len().saturating_sub(1)))
+                        .copied()?;
+                    let source_end = source_boundaries
+                        .get(end.min(source_boundaries.len().saturating_sub(1)))
+                        .copied()
+                        .unwrap_or(source_start);
+                    (source_start >= default_range.start && source_end <= default_range.end)
+                        .then_some((start, end))
+                }
+                _ => None,
+            }
+        });
+
+    let Some((start, end)) = matches.next() else {
+        return default_range;
+    };
+    if matches.next().is_some() {
+        return default_range;
+    }
+
+    source_macro_call_around(source_text, source_boundaries, start, end).unwrap_or(default_range)
+}
+
+fn source_macro_call_around(
+    source_text: &str,
+    source_boundaries: &[usize],
+    start: usize,
+    end: usize,
+) -> Option<Range<usize>> {
+    let bytes = source_text.as_bytes();
+    let mut open = start;
+    while open > 0 && bytes[open - 1].is_ascii_whitespace() {
+        open -= 1;
+    }
+    if open == 0 || bytes[open - 1] != b'(' {
+        return source_span_for_source_text_range(source_boundaries, start..end);
+    }
+    open -= 1;
+
+    let mut call_start = open;
+    while call_start > 0 && bytes[call_start - 1].is_ascii_whitespace() {
+        call_start -= 1;
+    }
+    let ident_end = call_start;
+    while call_start > 0 {
+        let previous = bytes[call_start - 1];
+        if !(previous.is_ascii_alphanumeric() || previous == b'_') {
+            break;
+        }
+        call_start -= 1;
+    }
+    if call_start == ident_end {
+        return source_span_for_source_text_range(source_boundaries, start..end);
+    }
+
+    let mut depth = 0usize;
+    let mut close = open;
+    while close < bytes.len() {
+        match bytes[close] {
+            b'(' => depth += 1,
+            b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close += 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+        close += 1;
+    }
+    source_span_for_source_text_range(source_boundaries, call_start..close)
+}
+
+fn source_span_for_source_text_range(
+    source_boundaries: &[usize],
+    range: Range<usize>,
+) -> Option<Range<usize>> {
+    let source_start = source_boundaries
+        .get(range.start.min(source_boundaries.len().saturating_sub(1)))
+        .copied()?;
+    let source_end = source_boundaries
+        .get(range.end.min(source_boundaries.len().saturating_sub(1)))
+        .copied()
+        .unwrap_or(source_start);
+    Some(source_start..source_end)
+}
+
+// ── File helpers ─────────────────────────────────────────────────────
+
+fn should_skip_file(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("stdatomic.h" | "tgmath.h")
+    )
+}
+
+fn global_file_id(path: &Path) -> FileId {
+    static FILE_IDS: OnceLock<Mutex<HashMap<PathBuf, FileId>>> = OnceLock::new();
+    static NEXT_FILE_ID: AtomicU32 = AtomicU32::new(0);
+
+    let mut guard = FILE_IDS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    if let Some(file_id) = guard.get(path).copied() {
+        return file_id;
+    }
+
+    let file_id = FileId::from(NEXT_FILE_ID.fetch_add(1, Ordering::Relaxed) as usize);
+    guard.insert(path.to_path_buf(), file_id);
+    file_id
 }

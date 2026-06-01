@@ -105,7 +105,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         let file_id = file_ids[&pending.preprocessed.main_file_idx];
         let source_name = pending.source_path.to_string_lossy().into_owned();
         let src_static: &'static str =
-            Box::leak(pending.preprocessed.normalized.to_string().into_boxed_str());
+            Box::leak(pending.preprocessed.raw_src.to_string().into_boxed_str());
         co2_ast::set_source_map(Arc::new(Co2SourceMap {
             files: Arc::new(source_files.clone()),
         }));

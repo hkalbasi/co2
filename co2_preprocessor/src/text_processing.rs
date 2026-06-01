@@ -19,10 +19,6 @@ impl LogicalSlice {
             .copied()
             .unwrap_or(self.terminator)
     }
-
-    pub(super) fn newline_boundaries(&self) -> Vec<usize> {
-        vec![self.source_offset(self.text.len()), self.terminator]
-    }
 }
 
 impl Preprocessor {

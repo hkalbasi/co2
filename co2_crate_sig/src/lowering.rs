@@ -15,7 +15,8 @@ use co2_ast::{
     TypeQualifier, TypeResolver, co2_test_symbol_name,
 };
 use co2_parser::{
-    parse_compound_statement, parse_translation_unit, parse_translation_unit_from_tokens,
+    parse_compound_statement, parse_translation_unit_from_preprocessed,
+    parse_translation_unit_from_tokens,
 };
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
@@ -489,12 +490,10 @@ fn load_modules(
             }));
 
             let source_name = module_path.to_string_lossy().into_owned();
-            let source: &'static str =
-                Box::leak(preprocessed.normalized.to_string().into_boxed_str());
-            let tu = parse_translation_unit(
+            let source: &'static str = Box::leak(preprocessed.raw_src.to_string().into_boxed_str());
+            let tu = parse_translation_unit_from_preprocessed(
                 &source_name,
-                source,
-                Some(&preprocessed),
+                &preprocessed,
                 StatelessResolver::new(),
             )
             .expect("failed to parse co2 module")
@@ -1057,10 +1056,9 @@ pub fn lower_crate_sig(
     let deps = ctx.dependencies();
 
     let parse_start = Instant::now();
-    let tu = co2_parser::parse_translation_unit(
+    let tu = co2_parser::parse_translation_unit_from_preprocessed(
         source_name,
-        src_static,
-        Some(preprocessed.as_ref()),
+        preprocessed.as_ref(),
         StatelessResolver::new(),
     )
     .expect("failed to parse co2 source")

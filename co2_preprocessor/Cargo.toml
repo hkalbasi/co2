@@ -11,4 +11,3 @@ path = "src/lib.rs"
 
 [dependencies]
 co2_ast = { path = "../co2_ast" }
-chumsky = "0.11.0"
