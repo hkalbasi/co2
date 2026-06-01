@@ -40,7 +40,7 @@ fn main() {
         std::process::exit(3);
     }
 
-    Vec<Vec<i32> > vv = Vec<Vec<i32> >::new();
+    Vec<Vec<i32> > vv = Vec::<Vec<i32> > ::new();
     vv.push(v);
     vv.push(v2);
     if (vv.len() != 2) {
@@ -54,7 +54,7 @@ fn main() {
         std::process::exit(4);
     }
 
-    Vec<*mut i32> v3 = Vec<*mut i32>::new();
+    Vec<*mut i32> v3 = Vec::<*mut i32>::new();
     v3.push(&a);
     v3.push(&b);
     if (*v3.pop().unwrap() != 2) {

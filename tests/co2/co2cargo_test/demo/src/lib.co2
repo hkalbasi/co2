@@ -10,7 +10,7 @@ fn second_test() {}
 
 #[test]
 fn failing_test() {
-    std::vec::Vec<i32> values = std::vec::Vec<i32>::new();
+    std::vec::Vec<i32> values = std::vec::Vec::<i32>::new();
     values.pop().unwrap();
 }
 

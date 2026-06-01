@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
 use crate::{
-    Declaration, EnumSpecifier, Enumerator, LazySubscription, RustPath, Spanned, StructOrUnionKind,
-    StructOrUnionSpecifier, TypeQueryResult,
+    Declaration, EnumSpecifier, Enumerator, LazySubscription, RustPath, Span, Spanned,
+    StructOrUnionKind, StructOrUnionSpecifier, TypeQueryResult,
 };
 
 pub trait TypeResolver: Clone + 'static {
@@ -16,7 +16,7 @@ pub trait TypeResolver: Clone + 'static {
     fn classify_path(
         &self,
         path: &RustPath<StatelessResolver>,
-    ) -> Option<(TypeQueryResult, Self::ResolvedRustPath)>;
+    ) -> Result<(TypeQueryResult, Self::ResolvedRustPath), (String, Span)>;
     fn register_ident(&self, name: String) -> Self::DeclarationIdent;
     /// Per C11 6.2.1p7, the scope of a declared identifier begins at the end of its declarator,
     /// before its initializer. This registers a single already-parsed declarator identifier as a
@@ -77,8 +77,8 @@ impl TypeResolver for StatelessResolver {
     fn classify_path(
         &self,
         path: &RustPath<StatelessResolver>,
-    ) -> Option<(TypeQueryResult, RustPath<StatelessResolver>)> {
-        Some((TypeQueryResult::Unsure, path.clone()))
+    ) -> Result<(TypeQueryResult, RustPath<StatelessResolver>), (String, Span)> {
+        Ok((TypeQueryResult::Unsure, path.clone()))
     }
 
     fn register_ident(&self, name: String) -> Self::DeclarationIdent {

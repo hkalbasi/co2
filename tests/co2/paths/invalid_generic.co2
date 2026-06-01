@@ -1,0 +1,27 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::mem::swap;
+
+// TODO: span is not ideal
+
+fn f1() -> i32 {
+    i32 a = 5;
+    return a::<i32>;
+         //^ error: type arguments are not allowed on local variable
+}
+
+fn f2(a: i32) -> i32 {
+    return a::<i32>;
+         //^ error: type arguments are not allowed on local variable
+}
+
+fn turbo_fish_is_forced() {
+    i32 a = 2, b = 5;
+    swap::<i32>(&a, &b);
+    swap<i32>(&a, &b);
+       //^^^ error: expected expression, found type name
+}
+
+fn main() {
+}

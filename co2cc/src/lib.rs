@@ -127,7 +127,11 @@ fn run_co2c(args: &CcArgs) {
             if let Some(t) = co2_driver_lib::time_report::take_timing() {
                 eprintln!("Time report:");
                 eprintln!("  Preprocess:    {:.3}s", t.preprocess.as_secs_f64());
-                eprintln!("  Parse:         {:.3}s + {:.3}s", t.parse.as_secs_f64(), t.parse_slack.as_secs_f64());
+                eprintln!(
+                    "  Parse:         {:.3}s + {:.3}s",
+                    t.parse.as_secs_f64(),
+                    t.parse_slack.as_secs_f64()
+                );
                 eprintln!("  Lowering:      {:.3}s", t.lowering.as_secs_f64());
                 eprintln!("    Body Parse:  {:.3}s", t.body_parse.as_secs_f64());
                 eprintln!("    HIR:         {:.3}s", t.hir_lowering.as_secs_f64());

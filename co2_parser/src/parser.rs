@@ -368,7 +368,7 @@ where
                     .parse(rust_path())
                     .ok()
                     .as_ref()
-                    .and_then(|path| resolver.classify_path(&path.0))
+                    .and_then(|path| resolver.classify_path(&path.0).ok())
                     .is_some_and(|(result, _)| {
                         matches!(result, TypeQueryResult::Unsure | TypeQueryResult::Type)
                     });
@@ -381,7 +381,7 @@ where
                     .parse(rust_path())
                     .ok()
                     .as_ref()
-                    .and_then(|path| resolver.classify_path(&path.0))
+                    .and_then(|path| resolver.classify_path(&path.0).ok())
                     .is_some_and(|(result, _)| matches!(result, TypeQueryResult::Type));
                 inp.rewind(checkpoint.clone());
                 prefer
@@ -837,18 +837,18 @@ where
                 .map(|body| Expression::GnuStatementExpr {
                     body: Box::new(body),
                 }),
-            rust_path().try_map({
+            rust_path_expr_simple().try_map({
                 let resolver = resolver.clone();
                 move |path, _| {
                     let path_span = rust_path_span(&path.0, path.1);
                     match resolver.classify_path(&path.0) {
-                    Some((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
+                    Ok((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
                         Ok(Expression::Identifier((resolved, path_span)))
                     }
-                    Some((TypeQueryResult::Type, _)) => {
+                    Ok((TypeQueryResult::Type, _)) => {
                         Err(Rich::custom(path_span, "expected expression, found type name"))
                     }
-                    None => Err(Rich::custom(path_span, format!("Unresolved name {}", path.0))),
+                    Err((msg, span)) => Err(Rich::custom(span, msg)),
                     }
                 }
             }),
@@ -1426,6 +1426,61 @@ where
     rust_path_with_generic_args(rust_generic_arg_ty())
 }
 
+/// Like `rust_path` but only allows generic arguments after `::` (turbofish syntax).
+/// Bare `<...>` after an identifier is NOT parsed as generics.
+/// Used in expression context to avoid ambiguity with `<` as less-than operator.
+fn rust_path_expr<'src, I, R: TypeResolver>(
+    generic_ty: impl Parser<'src, I, Spanned<RustTy<R>>, extra::Err<Rich<'src, Token, Span>>>
+    + Clone
+    + 'src,
+) -> impl Parser<'src, I, Spanned<RustPath<R>>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    let generics = generic_ty
+        .separated_by(just(Token::Comma))
+        .collect()
+        .map(RustPathSegment::Generics)
+        .delimited_by(just(Token::Lt), just(Token::Gt))
+        .map_with(|r, e| (r, e.span()));
+
+    just(Token::ColonColon).or_not().ignore_then(
+        choice((
+            identifier().map(|ident| vec![(RustPathSegment::Ident(ident.0), ident.1)]),
+            generics.map(|generics| vec![generics]),
+        ))
+        .separated_by(just(Token::ColonColon))
+        .at_least(1)
+        .collect::<Vec<Vec<Spanned<RustPathSegment<R>>>>>()
+        .map(|parts| {
+            let segments = parts
+                .into_iter()
+                .flatten()
+                .collect::<Vec<Spanned<RustPathSegment<R>>>>();
+            let span = segments.first().zip(segments.last()).map_or(
+                Span {
+                    start: 0,
+                    end: 0,
+                    context: FileId::INVALID,
+                },
+                |(first, last)| join_spans(first.1, last.1),
+            );
+            (RustPath { segments }, span)
+        }),
+    )
+}
+
+fn rust_path_expr_simple<'src, I>()
+-> impl Parser<'src, I, Spanned<RustPath<StatelessResolver>>, extra::Err<Rich<'src, Token, Span>>>
++ Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    rust_path_expr(rust_generic_arg_ty())
+}
+
 fn rust_generic_arg_ty<'src, I>()
 -> impl Parser<'src, I, Spanned<RustTy<StatelessResolver>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -1738,17 +1793,14 @@ where
             move |path, _| {
                 let path_span = rust_path_span(&path.0, path.1);
                 match resolver.classify_path(&path.0) {
-                    Some((TypeQueryResult::Unsure | TypeQueryResult::Type, resolved)) => {
+                    Ok((TypeQueryResult::Unsure | TypeQueryResult::Type, resolved)) => {
                         Ok(TypeSpecifier::TypedefName((resolved, path_span)))
                     }
-                    Some((TypeQueryResult::Expr, _)) => Err(Rich::custom(
+                    Ok((TypeQueryResult::Expr, _)) => Err(Rich::custom(
                         path_span,
                         "expected type name, found expression",
                     )),
-                    None => Err(Rich::custom(
-                        path_span,
-                        format!("Unresolved name {}", path.0),
-                    )),
+                    Err((msg, span)) => Err(Rich::custom(span, msg)),
                 }
             }
         }))
@@ -1998,7 +2050,7 @@ where
                                 s,
                                 Span::new(FileId::INVALID, 0..0)
                             ))),
-                            Some((TypeQueryResult::Type | TypeQueryResult::Unsure, _))
+                            Ok((TypeQueryResult::Type | TypeQueryResult::Unsure, _))
                         ),
                         _ => false,
                     }
@@ -2044,8 +2096,8 @@ where
                     (resolver.classify_path(&path.0), span)
                 }
             })
-            .filter(|r| {
-                let Some(r) = &r.0 else { return false };
+            .filter(|(result, _)| {
+                let Ok(r) = result else { return false };
                 match r.0 {
                     TypeQueryResult::Expr => false,
                     TypeQueryResult::Unsure | TypeQueryResult::Type => true,

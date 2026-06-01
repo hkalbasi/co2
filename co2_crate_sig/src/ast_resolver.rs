@@ -7,8 +7,8 @@ use std::{
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, Expression,
-    InitDeclarator, Initializer, RustPath, Spanned, StatelessResolver, StructOrUnionSpecifier,
-    TypeQueryResult, TypeResolver,
+    InitDeclarator, Initializer, RustPath, Span, Spanned, StatelessResolver,
+    StructOrUnionSpecifier, TypeQueryResult, TypeResolver,
 };
 use co2_parser::parse_expression_tokens;
 use co2_preprocessor::PreprocessedSource;
@@ -525,7 +525,7 @@ impl co2_ast::TypeResolver for LocalResolver {
     fn classify_path(
         &self,
         path: &co2_ast::RustPath<StatelessResolver>,
-    ) -> Option<(TypeQueryResult, Self::ResolvedRustPath)> {
+    ) -> Result<(TypeQueryResult, Self::ResolvedRustPath), (String, Span)> {
         let stripped_path: co2_ast::RustPath<StatelessResolver> = co2_ast::RustPath {
             segments: path
                 .segments
@@ -547,7 +547,7 @@ impl co2_ast::TypeResolver for LocalResolver {
             _ => vec![],
         };
         if ["__func__", "__PRETTY_FUNCTION__", "__FUNCTION__"].contains(&&*path_pretty) {
-            return Some((TypeQueryResult::Expr, DefOrLocal::FuncName));
+            return Ok((TypeQueryResult::Expr, DefOrLocal::FuncName));
         }
         let base = self.base.borrow();
         if let Some(ty) = self
@@ -556,12 +556,12 @@ impl co2_ast::TypeResolver for LocalResolver {
             .unrepresentable_typedefs
             .get(&path_pretty)
         {
-            return Some((
+            return Ok((
                 TypeQueryResult::Type,
                 DefOrLocal::UnrepresentableType(ty.clone()),
             ));
         }
-        let (def, class) = self
+        let (def, class) = match self
             .locals
             .borrow()
             .get(&path_pretty)
@@ -581,7 +581,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                 let receiver_path = co2_ast::RustPath {
                     segments: path.segments[..receiver_end].to_vec(),
                 };
-                let (receiver_class, receiver) = self.classify_path(&receiver_path)?;
+                let (receiver_class, receiver) = self.classify_path(&receiver_path).ok()?;
                 if receiver_class != TypeQueryResult::Type {
                     return None;
                 }
@@ -634,8 +634,21 @@ impl co2_ast::TypeResolver for LocalResolver {
                     ));
                 }
                 None
-            })?;
-        Some((class, def))
+            }) {
+            Some(r) => r,
+            None => {
+                let span = path.segments.first().unwrap().1;
+                return Err((format!("Unresolved name {path}"), span));
+            }
+        };
+        if !generic_args.is_empty() && matches!(def, DefOrLocal::Local(_) | DefOrLocal::FuncName) {
+            let span = path.segments.last().unwrap().1;
+            return Err((
+                format!("type arguments are not allowed on local variable"),
+                span,
+            ));
+        }
+        Ok((class, def))
     }
 
     fn register_ident(&self, name: String) -> Self::DeclarationIdent {
@@ -836,10 +849,11 @@ impl co2_ast::Transformable<StatelessResolver> for LocalResolver {
         &self,
         (path, span): &Spanned<RustPath<StatelessResolver>>,
     ) -> Spanned<Self::ResolvedRustPath> {
-        let Some(r) = self.classify_path(path) else {
-            self.base
-                .borrow()
-                .terminate_with_error(*span, &format!("Unresolved name {path}"));
+        let r = match self.classify_path(path) {
+            Ok(r) => r,
+            Err((msg, span)) => {
+                self.base.borrow().terminate_with_error(span, &msg);
+            }
         };
         (r.1, *span)
     }
