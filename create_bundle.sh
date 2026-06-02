@@ -40,6 +40,13 @@ cp "$SYSROOT"/lib/libLLVM*.so* "$PAYLOAD_DIR/lib/" || true
 
 checkpoint Collected libs
 
+# Strip debug info from shared libraries
+for lib in "$PAYLOAD_DIR"/lib/*.so*; do
+    [ -f "$lib" ] && strip --strip-debug "$lib" 2>/dev/null || true
+done
+
+checkpoint Stripped libs
+
 # Include ONLY stdlib for compilation in a way that rustc recognizes as sysroot
 TARGET_LIB_DIR="$PAYLOAD_DIR/lib/rustlib/x86_64-unknown-linux-gnu/lib"
 mkdir -p "$TARGET_LIB_DIR"
@@ -50,6 +57,21 @@ STD_CRATES=(std test getopts unicode_width core alloc panic_unwind panic_abort u
 for crate in "${STD_CRATES[@]}"; do
     # Copy both .rlib and .rmeta if they exist
     cp "$SYSROOT"/lib/rustlib/x86_64-unknown-linux-gnu/lib/lib${crate}-*.{rlib,rmeta} "$TARGET_LIB_DIR/" 2>/dev/null || true
+done
+
+# Strip .rlib files (ar archives of .o files)
+for rlib in "$TARGET_LIB_DIR"/*.rlib; do
+    [ -f "$rlib" ] || continue
+    dir=$(mktemp -d)
+    cp "$rlib" "$dir/archive.rlib"
+    (
+        cd "$dir"
+        ar x archive.rlib
+        find . -name '*.o' -exec strip --strip-debug {} + 2>/dev/null
+        ar crs archive.rlib *.o
+    )
+    cp "$dir/archive.rlib" "$rlib"
+    rm -rf "$dir"
 done
 
 # Include self-contained linker components if they exist
