@@ -8,11 +8,11 @@ note: please attach the file at `/tmp/co2-ct-dir/break_co2/rustc-ice-TIMESTAMP.t
 note: rustc 1.95.0-dev running on x86_64-unknown-linux-gnu
 co2cc panic: break co2!
 thread 'main' (PID) panicked at co2cc/src/lib.rs:LINE:COL:
-co2c object compile failed with status exit status: 101
+co2cc object compile failed with status exit status: 101
 note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
 error: the compiler unexpectedly panicked. This is a bug
 note: we would appreciate a bug report: https://github.com/HKalbasi/co2
 note: please make sure that you have updated to the latest nightly
 note: please attach the file at `/tmp/co2-ct-dir/break_co2/rustc-ice-TIMESTAMP.txt` to your bug report
 note: rustc 1.95.0-dev running on x86_64-unknown-linux-gnu
-co2cc panic: co2c object compile failed with status exit status: 101
+co2cc panic: co2cc object compile failed with status exit status: 101

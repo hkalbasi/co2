@@ -1,0 +1,24 @@
+Usage: co2cc [options] file...
+
+Options:
+  -c                   Compile to object file only
+  -o <file>            Write output to <file>
+  -shared              Build a shared library
+  -I <dir>             Add directory to include search path
+  -iquote <dir>        Add directory to quote include search path
+  -isystem <dir>       Add directory to system include search path
+  -x <language>        No effect (accepted for compatibility)
+  -D <macro>[=<val>]   Define macro
+  -U <macro>           Undefine macro
+  -include <file>      Include file before compilation
+  -nostdinc            Do not search standard include paths
+  -undef               Do not predefine system macros
+  -std=<standard>      No effect (accepted for compatibility)
+  -O<level>            Optimization level
+  -g                   Generate debug information
+  -fPIC                Generate position-independent code
+  -l <lib>             Link against library
+  -L <dir>             Add library search path
+  -Wl,<option>         Pass option to linker
+  -Xlinker <option>    Pass option to linker
+  -ftime-report        Print timing report

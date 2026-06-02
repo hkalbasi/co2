@@ -9,6 +9,7 @@ mod detect;
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -35,6 +36,20 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     co2_ast::set_force_json_diagnostics(rustc_requests_json_diagnostics(&args));
 
     let args = maybe_force_json_diagnostics(args);
+
+    let mut args = args;
+    for arg in args.iter_mut().skip(1) {
+        if !arg.starts_with('-') && Path::new(arg).extension().is_some_and(|e| e == "co2") {
+            let co2_path = Path::new(arg);
+            let rs_path = co2_path.with_extension("rs");
+            if !rs_path.exists() {
+                let _ = std::fs::write(&rs_path, "#![language(co2)]\n");
+            }
+            *arg = rs_path.display().to_string();
+            break;
+        }
+    }
+
     let co2_file = match detect_co2(&args) {
         DetectResult::Continue(exit_code) => {
             return exit_code;

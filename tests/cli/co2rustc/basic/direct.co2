@@ -1,0 +1,5 @@
+#include <stdio.h>
+
+fn main() {
+    printf("direct co2\n");
+}

@@ -1,0 +1,4 @@
+error: Argument to option 'o' missing
+       Usage:
+           -o <FILENAME>       Write output to FILENAME
+

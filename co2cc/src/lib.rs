@@ -41,7 +41,9 @@ enum ParseArgsError {
 impl fmt::Display for ParseArgsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingInputFile => f.write_str("missing input file"),
+            Self::MissingInputFile => {
+                write!(f, "missing input file\nuse 'co2cc --help' for more info")
+            }
             Self::MissingArgumentAfter(flag) => write!(f, "missing argument after {flag}"),
             Self::InvalidObjectEmissionInputs => {
                 f.write_str("object emission mode expects exactly one C input file")
@@ -55,8 +57,55 @@ pub fn main() -> std::process::ExitCode {
     main_with_args(&args)
 }
 
+fn print_help() {
+    eprintln!(
+        "\
+Usage: co2cc [options] file...
+
+Options:
+  -c                   Compile to object file only
+  -o <file>            Write output to <file>
+  -shared              Build a shared library
+  -I <dir>             Add directory to include search path
+  -iquote <dir>        Add directory to quote include search path
+  -isystem <dir>       Add directory to system include search path
+  -x <language>        No effect (accepted for compatibility)
+  -D <macro>[=<val>]   Define macro
+  -U <macro>           Undefine macro
+  -include <file>      Include file before compilation
+  -nostdinc            Do not search standard include paths
+  -undef               Do not predefine system macros
+  -std=<standard>      No effect (accepted for compatibility)
+  -O<level>            Optimization level
+  -g                   Generate debug information
+  -fPIC                Generate position-independent code
+  -l <lib>             Link against library
+  -L <dir>             Add library search path
+  -Wl,<option>         Pass option to linker
+  -Xlinker <option>    Pass option to linker
+  -ftime-report        Print timing report"
+    );
+}
+
 pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
     rustc_driver::install_ice_hook("https://github.com/HKalbasi/co2", |_| ());
+
+    if let Some(flag) = args.get(1)
+        && (flag == "-h" || flag == "--help")
+    {
+        print_help();
+        return std::process::ExitCode::SUCCESS;
+    }
+
+    for arg in args.iter().skip(1) {
+        if !arg.starts_with('-') && Path::new(arg).extension().is_some_and(|e| e == "co2") {
+            eprintln!(
+                "co2cc: error: {arg}: co2cc is a C compiler, use co2cargo or co2rustc for compiling co2 files"
+            );
+            return std::process::ExitCode::from(2);
+        }
+    }
+
     let cc_args = match parse_args(args) {
         Ok(args) => args,
         Err(msg) => {
@@ -64,6 +113,16 @@ pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+
+    for input in &cc_args.inputs {
+        if input != Path::new("-") && !input.exists() {
+            eprintln!(
+                "co2cc: error: {}: Input file does not exist",
+                input.display()
+            );
+            return std::process::ExitCode::from(2);
+        }
+    }
 
     if let Err(payload) = std::panic::catch_unwind(|| run_co2c(&cc_args)) {
         if co2_ast::is_diagnostic_abort(payload.as_ref()) {
@@ -478,7 +537,7 @@ fn compile_c_to_object(
 ) {
     let exe = current_invocation_path()
         .or_else(|| std::env::current_exe().ok())
-        .expect("failed to locate co2c executable");
+        .expect("failed to locate co2cc executable");
     let mut cmd = Command::new(exe);
     cmd.arg("-c").arg(input).arg("-o").arg(output);
     if let Some(level) = opt_level {
@@ -497,12 +556,14 @@ fn compile_c_to_object(
         cmd.arg(arg);
     }
 
-    let status = cmd.status().expect("failed to execute co2c object compile");
+    let status = cmd
+        .status()
+        .expect("failed to execute co2cc object compile");
     if !status.success() {
         if status.code() == Some(5) {
             co2_ast::panic_with_diagnostic_abort();
         }
-        panic!("co2c object compile failed with status {status}");
+        panic!("co2cc object compile failed with status {status}");
     }
 }
 
@@ -545,7 +606,7 @@ fn link_objects(
             .map(PathBuf::from)
             .or_else(current_invocation_path)
             .or_else(|| std::env::current_exe().ok())
-            .expect("failed to locate co2c executable");
+            .expect("failed to locate co2cc executable");
         let mut rustc_link_cmd = Command::new(&exe);
         rustc_link_cmd.args(&rustc_link_args);
         rustc_link_cmd.env("CO2_APPLET_OVERRIDE", "co2rustc");
@@ -569,7 +630,7 @@ fn link_objects(
         .map(PathBuf::from)
         .or_else(current_invocation_path)
         .or_else(|| std::env::current_exe().ok())
-        .expect("failed to locate co2c executable");
+        .expect("failed to locate co2cc executable");
 
     let mut stub_cmd = Command::new(&exe);
     stub_cmd.args(&rustc_args);
@@ -577,7 +638,7 @@ fn link_objects(
 
     let stub_status = stub_cmd
         .status()
-        .expect("failed to compile co2c panic stub object");
+        .expect("failed to compile co2cc panic stub object");
     assert!(
         stub_status.success(),
         "rustc panic stub compile failed with status {stub_status}"
@@ -760,7 +821,7 @@ fn make_temp_dir() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system time before unix epoch")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(".co2c-{}-{unique}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(".co2cc-{}-{unique}", std::process::id()));
     fs::create_dir_all(&path).expect("failed to create temporary directory");
     path
 }

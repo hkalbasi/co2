@@ -1,0 +1,1 @@
+co2cc: error: ./foo.co2: co2cc is a C compiler, use co2cargo or co2rustc for compiling co2 files
