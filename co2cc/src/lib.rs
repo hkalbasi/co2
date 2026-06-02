@@ -8,6 +8,8 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+extern crate rustc_driver;
+
 use co2_driver_lib::{CompileMode, compile_co2_source};
 
 #[derive(Clone, Copy)]
@@ -54,6 +56,7 @@ pub fn main() -> std::process::ExitCode {
 }
 
 pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
+    rustc_driver::install_ice_hook("https://github.com/HKalbasi/co2", |_| ());
     let cc_args = match parse_args(args) {
         Ok(args) => args,
         Err(msg) => {

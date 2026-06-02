@@ -19,6 +19,7 @@ pub fn main() -> std::process::ExitCode {
 }
 
 pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
+    rustc_driver::install_ice_hook("https://github.com/HKalbasi/co2", |_| ());
     if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR") {
         co2_ast::set_diagnostic_base_path(Some(PathBuf::from(manifest_dir)));
     }

@@ -219,7 +219,7 @@ impl ModuleData {
                         }
                     }
                 }
-                Declaration::PragmaPack { .. } => {}
+                Declaration::PragmaPack { .. } | Declaration::BreakCo2 => {}
             }
         }
         this

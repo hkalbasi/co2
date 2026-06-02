@@ -393,6 +393,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Statement<R>> {
                 pp.node("IndirectGoto", &sp, |pp| expr.pretty_print(pp));
             }
             Statement::Break => pp.leaf("Break", &sp),
+            Statement::BreakCo2 => pp.leaf("BreakCo2", &sp),
             Statement::Continue => pp.leaf("Continue", &sp),
             Statement::Switch { expr, body } => {
                 pp.node("Switch", &sp, |pp| {
@@ -864,6 +865,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Declaration<R>> {
             Declaration::PragmaPack { action } => {
                 pp.node("PragmaPack", &sp, |pp| action.pretty_print(pp));
             }
+            Declaration::BreakCo2 => pp.leaf("BreakCo2", &sp),
         }
     }
 }

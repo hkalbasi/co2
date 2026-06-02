@@ -80,6 +80,9 @@ impl HirCtx<'_> {
         let span = self.to_rust_span(parser_span);
         match stmt {
             Statement::Empty => {}
+            Statement::BreakCo2 => {
+                panic!("break co2!");
+            }
             Statement::Break => {
                 let Some(label) = self.current_break_label() else {
                     self.terminate_with_error(parser_span, "Break statement outside of loop body.");

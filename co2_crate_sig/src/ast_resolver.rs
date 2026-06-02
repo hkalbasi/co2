@@ -677,7 +677,9 @@ impl co2_ast::TypeResolver for LocalResolver {
         next.localize();
 
         match decl {
-            Declaration::FunctionDefinition { .. } | Declaration::RustTypeAlias { .. } => next,
+            Declaration::FunctionDefinition { .. }
+            | Declaration::RustTypeAlias { .. }
+            | Declaration::BreakCo2 => next,
             Declaration::PragmaPack { action } => {
                 next.base.borrow_mut().apply_pack_action(action);
                 next

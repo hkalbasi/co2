@@ -631,10 +631,10 @@ impl HirCtx<'_> {
                         span,
                     }));
                 }
+                Ok(())
             }
-            Declaration::PragmaPack { .. } => {}
+            Declaration::PragmaPack { .. } | Declaration::BreakCo2 => Ok(()),
         }
-        Ok(())
     }
 
     pub(crate) fn try_lower_value_decl_type(

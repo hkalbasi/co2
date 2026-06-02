@@ -29,6 +29,7 @@ pub enum Statement<R: TypeResolver> {
     Goto(Spanned<String>),
     IndirectGoto(Spanned<Expression<R>>),
     Break,
+    BreakCo2,
     Continue,
     Switch {
         expr: Spanned<Expression<R>>,
@@ -909,6 +910,7 @@ pub enum Declaration<R: TypeResolver> {
     PragmaPack {
         action: PackAction,
     },
+    BreakCo2,
 }
 
 #[derive(Debug, Clone)]

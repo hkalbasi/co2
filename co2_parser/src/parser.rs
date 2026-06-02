@@ -427,9 +427,12 @@ where
                     .or(identifier().map(Statement::Goto)),
             )
             .then_ignore(just(Token::Semicolon));
-        let break_statement = just(Token::Break)
-            .then_ignore(just(Token::Semicolon))
-            .to(Statement::Break);
+        let break_statement = just(Token::Break).ignore_then(
+            just(Token::Ident("co2".to_string()))
+                .then_ignore(just(Token::Semicolon))
+                .to(Statement::BreakCo2)
+                .or(just(Token::Semicolon).to(Statement::Break)),
+        );
         let continue_statement = just(Token::Continue)
             .then_ignore(just(Token::Semicolon))
             .to(Statement::Continue);
@@ -2841,6 +2844,23 @@ fn pragma_pack_action(ident: &str) -> Option<co2_ast::PackAction> {
     None
 }
 
+fn break_co2_item<'src, I, R: TypeResolver>(
+    resolver: R,
+) -> impl Parser<'src, I, (Spanned<Declaration<R>>, R), extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    just(Token::Break)
+        .then(just(Token::Ident("co2".to_string())))
+        .then_ignore(just(Token::Semicolon))
+        .map_with(move |_token, e| {
+            let decl = (Declaration::BreakCo2, e.span());
+            let next_resolver = resolver.register_decl(&decl.0);
+            (decl, next_resolver)
+        })
+}
+
 fn pragma_pack_item<'src, I, R: TypeResolver>(
     resolver: R,
 ) -> impl Parser<'src, I, (Spanned<Declaration<R>>, R), extra::Err<Rich<'src, Token, Span>>> + Clone
@@ -2878,7 +2898,7 @@ fn attach_attrs_to_declaration<R: TypeResolver>(
         | Declaration::RustTypeAlias {
             attrs: decl_attrs, ..
         } => *decl_attrs = attrs,
-        Declaration::PragmaPack { .. } => {}
+        Declaration::PragmaPack { .. } | Declaration::BreakCo2 => {}
     }
     decl
 }
@@ -2989,6 +3009,11 @@ where
                     TranslationUnitItem::Empty
                 } else if let Ok(item) = inp.parse(mod_item()) {
                     TranslationUnitItem::Mod(item)
+                } else if let Ok((decl, next_resolver)) =
+                    inp.parse(break_co2_item(current_resolver.clone()))
+                {
+                    current_resolver = next_resolver;
+                    TranslationUnitItem::Declaration(decl)
                 } else if let Ok((decl, next_resolver)) =
                     inp.parse(pragma_pack_item(current_resolver.clone()))
                 {

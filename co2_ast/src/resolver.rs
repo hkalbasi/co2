@@ -103,7 +103,7 @@ impl TypeResolver for StatelessResolver {
             Declaration::RustTypeAlias { ident, .. } => {
                 rust_style_enabled &= ident.0.as_str() != "fn";
             }
-            Declaration::PragmaPack { .. } => {}
+            Declaration::PragmaPack { .. } | Declaration::BreakCo2 => {}
         }
         StatelessResolver::with_rust_style_enabled(rust_style_enabled)
     }

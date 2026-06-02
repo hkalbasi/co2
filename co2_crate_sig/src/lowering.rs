@@ -312,7 +312,7 @@ fn deduplicate_tu_items(
                     tu_item_id += 1;
                 }
             }
-            Declaration::PragmaPack { .. } => {}
+            Declaration::PragmaPack { .. } | Declaration::BreakCo2 => {}
         }
     }
 
@@ -342,7 +342,7 @@ fn deduplicate_tu_items(
             });
             true
         }
-        Declaration::PragmaPack { .. } => true,
+        Declaration::PragmaPack { .. } | Declaration::BreakCo2 => true,
     });
 
     tu
@@ -997,6 +997,9 @@ fn lower_translation_unit_items(
                         }
                     }
                 }
+            }
+            Declaration::BreakCo2 => {
+                panic!("break co2!");
             }
             Declaration::PragmaPack { action } => {
                 resolver.base.borrow_mut().apply_pack_action(&action);

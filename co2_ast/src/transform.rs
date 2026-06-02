@@ -624,6 +624,7 @@ impl<A: TypeResolver> DoTransform for Declaration<A> {
             Declaration::PragmaPack { action } => Declaration::PragmaPack {
                 action: action.clone(),
             },
+            Declaration::BreakCo2 => Declaration::BreakCo2,
         }
     }
 }

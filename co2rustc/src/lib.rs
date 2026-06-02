@@ -25,6 +25,7 @@ pub fn main() -> std::process::ExitCode {
 }
 
 pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
+    rustc_driver::install_ice_hook("https://github.com/HKalbasi/co2", |_| ());
     let (args, dump_ast_tree) = take_unpretty_ast_tree_flag(args);
 
     if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
