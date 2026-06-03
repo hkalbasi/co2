@@ -929,6 +929,13 @@ impl<R: TypeResolver> FunctionDefinitionSignature<R> {
             FunctionDefinitionSignature::Rust(sig) => Some(sig.name.0.clone()),
         }
     }
+
+    pub fn ident_span(&self) -> Option<Span> {
+        match self {
+            FunctionDefinitionSignature::C { declarator, .. } => declarator.0.ident_span(),
+            FunctionDefinitionSignature::Rust(sig) => Some(sig.name.1),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1185,6 +1192,16 @@ impl<R: TypeResolver> Declarator<R> {
             Declarator::FunctionDeclarator { declarator, .. }
             | Declarator::PointerDeclarator { declarator, .. }
             | Declarator::ArrayDeclarator { declarator, .. } => declarator.0.ident(),
+        }
+    }
+
+    pub fn ident_span(&self) -> Option<Span> {
+        match self {
+            Declarator::Abstract => None,
+            Declarator::Identifier(ident) => Some(ident.1),
+            Declarator::FunctionDeclarator { declarator, .. }
+            | Declarator::PointerDeclarator { declarator, .. }
+            | Declarator::ArrayDeclarator { declarator, .. } => declarator.0.ident_span(),
         }
     }
 }

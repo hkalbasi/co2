@@ -30,6 +30,7 @@ pub enum HirModuleItem {
         attrs: Vec<GeneratedAttr>,
         no_mangle: bool,
         span: Span,
+        ident_span: Span,
     },
     Adt {
         name: String,
@@ -105,6 +106,13 @@ impl HirModuleItem {
             | HirModuleItem::Impl { span, .. }
             | HirModuleItem::Module { span, .. } => Some(*span),
             HirModuleItem::ForeignMod { .. } => None,
+        }
+    }
+
+    pub fn ident_span(&self) -> Option<Span> {
+        match self {
+            HirModuleItem::Function { ident_span, .. } => Some(*ident_span),
+            _ => self.span(),
         }
     }
 

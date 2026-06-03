@@ -271,19 +271,107 @@ fn declarator_ident_span<R: co2_ast::TypeResolver>(
 fn deduplicate_tu_items(
     mut tu: TranslationUnit<StatelessResolver>,
 ) -> TranslationUnit<StatelessResolver> {
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+    enum TuItemKind {
+        ExternVarDeclOrFuncDecl,
+        StaticUninitOrFuncDecl,
+        ExternFunction,
+        ExternVarDecl,
+        StaticUninit,
+        Typedef,
+        FunctionDeclaration,
+        StaticInitialized,
+        FunctionDefinition,
+        RustFunctionDefinition,
+        RustTypeAlias,
+    }
+    use TuItemKind::*;
+    impl TuItemKind {
+        fn check_mergable(self, other: Self) -> Option<Self> {
+            if self < other {
+                return other.check_mergable(self);
+            }
+            match (self, other) {
+                (Typedef, Typedef) => Some(Typedef),
+                (
+                    FunctionDefinition,
+                    ExternFunction
+                    | FunctionDeclaration
+                    | ExternVarDeclOrFuncDecl
+                    | StaticUninitOrFuncDecl,
+                ) => Some(FunctionDefinition),
+                (
+                    FunctionDeclaration,
+                    ExternFunction
+                    | FunctionDeclaration
+                    | ExternVarDeclOrFuncDecl
+                    | StaticUninitOrFuncDecl,
+                ) => Some(FunctionDeclaration),
+                (ExternFunction, ExternFunction) => Some(ExternFunction),
+                (
+                    ExternVarDecl,
+                    ExternVarDecl | ExternVarDeclOrFuncDecl | StaticUninitOrFuncDecl,
+                ) => Some(ExternVarDecl),
+                (
+                    StaticInitialized,
+                    StaticUninit | ExternVarDecl | ExternVarDeclOrFuncDecl | StaticUninitOrFuncDecl,
+                ) => Some(StaticInitialized),
+                (StaticUninit, StaticUninit | ExternVarDecl) => Some(StaticUninit),
+                _ => None,
+            }
+        }
+    }
+
+    let mut errors: Vec<co2_ast::Rich<'_, String, co2_ast::Span>> = Vec::new();
     let mut tu_item_id: usize = 0;
-    let mut name_to_important_def = HashMap::new();
+    let mut name_to_important_def = HashMap::<String, (usize, TuItemKind)>::new();
 
     for (item, _) in &tu.items {
         match item {
             Declaration::FunctionDefinition { signature, .. } => {
                 let name = signature.ident().unwrap();
-                name_to_important_def.insert(name, (tu_item_id, 3));
+                let kind = match signature {
+                    FunctionDefinitionSignature::C { .. } => FunctionDefinition,
+                    FunctionDefinitionSignature::Rust(_) => RustFunctionDefinition,
+                };
+                match name_to_important_def.entry(name) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        let (_, old_kind) = *entry.get();
+                        if old_kind.check_mergable(kind).is_none() {
+                            errors.push(co2_ast::Rich::custom(
+                                signature.ident_span().unwrap(),
+                                format!(
+                                    "the name `{}` is defined multiple times",
+                                    signature.ident().unwrap()
+                                ),
+                            ));
+                        }
+                        if kind > old_kind {
+                            entry.insert((tu_item_id, kind));
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert((tu_item_id, kind));
+                    }
+                }
                 tu_item_id += 1;
             }
             Declaration::RustTypeAlias { ident, .. } => {
                 let name = ident.0.clone();
-                name_to_important_def.insert(name, (tu_item_id, 3));
+                match name_to_important_def.entry(name) {
+                    std::collections::hash_map::Entry::Occupied(entry) => {
+                        let (_, old_kind) = *entry.get();
+                        if old_kind.check_mergable(RustTypeAlias).is_none() {
+                            errors.push(co2_ast::Rich::custom(
+                                ident.1,
+                                format!("the name `{}` is defined multiple times", ident.0),
+                            ));
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert((tu_item_id, RustTypeAlias));
+                    }
+                }
                 tu_item_id += 1;
             }
             Declaration::Declaration {
@@ -291,22 +379,55 @@ fn deduplicate_tu_items(
                 declaration_specifiers,
                 declarators,
             } => {
+                let is_typedef = declaration_specifiers.iter().any(|x| x.0.is_typedef());
                 let is_extern = declaration_specifiers.iter().any(|x| x.0.is_extern());
+                let uses_typedef_name = !is_typedef
+                    && declaration_specifiers.iter().any(|spec| {
+                        matches!(
+                            &spec.0,
+                            co2_ast::DeclarationSpecifier::TypeSpecifier(ts)
+                                if matches!(&ts.0, co2_ast::TypeSpecifier::TypedefName(..))
+                        )
+                    });
                 for decl in declarators {
-                    let prio = if decl.0.initializer.is_some() {
-                        2
-                    } else {
-                        i32::from(!is_extern)
-                    };
                     let name = decl.0.declarator.0.ident().unwrap();
-                    match name_to_important_def.entry(name) {
-                        std::collections::hash_map::Entry::Occupied(mut occupied_entry) => {
-                            if occupied_entry.get().1 < prio {
-                                *occupied_entry.get_mut() = (tu_item_id, prio);
+                    let kind = if is_typedef {
+                        Typedef
+                    } else if decl.0.declarator.0.is_function() {
+                        if is_extern {
+                            ExternFunction
+                        } else {
+                            FunctionDeclaration
+                        }
+                    } else if decl.0.initializer.is_some() {
+                        StaticInitialized
+                    } else if uses_typedef_name {
+                        if is_extern {
+                            ExternVarDeclOrFuncDecl
+                        } else {
+                            StaticUninitOrFuncDecl
+                        }
+                    } else if is_extern {
+                        ExternVarDecl
+                    } else {
+                        StaticUninit
+                    };
+                    match name_to_important_def.entry(name.clone()) {
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            let (_, old_kind) = *entry.get();
+                            if old_kind.check_mergable(kind).is_none() {
+                                let err_span = decl.0.declarator.0.ident_span().unwrap();
+                                errors.push(co2_ast::Rich::custom(
+                                    err_span,
+                                    format!("the name `{name}` is defined multiple times"),
+                                ));
+                            }
+                            if kind > old_kind {
+                                entry.insert((tu_item_id, kind));
                             }
                         }
-                        std::collections::hash_map::Entry::Vacant(vacant_entry) => {
-                            vacant_entry.insert((tu_item_id, prio));
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert((tu_item_id, kind));
                         }
                     }
                     tu_item_id += 1;
@@ -344,6 +465,10 @@ fn deduplicate_tu_items(
         }
         Declaration::PragmaPack { .. } | Declaration::BreakCo2 => true,
     });
+
+    if !errors.is_empty() {
+        co2_ast::emit_errors_and_terminate(errors);
+    }
 
     tu
 }
@@ -621,6 +746,12 @@ fn lower_translation_unit_items(
                 signature,
                 body,
             } => {
+                let ident_span = match &signature {
+                    FunctionDefinitionSignature::C { declarator, .. } => {
+                        declarator_ident_span(declarator).unwrap_or(parser_span)
+                    }
+                    FunctionDefinitionSignature::Rust(sig) => sig.name.1,
+                };
                 let (name, sig, attrs, no_mangle) = match signature {
                     FunctionDefinitionSignature::C {
                         declaration_specifiers,
@@ -631,7 +762,6 @@ fn lower_translation_unit_items(
                         let transformed_specs = declaration_specifiers;
                         let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
                         let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
-                        let ident_span = declarator_ident_span(&declarator).unwrap_or(parser_span);
                         let (name, sig) = ctx
                             .lower_function_signature(base, base_const, declarator)
                             .unwrap_or_else(|err| {
@@ -674,6 +804,7 @@ fn lower_translation_unit_items(
                     attrs,
                     no_mangle: no_mangle || is_test,
                     span,
+                    ident_span: ctx.co2_span_to_rustc(ident_span),
                 });
                 resolver = resolver.start_new_scope().with_owner(id.0);
                 let param_names = body_param_names

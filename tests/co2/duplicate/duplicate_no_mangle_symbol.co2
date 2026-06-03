@@ -1,0 +1,16 @@
+//@ mode: co2
+//@ compile-fail
+
+mod m1 {
+    int foo() {
+        return 2;
+    }
+}
+
+mod m2 {
+    int foo() { return 3; }
+  //^^^^^^^^^^^^^^^^^^^^^^^ error: symbol `foo` is already defined
+}
+
+fn main() {
+}

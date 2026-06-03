@@ -1244,6 +1244,7 @@ impl DefinedCrateInfo {
                             kind: DefinedItemKind::AnonConst(rhs),
                             attrs: Vec::new(),
                             span: DUMMY_SP,
+                            ident_span: None,
                             parent: Some(id),
                         });
                         DefinedItemKind::Const(id)
@@ -1276,6 +1277,7 @@ impl DefinedCrateInfo {
                                         kind: DefinedItemKind::Field(field.id),
                                         attrs: Vec::new(),
                                         span: internal(tcx, field.span),
+                                        ident_span: None,
                                         parent: Some(id.0),
                                     });
                                 }
@@ -1297,6 +1299,7 @@ impl DefinedCrateInfo {
                             },
                             attrs: Vec::new(),
                             span: DUMMY_SP,
+                            ident_span: None,
                             parent,
                         });
                         for item in impl_items {
@@ -1307,6 +1310,7 @@ impl DefinedCrateInfo {
                                         kind: DefinedItemKind::ImplItemFn(item.id),
                                         attrs: Vec::new(),
                                         span: DUMMY_SP,
+                                        ident_span: None,
                                         parent: Some(id),
                                     });
                                 }
@@ -1326,6 +1330,7 @@ impl DefinedCrateInfo {
                             kind: DefinedItemKind::Module(id),
                             attrs,
                             span: internal(tcx, span),
+                            ident_span: None,
                             parent,
                         });
                         collect_module(tcx, &module, Some(id), items, the_foreign_def);
@@ -1342,6 +1347,7 @@ impl DefinedCrateInfo {
                             kind: DefinedItemKind::ForeignMod(foreign_mod_id),
                             attrs: Vec::new(),
                             span: DUMMY_SP,
+                            ident_span: None,
                             parent,
                         });
                         for item in foreign_items {
@@ -1356,6 +1362,7 @@ impl DefinedCrateInfo {
                                     kind: DefinedItemKind::ForeignFunction(id),
                                     attrs: Vec::new(),
                                     span: DUMMY_SP,
+                                    ident_span: None,
                                     parent: Some(foreign_mod_id),
                                 }),
                                 crate::hir_structure::ForeignModItem::ForeignType {
@@ -1367,6 +1374,7 @@ impl DefinedCrateInfo {
                                     kind: DefinedItemKind::ForeignType(id),
                                     attrs: Vec::new(),
                                     span: DUMMY_SP,
+                                    ident_span: None,
                                     parent: Some(foreign_mod_id),
                                 }),
                                 crate::hir_structure::ForeignModItem::ForeignStatic {
@@ -1383,6 +1391,7 @@ impl DefinedCrateInfo {
                                     },
                                     attrs: Vec::new(),
                                     span: DUMMY_SP,
+                                    ident_span: None,
                                     parent: Some(foreign_mod_id),
                                 }),
                             }
@@ -1395,6 +1404,7 @@ impl DefinedCrateInfo {
                     kind,
                     attrs: hir_item.attrs().to_vec(),
                     span: hir_item.span().map_or(DUMMY_SP, |s| internal(tcx, s)),
+                    ident_span: hir_item.ident_span().map(|s| internal(tcx, s)),
                     parent,
                 });
             }
@@ -1691,6 +1701,18 @@ impl DefinedCrateState {
         Some(items.items.iter().find(|item| item.def_id() == key)?.span)
     }
 
+    fn def_ident_span(&self, tcx: TyCtxt<'_>, key: LocalDefId) -> Option<RustcSpan> {
+        let DefinedCrateState::Stage2(items, _, _, ()) = self else {
+            return None;
+        };
+        let key = rustc_def_to_my_def(tcx, key.to_def_id());
+        items
+            .items
+            .iter()
+            .find(|item| item.def_id() == key)?
+            .ident_span
+    }
+
     fn advance_to_stage1(&mut self, defined_crate: DefinedCrateInfo) {
         let DefinedCrateState::Stage0 = self else {
             panic!("Moving to stage1 from stage {}", self.stage_id());
@@ -1720,6 +1742,7 @@ pub struct DefinedItemInfo {
     pub kind: DefinedItemKind,
     pub attrs: Vec<GeneratedAttr>,
     pub span: RustcSpan,
+    pub ident_span: Option<RustcSpan>,
     pub parent: Option<DefId>,
 }
 
@@ -3104,7 +3127,7 @@ fn generated_def_span(tcx: TyCtxt<'_>, key: LocalDefId) -> RustcSpan {
 
 fn generated_def_ident_span(tcx: TyCtxt<'_>, key: LocalDefId) -> Option<RustcSpan> {
     with_generated_and_original(tcx, |generated, _original| {
-        if let Some(span) = generated.def_span(tcx, key) {
+        if let Some(span) = generated.def_ident_span(tcx, key) {
             return Some(span);
         }
 

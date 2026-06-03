@@ -1,0 +1,20 @@
+//@ mode: co2
+//@ run-status: 0
+
+mod m1 {
+    fn foo() -> i32 {
+        return 2;
+    }
+}
+
+mod m2 {
+    fn foo() -> i32 {
+        return 3;
+    }
+}
+
+fn main() {
+    if (m1::foo() != 2 || m2::foo() != 3) {
+        std::process::exit(1);
+    }
+}

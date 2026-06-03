@@ -1,0 +1,50 @@
+//@ mode: co2
+//@ compile-fail
+
+fn f1() -> i32 {
+    return 1;
+}
+
+fn f1() -> i32 {
+// ^^ error: the name `f1` is defined multiple times
+    return 2;
+}
+
+fn f2() -> i32 {
+    return 1;
+}
+
+i32 f3() {
+    return 1;
+}
+
+fn f3() -> i32 {
+// ^^ error: the name `f3` is defined multiple times
+    return 1;
+}
+
+i32 f4();
+
+fn f4() -> i32 {
+// ^^ error: the name `f4` is defined multiple times
+    return 1;
+}
+
+extern i32 f5();
+
+fn f5() -> i32 {
+// ^^ error: the name `f5` is defined multiple times
+    return 1;
+}
+
+fn f6() -> i32 {
+    return 1;
+}
+
+i32 f6() {
+//  ^^ error: the name `f6` is defined multiple times
+    return 1;
+}
+
+fn main() {
+}

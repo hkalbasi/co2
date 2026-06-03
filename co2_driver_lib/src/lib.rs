@@ -683,22 +683,45 @@ pub fn compile_co2_source(
 ) {
     install_pending_compile(mode, source_path, preprocessed);
 
-    if time_report::timing_enabled() {
-        let after_hook: Box<
-            dyn for<'tcx> FnOnce(rustc_middle::ty::TyCtxt<'tcx>) -> rustc_driver::Compilation
-                + Send,
-        > = Box::new(|_tcx| {
-            time_report::mark_codegen_start();
-            rustc_driver::Compilation::Continue
-        });
-        rustc_gen::generate_with_args_and_after_analysis::<Co2GeneratorState>(
-            rustc_args, after_hook,
-        );
-    } else {
-        rustc_gen::generate_with_args::<Co2GeneratorState>(rustc_args);
-    }
-    if co2_ast::diagnostics_were_emitted() {
-        co2_ast::panic_with_diagnostic_abort();
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        if time_report::timing_enabled() {
+            let after_hook: Box<
+                dyn for<'tcx> FnOnce(rustc_middle::ty::TyCtxt<'tcx>) -> rustc_driver::Compilation
+                    + Send,
+            > = Box::new(|_tcx| {
+                time_report::mark_codegen_start();
+                rustc_driver::Compilation::Continue
+            });
+            rustc_gen::generate_with_args_and_after_analysis::<Co2GeneratorState>(
+                rustc_args, after_hook,
+            );
+        } else {
+            rustc_gen::generate_with_args::<Co2GeneratorState>(rustc_args);
+        }
+    }));
+
+    match result {
+        Ok(()) => {
+            if co2_ast::diagnostics_were_emitted() {
+                co2_ast::panic_with_diagnostic_abort();
+            }
+        }
+        Err(payload) => {
+            if co2_ast::is_diagnostic_abort(payload.as_ref()) {
+                std::panic::resume_unwind(payload);
+            }
+            // String panics (e.g., `panic!("break co2!")`) are deliberate;
+            // let them propagate as real panics (exit 101).
+            if payload.downcast_ref::<String>().is_some()
+                || payload.downcast_ref::<&str>().is_some()
+            {
+                std::panic::resume_unwind(payload);
+            }
+            // Non-string panics from codegen (e.g., LLVM duplicate symbol)
+            // are compilation errors already reported via rustc's diagnostics.
+            // Convert to a clean DiagnosticAbort (exit code 5).
+            co2_ast::panic_with_diagnostic_abort();
+        }
     }
 }
 
