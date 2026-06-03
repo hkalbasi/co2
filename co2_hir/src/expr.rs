@@ -2665,7 +2665,10 @@ impl HirCtx<'_> {
             if !is_condition_ty(expr.ty) {
                 self.terminate_with_error(
                     parser_span,
-                    "condition must be scalar-like, got <TODO emit ty>",
+                    &format!(
+                        "condition must be scalar-like, got {}",
+                        self.format_ty(expr.ty),
+                    ),
                 );
             }
             HirExpr {
