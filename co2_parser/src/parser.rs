@@ -9,8 +9,8 @@ use co2_ast::{
     FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
     LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
     RustAttribute, RustAttributeStyle, RustFunctionParam, RustFunctionSignature, RustPath,
-    RustPathSegment, RustTy, Span, Spanned, SpecifierQualifier, StatelessResolver, Statement,
-    StatementOrDeclaration, StorageClassSpecifier, StringLiteral, StringLiteralPrefix,
+    RustPathSegment, RustStructField, RustTy, Span, Spanned, SpecifierQualifier, StatelessResolver,
+    Statement, StatementOrDeclaration, StorageClassSpecifier, StringLiteral, StringLiteralPrefix,
     StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token,
     TranslationUnit, TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp,
     UseItem, parse_unsigned_integer_constant,
@@ -60,7 +60,7 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    recursive(|content| {
+    let inner = recursive(|content| {
         let any_non_delim = any()
             .filter(|t| {
                 !matches!(
@@ -89,20 +89,20 @@ where
                 .ignored(),
         ));
 
-        choice((any_non_delim, any_group))
-            .repeated()
-            .ignored()
-            .delimited_by(just(Token::LBracket), just(Token::RBracket))
-    })
-    .map_with(|(), e| {
-        let slice: &[Spanned<Token>] = e.slice();
-        let inner = if slice.len() >= 2 {
-            slice[1..slice.len() - 1].to_vec()
-        } else {
-            Vec::new()
-        };
-        (inner, slice_span(slice, e.span()))
-    })
+        choice((any_non_delim, any_group)).repeated().ignored()
+    });
+
+    inner
+        .delimited_by(just(Token::LBracket), just(Token::RBracket))
+        .map_with(|(), e| {
+            let slice: &[Spanned<Token>] = e.slice();
+            let inner = if slice.len() >= 2 {
+                slice[1..slice.len() - 1].to_vec()
+            } else {
+                Vec::new()
+            };
+            (inner, slice_span(slice, e.span()))
+        })
 }
 
 fn parse_rust_attr(
@@ -2197,6 +2197,49 @@ where
         })
 }
 
+fn rust_style_struct_definition_with_attrs<'src, I, R: TypeResolver>(
+    resolver: R,
+    attrs: Vec<Spanned<RustAttribute>>,
+) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    let rust_struct_field = identifier()
+        .then_ignore(just(Token::Colon))
+        .then(rust_ty(resolver.clone()))
+        .map({
+            let resolver = resolver.clone();
+            move |(name, ty)| RustStructField {
+                name: (resolver.register_ident(name.0), name.1),
+                ty,
+            }
+        });
+
+    let fields = rust_struct_field
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBrace), just(Token::RBrace));
+
+    just(Token::Ident("pub".to_string()))
+        .ignore_then(just(Token::Struct))
+        .ignore_then(identifier())
+        .then(fields)
+        .map({
+            let resolver = resolver.clone();
+            move |(name, fields)| {
+                let name_span = name.1;
+                Declaration::RustStruct {
+                    attrs: attrs.clone(),
+                    ident: (resolver.register_ident(name.0), name_span),
+                    fields,
+                    is_pub: true,
+                }
+            }
+        })
+}
+
 fn rust_style_function_definition_with_attrs<'src, I, R: TypeResolver>(
     resolver: R,
     attrs: Vec<Spanned<RustAttribute>>,
@@ -2265,6 +2308,16 @@ where
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     rust_style_type_definition_with_attrs(resolver, Vec::new())
+}
+
+fn rust_style_struct_definition<'src, I, R: TypeResolver>(
+    resolver: R,
+) -> impl Parser<'src, I, Declaration<R>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    rust_style_struct_definition_with_attrs(resolver, Vec::new())
 }
 
 fn rust_style_function_definition<'src, I, R: TypeResolver>(
@@ -2897,6 +2950,9 @@ fn attach_attrs_to_declaration<R: TypeResolver>(
         }
         | Declaration::RustTypeAlias {
             attrs: decl_attrs, ..
+        }
+        | Declaration::RustStruct {
+            attrs: decl_attrs, ..
         } => *decl_attrs = attrs,
         Declaration::PragmaPack { .. } | Declaration::BreakCo2 => {}
     }
@@ -2976,6 +3032,10 @@ where
                                 current_resolver.clone(),
                                 attrs.clone(),
                             ),
+                            rust_style_struct_definition_with_attrs(
+                                current_resolver.clone(),
+                                attrs.clone(),
+                            ),
                         ))
                         .map_with(|v, e| {
                             let nr = current_resolver.register_decl(&v);
@@ -3019,10 +3079,16 @@ where
                 {
                     current_resolver = next_resolver;
                     TranslationUnitItem::Declaration(decl)
-                } else if let Ok((decl, next_resolver)) = inp.parse(declaration(
-                    current_resolver.clone(),
-                    statement(current_resolver.clone()),
-                )) {
+                } else if let Ok((decl, next_resolver)) = inp.parse(choice((
+                    rust_style_struct_definition(current_resolver.clone()).map_with(|v, e| {
+                        let nr = current_resolver.register_decl(&v);
+                        ((v, e.span()), nr)
+                    }),
+                    declaration(
+                        current_resolver.clone(),
+                        statement(current_resolver.clone()),
+                    ),
+                ))) {
                     current_resolver = next_resolver;
                     TranslationUnitItem::Declaration(decl)
                 } else {

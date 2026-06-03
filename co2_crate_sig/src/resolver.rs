@@ -165,7 +165,8 @@ impl ModuleData {
                     let def_id = ctx.allocate_def_id(parent, &DefData::ValueNs(def_name));
                     this.insert_path([&*decl].into_iter(), Some((def_id, TypeQueryResult::Expr)));
                 }
-                Declaration::RustTypeAlias { ident, .. } => {
+                Declaration::RustTypeAlias { ident, .. }
+                | Declaration::RustStruct { ident, .. } => {
                     let name = ident.0.as_str();
                     let def_id = ctx.allocate_def_id(parent, &DefData::TypeNs(name.to_owned()));
                     this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));

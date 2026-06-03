@@ -100,7 +100,7 @@ impl TypeResolver for StatelessResolver {
                     .iter()
                     .all(|decl| decl.0.declarator.0.ident().as_deref() != Some("fn"));
             }
-            Declaration::RustTypeAlias { ident, .. } => {
+            Declaration::RustTypeAlias { ident, .. } | Declaration::RustStruct { ident, .. } => {
                 rust_style_enabled &= ident.0.as_str() != "fn";
             }
             Declaration::PragmaPack { .. } | Declaration::BreakCo2 => {}

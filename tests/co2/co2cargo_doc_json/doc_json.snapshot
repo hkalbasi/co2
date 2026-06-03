@@ -13,9 +13,6 @@
         "demo::MUTABLE",
         "demo::Number",
         "demo::Point",
-        "demo::__co2_c_adt__0",
-        "demo::__co2_c_adt__1",
-        "demo::__co2_c_adt__2",
         "demo::c_abi_value",
         "demo::c_abi_variadic",
         "demo::c_abi_with_args",
@@ -63,53 +60,6 @@
     },
     {
       "path": "demo::Number",
-      "kind": "type_alias",
-      "visibility": "public",
-      "filename": "src/lib.co2",
-      "type": {
-        "resolved_path": {
-          "path": "__co2_c_adt__1",
-          "id": "demo::__co2_c_adt__1"
-        }
-      }
-    },
-    {
-      "path": "demo::Point",
-      "kind": "type_alias",
-      "visibility": "public",
-      "filename": "src/lib.co2",
-      "docs": "Docs for Point typedef.\nPoint has these fields:\n* `x`: position in the x-axis\n* `y`: position in the x-axis",
-      "type": {
-        "resolved_path": {
-          "path": "__co2_c_adt__0",
-          "id": "demo::__co2_c_adt__0"
-        }
-      }
-    },
-    {
-      "path": "demo::__co2_c_adt__0",
-      "kind": "struct",
-      "visibility": "public",
-      "filename": "src/lib.co2",
-      "fields": [
-        {
-          "name": "x",
-          "kind": "struct_field",
-          "type": {
-            "primitive": "i32"
-          }
-        },
-        {
-          "name": "y",
-          "kind": "struct_field",
-          "type": {
-            "primitive": "i32"
-          }
-        }
-      ]
-    },
-    {
-      "path": "demo::__co2_c_adt__1",
       "kind": "union",
       "visibility": "public",
       "filename": "src/lib.co2",
@@ -131,13 +81,20 @@
       ]
     },
     {
-      "path": "demo::__co2_c_adt__2",
+      "path": "demo::Point",
       "kind": "struct",
       "visibility": "public",
-      "filename": "src/nested.co2",
+      "filename": "src/lib.co2",
       "fields": [
         {
-          "name": "value",
+          "name": "x",
+          "kind": "struct_field",
+          "type": {
+            "primitive": "i32"
+          }
+        },
+        {
+          "name": "y",
           "kind": "struct_field",
           "type": {
             "primitive": "i32"
@@ -374,15 +331,18 @@
     },
     {
       "path": "demo::nested::Nested",
-      "kind": "type_alias",
+      "kind": "struct",
       "visibility": "public",
       "filename": "src/nested.co2",
-      "type": {
-        "resolved_path": {
-          "path": "__co2_c_adt__2",
-          "id": "demo::__co2_c_adt__2"
+      "fields": [
+        {
+          "name": "value",
+          "kind": "struct_field",
+          "type": {
+            "primitive": "i32"
+          }
         }
-      }
+      ]
     },
     {
       "path": "demo::nested::deeper",
@@ -459,7 +419,7 @@
                 "type": {
                   "resolved_path": {
                     "path": "Nested",
-                    "id": 3,
+                    "id": 4,
                     "args": null
                   }
                 }

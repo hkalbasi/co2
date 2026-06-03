@@ -449,17 +449,15 @@ impl HirCtx<'_> {
         local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<(), (co2_ast::Span, String)> {
         match decl {
-            Declaration::FunctionDefinition { .. } => {
-                return Err(spanned_error(
-                    invalid_span(),
-                    "nested function declaration is not supported",
-                ));
-            }
-            Declaration::RustTypeAlias { .. } => {
-                return Err(spanned_error(
+            Declaration::FunctionDefinition { .. } => Err(spanned_error(
+                invalid_span(),
+                "nested function declaration is not supported",
+            )),
+            Declaration::RustStruct { .. } | Declaration::RustTypeAlias { .. } => {
+                Err(spanned_error(
                     invalid_span(),
                     "nested rust style type declaration is not supported",
-                ));
+                ))
             }
             Declaration::Declaration {
                 declaration_specifiers,

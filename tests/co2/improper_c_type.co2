@@ -14,7 +14,7 @@ typedef struct {} EmptyStruct;
 type ImproperCType2 = EmptyStruct;
 
 void bad3(ImproperCType2 inp) {}
-        //^^^^^^^^^^^^^^ warning: `extern` fn uses type `__co2_c_adt__0`, which is not FFI-safe
+        //^^^^^^^^^^^^^^ warning: `extern` fn uses type `EmptyStruct`, which is not FFI-safe
 
 void bad4(int good_input1, struct Empty2 {} bad_input, int good_input2) {}
                          //^^^^^^^^^^^^^^^^ warning: `extern` fn uses type `__co2_c_adt_Empty2_1`, which is not FFI-safe

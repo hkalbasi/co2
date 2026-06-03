@@ -679,6 +679,7 @@ impl co2_ast::TypeResolver for LocalResolver {
         match decl {
             Declaration::FunctionDefinition { .. }
             | Declaration::RustTypeAlias { .. }
+            | Declaration::RustStruct { .. }
             | Declaration::BreakCo2 => next,
             Declaration::PragmaPack { action } => {
                 next.base.borrow_mut().apply_pack_action(action);

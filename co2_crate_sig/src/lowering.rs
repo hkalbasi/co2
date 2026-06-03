@@ -11,8 +11,8 @@ use std::{
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Designator, DoTransform as _,
     Expression, FunctionDefinitionSignature, InitDeclarator, Initializer, IntegerSuffix, ModItem,
-    Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, TranslationUnit,
-    TypeQualifier, TypeResolver, co2_test_symbol_name,
+    Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, StructOrUnionSpecifier,
+    Token, TranslationUnit, TypeQualifier, TypeResolver, TypeSpecifier, co2_test_symbol_name,
 };
 use co2_parser::{
     parse_compound_statement, parse_translation_unit_from_preprocessed,
@@ -22,7 +22,7 @@ use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
     HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
-    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind,
+    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind, StructField,
     rustc_public::{
         DefId,
         ty::{AdtDef, FnDef, IntTy},
@@ -108,6 +108,17 @@ fn lower_module_file_attrs_for_decl_item(
             GeneratedAttr::Word { path } => GeneratedAttr::Word { path },
         })
         .collect()
+}
+
+fn has_derive_attr(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>], trait_name: &str) -> bool {
+    attrs.iter().any(|(attr, _)| {
+        attr.path.len() == 1
+            && attr.path[0].0 == "derive"
+            && attr
+                .args
+                .iter()
+                .any(|(tok, _)| matches!(tok, co2_ast::Token::Ident(s) if s == trait_name))
+    })
 }
 
 fn has_word_attr(attrs: &[GeneratedAttr], word: &str) -> bool {
@@ -284,6 +295,7 @@ fn deduplicate_tu_items(
         FunctionDefinition,
         RustFunctionDefinition,
         RustTypeAlias,
+        RustStruct,
     }
     use TuItemKind::*;
     impl TuItemKind {
@@ -356,12 +368,16 @@ fn deduplicate_tu_items(
                 }
                 tu_item_id += 1;
             }
-            Declaration::RustTypeAlias { ident, .. } => {
+            Declaration::RustTypeAlias { ident, .. } | Declaration::RustStruct { ident, .. } => {
                 let name = ident.0.clone();
+                let kind = match item {
+                    Declaration::RustTypeAlias { .. } => RustTypeAlias,
+                    _ => RustStruct,
+                };
                 match name_to_important_def.entry(name) {
                     std::collections::hash_map::Entry::Occupied(entry) => {
                         let (_, old_kind) = *entry.get();
-                        if old_kind.check_mergable(RustTypeAlias).is_none() {
+                        if old_kind.check_mergable(kind).is_none() {
                             errors.push(co2_ast::Rich::custom(
                                 ident.1,
                                 format!("the name `{}` is defined multiple times", ident.0),
@@ -369,7 +385,7 @@ fn deduplicate_tu_items(
                         }
                     }
                     std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert((tu_item_id, RustTypeAlias));
+                        entry.insert((tu_item_id, kind));
                     }
                 }
                 tu_item_id += 1;
@@ -446,7 +462,7 @@ fn deduplicate_tu_items(
             tu_item_id += 1;
             is_needed
         }
-        Declaration::RustTypeAlias { .. } => {
+        Declaration::RustTypeAlias { .. } | Declaration::RustStruct { .. } => {
             tu_item_id += 1;
             true
         }
@@ -704,6 +720,44 @@ fn resolve_in_module<'a>(
     .unwrap()
 }
 
+fn adt_repr_from_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> AdtRepr {
+    for (attr, _) in attrs {
+        if attr.path.len() == 1 && attr.path[0].0 == "repr" && attr.args.len() >= 2 {
+            let inner = &attr.args[1..attr.args.len() - 1];
+            let mut repr = AdtRepr::Rust;
+            let mut packed = false;
+            let mut pack_align: Option<u32> = None;
+            let mut i = 0;
+            while i < inner.len() {
+                match &inner[i].0 {
+                    Token::Ident(s) if s == "C" => repr = AdtRepr::C,
+                    Token::Ident(s) if s == "Rust" => repr = AdtRepr::Rust,
+                    Token::Ident(s) if s == "packed" => {
+                        packed = true;
+                        if i + 2 < inner.len()
+                            && matches!(&inner[i + 1].0, Token::LParen)
+                            && let Some((Token::Integer(text, _), _)) = inner.get(i + 2)
+                            && let Ok(n) = text.parse::<u32>()
+                        {
+                            pack_align = Some(n);
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            if let Some(align) = pack_align {
+                return AdtRepr::CPacked(align);
+            }
+            if packed {
+                return AdtRepr::CPacked(1);
+            }
+            return repr;
+        }
+    }
+    AdtRepr::Rust
+}
+
 fn lower_translation_unit_items(
     ctx: &mut CrateSigCtx<'_>,
     tu: &TranslationUnit<StatelessResolver>,
@@ -723,6 +777,86 @@ fn lower_translation_unit_items(
         let span = ctx.co2_span_to_rustc(parser_span);
         let mut resolver =
             LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
+
+        if let Declaration::Declaration {
+            attrs: _,
+            declaration_specifiers,
+            declarators,
+        } = &item
+            && let [
+                (DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Typedef, _)), _),
+                (
+                    DeclarationSpecifier::TypeSpecifier((
+                        TypeSpecifier::StructOrUnion { kind, specifier },
+                        _,
+                    )),
+                    _,
+                ),
+            ] = declaration_specifiers.as_slice()
+            && let StructOrUnionSpecifier::Anonymous { fields } = &specifier.0
+            && let [
+                (
+                    InitDeclarator {
+                        declarator,
+                        initializer: None,
+                        is_transparent_union: false,
+                    },
+                    _,
+                ),
+            ] = declarators.as_slice()
+            && let Declarator::Identifier((name, _)) = &declarator.0
+        {
+            let type_def = resolve_in_module(ctx, module_path, name).0;
+            let transformed_fields: Vec<_> = fields
+                .iter()
+                .map(|(f, sp)| (f.transform(&resolver), *sp))
+                .collect();
+            let mut base = ctx.resolver.borrow_mut();
+            base.struct_manager.definitions.insert(
+                type_def,
+                StructData {
+                    def_id: type_def,
+                    name: name.clone(),
+                    tag_name: Some(name.clone()),
+                    kind: *kind,
+                    span,
+                    emitted_fields: None,
+                    logical_fields: None,
+                    pack_align: None,
+                    skip_emit: false,
+                },
+            );
+            base.define_def(type_def, &transformed_fields, span);
+            let fields = base.struct_manager.definitions[&type_def]
+                .emitted_fields
+                .clone()
+                .unwrap();
+            let pack = base.struct_manager.definitions[&type_def].pack_align;
+            base.struct_manager
+                .definitions
+                .get_mut(&type_def)
+                .unwrap()
+                .skip_emit = true;
+            drop(base);
+            let adt_kind = match kind {
+                StructOrUnionKind::Struct => HirAdtKind::Struct { fields },
+                StructOrUnionKind::Union => HirAdtKind::Union { fields },
+            };
+            let adt_repr = match pack {
+                Some(n) => AdtRepr::CPacked(n),
+                None => AdtRepr::C,
+            };
+            hir_items.push(HirModuleItem::Adt {
+                name: name.clone(),
+                id: AdtDef(type_def),
+                kind: adt_kind,
+                span,
+                repr: adt_repr,
+            });
+            add_clone_and_copy_for_def(ctx, type_def, span);
+            continue;
+        }
+
         let item = item.transform(&resolver);
         match item {
             Declaration::RustTypeAlias {
@@ -740,6 +874,41 @@ fn lower_translation_unit_items(
                     attrs: lower_generated_attrs(&attrs),
                     span,
                 });
+            }
+            Declaration::RustStruct {
+                attrs,
+                ident,
+                fields: struct_fields,
+                is_pub: _,
+            } => {
+                let name = ident.0.1;
+                let id = resolve_in_module(ctx, module_path, &name).0;
+                let repr = adt_repr_from_attrs(&attrs);
+                let fields = struct_fields
+                    .into_iter()
+                    .map(|field| {
+                        let field_span = ctx.co2_span_to_rustc(field.name.1);
+                        let field_ty = ctx.lower_rust_ty(field.ty);
+                        let field_id =
+                            ctx.allocate_def_id(id, &DefData::ValueNs(field.name.0.1.clone()));
+                        StructField {
+                            id: field_id,
+                            name: field.name.0.1,
+                            ty: field_ty,
+                            span: field_span,
+                        }
+                    })
+                    .collect();
+                hir_items.push(HirModuleItem::Adt {
+                    name,
+                    id: AdtDef(id),
+                    kind: HirAdtKind::Struct { fields },
+                    span,
+                    repr,
+                });
+                if has_derive_attr(&attrs, "Copy") {
+                    add_clone_and_copy_for_def(ctx, id, span);
+                }
             }
             Declaration::FunctionDefinition {
                 attrs: decl_attrs,
@@ -1249,6 +1418,9 @@ pub fn lower_crate_sig(
     let file_ids = Arc::new(file_ids.clone());
 
     let mut ctx = CrateSigCtx {
+        clone_trait: resolver.resolve("core::clone::Clone").unwrap().0,
+        copy_trait: resolver.resolve("core::marker::Copy").unwrap().0,
+        clone_trait_fn: resolver.resolve("core::clone::Clone::clone").unwrap().0,
         resolver: Rc::new(RefCell::new(LocalResolverBase {
             resolver,
             local_counter: 0,
@@ -1317,10 +1489,6 @@ pub fn lower_crate_sig(
         &mut on_body_parsed,
     );
     ctx.hir_items.extend(root_items);
-
-    let clone_trait = ctx.resolve("core::clone::Clone").unwrap().0;
-    let copy_trait = ctx.resolve("core::marker::Copy").unwrap().0;
-    let clone_trait_fn = ctx.resolve("core::clone::Clone::clone").unwrap().0;
 
     let pending_typedefs = std::mem::take(&mut ctx.resolver.borrow_mut().pending_typedefs);
     for (id, name, specifiers, declarator, parser_span, is_transparent_union) in pending_typedefs {
@@ -1468,8 +1636,12 @@ pub fn lower_crate_sig(
         logical_fields: _,
         span,
         pack_align,
+        skip_emit,
     } in structs
     {
+        if skip_emit {
+            continue;
+        }
         let Some(fields) = fields else {
             let foreign_name = format!("{name}__foreign");
             let foreign_def = ctx.allocate_def_id(foreign_mod, &DefData::TypeNs(foreign_name));
@@ -1512,49 +1684,7 @@ pub fn lower_crate_sig(
             repr,
         });
 
-        let self_ty_hir = HirTy::adt(def, vec![], span);
-
-        let root_crate = ctx.root_crate_def_id();
-        let clone_impl_def = ctx.allocate_def_id(root_crate, &DefData::Impl);
-        let clone_method_def =
-            ctx.allocate_def_id(clone_impl_def, &DefData::ValueNs("clone".to_owned()));
-        let clone_self_lifetime =
-            ctx.allocate_def_id(clone_method_def, &DefData::LifetimeNs("a".to_owned()));
-        let clone_sig = FunctionSignature {
-            lifetimes: vec![clone_self_lifetime],
-            inputs: Vec::new(),
-            output: self_ty_hir.clone(),
-            abi: FunctionAbi::Rust,
-            is_unsafe: false,
-            c_variadic: false,
-        };
-        ctx.hir_items.push(HirModuleItem::Impl {
-            id: clone_impl_def,
-            self_ty: self_ty_hir.clone(),
-            trait_def: Some(clone_trait),
-            items: vec![HirImplItem {
-                name: "clone".to_owned(),
-                id: clone_method_def,
-                kind: HirImplItemKind::Fn {
-                    sig: clone_sig,
-                    self_kind: HirSelfKind::RefImm(HirLifetime::Param(clone_self_lifetime)),
-                    trait_item_def_id: Some(clone_trait_fn),
-                },
-                span,
-            }],
-            span,
-        });
-        ctx.mir_owners
-            .insert(clone_method_def, MirOwnerInfo::CloneMethod(AdtDef(def)));
-
-        let copy_impl_def = ctx.allocate_def_id(root_crate, &DefData::Impl);
-        ctx.hir_items.push(HirModuleItem::Impl {
-            id: copy_impl_def,
-            self_ty: self_ty_hir.clone(),
-            trait_def: Some(copy_trait),
-            items: Vec::new(),
-            span,
-        });
+        add_clone_and_copy_for_def(&mut ctx, def, span);
     }
 
     ctx.hir_items.push(HirModuleItem::ForeignMod {
@@ -1663,6 +1793,56 @@ pub fn lower_crate_sig(
         ctx.mir_owners,
         defs,
     )
+}
+
+fn add_clone_and_copy_for_def(
+    ctx: &mut CrateSigCtx<'_>,
+    def: DefId,
+    span: rustc_public_generative::rustc_public::ty::Span,
+) {
+    let self_ty_hir = HirTy::adt(def, vec![], span);
+
+    let root_crate = ctx.root_crate_def_id();
+    let clone_impl_def = ctx.allocate_def_id(root_crate, &DefData::Impl);
+    let clone_method_def =
+        ctx.allocate_def_id(clone_impl_def, &DefData::ValueNs("clone".to_owned()));
+    let clone_self_lifetime =
+        ctx.allocate_def_id(clone_method_def, &DefData::LifetimeNs("a".to_owned()));
+    let clone_sig = FunctionSignature {
+        lifetimes: vec![clone_self_lifetime],
+        inputs: Vec::new(),
+        output: self_ty_hir.clone(),
+        abi: FunctionAbi::Rust,
+        is_unsafe: false,
+        c_variadic: false,
+    };
+    ctx.hir_items.push(HirModuleItem::Impl {
+        id: clone_impl_def,
+        self_ty: self_ty_hir.clone(),
+        trait_def: Some(ctx.clone_trait),
+        items: vec![HirImplItem {
+            name: "clone".to_owned(),
+            id: clone_method_def,
+            kind: HirImplItemKind::Fn {
+                sig: clone_sig,
+                self_kind: HirSelfKind::RefImm(HirLifetime::Param(clone_self_lifetime)),
+                trait_item_def_id: Some(ctx.clone_trait_fn),
+            },
+            span,
+        }],
+        span,
+    });
+    ctx.mir_owners
+        .insert(clone_method_def, MirOwnerInfo::CloneMethod(AdtDef(def)));
+
+    let copy_impl_def = ctx.allocate_def_id(root_crate, &DefData::Impl);
+    ctx.hir_items.push(HirModuleItem::Impl {
+        id: copy_impl_def,
+        self_ty: self_ty_hir.clone(),
+        trait_def: Some(ctx.copy_trait),
+        items: Vec::new(),
+        span,
+    });
 }
 
 // TODO: this function is AI garbage and is duplicate logic from what is in co2_hir

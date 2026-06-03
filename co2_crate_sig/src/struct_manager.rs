@@ -24,6 +24,7 @@ pub(crate) struct StructData {
     /// Effective `#pragma pack` alignment in bytes at the point this struct was defined,
     /// `None` means default (no packing).
     pub(crate) pack_align: Option<u32>,
+    pub(crate) skip_emit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -263,6 +264,7 @@ impl LocalResolverBase {
             }]),
             logical_fields: None,
             pack_align: None,
+            skip_emit: false,
         };
         self.struct_manager.definitions.insert(def_id, data);
         self.struct_manager.enum_defs.insert(def_id);
@@ -287,6 +289,7 @@ impl LocalResolverBase {
             emitted_fields: None,
             logical_fields: None,
             pack_align: None,
+            skip_emit: false,
         };
         self.struct_manager.definitions.insert(def_id, data);
         def_id
@@ -298,6 +301,9 @@ impl LocalResolverBase {
 
     pub(crate) fn c_adt_display_info(&self, def_id: DefId) -> Option<CAdtDisplayInfo> {
         let data = self.struct_manager.definitions.get(&def_id)?;
+        if data.skip_emit {
+            return None;
+        }
         let anonymous_id = data
             .name
             .rsplit_once('_')
@@ -372,7 +378,7 @@ impl LocalResolverBase {
             .clone()
     }
 
-    fn define_def(
+    pub(crate) fn define_def(
         &mut self,
         def: DefId,
         fields: &[co2_ast::Spanned<StructOrUnionField<LocalResolver>>],

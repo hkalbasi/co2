@@ -89,6 +89,15 @@ void anonymous_assignment_mismatch(void) {
 //  ^^^^^ error: assignment type mismatch: expected co2(struct #4), got co2(struct #3)
 }
 
+typedef struct { int x; } Foo;
+
+void anonymous_assignment_mismatch2(void) {
+    struct { int x; } a = { 1 };
+    Foo b = { 2 };
+    b = a;
+//  ^^^^^ error: assignment type mismatch: expected Foo, got co2(struct #6)
+}
+
 int (*array_pointer_return_mismatch(void))[10] {
     int *p = 0;
     return p;

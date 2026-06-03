@@ -907,6 +907,12 @@ pub enum Declaration<R: TypeResolver> {
         ty: Spanned<RustTy<R>>,
         is_pub: bool,
     },
+    RustStruct {
+        attrs: Vec<Spanned<RustAttribute>>,
+        ident: Spanned<R::DeclarationIdent>,
+        fields: Vec<RustStructField<R>>,
+        is_pub: bool,
+    },
     PragmaPack {
         action: PackAction,
     },
@@ -949,6 +955,12 @@ pub struct RustFunctionSignature<R: TypeResolver> {
 
 #[derive(Debug, Clone)]
 pub struct RustFunctionParam<R: TypeResolver> {
+    pub name: Spanned<R::DeclarationIdent>,
+    pub ty: Spanned<RustTy<R>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RustStructField<R: TypeResolver> {
     pub name: Spanned<R::DeclarationIdent>,
     pub ty: Spanned<RustTy<R>>,
 }

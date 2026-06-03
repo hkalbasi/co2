@@ -2,8 +2,9 @@ use crate::{
     Declaration, DeclarationSpecifier, Declarator, Designator, EnumSpecifier, Enumerator,
     Expression, FunctionDefinitionSignature, GenericAssociation, InitDeclarator, Initializer,
     InitializerItem, ParameterList, RustFunctionParam, RustFunctionSignature, RustPath,
-    RustPathSegment, RustTy, Spanned, SpecifierQualifier, StructDeclarator, StructOrUnionField,
-    StructOrUnionKind, StructOrUnionSpecifier, TypeName, TypeResolver, TypeSpecifier,
+    RustPathSegment, RustStructField, RustTy, Spanned, SpecifierQualifier, StructDeclarator,
+    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeName, TypeResolver,
+    TypeSpecifier,
 };
 
 pub trait Transformable<F: TypeResolver>: TypeResolver {
@@ -513,6 +514,18 @@ impl<A: TypeResolver> DoTransform for RustFunctionParam<A> {
     }
 }
 
+impl<A: TypeResolver> DoTransform for RustStructField<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = RustStructField<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> RustStructField<B> {
+        RustStructField {
+            name: (B::transform_decl_ident(&self.name.0), self.name.1),
+            ty: self.ty.transform(b),
+        }
+    }
+}
+
 impl<A: TypeResolver> DoTransform for RustPathSegment<A> {
     type Resolver = A;
     type Target<T: TypeResolver> = RustPathSegment<T>;
@@ -619,6 +632,23 @@ impl<A: TypeResolver> DoTransform for Declaration<A> {
                 attrs: attrs.clone(),
                 ident: (B::transform_decl_ident(&ident.0), ident.1),
                 ty: ty.transform(b),
+                is_pub: *is_pub,
+            },
+            Declaration::RustStruct {
+                attrs,
+                ident,
+                fields,
+                is_pub,
+            } => Declaration::RustStruct {
+                attrs: attrs.clone(),
+                ident: (B::transform_decl_ident(&ident.0), ident.1),
+                fields: fields
+                    .iter()
+                    .map(|field| RustStructField {
+                        name: (B::transform_decl_ident(&field.name.0), field.name.1),
+                        ty: field.ty.transform(b),
+                    })
+                    .collect(),
                 is_pub: *is_pub,
             },
             Declaration::PragmaPack { action } => Declaration::PragmaPack {

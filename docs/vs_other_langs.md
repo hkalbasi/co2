@@ -91,6 +91,9 @@ Benefits of Zngur, CXX, Crubit, ... over CO2++:
 
 See [CO2 as a C successor language](./c_successor.md).
 
+## CO2 vs D's importC
+
+
 ## Network effect for programming languages
 
 A network effect occurs when a product or system becomes more valuable as more people use it.

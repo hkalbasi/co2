@@ -9,10 +9,11 @@ use crate::{
     EnumSpecifier, Expression, FileId, FloatSuffix, ForInit, FunctionDefinitionSignature,
     FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
     IntegerSuffix, LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, PackAction,
-    ParameterList, RustAttribute, RustFunctionParam, RustFunctionSignature, RustTy, Span, Spanned,
-    SpecifierQualifier, Statement, StatementOrDeclaration, StorageClassSpecifier, StructDeclarator,
-    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TranslationUnit, TypeName,
-    TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp, UpdateOp, UseItem,
+    ParameterList, RustAttribute, RustFunctionParam, RustFunctionSignature, RustStructField,
+    RustTy, Span, Spanned, SpecifierQualifier, Statement, StatementOrDeclaration,
+    StorageClassSpecifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
+    StructOrUnionSpecifier, TranslationUnit, TypeName, TypeQualifier, TypeResolver, TypeSpecifier,
+    UnaryOp, UpdateOp, UseItem,
 };
 
 /// Pretty-print a `Spanned<CompoundStatement<LocalResolver>>` with default config.
@@ -803,6 +804,15 @@ impl<R: TypeResolver> PrettyPrint for RustFunctionParam<R> {
     }
 }
 
+impl<R: TypeResolver> PrettyPrint for RustStructField<R> {
+    fn pretty_print(&self, pp: &mut PrettyPrinter) {
+        pp.node("Field", &fmt_span(&self.name.1, pp.config), |pp| {
+            pp.leaf_data("Name", "", format_args!("{:?}", &self.name.0));
+            self.ty.pretty_print(pp);
+        });
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Spanned<Declaration<R>>
 // ---------------------------------------------------------------------------
@@ -857,6 +867,29 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Declaration<R>> {
                         format_args!("{:?}", &ident.0),
                     );
                     ty.pretty_print(pp);
+                    if *is_pub {
+                        pp.data("pub");
+                    }
+                });
+            }
+            Declaration::RustStruct {
+                attrs,
+                ident,
+                fields,
+                is_pub,
+            } => {
+                pp.node("RustStruct", &sp, |pp| {
+                    for attr in attrs {
+                        attr.pretty_print(pp);
+                    }
+                    pp.leaf_data(
+                        "Ident",
+                        &fmt_span(&ident.1, pp.config),
+                        format_args!("{:?}", &ident.0),
+                    );
+                    for field in fields {
+                        field.pretty_print(pp);
+                    }
                     if *is_pub {
                         pp.data("pub");
                     }

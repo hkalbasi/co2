@@ -1,4 +1,5 @@
 mod inner_mod;
+use std::vec::Vec;
 
 typedef struct {
     int x;
@@ -64,8 +65,36 @@ typedef struct {
     int e;
 } BitFieldReprCStruct;
 
+pub struct ReprRustStruct {
+    a: i32,
+    b: *mut i32,
+    c: *const i32,
+    d: NormalReprCStruct,
+    e: BitFieldReprCStruct,
+    f: *mut BitFieldReprCStruct,
+}
+
+pub struct RustStructHoldingVector {
+    a: i32,
+    b: Vec<i32>,
+    c: Vec<RustStructHoldingVector>,
+}
+
+#[derive(Copy)]
+pub struct CopyReprRustStruct {
+    a: i32,
+    b: Point,
+    c: *mut CopyReprRustStruct,
+    foo: *const RustStructHoldingVector,
+}
+
 constexpr usize C23Const = 2;
 
 typedef struct Unknown1 ExternType1;
 typedef struct Unknown1 ExternType1Again;
 typedef struct Unknown2 ExternType2;
+typedef Point TypeDefToPoint;
+pub type TypeAliasToPoint = Point;
+typedef struct TaggedInt TaggedAlias1;
+typedef struct TaggedInt { int x; } TaggedAlias2;
+typedef struct TaggedInt TaggedAlias3;

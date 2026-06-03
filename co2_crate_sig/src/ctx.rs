@@ -10,6 +10,9 @@ pub(crate) struct CrateSigCtx<'a> {
     pub(crate) hir_ctx: &'a HirStructureCtx<'a>,
     pub(crate) file_ids: Arc<HashMap<co2_ast::FileId, FileId>>,
     pub(crate) resolver: Rc<RefCell<LocalResolverBase>>,
+    pub(crate) clone_trait: DefId,
+    pub(crate) clone_trait_fn: DefId,
+    pub(crate) copy_trait: DefId,
     pub(crate) mir_owners: HashMap<DefId, MirOwnerInfo>,
     pub(crate) hir_items: Vec<HirModuleItem>,
 }
