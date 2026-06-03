@@ -22,7 +22,9 @@
         "demo::c_abi_with_args_unnamed",
         "demo::ffi",
         "demo::nested",
-        "demo::public_value"
+        "demo::public_value",
+        "demo::test_link",
+        "demo::test_link_target"
       ]
     },
     {
@@ -446,6 +448,7 @@
       "kind": "function",
       "visibility": "public",
       "filename": "src/nested.co2",
+      "docs": "Rust doc link to [`nested_value`] [`invalid`]",
       "sig": {
         "inputs": [
           [
@@ -488,6 +491,43 @@
         "output": {
           "primitive": "i32"
         },
+        "is_c_variadic": false
+      },
+      "header": {
+        "is_const": false,
+        "is_unsafe": false,
+        "is_async": false,
+        "abi": "Rust"
+      },
+      "has_body": true
+    },
+    {
+      "path": "demo::test_link",
+      "kind": "function",
+      "visibility": "public",
+      "filename": "src/lib.co2",
+      "docs": "Rust doc support for links [`test_link_target`] and [`nested::deeper::deep_value`].",
+      "sig": {
+        "inputs": [],
+        "output": null,
+        "is_c_variadic": false
+      },
+      "header": {
+        "is_const": false,
+        "is_unsafe": false,
+        "is_async": false,
+        "abi": "Rust"
+      },
+      "has_body": true
+    },
+    {
+      "path": "demo::test_link_target",
+      "kind": "function",
+      "visibility": "public",
+      "filename": "src/lib.co2",
+      "sig": {
+        "inputs": [],
+        "output": null,
         "is_c_variadic": false
       },
       "header": {

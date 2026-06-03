@@ -1,0 +1,9 @@
+mod deeper;
+
+/// Nested module type.
+pub type Nested = i32;
+
+/// Nested module function.
+pub fn nested_func() -> i32 {
+    return 2;
+}

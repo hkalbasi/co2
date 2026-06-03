@@ -10,6 +10,7 @@ pub fn nested_value() -> i32 {
     return 3;
 }
 
+/// Rust doc link to [`nested_value`] [`invalid`]
 pub fn nested_value_with_args(input: *mut Nested) -> i32 {
     return input->value;
 }

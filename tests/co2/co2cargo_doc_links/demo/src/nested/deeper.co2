@@ -1,0 +1,4 @@
+/// Deeper nested function.
+pub fn deep_func() -> i32 {
+    return 3;
+}

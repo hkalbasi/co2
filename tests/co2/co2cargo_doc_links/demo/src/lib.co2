@@ -1,0 +1,105 @@
+mod nested;
+mod ffi;
+
+mod tests {
+    #include <assert.h>
+
+    int helper() {
+        return 0;
+    }
+
+    #[test]
+    fn test_something() {
+        assert(helper() == 0);
+    }
+}
+
+/// Target for single-segment function links.
+pub fn link_target() -> i32 {
+    return 1;
+}
+
+/// Type alias for link tests.
+pub type MyType = i32;
+
+/// Constant for link tests.
+const int MY_CONST = 42;
+
+/// Static for link tests.
+int MY_STATIC = 7;
+
+/// Link to function: [`link_target`].
+pub fn test_fn_link() -> i32 {
+    return 1;
+}
+
+/// Link to type: [`MyType`].
+pub fn test_type_link() -> i32 {
+    return 1;
+}
+
+/// Link to constant: [`MY_CONST`].
+pub fn test_const_link() -> i32 {
+    return 1;
+}
+
+/// Link to static: [`MY_STATIC`].
+pub fn test_static_link() -> i32 {
+    return 1;
+}
+
+/// Link to module: [`nested`].
+pub fn test_mod_link() -> i32 {
+    return 1;
+}
+
+/// Link to sibling function: [`ffi::ffi_func`].
+pub fn test_cross_mod_fn_link() -> i32 {
+    return 1;
+}
+
+/// Link to sibling type: [`ffi::Handle`].
+pub fn test_cross_mod_type_link() -> i32 {
+    return 1;
+}
+
+/// Link to nested module function: [`nested::nested_func`].
+pub fn test_nested_fn_link() -> i32 {
+    return 1;
+}
+
+/// Link to nested module type: [`nested::Nested`].
+pub fn test_nested_type_link() -> i32 {
+    return 1;
+}
+
+/// Link to deeply nested item: [`nested::deeper::deep_func`].
+pub fn test_deep_link() -> i32 {
+    return 1;
+}
+
+/// Link to item inside `#include` mod block: [`tests::helper`].
+pub fn test_include_mod_link() -> i32 {
+    return 1;
+}
+
+/// Multiple links in one doc comment: [`link_target`], [`MY_CONST`], [`ffi::ffi_func`].
+pub fn test_multi_link() -> i32 {
+    return 1;
+}
+
+/// Struct with fields for field link tests.
+typedef struct {
+    int x;
+    int y;
+} Point;
+
+/// Link to struct: [`Point`].
+pub fn test_struct_link() -> i32 {
+    return 1;
+}
+
+/// Link to struct field: [`Point::x`].
+pub fn test_struct_field_link() -> i32 {
+    return 1;
+}

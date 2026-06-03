@@ -1,0 +1,17 @@
+warning: unresolved link to `invalid`
+  --> src/nested.co2:14:1
+   |
+14 | / pub fn nested_value_with_args(input: *mut Nested) -> i32 {
+15 | |     return input->value;
+16 | | }
+   | |_^
+   |
+   = note: the link appears in this line:
+           
+           Rust doc link to [`nested_value`] [`invalid`]
+                                              ^^^^^^^^^
+   = note: no item named `invalid` in scope
+   = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+   = note: `#[warn(rustdoc::broken_intra_doc_links)]` on by default
+
+warning: `demo` (lib doc) generated 1 warning

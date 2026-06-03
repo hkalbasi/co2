@@ -48,3 +48,23 @@ if $actual != $snapshot {
     diff $snapshot $actual
     exit 1
 }
+
+let stderr_file = (mktemp)
+$doc.stderr | save -f $stderr_file
+let stderr_normalized = (do { ^python ($test_dir | path join "normalize_stderr.py") $stderr_file } | complete)
+if $stderr_normalized.exit_code != 0 {
+    print $"failed to normalize stderr: ($stderr_normalized | to json -r)"
+    exit 5
+}
+
+let stderr_expected = (open ($test_dir | path join "doc_json.stderr.snapshot"))
+if $stderr_normalized.stdout != $stderr_expected {
+    print "rustdoc stderr snapshot mismatch!"
+    print "--- GOT ---"
+    print $stderr_normalized.stdout
+    print "--- EXPECTED ---"
+    print $stderr_expected
+    print "--- Diff ---"
+    diff $stderr_expected $stderr_normalized.stdout
+    exit 1
+}

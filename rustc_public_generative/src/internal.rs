@@ -17,7 +17,7 @@ use rustc_data_structures::smallvec::SmallVec;
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
-use rustc_hir::def::{CtorKind, DefKind, Res};
+use rustc_hir::def::{CtorKind, DefKind, Namespace, Res};
 use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefIdMap};
 use rustc_hir::definitions::{DefPathData, DisambiguatorState};
 use rustc_hir::lang_items::LangItem;
@@ -2646,6 +2646,8 @@ fn override_providers<S: CrateGeneratorState>(providers: &mut QueryProviders, ga
                 })
         };
     }
+    providers.doc_link_resolutions = generated_doc_link_resolutions;
+    providers.doc_link_traits_in_scope = generated_doc_link_traits_in_scope;
     providers.hir_attr_map = generated_hir_attr_map;
     providers.opt_ast_lowering_delayed_lints = generated_opt_ast_lowering_delayed_lints;
     providers.entry_fn = generated_entry_fn;
@@ -2707,6 +2709,24 @@ fn generated_resolutions(tcx: TyCtxt<'_>, (): ()) -> &rustc_middle::ty::Resolver
     augment_resolutions_with_items(&mut resolutions, &items, tcx);
 
     tcx.arena.alloc(resolutions)
+}
+
+fn generated_doc_link_resolutions(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+) -> &rustc_hir::def::DocLinkResMap {
+    if let Some(map) = tcx.resolutions(()).doc_link_resolutions.get(&def_id) {
+        return map;
+    }
+    panic!("no doc_link_resolutions entry for {def_id:?}");
+}
+
+fn generated_doc_link_traits_in_scope(tcx: TyCtxt<'_>, def_id: LocalDefId) -> &[RustcDefId] {
+    if let Some(traits) = tcx.resolutions(()).doc_link_traits_in_scope.get(&def_id) {
+        traits.as_slice()
+    } else {
+        &[]
+    }
 }
 
 fn generated_effective_visibilities(
@@ -2819,6 +2839,168 @@ fn augment_resolutions_with_items(
             }
         }
     }
+
+    // Ensure every generated module has an entry in doc_link_resolutions to
+    // prevent the encoder (encoder.rs:2573) from panicking on missing def_ids.
+    for item in items {
+        if let DefinedItemKind::Module(_) = item.kind
+            && let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local()
+        {
+            resolutions
+                .doc_link_resolutions
+                .entry(local_def_id)
+                .or_default();
+            resolutions
+                .doc_link_traits_in_scope
+                .entry(local_def_id)
+                .or_default();
+        }
+    }
+
+    // Build a parent-to-children index for resolving intra-doc links.
+    let mut children_by_module: HashMap<LocalDefId, Vec<(String, LocalDefId, DefKind)>> =
+        HashMap::new();
+    for item in items {
+        let Some(child_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() else {
+            continue;
+        };
+        let def_kind = match item.kind {
+            DefinedItemKind::Function { .. } | DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
+            DefinedItemKind::Struct(_, _) => DefKind::Struct,
+            DefinedItemKind::Union(_, _) => DefKind::Union,
+            DefinedItemKind::TypeDef(_) => DefKind::TyAlias,
+            DefinedItemKind::Module(_) => DefKind::Mod,
+            DefinedItemKind::Static { .. } => DefKind::Static {
+                safety: rustc_hir::Safety::Safe,
+                mutability: ty::Mutability::Mut,
+                nested: false,
+            },
+            DefinedItemKind::Const(_) => DefKind::Const,
+            _ => continue,
+        };
+        let parent = item
+            .parent
+            .and_then(|parent| my_def_id_to_rustc_def_id(tcx, parent).as_local())
+            .unwrap_or(CRATE_DEF_ID);
+        children_by_module.entry(parent).or_default().push((
+            item.name.clone(),
+            child_def_id,
+            def_kind,
+        ));
+    }
+
+    // Scan generated items for doc comments containing intra-doc links and
+    // populate doc_link_resolutions so that rustdoc's resolve_path does not
+    // panic on missing entries (collect_intra_doc_links.rs:370).
+    // For multi-segment paths (e.g. `nested::deeper::deep_value`), resolve
+    // by walking the module tree through children_by_module.
+    // Run BEFORE the direct-child loop below, so that the loop overwrites
+    // placeholder None entries with the correct child resolution.
+    for item in items {
+        let parent_def_id = item
+            .parent
+            .and_then(|parent| my_def_id_to_rustc_def_id(tcx, parent).as_local())
+            .unwrap_or(CRATE_DEF_ID);
+        for attr in &item.attrs {
+            if let GeneratedAttr::DocComment { comment, .. } = attr {
+                for link_path in extract_intra_doc_links(comment) {
+                    let segments: Vec<&str> = link_path.split("::").collect();
+                    // Resolve the full multi-segment path if applicable.
+                    let full_resolved = if segments.len() > 1 {
+                        resolve_multi_segment_path(&children_by_module, parent_def_id, &segments)
+                    } else {
+                        None
+                    };
+                    let sym = Symbol::intern(&link_path);
+                    let map = resolutions
+                        .doc_link_resolutions
+                        .entry(parent_def_id)
+                        .or_default();
+                    if let Some((kind, def_id)) = full_resolved {
+                        let resolved = Some(Res::Def(kind, def_id));
+                        map.insert((sym, Namespace::TypeNS), resolved);
+                        map.insert((sym, Namespace::ValueNS), resolved);
+                        map.insert((sym, Namespace::MacroNS), resolved);
+                    } else {
+                        // Insert placeholder None; the direct-child loop below
+                        // will overwrite with the correct resolution for actual
+                        // children.
+                        map.insert((sym, Namespace::TypeNS), None);
+                        map.insert((sym, Namespace::ValueNS), None);
+                        map.insert((sym, Namespace::MacroNS), None);
+                    }
+                    // Also insert prefix paths (e.g. `nested::deeper`, `nested`)
+                    // so that resolve_path doesn't panic on the associated-item
+                    // fallback branch in rustdoc's resolve function.
+                    if segments.len() > 1 {
+                        for i in 1..segments.len() {
+                            let prefix = segments[..i].join("::");
+                            let p_sym = Symbol::intern(&prefix);
+                            let p_children = children_by_module.entry(parent_def_id).or_default();
+                            let p_type_res = p_children.iter().find_map(|(name, id, kind)| {
+                                if name == &prefix
+                                    && matches!(
+                                        kind,
+                                        DefKind::Struct
+                                            | DefKind::Union
+                                            | DefKind::TyAlias
+                                            | DefKind::Mod
+                                    )
+                                {
+                                    Some(Res::Def(*kind, id.to_def_id()))
+                                } else {
+                                    None
+                                }
+                            });
+                            let p_value_res = p_children.iter().find_map(|(name, id, kind)| {
+                                if name == &prefix
+                                    && matches!(
+                                        kind,
+                                        DefKind::Fn | DefKind::Const | DefKind::Static { .. }
+                                    )
+                                {
+                                    Some(Res::Def(*kind, id.to_def_id()))
+                                } else {
+                                    None
+                                }
+                            });
+                            map.insert((p_sym, Namespace::TypeNS), p_type_res);
+                            map.insert((p_sym, Namespace::ValueNS), p_value_res);
+                            map.insert((p_sym, Namespace::MacroNS), None);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Populate doc_link_resolutions for all children in each module, so that
+    // rustdoc's resolve_path can find simple child names (collect_intra_doc_links.rs:370).
+    // Runs AFTER the doc-comment scanning loop above, so its entries overwrite
+    // the placeholder None entries for actual children.
+    for (module, children) in &children_by_module {
+        let map = resolutions.doc_link_resolutions.entry(*module).or_default();
+        for (name, id, kind) in children {
+            let sym = Symbol::intern(name);
+            if matches!(
+                kind,
+                DefKind::Struct | DefKind::Union | DefKind::TyAlias | DefKind::Mod
+            ) {
+                map.insert(
+                    (sym, Namespace::TypeNS),
+                    Some(Res::Def(*kind, id.to_def_id())),
+                );
+            }
+            if matches!(kind, DefKind::Fn | DefKind::Const | DefKind::Static { .. }) {
+                map.insert(
+                    (sym, Namespace::ValueNS),
+                    Some(Res::Def(*kind, id.to_def_id())),
+                );
+            }
+            map.entry((sym, Namespace::MacroNS)).or_insert(None);
+        }
+    }
+
     let mut vis = resolutions.effective_visibilities.clone();
     augment_effective_visibilities_with_items(&mut vis, items, tcx);
     resolutions.effective_visibilities = vis;
@@ -2840,6 +3022,106 @@ fn augment_effective_visibilities_with_items(
             tcx,
         );
     }
+}
+
+/// Extract intra-doc link paths from a doc comment string.
+/// Returns the resolved link target strings (URLs), not display text.
+/// Handles `[path]`, `` [`path`] ``, and `[display](path)` patterns.
+fn extract_intra_doc_links(text: &str) -> Vec<String> {
+    let mut links = Vec::new();
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] != b'[' || (i + 1 < len && bytes[i + 1] == b'[') {
+            i += 1;
+            continue;
+        }
+        // Found a '[' not followed by another '['. Search for matching ']'.
+        let open = i;
+        i += 1;
+        let mut depth = 1;
+        while i < len && depth > 0 {
+            if bytes[i] == b'[' {
+                depth += 1;
+            } else if bytes[i] == b']' {
+                depth -= 1;
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            continue;
+        }
+        let bracket_content = &text[open + 1..i - 1];
+
+        // Determine the link URL: if `]` is followed by `(`, use the parenthesized content.
+        let url = if i < len && bytes[i] == b'(' {
+            let paren_open = i;
+            i += 1;
+            depth = 1;
+            while i < len && depth > 0 {
+                if bytes[i] == b'(' {
+                    depth += 1;
+                } else if bytes[i] == b')' {
+                    depth -= 1;
+                }
+                i += 1;
+            }
+            if depth == 0 {
+                text[paren_open + 1..i - 1].trim()
+            } else {
+                bracket_content.trim()
+            }
+        } else {
+            bracket_content.trim()
+        };
+
+        let link = url.trim().trim_matches('`').trim();
+        if link.is_empty()
+            || link.starts_with("http://")
+            || link.starts_with("https://")
+            || link.starts_with("ftp://")
+            || link.starts_with("mailto:")
+        {
+            continue;
+        }
+        links.push(link.to_owned());
+    }
+
+    links
+}
+
+/// Walk the module tree through `children_by_module` to resolve a
+/// multi-segment path starting from `start_module`.
+fn resolve_multi_segment_path(
+    children_by_module: &HashMap<LocalDefId, Vec<(String, LocalDefId, DefKind)>>,
+    start_module: LocalDefId,
+    segments: &[&str],
+) -> Option<(DefKind, RustcDefId)> {
+    let mut current_module = start_module;
+    for (i, segment) in segments.iter().enumerate() {
+        let is_last = i == segments.len() - 1;
+        if let Some(children) = children_by_module.get(&current_module) {
+            if let Some((_name, child_id, kind)) =
+                children.iter().find(|(name, _, _)| name == segment)
+            {
+                if is_last {
+                    return Some((*kind, child_id.to_def_id()));
+                }
+                if matches!(kind, DefKind::Mod) {
+                    current_module = *child_id;
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    None
 }
 
 fn clone_resolver_global_ctxt(
@@ -3131,8 +3413,7 @@ fn generated_def_ident_span(tcx: TyCtxt<'_>, key: LocalDefId) -> Option<RustcSpa
             return Some(span);
         }
 
-        None
-        // (original.def_ident_span)(tcx, key)
+        generated.def_span(tcx, key)
     })
 }
 

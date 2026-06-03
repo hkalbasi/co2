@@ -54,3 +54,8 @@ void c_abi_with_args_unnamed(int, int*, int named, int) {
 int c_abi_variadic(int n, int* p, ...) {
     return 9;
 }
+
+fn test_link_target() {}
+
+/// Rust doc support for links [`test_link_target`] and [`nested::deeper::deep_value`].
+fn test_link() {}

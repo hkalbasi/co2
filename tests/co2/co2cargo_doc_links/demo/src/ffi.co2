@@ -1,0 +1,7 @@
+/// Handle type for FFI.
+pub type Handle = *mut u8;
+
+/// FFI module function.
+pub fn ffi_func() -> Handle {
+    return (Handle)0;
+}
