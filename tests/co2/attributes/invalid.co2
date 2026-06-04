@@ -1,0 +1,32 @@
+//@ mode: co2
+//@ compile-fail
+
+#[derive(Copy)]
+//^^^^^^ error: `derive` is not applicable to modules
+mod foo {
+    #[repr(Clone)]
+         //^^^^^ error: unrecognized representation hint `Clone`
+    pub struct Foo2 {}
+}
+
+#[unknown]
+//^^^^^^^ error: unknown attribute `unknown`
+fn foo() {}
+
+#[derive(Copy)]
+//^^^^^^ error: `derive` is not applicable to functions
+fn foo2() {}
+
+#[repr(C)]
+//^^^^ error: `repr` is not applicable to functions
+fn foo3() {}
+
+#[derive(Unknown)]
+       //^^^^^^^ error: unknown derive macro `Unknown`
+pub struct Foo {}
+
+#[repr(Unknown)]
+     //^^^^^^^ error: unrecognized representation hint `Unknown`
+pub struct Foo2 {}
+
+fn main() {}

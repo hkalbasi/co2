@@ -121,6 +121,162 @@ fn has_derive_attr(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>], trait_nam
     })
 }
 
+fn is_known_fn_word_attr(name: &str) -> bool {
+    matches!(name, "test" | "ignore" | "should_panic" | "no_mangle")
+}
+
+fn validate_attrs_for_fn(
+    attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>],
+) -> Vec<co2_ast::Rich<'static, String, co2_ast::Span>> {
+    let mut errors = Vec::new();
+    for (attr, _) in attrs {
+        let path: Vec<&str> = attr.path.iter().map(|seg| seg.0.as_str()).collect();
+        match path.as_slice() {
+            ["doc"] => {}
+            ["derive"] => {
+                errors.push(co2_ast::Rich::custom(
+                    attr.path[0].1,
+                    "`derive` is not applicable to functions",
+                ));
+            }
+            ["repr"] => {
+                errors.push(co2_ast::Rich::custom(
+                    attr.path[0].1,
+                    "`repr` is not applicable to functions",
+                ));
+            }
+            [name] if attr.args.is_empty() && !is_known_fn_word_attr(name) => {
+                errors.push(co2_ast::Rich::custom(
+                    attr.path[0].1,
+                    format!("unknown attribute `{name}`"),
+                ));
+            }
+            _ => {}
+        }
+    }
+    errors
+}
+
+fn validate_attrs_for_struct(
+    attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>],
+) -> Vec<co2_ast::Rich<'static, String, co2_ast::Span>> {
+    let mut errors = Vec::new();
+    for (attr, _) in attrs {
+        let path: Vec<&str> = attr.path.iter().map(|seg| seg.0.as_str()).collect();
+        match path.as_slice() {
+            ["derive"] if attr.args.len() >= 2 => {
+                let inner = &attr.args[1..attr.args.len() - 1];
+                for (token, span) in inner {
+                    if let co2_ast::Token::Ident(name) = token
+                        && !matches!(name.as_str(), "Copy" | "Clone")
+                    {
+                        errors.push(co2_ast::Rich::custom(
+                            *span,
+                            format!("unknown derive macro `{name}`"),
+                        ));
+                    }
+                }
+            }
+            ["repr"] if attr.args.len() >= 2 => {
+                let inner = &attr.args[1..attr.args.len() - 1];
+                for (token, span) in inner {
+                    if let co2_ast::Token::Ident(name) = token
+                        && !matches!(name.as_str(), "C" | "Rust" | "packed")
+                    {
+                        errors.push(co2_ast::Rich::custom(
+                            *span,
+                            format!("unrecognized representation hint `{name}`"),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    errors
+}
+
+fn collect_attr_errors_from_tu(
+    tu: &co2_ast::TranslationUnit<co2_ast::StatelessResolver>,
+) -> Vec<co2_ast::Rich<'static, String, co2_ast::Span>> {
+    let mut errors = Vec::new();
+    for (item, _) in &tu.items {
+        match item {
+            co2_ast::Declaration::FunctionDefinition {
+                attrs: decl_attrs,
+                signature,
+                ..
+            } => {
+                errors.extend(validate_attrs_for_fn(decl_attrs));
+                if let co2_ast::FunctionDefinitionSignature::Rust(sig) = signature {
+                    errors.extend(validate_attrs_for_fn(&sig.attrs));
+                }
+            }
+            co2_ast::Declaration::RustStruct { attrs, .. } => {
+                errors.extend(validate_attrs_for_struct(attrs));
+            }
+            _ => {}
+        }
+    }
+    errors
+}
+
+fn validate_all_attrs(
+    tu: &co2_ast::TranslationUnit<co2_ast::StatelessResolver>,
+    modules: &[LoadedModule],
+) {
+    let mut errors = collect_attr_errors_from_tu(tu);
+    for module in modules {
+        errors.extend(validate_module_attrs_recursive(module));
+    }
+    if !errors.is_empty() {
+        co2_ast::emit_errors_and_terminate(errors);
+    }
+}
+
+fn validate_attrs_for_mod(
+    attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>],
+) -> Vec<co2_ast::Rich<'static, String, co2_ast::Span>> {
+    let mut errors = Vec::new();
+    for (attr, _) in attrs {
+        let path: Vec<&str> = attr.path.iter().map(|seg| seg.0.as_str()).collect();
+        match path.as_slice() {
+            ["doc"] => {}
+            ["derive"] => {
+                errors.push(co2_ast::Rich::custom(
+                    attr.path[0].1,
+                    "`derive` is not applicable to modules",
+                ));
+            }
+            ["repr"] => {
+                errors.push(co2_ast::Rich::custom(
+                    attr.path[0].1,
+                    "`repr` is not applicable to modules",
+                ));
+            }
+            [name] if attr.args.is_empty() && !is_known_fn_word_attr(name) => {
+                errors.push(co2_ast::Rich::custom(
+                    attr.path[0].1,
+                    format!("unknown attribute `{name}`"),
+                ));
+            }
+            _ => {}
+        }
+    }
+    errors
+}
+
+fn validate_module_attrs_recursive(
+    module: &LoadedModule,
+) -> Vec<co2_ast::Rich<'static, String, co2_ast::Span>> {
+    let mut errors = validate_attrs_for_mod(&module.attrs);
+    errors.extend(collect_attr_errors_from_tu(&module.tu));
+    for child in &module.children {
+        errors.extend(validate_module_attrs_recursive(child));
+    }
+    errors
+}
+
 fn has_word_attr(attrs: &[GeneratedAttr], word: &str) -> bool {
     attrs
         .iter()
@@ -1474,6 +1630,8 @@ pub fn lower_crate_sig(
             });
         }
     }
+
+    validate_all_attrs(&tu, &loaded_modules);
 
     let root_items = lower_translation_unit_items(
         &mut ctx,
