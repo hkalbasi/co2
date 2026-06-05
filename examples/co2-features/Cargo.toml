@@ -1,0 +1,4 @@
+[package]
+name = "co2-features"
+version = "0.1.0"
+edition = "2021"

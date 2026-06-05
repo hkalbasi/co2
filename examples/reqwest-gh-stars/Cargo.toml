@@ -1,0 +1,8 @@
+[package]
+name = "reqwest-gh-stars"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+serde_json = "1"

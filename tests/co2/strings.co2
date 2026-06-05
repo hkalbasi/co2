@@ -1,0 +1,13 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::string::String;
+use std::ffi::{CStr};
+
+fn c_str_to_rust_str(s: *const i8) -> *const CStr {
+    return CStr::from_ptr(s);
+}
+
+fn main() {
+    c_str_to_rust_str("hello");    
+}

@@ -52,7 +52,14 @@ TARGET_LIB_DIR="$PAYLOAD_DIR/lib/rustlib/x86_64-unknown-linux-gnu/lib"
 mkdir -p "$TARGET_LIB_DIR"
 
 # List of essential stdlib crates
-STD_CRATES=(std test getopts unicode_width core alloc panic_unwind panic_abort unwind libc compiler_builtins std_detect rustc_std_workspace_core rustc_std_workspace_alloc rustc_std_workspace_std miniz_oxide addr2line object gimli hashbrown adler2 memchr rustc_demangle cfg_if)
+STD_CRATES=(
+  std test getopts unicode_width core alloc panic_unwind panic_abort unwind
+  libc compiler_builtins std_detect
+  rustc_std_workspace_core rustc_std_workspace_alloc rustc_std_workspace_std
+  miniz_oxide addr2line object gimli hashbrown adler2 memchr
+  rustc_demangle rustc_literal_escaper cfg_if
+  proc_macro
+)
 
 for crate in "${STD_CRATES[@]}"; do
     # Copy both .rlib and .rmeta if they exist

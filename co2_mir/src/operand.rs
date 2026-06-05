@@ -1368,7 +1368,15 @@ impl Builder<'_, '_> {
             return MirOperand::Copy(place(tmp));
         }
         if src_is_ref && dst_is_ptr {
-            todo!()
+            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(tmp),
+                    Rvalue::Cast(CastKind::Transmute, inner_op, dst_ty),
+                ),
+                span,
+            });
+            return self.place_operand_for_ty(place(tmp), dst_ty);
         }
         if src_is_ptr && dst_is_ref {
             let TyKind::RigidTy(RigidTy::Ref(region, _, kind)) = dst_ty.kind() else {

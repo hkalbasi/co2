@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "co2-features",
+    "reqwest-gh-stars",
+]
+resolver = "2"
