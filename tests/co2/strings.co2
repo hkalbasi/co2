@@ -1,13 +1,21 @@
 //@ mode: co2
 //@ run-status: 0
+//@ run-stdout: hello world\n
 
 use std::string::String;
 use std::ffi::{CStr};
+use libc::printf;
 
-fn c_str_to_rust_str(s: *const i8) -> *const CStr {
-    return CStr::from_ptr(s);
+fn c_str_to_rust_str(s: *const i8) -> *const str {
+    return CStr::from_ptr(s).to_str().unwrap();
+}
+
+fn print_rust_str(s: *const str) {
+    printf("%.*s", s.len(), s.as_ptr());
 }
 
 fn main() {
-    c_str_to_rust_str("hello");    
+    String s = c_str_to_rust_str("hello").to_owned();
+    s.push_str(c_str_to_rust_str(" world\n"));
+    print_rust_str(s.as_str());
 }

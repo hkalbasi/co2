@@ -38,20 +38,27 @@ fn run_main() -> Result<()> {
     };
 
     let mut stats = Stats::default();
+    let start = std::time::Instant::now();
     run_tests(
         &root,
         cli.filter.as_deref(),
         coverage_dir.as_deref(),
         &mut stats,
     )?;
+    let elapsed = start.elapsed();
 
     if let Some(dir) = coverage_dir {
         generate_coverage_report(&root, &dir);
     }
 
+    for name in &stats.failed_names {
+        eprintln!("FAIL {name}");
+    }
+
     eprintln!(
-        "summary: passed={}, failed={}, skipped={}",
-        stats.passed, stats.failed, stats.skipped
+        "summary: passed={}, failed={}, skipped={}  ({:.2}s)",
+        stats.passed, stats.failed, stats.skipped,
+        elapsed.as_secs_f64(),
     );
 
     if stats.failed > 0 {

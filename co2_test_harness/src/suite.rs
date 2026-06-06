@@ -23,6 +23,7 @@ pub struct Stats {
     pub passed: usize,
     pub failed: usize,
     pub skipped: usize,
+    pub failed_names: Vec<String>,
 }
 
 pub fn run_tests(
@@ -47,7 +48,8 @@ pub fn run_tests(
             }
             Err(err) => {
                 stats.failed += 1;
-                let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
+                let name = test.path.strip_prefix(root).unwrap_or(&test.path).display().to_string();
+                stats.failed_names.push(name.clone());
                 if let Some(e) = err.downcast_ref::<TestError>() {
                     eprintln!("FAIL {name}");
                     render_test_error(&test.path, e);

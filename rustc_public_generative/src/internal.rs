@@ -4457,6 +4457,7 @@ fn hir_ty_to_rustc(
         }
         HirTyKind::Bool => make_prim_ty(owner, hir::PrimTy::Bool, span),
         HirTyKind::Char => make_prim_ty(owner, hir::PrimTy::Char, span),
+        HirTyKind::Str => make_prim_ty(owner, hir::PrimTy::Str, span),
         HirTyKind::Float(float_ty) => {
             let float_ty = match float_ty {
                 rustc_public::ty::FloatTy::F16 => FloatTy::F16,

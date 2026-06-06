@@ -1821,6 +1821,10 @@ impl LocalResolverBase {
                 kind: HirTyKind::Bool,
                 span,
             },
+            PrimitiveTy::Str => HirTy {
+                kind: HirTyKind::Str,
+                span,
+            },
             PrimitiveTy::IntTy(int_ty) => HirTy::signed_ty(int_ty, span),
             PrimitiveTy::UintTy(uint_ty) => HirTy::unsigned_ty(uint_ty, span),
             PrimitiveTy::FloatTy(float_ty) => HirTy::float_ty(float_ty, span),
@@ -2066,6 +2070,7 @@ fn function_param_names(decl: &Declarator<LocalResolver>) -> Option<Vec<Option<S
 #[derive(Debug, Clone, Copy)]
 pub enum PrimitiveTy {
     Bool,
+    Str,
     IntTy(IntTy),
     UintTy(UintTy),
     FloatTy(FloatTy),
@@ -2084,6 +2089,7 @@ impl PrimitiveTy {
             "i64" => Some(PrimitiveTy::IntTy(IntTy::I64)),
             "usize" => Some(PrimitiveTy::UintTy(UintTy::Usize)),
             "isize" => Some(PrimitiveTy::IntTy(IntTy::Isize)),
+            "str" => Some(PrimitiveTy::Str),
             "_Float32" | "_Float32x" => Some(PrimitiveTy::FloatTy(FloatTy::F32)),
             "_Float64" | "_Float64x" => Some(PrimitiveTy::FloatTy(FloatTy::F64)),
             "_Float128" => Some(PrimitiveTy::FloatTy(FloatTy::F128)),

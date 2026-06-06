@@ -9,6 +9,7 @@ use crate::FunctionSignature;
 #[derive(Clone, Debug)]
 pub enum HirTyKind {
     Bool,
+    Str,
     Char,
     Int(IntTy),
     Uint(UintTy),

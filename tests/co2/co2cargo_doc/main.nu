@@ -5,7 +5,7 @@ cd ($test_dir | path join "demo")
 
 let result = (do { ^co2cargo doc --no-deps --document-private-items } | complete)
 if $result.exit_code != 0 {
-    print $"expected successful co2cargo doc run, got: ($result | to json -r)"
+    print $"expected successful co2cargo doc run, got:\nExit code: ($result.exit_code)\nStderr: ($result.stderr)"
     exit 2
 }
 

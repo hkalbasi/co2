@@ -383,6 +383,23 @@ impl Resolver {
             this.current
                 .insert_path(["__builtin_ctzll"].into_iter(), Some(def));
         }
+        for t in &deps.traits {
+            let Some(name) = t.path.rsplit("::").next() else {
+                continue;
+            };
+            if is_prelude_trait(name) {
+                let (mut crate_name, rest) = t.path.split_once("::").unwrap();
+                normalize_crate_name(&mut crate_name);
+                let path = format!("{crate_name}::{rest}");
+                if !this.scoped_traits.iter().any(|st| st.path == path) {
+                    this.scoped_traits.push(ScopedTrait {
+                        name: name.to_owned(),
+                        def_id: t.def_id,
+                        path,
+                    });
+                }
+            }
+        }
         this.rebuild_method_receivers();
         this
     }
@@ -687,6 +704,9 @@ impl Resolver {
                 .method_receivers
                 .get(&adt.0)
                 .and_then(|module| Self::resolve_method_in_module(module, method)),
+            TyKind::RigidTy(RigidTy::Str) => {
+                self.resolve_in_deps("core", ["str", "<impl str>", method])
+            }
             TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
                 self.resolve_inherent_method(inner, method)
             }
@@ -696,7 +716,11 @@ impl Resolver {
 
     pub(crate) fn traits_in_scope_with_method(&self, method: &str) -> Vec<(String, DefId, String)> {
         let mut out = Vec::new();
+        let mut seen_paths: HashSet<&str> = HashSet::new();
         for scoped_trait in &self.scoped_traits {
+            if !seen_paths.insert(scoped_trait.path.as_str()) {
+                continue;
+            }
             if !self.trait_methods.get(method).is_some_and(|candidates| {
                 candidates
                     .iter()
@@ -795,6 +819,41 @@ fn method_search_priority(name: &str) -> (usize, &str) {
                 .count()
         });
     (generic_arity, name)
+}
+
+fn is_prelude_trait(name: &str) -> bool {
+    matches!(
+        name,
+        "ToOwned"
+            | "Clone"
+            | "Into"
+            | "From"
+            | "IntoIterator"
+            | "Iterator"
+            | "ToString"
+            | "AsRef"
+            | "AsMut"
+            | "Default"
+            | "PartialEq"
+            | "Eq"
+            | "PartialOrd"
+            | "Ord"
+            | "Drop"
+            | "Fn"
+            | "FnMut"
+            | "FnOnce"
+            | "Send"
+            | "Sync"
+            | "Sized"
+            | "Unpin"
+            | "Copy"
+            | "Borrow"
+            | "BorrowMut"
+            | "DoubleEndedIterator"
+            | "ExactSizeIterator"
+            | "Extend"
+            | "FromIterator"
+    )
 }
 
 fn parse_trait_method_path(path: &str) -> Option<(String, String)> {

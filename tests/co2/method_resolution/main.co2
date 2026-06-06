@@ -1,0 +1,6 @@
+use support_lib::{Struct1, Struct1Alias};
+
+fn main() {
+    Struct1 s = Struct1::new(42);
+    Struct1Alias s2 = Struct1Alias::new(43);
+}

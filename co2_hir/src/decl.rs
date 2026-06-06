@@ -1458,6 +1458,7 @@ pub(crate) fn hir_ty_to_ty(hir_ty: &HirTy) -> Ty {
     match &hir_ty.kind {
         rustc_public_generative::HirTyKind::Bool => Ty::bool_ty(),
         rustc_public_generative::HirTyKind::Char => Ty::from_rigid_kind(RigidTy::Char),
+        rustc_public_generative::HirTyKind::Str => Ty::from_rigid_kind(RigidTy::Str),
         &rustc_public_generative::HirTyKind::Int(int_ty) => Ty::signed_ty(int_ty),
         &rustc_public_generative::HirTyKind::Uint(uint_ty) => Ty::unsigned_ty(uint_ty),
         &rustc_public_generative::HirTyKind::Float(float_ty) => {
@@ -1550,6 +1551,7 @@ fn has_const_qualifier_in_decl_specs(
 fn prim_ty_to_ty(primitive_ty: co2_crate_sig::PrimitiveTy) -> Ty {
     match primitive_ty {
         co2_crate_sig::PrimitiveTy::Bool => Ty::bool_ty(),
+        co2_crate_sig::PrimitiveTy::Str => Ty::from_rigid_kind(RigidTy::Str),
         co2_crate_sig::PrimitiveTy::IntTy(int_ty) => Ty::from_rigid_kind(RigidTy::Int(int_ty)),
         co2_crate_sig::PrimitiveTy::UintTy(uint_ty) => Ty::from_rigid_kind(RigidTy::Uint(uint_ty)),
         co2_crate_sig::PrimitiveTy::FloatTy(float_ty) => {

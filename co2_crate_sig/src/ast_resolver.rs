@@ -14,7 +14,11 @@ use co2_parser::parse_expression_tokens;
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     DefData, FileId, HirStructureCtx,
-    rustc_public::{DefId, ty::Ty},
+    rustc_public::{
+        DefId,
+        mir::Mutability,
+        ty::{Region, RegionKind, RigidTy, Ty},
+    },
 };
 use rustc_public_generative::{HirTy, HirTyKind};
 
@@ -396,6 +400,7 @@ impl LocalResolver {
             .borrow()
             .resolver
             .traits_in_scope_with_method(method);
+        let trait_candidates_ref = trait_candidates.clone();
         let hir_ctx = self.base.borrow().hir_ctx;
         let mut applicable = Vec::new();
         for (trait_name, trait_def, trait_path) in trait_candidates {
@@ -411,13 +416,73 @@ impl LocalResolver {
         }
 
         match applicable.len() {
-            0 => match receiver_ty.kind() {
-                rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
+            0 => {
+                // Auto-deref: resolve method on the pointee of Ref/RawPtr
+                if let rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
                     rustc_public_generative::rustc_public::ty::RigidTy::Ref(_, inner, _)
                     | rustc_public_generative::rustc_public::ty::RigidTy::RawPtr(inner, _),
-                ) => self.resolve_method(inner, method, span),
-                _ => Ok(None),
-            },
+                ) = receiver_ty.kind()
+                {
+                    return self.resolve_method(inner, method, span);
+                }
+                // Auto-ref: try &T and &mut T
+                for mutability in [Mutability::Not, Mutability::Mut] {
+                    let ref_ty = Ty::from_rigid_kind(RigidTy::Ref(
+                        Region {
+                            kind: RegionKind::ReStatic,
+                        },
+                        receiver_ty,
+                        mutability,
+                    ));
+                    if let Some(found) = self
+                        .base
+                        .borrow()
+                        .resolver
+                        .resolve_inherent_method(ref_ty, method)
+                    {
+                        let (method_def, class) = found;
+                        return Ok(Some((method_def, class, MethodResolutionKind::Inherent)));
+                    }
+                    let mut applicable = Vec::new();
+                    for (trait_name, trait_def, trait_path) in trait_candidates_ref.clone() {
+                        if (hir_ctx.type_implements_trait(self.current_owner, ref_ty, trait_def)
+                            || hir_ctx.type_implements_trait(
+                                self.current_owner,
+                                receiver_ty,
+                                trait_def,
+                            ))
+                            && let Some((method_def, class)) = self
+                                .base
+                                .borrow()
+                                .resolver
+                                .resolve_trait_method(&trait_path, method)
+                        {
+                            applicable.push((trait_name, method_def, class));
+                        }
+                    }
+                    match applicable.len() {
+                        0 => {}
+                        1 => {
+                            let (_, method_def, class) = applicable.pop().unwrap();
+                            return Ok(Some((method_def, class, MethodResolutionKind::Trait)));
+                        }
+                        _ => {
+                            return Err((
+                                span,
+                                format!(
+                                    "multiple traits in scope provide method `{method}` for receiver type {ref_ty:?}: {}",
+                                    applicable
+                                        .into_iter()
+                                        .map(|(trait_name, _, _)| trait_name)
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ),
+                            ));
+                        }
+                    }
+                }
+                Ok(None)
+            }
             1 => {
                 let (_, method_def, class) = applicable.pop().unwrap();
                 Ok(Some((method_def, class, MethodResolutionKind::Trait)))

@@ -1074,43 +1074,91 @@ impl HirCtx<'_> {
             }
             Expression::Field(base, field) => {
                 let base = self.lower_expr(*base, locals, local_map)?;
-                match self
-                    .resolve_struct_field_access(base.ty, &field.0)
-                    .ok_or_else(|| {
-                        spanned_error(
-                            parser_span,
-                            format!("unknown field `{}` on type {:?}", field.0, base.ty),
-                        )
-                    })? {
-                    ResolvedFieldAccess::Direct { path, ty } => {
-                        self.project_field_path(base, &path, ty, span)
-                    }
-                    ResolvedFieldAccess::Bitfield {
-                        container_path,
-                        storage_index,
-                        storage_ty,
-                        bit_offset,
-                        bit_width,
-                        signed,
-                        ty,
-                    } => {
-                        let container_ty = self.field_path_ty(base.ty, &container_path)?;
-                        let base =
-                            self.project_field_path(base, &container_path, container_ty, span)?;
-                        Ok(HirExpr {
-                            kind: HirExprKind::Bitfield {
-                                base: Box::new(base),
-                                storage_index,
-                                storage_ty,
-                                bit_offset,
-                                bit_width,
-                                signed,
-                            },
+                if let Some(resolved) = self.resolve_struct_field_access(base.ty, &field.0) {
+                    return match resolved {
+                        ResolvedFieldAccess::Direct { path, ty } => {
+                            self.project_field_path(base, &path, ty, span)
+                        }
+                        ResolvedFieldAccess::Bitfield {
+                            container_path,
+                            storage_index,
+                            storage_ty,
+                            bit_offset,
+                            bit_width,
+                            signed,
                             ty,
-                            span,
-                        })
-                    }
+                        } => {
+                            let container_ty = self.field_path_ty(base.ty, &container_path)?;
+                            let base =
+                                self.project_field_path(base, &container_path, container_ty, span)?;
+                            Ok(HirExpr {
+                                kind: HirExprKind::Bitfield {
+                                    base: Box::new(base),
+                                    storage_index,
+                                    storage_ty,
+                                    bit_offset,
+                                    bit_width,
+                                    signed,
+                                },
+                                ty,
+                                span,
+                            })
+                        }
+                    };
                 }
+                // Fall back to method resolution (e.g. `(*s).as_ptr()`)
+                let resolver = &self.decl_resolver;
+                let (method_def, class, resolution_kind) =
+                    match resolver.resolve_method(base.ty, &field.0, parser_span) {
+                        Ok(Some(found)) => found,
+                        Ok(None) => {
+                            return Err(spanned_error(
+                                parser_span,
+                                format!("unknown field `{}` on type {}", field.0, self.format_ty(base.ty)),
+                            ));
+                        }
+                        Err(err) => return Err(err),
+                    };
+                if class != co2_ast::TypeQueryResult::Expr {
+                    return Err(spanned_error(
+                        parser_span,
+                        format!("unknown field `{}` on type {}", field.0, self.format_ty(base.ty)),
+                    ));
+                }
+                let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
+                let resolved_generic_args = match resolution_kind {
+                    MethodResolutionKind::Inherent => receiver_generic_args(base.ty),
+                    MethodResolutionKind::Trait => {
+                        vec![GenericArgKind::Type(trait_method_self_ty(base.ty))]
+                    }
+                };
+                let Some(sig) =
+                    self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, base.ty)
+                else {
+                    return Err(spanned_error(
+                        parser_span,
+                        format!("unknown field `{}` on type {}", field.0, self.format_ty(base.ty)),
+                    ));
+                };
+                let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args);
+                let func_ty = resolved.ty();
+                let receiver = if let Some(expected) = sig.inputs().first().copied() {
+                    self.method_receiver_arg(base, expected)
+                } else {
+                    base
+                };
+                Ok(HirExpr {
+                    kind: HirExprKind::Call {
+                        func: Box::new(HirExpr {
+                            kind: HirExprKind::Path(resolved),
+                            ty: func_ty,
+                            span: self.to_rust_span(parser_span),
+                        }),
+                        args: vec![receiver],
+                    },
+                    ty: sig.output(),
+                    span,
+                })
             }
             Expression::Arrow(base, field) => {
                 let mut base = self.lower_expr(*base, locals, local_map)?;
@@ -1131,7 +1179,7 @@ impl HirCtx<'_> {
                     .ok_or_else(|| {
                         spanned_error(
                             parser_span,
-                            format!("unknown field `{}` on type {:?}", field.0, deref_base.ty),
+                            format!("unknown field `{}` on type {}", field.0, self.format_ty(deref_base.ty)),
                         )
                     })? {
                     ResolvedFieldAccess::Direct { path, ty } => {

@@ -57,6 +57,42 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
         DetectResult::Co2(file) => file,
     };
 
+    // Force-load all --extern crates by prefixing with "force:" so rustc's
+    // inject_forced_externs eagerly loads them. Without this, crates only
+    // referenced in CO2 `use` statements would never be loaded by rustc.
+    {
+        let has_extern = {
+            let mut i = 1;
+            let mut found = false;
+            while i < args.len() {
+                if args[i] == "--extern" {
+                    if let Some(val) = args.get(i + 1) {
+                        if !val.starts_with("force:") {
+                            args[i + 1] = format!("force:{}", val);
+                            found = true;
+                        }
+                        i += 2;
+                        continue;
+                    }
+                } else if let Some(value) = args[i].strip_prefix("--extern=") {
+                    if !value.starts_with("force:") {
+                        args[i] = format!("--extern=force:{}", value);
+                        found = true;
+                    }
+                }
+                i += 1;
+            }
+            found
+        };
+        if has_extern
+            && !args.iter().any(|a| a == "unstable-options")
+            && !args.windows(2).any(|w| w[0] == "-Z" && w[1] == "unstable-options")
+        {
+            args.push("-Z".to_owned());
+            args.push("unstable-options".to_owned());
+        }
+    }
+
     if dump_ast_tree {
         return dump_ast_tree_for_file(&co2_file);
     }
