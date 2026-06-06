@@ -7,6 +7,7 @@ rustc-ice*
 synthetic
 .gavcode
 .opencode
+.antigravitycli
 opencode.json
 gavcode.json
 AGENTS.md

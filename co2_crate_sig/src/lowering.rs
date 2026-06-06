@@ -20,12 +20,14 @@ use co2_parser::{
 };
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
-    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
-    HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
-    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind, StructField,
+    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature,
+    GeneratedAttr, HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule,
+    HirModuleItem, HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind,
+    StructField,
     rustc_public::{
         DefId,
-        ty::{AdtDef, FnDef, IntTy},
+        mir::Mutability,
+        ty::{AdtDef, FnDef, IntTy, RigidTy, Ty, UintTy},
     },
 };
 
@@ -50,7 +52,6 @@ pub struct WellknownDefs {
     pub offset_const: FnDef,
     pub offset_from: FnDef,
     pub zeroed: FnDef,
-    pub str_as_ptr: FnDef,
 }
 
 fn has_const_qualifier_in_decl_specs(
@@ -1513,6 +1514,7 @@ pub fn lower_crate_sig(
 ) -> (HirStructure, HashMap<DefId, MirOwnerInfo>, WellknownDefs) {
     let span = ctx.span_in_file(file_id, 0, 0);
     let deps = ctx.dependencies();
+    deps.roots();
 
     let parse_start = Instant::now();
     let tu = co2_parser::parse_translation_unit_from_preprocessed(
@@ -1550,7 +1552,10 @@ pub fn lower_crate_sig(
     let mut foreign_items = Vec::new();
 
     let ctx = &*Box::leak(Box::new(ctx));
-    let mut resolver = Resolver::new(ctx, deps, &tu, foreign_mod, test);
+    let ctx_static: &'static HirStructureCtx<'static> = unsafe {
+        std::mem::transmute::<&HirStructureCtx<'_>, &'static HirStructureCtx<'static>>(ctx)
+    };
+    let mut resolver = Resolver::new(ctx_static, deps, &tu, foreign_mod, test);
 
     let loaded_modules = match loaded_modules {
         Ok(l) => l,
@@ -1617,7 +1622,7 @@ pub fn lower_crate_sig(
             span,
         );
         for name in ["__builtin_va_list", "__gnuc_va_list"] {
-            let Some((id, _)) = ctx.resolve(name) else {
+            let Ok((id, _)) = ctx.resolve(name) else {
                 continue;
             };
             ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
@@ -1909,6 +1914,17 @@ pub fn lower_crate_sig(
             .insert(registered.def_id, MirOwnerInfo::Const);
     }
 
+    let resolve_inherent_method = |receiver_ty: Ty, method: &str| {
+        FnDef(
+            ctx.resolver
+                .borrow_mut()
+                .resolver
+                .resolve_inherent_method(receiver_ty, method)
+                .unwrap()
+                .0,
+        )
+    };
+
     let defs = WellknownDefs {
         maybe_uninit: AdtDef(ctx.resolve("core::mem::MaybeUninit").unwrap().0),
         maybe_uninit_uninit: FnDef(
@@ -1922,21 +1938,17 @@ pub fn lower_crate_sig(
         zeroed: FnDef(ctx.resolve("core::mem::zeroed").unwrap().0),
         transmute: FnDef(ctx.resolve("core::intrinsics::transmute").unwrap().0),
         transmute_copy: FnDef(ctx.resolve("core::mem::transmute_copy").unwrap().0),
-        str_as_ptr: FnDef(ctx.resolve("core::str::<impl str>::as_ptr").unwrap().0),
-        offset_mut: FnDef(
-            ctx.resolve("core::ptr::mut_ptr::<impl *mut T>::offset")
-                .unwrap()
-                .0,
+        offset_mut: resolve_inherent_method(
+            Ty::new_ptr(Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)), Mutability::Mut),
+            "offset",
         ),
-        offset_const: FnDef(
-            ctx.resolve("core::ptr::const_ptr::<impl *const T>::offset")
-                .unwrap()
-                .0,
+        offset_const: resolve_inherent_method(
+            Ty::new_ptr(Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)), Mutability::Not),
+            "offset",
         ),
-        offset_from: FnDef(
-            ctx.resolve("core::ptr::const_ptr::<impl *const T>::offset_from")
-                .unwrap()
-                .0,
+        offset_from: resolve_inherent_method(
+            Ty::new_ptr(Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)), Mutability::Not),
+            "offset_from",
         ),
     };
     (

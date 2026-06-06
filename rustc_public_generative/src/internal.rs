@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use rustc_abi::ExternAbi;
 use rustc_ast::token::{CommentKind, DocFragmentKind, Token};
 use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
-use rustc_ast::{Attribute, FloatTy, IntTy, UintTy};
+use rustc_ast::{Attribute, FloatTy, IntTy, Mutability as AstMutability, UintTy};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
 use rustc_data_structures::packed::Pu128;
@@ -28,7 +28,7 @@ use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
 use rustc_middle::mir::{BorrowKind, ConstValue};
 use rustc_middle::queries::mir_borrowck::ProvidedValue as BorrowckProvidedValue;
 use rustc_middle::query::Providers as QueryProviders;
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, fast_reject::SimplifiedType, TyCtxt};
 use rustc_middle::util::Providers as UtilProviders;
 use rustc_public::rustc_internal::internal;
 use rustc_session::config::{CrateType, EntryFnType};
@@ -40,8 +40,8 @@ use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, GeneratedAtt
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{
-    CrateGeneratorState, DependencyConstValue, DependencyCrate, DependencyFunction, DependencyInfo,
-    DependencyTrait, DependencyType, DependencyValue, DependencyValueKind, FileId,
+    CrateGeneratorState, DependencyChild, DependencyChildKind, DependencyConstValue, DependencyCrate,
+    ImplFunction, FileId,
 };
 use rustc_public::DefId;
 use rustc_public::mir::{
@@ -2257,120 +2257,260 @@ pub fn generate_with_args_and_after_analysis<S: CrateGeneratorState>(
     rustc_driver::run_compiler(&args, &mut callbacks);
 }
 
-pub fn collect_dependency_info(tcx: rustc_middle::ty::TyCtxt<'_>) -> DependencyInfo {
-    let mut info = DependencyInfo::default();
+pub fn dependency_roots(tcx: TyCtxt<'_>) -> Vec<(DependencyCrate, DefId)> {
     let _ = tcx.resolutions(());
+    tcx.crates(())
+        .iter()
+        .filter_map(|&krate| {
+            let name = tcx.crate_name(krate).to_string();
+            if name == "co2_std" {
+                return None;
+            }
+            let disambiguator = tcx.crate_hash(krate).to_hex();
+            // The crate root DefId has index 0 in the crate's DefId space.
+            let root_def_id = rustc_def_to_my_def(
+                tcx,
+                RustcDefId {
+                    krate,
+                    index: rustc_span::def_id::DefIndex::from_usize(0),
+                },
+            );
+            Some((
+                DependencyCrate {
+                    name,
+                    disambiguator,
+                },
+                root_def_id,
+            ))
+        })
+        .collect()
+}
 
-    for &krate in tcx.crates(()) {
-        let name = tcx.crate_name(krate).to_string();
-        let disambiguator = tcx.crate_hash(krate).to_hex();
-        info.crates.push(DependencyCrate {
-            name,
-            disambiguator,
-        });
-    }
-
-    for &cnum in tcx.crates(()) {
-        let num_defs = tcx.num_extern_def_ids(cnum);
-        for idx in 0..num_defs {
-            let def_id = RustcDefId {
-                krate: cnum,
-                index: rustc_span::def_id::DefIndex::from_usize(idx),
-            };
-            collect_dependency_def(tcx, def_id, &mut info);
+fn child_kind_from_def_kind(kind: DefKind) -> DependencyChildKind {
+    match kind {
+        DefKind::Mod => DependencyChildKind::Module,
+        DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(_, CtorKind::Fn) => {
+            DependencyChildKind::Function
         }
+        DefKind::Struct => DependencyChildKind::Struct,
+        DefKind::Enum => DependencyChildKind::Enum,
+        DefKind::Union => DependencyChildKind::Union,
+        DefKind::Trait => DependencyChildKind::Trait,
+        DefKind::Const => DependencyChildKind::Const,
+        DefKind::Static { .. } => DependencyChildKind::Static,
+        _ => DependencyChildKind::Other,
     }
-
-    info
 }
 
-fn collect_dependency_def(tcx: TyCtxt<'_>, def_id: RustcDefId, info: &mut DependencyInfo) {
-    let kind = tcx.def_kind(def_id);
+pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChild> {
+    let rustc_def_id = my_def_id_to_rustc_def_id(tcx, def_id);
+    let kind = tcx.def_kind(rustc_def_id);
 
-    if matches!(
-        kind,
-        DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(_, CtorKind::Fn)
-    ) {
-        let hash = tcx.def_path_hash(def_id);
-        let (hi, lo): (u64, u64) =
-            unsafe { std::mem::transmute::<Fingerprint, (u64, u64)>(hash.0) };
-        info.functions.push(DependencyFunction {
-            path: tcx.def_path_str(def_id),
-            def_path_hash_hi: hi,
-            def_path_hash_lo: lo,
-            fn_def: stable_fn_from_def_id(tcx, def_id),
-        });
-    }
-
-    if matches!(kind, DefKind::Const | DefKind::Static { .. }) {
-        let hash = tcx.def_path_hash(def_id);
-        let (hi, lo): (u64, u64) =
-            unsafe { std::mem::transmute::<Fingerprint, (u64, u64)>(hash.0) };
-        info.values.push(DependencyValue {
-            kind: match kind {
-                DefKind::Const => DependencyValueKind::ConstDef(rustc_def_to_my_def(tcx, def_id)),
-                DefKind::Static { .. } => {
-                    DependencyValueKind::Def(rustc_def_to_my_def(tcx, def_id))
+    match kind {
+        DefKind::Mod => {
+            let mod_children = tcx.module_children(rustc_def_id);
+            let mut result: Vec<DependencyChild> = mod_children
+                .iter()
+                .filter_map(|child| {
+                    let child_def_id = match child.res {
+                        Res::Def(_, def_id) => def_id,
+                        _ => return None,
+                    };
+                    let child_kind = tcx.def_kind(child_def_id);
+                    let dep_child_kind = child_kind_from_def_kind(child_kind);
+                    if dep_child_kind == DependencyChildKind::Other {
+                        return None;
+                    }
+                    Some(DependencyChild {
+                        def_id: rustc_def_to_my_def(tcx, child_def_id),
+                        name: child.ident.to_string(),
+                        kind: dep_child_kind,
+                    })
+                })
+                .collect();
+            // For modules with a corresponding primitive type (like "str"), also
+            // include the children of the "prim_X" module if it exists.
+            let module_name = tcx.item_name(rustc_def_id);
+            let module_name_str = module_name.as_str();
+            if !module_name_str.starts_with("prim_") {
+                let prim_name = Symbol::intern(&format!("prim_{}", module_name_str));
+                // Try to find the prim_X module in the parent module
+                if let Some(parent) = tcx.opt_parent(rustc_def_id) {
+                    for child in tcx.module_children(parent) {
+                        if child.ident.name == prim_name {
+                            if let Res::Def(_, prim_def_id) = child.res {
+                                for subchild in tcx.module_children(prim_def_id) {
+                                    if let Res::Def(_, sub_def_id) = subchild.res {
+                                        let sub_kind = tcx.def_kind(sub_def_id);
+                                        let dep_kind = child_kind_from_def_kind(sub_kind);
+                                        if dep_kind != DependencyChildKind::Other {
+                                            result.push(DependencyChild {
+                                                def_id: rustc_def_to_my_def(tcx, sub_def_id),
+                                                name: subchild.ident.to_string(),
+                                                kind: dep_kind,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
                 }
-                _ => unreachable!(),
-            },
-            path: tcx.def_path_str(def_id),
-            def_path_hash_hi: hi,
-            def_path_hash_lo: lo,
-        });
-    }
-
-    if matches!(kind, DefKind::Struct | DefKind::Enum | DefKind::Union)
-        && let Some(adt) = stable_adt_from_def_id(tcx, def_id)
-    {
-        let hash = tcx.def_path_hash(def_id);
-        let (hi, lo): (u64, u64) =
-            unsafe { std::mem::transmute::<Fingerprint, (u64, u64)>(hash.0) };
-        info.types.push(DependencyType {
-            adt,
-            path: tcx.def_path_str(def_id),
-            def_path_hash_hi: hi,
-            def_path_hash_lo: lo,
-        });
-    }
-
-    if matches!(kind, DefKind::Trait) {
-        let hash = tcx.def_path_hash(def_id);
-        let (hi, lo): (u64, u64) =
-            unsafe { std::mem::transmute::<Fingerprint, (u64, u64)>(hash.0) };
-        info.traits.push(DependencyTrait {
-            def_id: rustc_def_to_my_def(tcx, def_id),
-            path: tcx.def_path_str(def_id),
-            def_path_hash_hi: hi,
-            def_path_hash_lo: lo,
-        });
-    }
-}
-
-fn stable_adt_from_def_id(tcx: TyCtxt<'_>, def_id: RustcDefId) -> Option<AdtDef> {
-    use rustc_public::rustc_internal::stable;
-    use rustc_public::ty::{RigidTy, TyKind};
-
-    let ty = tcx.type_of(def_id).instantiate_identity();
-    let stable_ty = stable(ty);
-    match stable_ty.kind() {
-        TyKind::RigidTy(RigidTy::Adt(adt, _)) => Some(adt),
-        _ => None,
+            }
+            // For modules whose name matches a primitive type (like "str"), also
+            // include the incoherent inherent impl methods for that primitive type.
+            let impls = dependency_incoherent_impls_for_name(tcx, &module_name_str);
+            for impl_fn in impls {
+                result.push(DependencyChild {
+                    def_id: impl_fn.def_id,
+                    name: impl_fn.name,
+                    kind: DependencyChildKind::Function,
+                });
+            }
+            result
+        }
+        DefKind::Trait | DefKind::Impl { .. } => tcx
+            .associated_item_def_ids(rustc_def_id)
+            .iter()
+            .filter_map(|&child_id| {
+                let child_kind = tcx.def_kind(child_id);
+                let dep_child_kind = child_kind_from_def_kind(child_kind);
+                if dep_child_kind == DependencyChildKind::Other {
+                    return None;
+                }
+                let full = tcx.def_path_str(child_id);
+                let name = full.split("::").last().unwrap_or(&full).to_string();
+                Some(DependencyChild {
+                    def_id: rustc_def_to_my_def(tcx, child_id),
+                    name,
+                    kind: dep_child_kind,
+                })
+            })
+            .collect(),
+        _ => vec![],
     }
 }
 
-fn stable_fn_from_def_id(tcx: TyCtxt<'_>, def_id: RustcDefId) -> Option<rustc_public::ty::FnDef> {
-    use rustc_public::rustc_internal::stable;
+pub fn dependency_impls(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<ImplFunction> {
+    let rustc_def_id = my_def_id_to_rustc_def_id(tcx, def_id);
+    tcx.inherent_impls(rustc_def_id)
+        .iter()
+        .flat_map(|&impl_def_id| tcx.associated_item_def_ids(impl_def_id).to_vec())
+        .filter(|&item_id| {
+            matches!(
+                tcx.def_kind(item_id),
+                DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(_, CtorKind::Fn)
+            )
+        })
+        .map(|item_id| {
+            let full = tcx.def_path_str(item_id);
+            let name = full.split("::").last().unwrap_or(&full).to_string();
+            ImplFunction {
+                def_id: rustc_def_to_my_def(tcx, item_id),
+                name,
+            }
+        })
+        .collect()
+}
+
+fn dependency_incoherent_simplified_type(
+    tcx: TyCtxt<'_>,
+    receiver_ty: rustc_public::ty::Ty,
+) -> Option<SimplifiedType> {
     use rustc_public::ty::TyKind;
 
-    let args = ty::GenericArgs::identity_for_item(tcx, def_id);
-    let fn_ty = ty::Ty::new_fn_def(tcx, def_id, args);
-    let stable_ty = stable(fn_ty);
-    match stable_ty.kind() {
-        TyKind::RigidTy(RigidTy::FnDef(def, _)) => Some(def),
+    match receiver_ty.kind() {
+        TyKind::RigidTy(rigid) => match rigid {
+            RigidTy::Bool => Some(SimplifiedType::Bool),
+            RigidTy::Char => Some(SimplifiedType::Char),
+            RigidTy::Int(int) => Some(SimplifiedType::Int(match int {
+                rustc_public::ty::IntTy::Isize => IntTy::Isize,
+                rustc_public::ty::IntTy::I8 => IntTy::I8,
+                rustc_public::ty::IntTy::I16 => IntTy::I16,
+                rustc_public::ty::IntTy::I32 => IntTy::I32,
+                rustc_public::ty::IntTy::I64 => IntTy::I64,
+                rustc_public::ty::IntTy::I128 => IntTy::I128,
+            })),
+            RigidTy::Uint(uint) => Some(SimplifiedType::Uint(match uint {
+                rustc_public::ty::UintTy::Usize => UintTy::Usize,
+                rustc_public::ty::UintTy::U8 => UintTy::U8,
+                rustc_public::ty::UintTy::U16 => UintTy::U16,
+                rustc_public::ty::UintTy::U32 => UintTy::U32,
+                rustc_public::ty::UintTy::U64 => UintTy::U64,
+                rustc_public::ty::UintTy::U128 => UintTy::U128,
+            })),
+            RigidTy::Float(float) => Some(SimplifiedType::Float(match float {
+                rustc_public::ty::FloatTy::F16 => FloatTy::F16,
+                rustc_public::ty::FloatTy::F32 => FloatTy::F32,
+                rustc_public::ty::FloatTy::F64 => FloatTy::F64,
+                rustc_public::ty::FloatTy::F128 => FloatTy::F128,
+            })),
+            RigidTy::Adt(adt, _) => {
+                Some(SimplifiedType::Adt(my_def_id_to_rustc_def_id(tcx, adt.0)))
+            }
+            RigidTy::Foreign(def_id) => {
+                Some(SimplifiedType::Foreign(my_def_id_to_rustc_def_id(tcx, def_id.0)))
+            }
+            RigidTy::Str => Some(SimplifiedType::Str),
+            RigidTy::Array(_, _) => Some(SimplifiedType::Array),
+            RigidTy::Slice(_) => Some(SimplifiedType::Slice),
+            RigidTy::RawPtr(_, mutability) => Some(SimplifiedType::Ptr(match mutability {
+                rustc_public::mir::Mutability::Mut => AstMutability::Mut,
+                rustc_public::mir::Mutability::Not => AstMutability::Not,
+            })),
+            _ => None,
+        },
         _ => None,
     }
 }
+
+pub fn dependency_incoherent_impls(
+    tcx: TyCtxt<'_>,
+    receiver_ty: rustc_public::ty::Ty,
+) -> Vec<ImplFunction> {
+    let Some(simplified) = dependency_incoherent_simplified_type(tcx, receiver_ty) else {
+        return vec![];
+    };
+
+    tcx.crates(())
+        .iter()
+        .flat_map(|&cnum| tcx.crate_incoherent_impls((cnum, simplified)).iter().copied())
+        .flat_map(|impl_def_id| tcx.associated_item_def_ids(impl_def_id).to_vec())
+        .filter(|&item_id| {
+            matches!(
+                tcx.def_kind(item_id),
+                DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(_, CtorKind::Fn)
+            )
+        })
+        .map(|item_id| {
+            let full = tcx.def_path_str(item_id);
+            let name = full.split("::").last().unwrap_or(&full).to_string();
+            ImplFunction {
+                def_id: rustc_def_to_my_def(tcx, item_id),
+                name,
+            }
+        })
+        .collect()
+}
+
+pub fn dependency_incoherent_impls_for_name(
+    _tcx: TyCtxt<'_>,
+    _type_name: &str,
+) -> Vec<ImplFunction> {
+    // We cannot use tcx.incoherent_impls() during stage 0 (Resolver feeding phase)
+    // as it requires hir_crate. Instead, try to find inherent impls by scanning
+    // the core crate's metadata for impl blocks on this type.
+    // For now, return empty - this function is only used by dependency_children
+    // which can't access incoherent_impls during stage 0.
+    vec![]
+}
+
+pub fn dependency_is_trait(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    let rustc_def_id = my_def_id_to_rustc_def_id(tcx, def_id);
+    matches!(tcx.def_kind(rustc_def_id), DefKind::Trait)
+}
+
 
 fn dependency_const_value(tcx: TyCtxt<'_>, def_id: RustcDefId) -> Option<DependencyConstValue> {
     let kind = tcx.def_kind(def_id);

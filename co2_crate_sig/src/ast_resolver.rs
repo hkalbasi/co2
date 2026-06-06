@@ -387,7 +387,7 @@ impl LocalResolver {
     {
         if let Some(found) = self
             .base
-            .borrow()
+            .borrow_mut()
             .resolver
             .resolve_inherent_method(receiver_ty, method)
         {
@@ -397,7 +397,7 @@ impl LocalResolver {
 
         let trait_candidates = self
             .base
-            .borrow()
+            .borrow_mut()
             .resolver
             .traits_in_scope_with_method(method);
         let trait_candidates_ref = trait_candidates.clone();
@@ -407,7 +407,7 @@ impl LocalResolver {
             if hir_ctx.type_implements_trait(self.current_owner, receiver_ty, trait_def)
                 && let Some((method_def, class)) = self
                     .base
-                    .borrow()
+                    .borrow_mut()
                     .resolver
                     .resolve_trait_method(&trait_path, method)
             {
@@ -436,7 +436,7 @@ impl LocalResolver {
                     ));
                     if let Some(found) = self
                         .base
-                        .borrow()
+                        .borrow_mut()
                         .resolver
                         .resolve_inherent_method(ref_ty, method)
                     {
@@ -453,7 +453,7 @@ impl LocalResolver {
                             ))
                             && let Some((method_def, class)) = self
                                 .base
-                                .borrow()
+                                .borrow_mut()
                                 .resolver
                                 .resolve_trait_method(&trait_path, method)
                         {
@@ -614,7 +614,6 @@ impl co2_ast::TypeResolver for LocalResolver {
         if ["__func__", "__PRETTY_FUNCTION__", "__FUNCTION__"].contains(&&*path_pretty) {
             return Ok((TypeQueryResult::Expr, DefOrLocal::FuncName));
         }
-        let base = self.base.borrow();
         if let Some(ty) = self
             .base
             .borrow()
@@ -626,6 +625,20 @@ impl co2_ast::TypeResolver for LocalResolver {
                 DefOrLocal::UnrepresentableType(ty.clone()),
             ));
         }
+        let base_resolve = self.base.borrow_mut().resolver.resolve_relative_expr_path(
+            &self.module_path,
+            &path_pretty,
+        );
+        let expr_path_result = base_resolve.and_then(|res| match res {
+            ResolvedExprPath::Def(def_id, class) => Some((
+                DefOrLocal::Def {
+                    def_id,
+                    generic_args: generic_args.clone(),
+                },
+                class,
+            )),
+        });
+        let has_direct_expr_path = expr_path_result.is_some();
         let Some((def, class)) = self
             .locals
             .borrow()
@@ -657,6 +670,9 @@ impl co2_ast::TypeResolver for LocalResolver {
                 else {
                     return None;
                 };
+                if receiver_generic_args.is_empty() && has_direct_expr_path {
+                    return None;
+                }
                 Some((
                     DefOrLocal::AssocMethod {
                         receiver,
@@ -666,23 +682,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                     TypeQueryResult::Expr,
                 ))
             })
-            .or_else(|| {
-                match base
-                    .resolver
-                    .resolve_relative_expr_path(&self.module_path, &path_pretty)?
-                {
-                    ResolvedExprPath::Def(def_id, class) => Some((
-                        DefOrLocal::Def {
-                            def_id,
-                            generic_args: generic_args.clone(),
-                        },
-                        class,
-                    )),
-                    ResolvedExprPath::Const(def_id) => {
-                        Some((DefOrLocal::Const(def_id), TypeQueryResult::Expr))
-                    }
-                }
-            })
+            .or_else(|| expr_path_result)
             .or_else(|| {
                 PrimitiveTy::parse(&path_pretty)
                     .map(|prim| (DefOrLocal::Prim(prim), TypeQueryResult::Type))
@@ -888,7 +888,7 @@ impl co2_ast::TypeResolver for LocalResolver {
         !self.locals.borrow().contains_key("fn")
             && self
                 .base
-                .borrow()
+                .borrow_mut()
                 .resolver
                 .resolve_in_current(["fn"])
                 .is_none()

@@ -16,6 +16,6 @@ pub use ast_resolver::{
 };
 pub use lowering::{WellknownDefs, lower_crate_sig};
 pub use mir::MirOwnerInfo;
-pub use resolver::Resolver;
+pub use resolver::{ResolveError, Resolver};
 pub use struct_manager::{LogicalAdtFieldInfo, LogicalAdtFieldKind};
 pub use ty::{CTy, CompressedTypeSpecifier, PrimitiveTy};

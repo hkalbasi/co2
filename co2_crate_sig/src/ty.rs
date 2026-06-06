@@ -351,7 +351,7 @@ impl CrateSigCtx<'_> {
                                     ty
                                 }
                             }
-                            CTy::Function(sig) => self.resolver.borrow().maybe_uninit_of(
+                            CTy::Function(sig) => self.resolver.borrow_mut().maybe_uninit_of(
                                 HirTy {
                                     kind: HirTyKind::FnPtr(Box::new(sig)),
                                     span: rust_span,
@@ -405,7 +405,7 @@ impl CrateSigCtx<'_> {
                 };
                 let ptr_or_fn_ptr = match current {
                     CTy::Ty(inner) => CTy::Ty(HirTy::new_ptr(inner, ptr_mutability, rust_span)),
-                    CTy::Function(sig) => CTy::Ty(self.resolver.borrow().maybe_uninit_of(
+                    CTy::Function(sig) => CTy::Ty(self.resolver.borrow_mut().maybe_uninit_of(
                         HirTy {
                             kind: HirTyKind::FnPtr(Box::new(sig)),
                             span: rust_span,
@@ -1736,6 +1736,7 @@ impl LocalResolverBase {
                 } else if self
                     .resolver
                     .resolve("core::mem::MaybeUninit")
+                    .ok()
                     .map(|(d, _)| d)
                     == Some(*def)
                 {
@@ -2025,7 +2026,7 @@ impl LocalResolverBase {
     }
 
     fn maybe_uninit_of(
-        &self,
+        &mut self,
         inner: HirTy,
         span: rustc_public_generative::rustc_public::ty::Span,
         co2_span: co2_ast::Span,
@@ -2033,8 +2034,11 @@ impl LocalResolverBase {
         let (def, _) = self
             .resolver
             .resolve("core::mem::MaybeUninit")
-            .unwrap_or_else(|| {
-                self.terminate_with_error(co2_span, "failed to resolve core::mem::MaybeUninit")
+            .unwrap_or_else(|e| {
+                self.terminate_with_error(
+                    co2_span,
+                    &format!("failed to resolve core::mem::MaybeUninit: {e}"),
+                )
             });
         HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span)
     }

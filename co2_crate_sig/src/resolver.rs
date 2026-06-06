@@ -1,21 +1,61 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use co2_ast::{
     Declaration, Declarator, StatelessResolver, TranslationUnit, TypeQueryResult,
     co2_test_symbol_name,
 };
+
+#[derive(Debug, Clone)]
+pub struct ResolveError {
+    pub path: String,
+    pub failed_segment: String,
+    pub candidates: Vec<String>,
+}
+
+impl fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.candidates.is_empty() {
+            write!(
+                f,
+                "failed to resolve `{}`: segment `{}` not found",
+                self.path, self.failed_segment,
+            )
+        } else {
+            write!(
+                f,
+                "failed to resolve `{}`: segment `{}` not found, expected one of: {}",
+                self.path,
+                self.failed_segment,
+                self.candidates.join(", "),
+            )
+        }
+    }
+}
 use rustc_public_generative::{
-    DefData, DependencyInfo, DependencyValueKind, HirStructureCtx,
+    DefData, DependencyChildKind, DependencyInfo, HirStructureCtx,
     rustc_public::{
         DefId,
-        ty::{RigidTy, Ty, TyKind},
+        ty::{RigidTy, Ty, TyKind, UintTy},
     },
 };
 
+#[derive(Debug, Clone)]
+pub(crate) enum ModuleData {
+    Unexpanded(DefId),
+    Expanded(Box<ModuleContent>),
+}
+
+impl Default for ModuleData {
+    fn default() -> Self {
+        Self::Expanded(Box::default())
+    }
+}
+
 #[derive(Debug, Default, Clone)]
-pub(crate) struct ModuleData {
-    id: Option<(DefId, TypeQueryResult)>,
-    items: HashMap<String, ModuleData>,
+pub(crate) struct ModuleContent {
+    pub id: Option<(DefId, TypeQueryResult)>,
+    pub items: HashMap<String, ModuleData>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,13 +63,6 @@ struct ScopedTrait {
     name: String,
     def_id: DefId,
     path: String,
-}
-
-#[derive(Debug, Clone)]
-struct TraitMethod {
-    trait_path: String,
-    method: String,
-    def_id: DefId,
 }
 
 fn extract_decl_name(decl: &Declarator<StatelessResolver>) -> Option<String> {
@@ -51,83 +84,157 @@ fn extract_decl_name(decl: &Declarator<StatelessResolver>) -> Option<String> {
     }
 }
 
+fn type_query_result(kind: &DependencyChildKind) -> TypeQueryResult {
+    match kind {
+        DependencyChildKind::Function
+        | DependencyChildKind::Const
+        | DependencyChildKind::Static => TypeQueryResult::Expr,
+        DependencyChildKind::Struct
+        | DependencyChildKind::Enum
+        | DependencyChildKind::Union
+        | DependencyChildKind::Trait => TypeQueryResult::Type,
+        DependencyChildKind::Module | DependencyChildKind::Other => TypeQueryResult::Type,
+    }
+}
+
+fn module_data_class(data: &ModuleData) -> Option<TypeQueryResult> {
+    match data {
+        ModuleData::Expanded(content) => content.id.map(|(_, class)| class),
+        ModuleData::Unexpanded(_) => None,
+    }
+}
+
 impl ModuleData {
+
+    fn as_content(&self) -> &ModuleContent {
+        match self {
+            Self::Expanded(c) => c,
+            Self::Unexpanded(_) => panic!("ModuleData not expanded"),
+        }
+    }
+
+    fn as_content_mut(&mut self) -> &mut ModuleContent {
+        match self {
+            Self::Expanded(c) => c,
+            Self::Unexpanded(_) => panic!("ModuleData not expanded"),
+        }
+    }
+
+    fn fill_impl_children(content: &mut ModuleContent, def_id: DefId, dep_info: &DependencyInfo<'_>) {
+        let impls = dep_info.impls(def_id);
+        for impl_fn in impls {
+            content.items.entry(impl_fn.name.clone()).or_insert_with(|| {
+                let mut c = ModuleContent::default();
+                c.id = Some((impl_fn.def_id, TypeQueryResult::Expr));
+                ModuleData::Expanded(Box::new(c))
+            });
+        }
+    }
+
+    fn ensure_expanded(&mut self, dep_info: &DependencyInfo<'_>) {
+        let Some(def_id) = (match self {
+            Self::Unexpanded(def_id) => Some(*def_id),
+            Self::Expanded(_) => None,
+        }) else {
+            return;
+        };
+        let mut content = ModuleContent::default();
+        let children = dep_info.children(def_id);
+        for child in children {
+            let mut child_content = ModuleContent::default();
+            child_content.id = Some((child.def_id, type_query_result(&child.kind)));
+            let child_data = match child.kind {
+                DependencyChildKind::Module | DependencyChildKind::Trait => {
+                    ModuleData::Unexpanded(child.def_id)
+                }
+                _ => {
+                    // Pre-populate inherent impl methods for types (structs, enums, unions)
+                    Self::fill_impl_children(&mut child_content, child.def_id, dep_info);
+                    ModuleData::Expanded(Box::new(child_content))
+                }
+            };
+            match content.items.entry(child.name) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(child_data);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let existing_class = module_data_class(entry.get());
+                    let new_class = module_data_class(&child_data);
+                    if matches!(
+                        (existing_class, new_class),
+                        (Some(TypeQueryResult::Expr), Some(TypeQueryResult::Type))
+                    ) {
+                        entry.insert(child_data);
+                    }
+                }
+            }
+        }
+        // Also add inherent impl methods for this def_id (for traits, modules, etc.)
+        Self::fill_impl_children(&mut content, def_id, dep_info);
+        content.id = Some((def_id, TypeQueryResult::Type));
+        *self = Self::Expanded(Box::new(content));
+    }
+
     fn insert_path<'a>(
         &mut self,
         mut path: impl Iterator<Item = &'a str>,
         def: Option<(DefId, TypeQueryResult)>,
     ) {
+        let content = self.as_content_mut();
         let Some(seg1) = path.next() else {
-            self.id = def;
+            content.id = def;
             return;
         };
-        let part = self.items.entry(seg1.to_owned()).or_default();
+        let part = content.items.entry(seg1.to_owned()).or_default();
         part.insert_path(path, def);
     }
 
     fn resolve_path<'a>(
-        &self,
+        &'a mut self,
         path: impl Iterator<Item = &'a str>,
+        dep_info: &'a DependencyInfo<'_>,
     ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
         let parts = path.collect::<Vec<_>>();
-        self.lookup_path(&parts)?.id
+        self.resolve_path_inner(&parts, dep_info)
+    }
+
+    fn resolve_path_inner(
+        &mut self,
+        path: &[&str],
+        dep_info: &DependencyInfo<'_>,
+    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
+        self.ensure_expanded(dep_info);
+        let content = self.as_content_mut();
+        if path.is_empty() {
+            return content.id;
+        }
+        // Skip generic parameter segments like <T>, <'f>, <impl str>
+        if path[0].starts_with('<') {
+            return self.resolve_path_inner(&path[1..], dep_info);
+        }
+        let child = content.items.get_mut(path[0])?;
+        let result = child.resolve_path_inner(&path[1..], dep_info);
+        result
     }
 
     fn resolve_path_or_unique_leaf<'a>(
-        &self,
-        path: impl Iterator<Item = &'a str>,
+        &'a mut self,
+        path: impl IntoIterator<Item = &'a str>,
+        dep_info: &DependencyInfo<'_>,
     ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
-        let parts = path.collect::<Vec<_>>();
-        self.lookup_path_or_unique_leaf(&parts)?.id
-    }
-
-    fn lookup_path(&self, path: &[&str]) -> Option<&Self> {
-        let Some((seg1, rest)) = path.split_first() else {
-            return Some(self);
-        };
-        let part = self.items.get(*seg1)?;
-        part.lookup_path(rest)
-    }
-
-    fn lookup_path_or_unique_leaf<'a>(&'a self, path: &[&'a str]) -> Option<&'a Self> {
-        match self.lookup_path(path) {
+        let parts: Vec<&str> = path.into_iter().collect();
+        match self.resolve_path_inner(&parts, dep_info) {
             Some(found) => Some(found),
-            None if path.len() == 1 => self.lookup_unique_leaf(path[0]),
+            None if parts.len() == 1 => {
+                self.ensure_expanded(dep_info);
+                self.as_content().lookup_unique_leaf(parts[0]).and_then(|m| m.id)
+            }
             None => None,
         }
     }
 
-    // TODO: this function is super wrong. It's just a workaround for
-    // having `libc::puts` (not `libc::unix::puts`) without supporting
-    // `pub use` in dependencies properly.
-    fn lookup_unique_leaf<'a>(&'a self, leaf: &str) -> Option<&'a Self> {
-        let mut matches = Vec::new();
-        self.collect_leaf_matches(leaf, &mut matches);
-        match matches.as_slice() {
-            [] => None,
-            [single] => Some(*single),
-            many => {
-                let first_id = many[0].id;
-                if first_id.is_some() && many.iter().all(|item| item.id == first_id) {
-                    Some(many[0])
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    fn collect_leaf_matches<'a>(&'a self, leaf: &str, out: &mut Vec<&'a Self>) {
-        if let Some(child) = self.items.get(leaf) {
-            out.push(child);
-        }
-        for child in self.items.values() {
-            child.collect_leaf_matches(leaf, out);
-        }
-    }
-
     pub(crate) fn insert_alias(&mut self, alias: &str, item: ModuleData) {
-        self.items.insert(alias.to_owned(), item);
+        self.as_content_mut().items.insert(alias.to_owned(), item);
     }
 
     pub(crate) fn forward_pass_parsed_module(
@@ -139,11 +246,13 @@ impl ModuleData {
         include_builtin_va_list: bool,
         test: bool,
     ) -> Self {
-        let mut this = Self::default();
+        let mut this = ModuleContent::default();
         if include_builtin_va_list {
             for name in ["__builtin_va_list", "__gnuc_va_list"] {
                 let def_id = ctx.allocate_def_id(parent, &DefData::TypeNs(name.to_owned()));
-                this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));
+                let mut c = ModuleContent::default();
+                c.id = Some((def_id, TypeQueryResult::Type));
+                this.items.insert(name.to_owned(), ModuleData::Expanded(Box::new(c)));
             }
         }
         for (item, _) in &ast.items {
@@ -163,13 +272,17 @@ impl ModuleData {
                         decl.clone()
                     };
                     let def_id = ctx.allocate_def_id(parent, &DefData::ValueNs(def_name));
-                    this.insert_path([&*decl].into_iter(), Some((def_id, TypeQueryResult::Expr)));
+                    let mut c = ModuleContent::default();
+                    c.id = Some((def_id, TypeQueryResult::Expr));
+                    this.items.insert(decl.clone(), ModuleData::Expanded(Box::new(c)));
                 }
                 Declaration::RustTypeAlias { ident, .. }
                 | Declaration::RustStruct { ident, .. } => {
                     let name = ident.0.as_str();
                     let def_id = ctx.allocate_def_id(parent, &DefData::TypeNs(name.to_owned()));
-                    this.insert_path([name].into_iter(), Some((def_id, TypeQueryResult::Type)));
+                    let mut c = ModuleContent::default();
+                    c.id = Some((def_id, TypeQueryResult::Type));
+                    this.items.insert(name.to_owned(), ModuleData::Expanded(Box::new(c)));
                 }
                 Declaration::Declaration {
                     attrs: _,
@@ -187,15 +300,14 @@ impl ModuleData {
                             let Some(name) = extract_decl_name(decl) else {
                                 continue;
                             };
-                            if this.resolve_path([&*name].into_iter()).is_some() {
+                            if this.items.contains_key(&name) {
                                 continue;
                             }
                             let def_id =
                                 ctx.allocate_def_id(parent, &DefData::TypeNs(name.clone()));
-                            this.insert_path(
-                                [&*name].into_iter(),
-                                Some((def_id, TypeQueryResult::Type)),
-                            );
+                            let mut c = ModuleContent::default();
+                            c.id = Some((def_id, TypeQueryResult::Type));
+                            this.items.insert(name, ModuleData::Expanded(Box::new(c)));
                         }
                     } else {
                         for decl in declarators {
@@ -203,7 +315,7 @@ impl ModuleData {
                             let Some(name) = extract_decl_name(decl) else {
                                 continue;
                             };
-                            if this.resolve_path([&*name].into_iter()).is_some() {
+                            if this.items.contains_key(&name) {
                                 continue;
                             }
                             let parent = if decl.is_function() || is_extern {
@@ -213,17 +325,48 @@ impl ModuleData {
                             };
                             let def_id =
                                 ctx.allocate_def_id(parent, &DefData::ValueNs(name.clone()));
-                            this.insert_path(
-                                [&*name].into_iter(),
-                                Some((def_id, TypeQueryResult::Expr)),
-                            );
+                            let mut c = ModuleContent::default();
+                            c.id = Some((def_id, TypeQueryResult::Expr));
+                            this.items.insert(name, ModuleData::Expanded(Box::new(c)));
                         }
                     }
                 }
                 Declaration::PragmaPack { .. } | Declaration::BreakCo2 => {}
             }
         }
-        this
+        ModuleData::Expanded(Box::new(this))
+    }
+}
+
+impl ModuleContent {
+    fn lookup_unique_leaf<'a>(&'a self, leaf: &str) -> Option<&'a Self> {
+        let mut matches = Vec::new();
+        self.collect_leaf_matches(leaf, &mut matches);
+        match matches.as_slice() {
+            [] => None,
+            [single] => Some(*single),
+            many => {
+                let first_id = many[0].id;
+                if first_id.is_some() && many.iter().all(|item| item.id == first_id) {
+                    Some(many[0])
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn collect_leaf_matches<'a>(&'a self, leaf: &str, out: &mut Vec<&'a Self>) {
+        if let Some(child) = self.items.get(leaf) {
+            if let ModuleData::Expanded(c) = child {
+                out.push(c);
+            }
+        }
+        for child in self.items.values() {
+            if let ModuleData::Expanded(c) = child {
+                c.collect_leaf_matches(leaf, out);
+            }
+        }
     }
 }
 
@@ -254,15 +397,13 @@ fn anchored_module_prefix<'a>(
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Resolver {
-    const_values: HashMap<String, DefId>,
+    method_receivers: HashMap<DefId, ModuleData>,
     dependencies: HashMap<String, ModuleData>,
     current: ModuleData,
-    method_receivers: HashMap<DefId, ModuleData>,
-    traits: HashSet<DefId>,
     scoped_traits: Vec<ScopedTrait>,
-    trait_methods: HashMap<String, Vec<TraitMethod>>,
+    hir_ctx: &'static HirStructureCtx<'static>,
 }
 
 fn normalize_crate_name(name: &mut &str) {
@@ -273,75 +414,26 @@ fn normalize_crate_name(name: &mut &str) {
 
 impl Resolver {
     pub(crate) fn new(
-        ctx: &HirStructureCtx<'_>,
-        deps: DependencyInfo,
+        ctx: &'static HirStructureCtx<'static>,
+        deps: DependencyInfo<'_>,
         p: &TranslationUnit<StatelessResolver>,
         foreign_mod: DefId,
         test: bool,
     ) -> Self {
-        let mut this = Self::default();
-        for c in deps.crates {
+        let hir_ctx = ctx;
+        let mut this = Self {
+            method_receivers: HashMap::new(),
+            dependencies: HashMap::new(),
+            current: ModuleData::default(),
+            scoped_traits: Vec::new(),
+            hir_ctx,
+        };
+
+        for (krate, root_def_id) in deps.roots() {
             this.dependencies
-                .insert(c.name.clone(), ModuleData::default());
+                .insert(krate.name, ModuleData::Unexpanded(root_def_id));
         }
-        this.dependencies
-            .insert("std_core".to_owned(), ModuleData::default());
-        for t in &deps.traits {
-            this.traits.insert(t.def_id);
-            let (mut crate_name, rest) = t.path.split_once("::").unwrap();
-            normalize_crate_name(&mut crate_name);
-            let Some(i) = this.dependencies.get_mut(crate_name) else {
-                continue;
-            };
-            i.insert_path(rest.split("::"), Some((t.def_id, TypeQueryResult::Type)));
-        }
-        for t in deps.functions {
-            if let Some(fn_def) = t.fn_def
-                && let Some((trait_path, method)) = parse_trait_method_path(&t.path)
-                && self::Resolver::is_known_trait_path(&this, &trait_path)
-            {
-                this.trait_methods
-                    .entry(method.clone())
-                    .or_default()
-                    .push(TraitMethod {
-                        trait_path,
-                        method,
-                        def_id: fn_def.0,
-                    });
-            }
-            let (mut crate_name, rest) = t.path.split_once("::").unwrap();
-            normalize_crate_name(&mut crate_name);
-            let Some(i) = this.dependencies.get_mut(crate_name) else {
-                continue;
-            };
-            i.insert_path(
-                rest.split("::"),
-                t.fn_def.map(|x| (x.0, TypeQueryResult::Expr)),
-            );
-        }
-        for t in deps.values {
-            match t.kind {
-                DependencyValueKind::Def(def_id) => {
-                    let (mut crate_name, rest) = t.path.split_once("::").unwrap();
-                    normalize_crate_name(&mut crate_name);
-                    let Some(i) = this.dependencies.get_mut(crate_name) else {
-                        continue;
-                    };
-                    i.insert_path(rest.split("::"), Some((def_id, TypeQueryResult::Expr)));
-                }
-                DependencyValueKind::ConstDef(def_id) => {
-                    this.const_values.insert(normalized_path(&t.path), def_id);
-                }
-            }
-        }
-        for t in deps.types {
-            let (mut crate_name, rest) = t.path.split_once("::").unwrap();
-            normalize_crate_name(&mut crate_name);
-            let Some(i) = this.dependencies.get_mut(crate_name) else {
-                continue;
-            };
-            i.insert_path(rest.split("::"), Some((t.adt.0, TypeQueryResult::Type)));
-        }
+
         this.current = ModuleData::forward_pass_parsed_module(
             ctx,
             p,
@@ -351,91 +443,148 @@ impl Resolver {
             true,
             test,
         );
-        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u16>", "swap_bytes"]) {
-            this.current
-                .insert_path(["__builtin_bswap16"].into_iter(), Some(def));
-        }
-        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u32>", "swap_bytes"]) {
-            this.current
-                .insert_path(["__builtin_bswap32"].into_iter(), Some(def));
-        }
-        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u64>", "swap_bytes"]) {
-            this.current
-                .insert_path(["__builtin_bswap64"].into_iter(), Some(def));
-        }
-        // __builtin_clz: count leading zeros for unsigned int (u32)
-        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u32>", "leading_zeros"]) {
-            this.current
-                .insert_path(["__builtin_clz"].into_iter(), Some(def));
-        }
-        // __builtin_clzll: count leading zeros for unsigned long long (u64)
-        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u64>", "leading_zeros"]) {
-            this.current
-                .insert_path(["__builtin_clzll"].into_iter(), Some(def));
-        }
-        // __builtin_ctz: count trailing zeros for unsigned int (u32)
-        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u32>", "trailing_zeros"]) {
-            this.current
-                .insert_path(["__builtin_ctz"].into_iter(), Some(def));
-        }
-        // __builtin_ctzll: count trailing zeros for unsigned long long (u64)
-        if let Some(def) = this.resolve_builtin_dep(["num", "<impl u64>", "trailing_zeros"]) {
-            this.current
-                .insert_path(["__builtin_ctzll"].into_iter(), Some(def));
-        }
-        for t in &deps.traits {
-            let Some(name) = t.path.rsplit("::").next() else {
-                continue;
-            };
-            if is_prelude_trait(name) {
-                let (mut crate_name, rest) = t.path.split_once("::").unwrap();
-                normalize_crate_name(&mut crate_name);
-                let path = format!("{crate_name}::{rest}");
-                if !this.scoped_traits.iter().any(|st| st.path == path) {
-                    this.scoped_traits.push(ScopedTrait {
-                        name: name.to_owned(),
-                        def_id: t.def_id,
-                        path,
-                    });
+
+        let builtin_mappings: &[(Ty, &str, &[&str])] = &[
+            (
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U16)),
+                "swap_bytes",
+                &["__builtin_bswap16"],
+            ),
+            (
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U32)),
+                "swap_bytes",
+                &["__builtin_bswap32"],
+            ),
+            (
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U64)),
+                "swap_bytes",
+                &["__builtin_bswap64"],
+            ),
+            (
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U32)),
+                "leading_zeros",
+                &["__builtin_clz"],
+            ),
+            (
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U64)),
+                "leading_zeros",
+                &["__builtin_clzll"],
+            ),
+            (
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U32)),
+                "trailing_zeros",
+                &["__builtin_ctz"],
+            ),
+            (
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U64)),
+                "trailing_zeros",
+                &["__builtin_ctzll"],
+            ),
+        ];
+        for &(receiver_ty, method, aliases) in builtin_mappings {
+            if let Some(def) = this.resolve_inherent_method(receiver_ty, method) {
+                for &alias in aliases {
+                    this.current.insert_path([alias].into_iter(), Some(def));
                 }
             }
         }
-        this.rebuild_method_receivers();
+
+        // Populate prelude traits (auto-imported like Clone, Copy, etc.)
+        // Try resolving them from known crate paths
+        let prelude_trait_names: &[(&str, &str)] = &[
+            ("std", "borrow::ToOwned"),
+            ("core", "clone::Clone"),
+            ("core", "marker::Copy"),
+            ("core", "convert::Into"),
+            ("core", "convert::From"),
+            ("core", "iter::IntoIterator"),
+            ("core", "iter::Iterator"),
+            ("core", "fmt::ToString"),
+            ("core", "convert::AsRef"),
+            ("core", "convert::AsMut"),
+            ("core", "default::Default"),
+            ("core", "cmp::PartialEq"),
+            ("core", "cmp::Eq"),
+            ("core", "cmp::PartialOrd"),
+            ("core", "cmp::Ord"),
+            ("core", "ops::Drop"),
+            ("core", "ops::Fn"),
+            ("core", "ops::FnMut"),
+            ("core", "ops::FnOnce"),
+            ("core", "marker::Send"),
+            ("core", "marker::Sync"),
+            ("core", "marker::Sized"),
+            ("core", "marker::Unpin"),
+            ("core", "borrow::Borrow"),
+            ("core", "borrow::BorrowMut"),
+            ("core", "iter::DoubleEndedIterator"),
+            ("core", "iter::ExactSizeIterator"),
+            ("core", "iter::Extend"),
+            ("core", "iter::FromIterator"),
+        ];
+        for &(crate_name, rest) in prelude_trait_names {
+            if let Ok((def_id, _)) = this.resolve(&format!("{crate_name}::{rest}")) {
+                let name = rest.split("::").last().unwrap_or(rest);
+                this.scoped_traits.push(ScopedTrait {
+                    name: name.to_owned(),
+                    def_id,
+                    path: format!("{crate_name}::{rest}"),
+                });
+            }
+        }
+
         this
+    }
+
+    fn dep_info(&self) -> DependencyInfo<'static> {
+        DependencyInfo { tcx: self.hir_ctx.tcx }
     }
 
     fn module_mut<'a>(&'a mut self, path: &[String]) -> &'a mut ModuleData {
         let mut module = &mut self.current;
         for segment in path {
-            module = module.items.entry(segment.clone()).or_default();
+            module = match module {
+                ModuleData::Expanded(c) => {
+                    c.items.entry(segment.clone()).or_default()
+                }
+                ModuleData::Unexpanded(_) => panic!("current module must be expanded"),
+            };
         }
         module
     }
 
-    fn resolve_module_path_relative<'a>(
-        &self,
+    fn resolve_module_node_relative<'a>(
+        &mut self,
         module_path: &[String],
         path: impl IntoIterator<Item = &'a str>,
     ) -> Option<ModuleData> {
-        let parts = path.into_iter().collect::<Vec<_>>();
-        let first = parts.first().copied()?;
+        let parts: Vec<&str> = path.into_iter().collect();
+        let info = self.dep_info();
+
+        fn descend(node: &mut ModuleData, parts: &[&str], info: &DependencyInfo<'_>) -> Option<ModuleData> {
+            node.ensure_expanded(info);
+            if parts.is_empty() {
+                return Some(node.clone());
+            }
+            let child = node.as_content_mut().items.get_mut(parts[0])?;
+            descend(child, &parts[1..], info)
+        }
+
         if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
-            return self
-                .current
-                .lookup_path(
-                    &prefix
-                        .into_iter()
-                        .chain(rest.iter().copied())
-                        .collect::<Vec<_>>(),
-                )
-                .cloned();
+            let mut current = &mut self.current;
+            for segment in &prefix {
+                current = current.as_content_mut().items.get_mut(*segment)?;
+            }
+            return descend(current, rest, &info);
         }
-        let mut crate_name = first;
-        normalize_crate_name(&mut crate_name);
-        if let Some(crate_data) = self.dependencies.get(crate_name) {
-            return crate_data.lookup_path_or_unique_leaf(&parts[1..]).cloned();
+
+        if let Some((first, rest)) = parts.split_first()
+            && let Some(crate_data) = self.dependencies.get_mut(*first)
+        {
+            return descend(crate_data, rest, &info);
         }
-        self.current.lookup_path(&parts).cloned()
+
+        descend(&mut self.current, &parts, &info)
     }
 
     pub(crate) fn import_use_items(
@@ -444,31 +593,37 @@ impl Resolver {
         p: &TranslationUnit<StatelessResolver>,
     ) {
         let mut errors: Vec<co2_ast::Rich<'static, String, co2_ast::Span>> = Vec::new();
+        let info = self.dep_info();
         for (use_item, _) in &p.rust_use_items {
             let Some((last_segment, _)) = use_item.path.last() else {
                 continue;
             };
 
             if last_segment == "*" {
-                let Some(item) = self.resolve_module_path_relative(
+                let Some(item) = self.resolve_module_node_relative(
                     module_path,
                     use_item.path[..use_item.path.len() - 1]
                         .iter()
                         .map(|(segment, _)| segment.as_str()),
                 ) else {
                     if let Some((_, span)) =
-                        self.first_unresolved_use_segment(module_path, use_item)
+                        self.first_unresolved_use_segment(&info, module_path, use_item)
                     {
                         errors.push(co2_ast::Rich::custom(*span, "Unresolved item".to_owned()));
                     }
                     continue;
                 };
 
-                for (name, child_item) in item.items {
-                    self.module_mut(module_path)
-                        .items
-                        .entry(name)
-                        .or_insert(child_item);
+                if let ModuleData::Expanded(ref content) = item {
+                    for (name, child_item) in &content.items {
+                        let target = self.module_mut(module_path);
+                        match target {
+                            ModuleData::Expanded(c) => {
+                                c.items.entry(name.clone()).or_insert(child_item.clone());
+                            }
+                            ModuleData::Unexpanded(_) => unreachable!(),
+                        }
+                    }
                 }
                 continue;
             }
@@ -479,11 +634,10 @@ impl Resolver {
                 last_segment.as_str()
             };
             let module = self.module_mut(module_path);
-            if module.resolve_path([alias].into_iter()).is_some()
-                || self.const_values.contains_key(alias)
-            {
+            if module.resolve_path([alias].into_iter(), &info).is_some() {
                 continue;
             }
+
             let full_path = use_item
                 .path
                 .iter()
@@ -491,21 +645,22 @@ impl Resolver {
                 .collect::<Vec<_>>()
                 .join("::");
             let normalized_full_path = normalized_path(&full_path);
-            if let Some(def_id) = self.const_values.get(&normalized_path(&full_path)).copied() {
-                self.const_values.insert(alias.to_owned(), def_id);
-                continue;
-            }
-            let Some(item) = self.resolve_module_path_relative(
+
+            let Some(item) = self.resolve_module_node_relative(
                 module_path,
                 use_item.path.iter().map(|(segment, _)| segment.as_str()),
             ) else {
-                if let Some((_, span)) = self.first_unresolved_use_segment(module_path, use_item) {
+                if let Some((_, span)) = self.first_unresolved_use_segment(&info, module_path, use_item) {
                     errors.push(co2_ast::Rich::custom(*span, "Unresolved item".to_owned()));
                 }
                 continue;
             };
-            if let Some((def_id, TypeQueryResult::Type)) = item.id
-                && self.traits.contains(&def_id)
+            let item_id = match &item {
+                ModuleData::Expanded(c) => c.id,
+                ModuleData::Unexpanded(_) => None,
+            };
+            if let Some((def_id, TypeQueryResult::Type)) = item_id
+                && info.is_trait(def_id)
             {
                 self.scoped_traits.push(ScopedTrait {
                     name: alias.to_owned(),
@@ -513,11 +668,10 @@ impl Resolver {
                     path: normalized_full_path.clone(),
                 });
             }
-            let item = if matches!(item.id, Some((_, TypeQueryResult::Expr))) {
-                ModuleData {
-                    id: item.id,
-                    items: HashMap::new(),
-                }
+            let item = if matches!(item_id, Some((_, TypeQueryResult::Expr))) {
+                let mut c = ModuleContent::default();
+                c.id = item_id;
+                ModuleData::Expanded(Box::new(c))
             } else {
                 item
             };
@@ -529,7 +683,8 @@ impl Resolver {
     }
 
     fn first_unresolved_use_segment<'a>(
-        &self,
+        &mut self,
+        _info: &DependencyInfo<'_>,
         module_path: &[String],
         use_item: &'a co2_ast::UseItem,
     ) -> Option<&'a co2_ast::Spanned<String>> {
@@ -540,51 +695,71 @@ impl Resolver {
             .collect::<Vec<_>>();
         if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
             let mut current = &self.current;
-            for segment in prefix {
-                let Some(next) = current.items.get(segment) else {
-                    return use_item
-                        .path
-                        .iter()
-                        .find(|(name, _)| name.as_str() == segment);
-                };
-                current = next;
+            for segment in &prefix {
+                match current {
+                    ModuleData::Expanded(c) => {
+                        let Some(next) = c.items.get(*segment) else {
+                            return use_item
+                                .path
+                                .iter()
+                                .find(|(name, _)| name.as_str() == *segment);
+                        };
+                        current = next;
+                    }
+                    ModuleData::Unexpanded(_) => return None,
+                }
             }
             for segment in rest {
-                let Some(next) = current.items.get(*segment) else {
-                    return use_item
-                        .path
-                        .iter()
-                        .find(|(name, _)| name.as_str() == *segment);
-                };
-                current = next;
+                match current {
+                    ModuleData::Expanded(c) => {
+                        let Some(next) = c.items.get(*segment) else {
+                            return use_item
+                                .path
+                                .iter()
+                                .find(|(name, _)| name.as_str() == *segment);
+                        };
+                        current = next;
+                    }
+                    ModuleData::Unexpanded(_) => return Some(
+                        use_item.path.iter().find(|(name, _)| name.as_str() == *segment)?,
+                    ),
+                }
             }
             return None;
         }
         let (first, rest) = use_item.path.split_first()?;
-        let mut crate_name = first.0.as_str();
-        normalize_crate_name(&mut crate_name);
-        if let Some(module) = self.dependencies.get(crate_name) {
+        if let Some(module) = self.dependencies.get(first.0.as_str()) {
             let mut current = module;
             for segment in rest {
-                let Some(next) = current.items.get(&segment.0) else {
-                    return Some(segment);
-                };
-                current = next;
+                match current {
+                    ModuleData::Expanded(c) => {
+                        let Some(next) = c.items.get(&segment.0) else {
+                            return Some(segment);
+                        };
+                        current = next;
+                    }
+                    ModuleData::Unexpanded(_) => return Some(segment),
+                }
             }
             return None;
         }
         let mut current = &self.current;
         for segment in &use_item.path {
-            let Some(next) = current.items.get(&segment.0) else {
-                return Some(segment);
-            };
-            current = next;
+            match current {
+                ModuleData::Expanded(c) => {
+                    let Some(next) = c.items.get(&segment.0) else {
+                        return Some(segment);
+                    };
+                    current = next;
+                }
+                ModuleData::Unexpanded(_) => return Some(segment),
+            }
         }
         None
     }
 
     pub(crate) fn insert_module_data(&mut self, path: &[String], alias: &str, item: ModuleData) {
-        fn seed_builtin_aliases(root: &ModuleData, module: &mut ModuleData) {
+        fn seed_builtin_aliases(root: &ModuleContent, module: &mut ModuleContent) {
             if module.id.is_some() {
                 return;
             }
@@ -594,176 +769,273 @@ impl Resolver {
                 }
             }
             for child in module.items.values_mut() {
-                seed_builtin_aliases(root, child);
+                if let ModuleData::Expanded(c) = child {
+                    seed_builtin_aliases(root, c);
+                }
             }
         }
 
+        let root_content = match &self.current {
+            ModuleData::Expanded(c) => c.as_ref(),
+            ModuleData::Unexpanded(_) => panic!("current must be expanded"),
+        };
+
         let mut item = item;
-        seed_builtin_aliases(&self.current, &mut item);
+        if let ModuleData::Expanded(ref mut item_content) = item {
+            seed_builtin_aliases(root_content, item_content);
+        }
         let mut module = &mut self.current;
         for segment in path {
-            module = module.items.entry(segment.clone()).or_default();
+            module = module.as_content_mut().items.entry(segment.clone()).or_default();
         }
         module.insert_alias(alias, item);
     }
 
     pub(crate) fn resolve_in_deps<'a>(
-        &self,
-        mut crate_name: &str,
+        &mut self,
+        crate_name: &str,
         path: impl IntoIterator<Item = &'a str>,
     ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
-        normalize_crate_name(&mut crate_name);
-        let crate_data = self.dependencies.get(crate_name)?;
-        crate_data.resolve_path_or_unique_leaf(path.into_iter())
-    }
-
-    fn resolve_builtin_dep<const N: usize>(
-        &self,
-        path: [&str; N],
-    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
-        self.resolve_in_deps("std", path)
-            .or_else(|| self.resolve_in_deps("core", path))
+        let info = self.dep_info();
+        let parts: Vec<&str> = path.into_iter().collect();
+        let crate_data = self.dependencies.get_mut(crate_name)?;
+        crate_data.resolve_path_inner(&parts, &info)
     }
 
     pub(crate) fn resolve_in_current<'a>(
-        &self,
+        &mut self,
         path: impl IntoIterator<Item = &'a str>,
     ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
-        self.current.resolve_path(path.into_iter())
+        let info = self.dep_info();
+        let parts: Vec<&str> = path.into_iter().collect();
+        self.current.resolve_path_inner(&parts, &info)
     }
 
-    pub fn resolve(&self, path: &str) -> Option<(DefId, co2_ast::TypeQueryResult)> {
-        let Some((mut crate_name, rest)) = path.split_once("::") else {
-            return self.resolve_in_current([path]);
-        };
-        normalize_crate_name(&mut crate_name);
-        if self.dependencies.contains_key(crate_name) {
-            self.resolve_in_deps(crate_name, rest.split("::"))
+    pub fn resolve(&mut self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), ResolveError> {
+        let parts: Vec<&str> = path.split("::").collect();
+        let result = if let Some((crate_name, _)) = path.split_once("::") {
+            if self.dependencies.contains_key(crate_name) {
+                self.resolve_in_deps(crate_name, parts[1..].iter().copied())
+            } else {
+                self.resolve_in_current(parts.iter().copied())
+            }
         } else {
-            self.resolve_in_current(path.split("::"))
+            self.resolve_in_current(parts.iter().copied())
+        };
+        match result {
+            Some(found) => Ok(found),
+            None => Err(self.build_resolve_error(path, &parts)),
+        }
+    }
+
+    fn build_resolve_error(&mut self, path: &str, parts: &[&str]) -> ResolveError {
+        let tcx = self.hir_ctx.tcx;
+        let info = rustc_public_generative::DependencyInfo { tcx };
+
+        let dep_keys: Vec<String> = self.dependencies.keys().cloned().collect();
+
+        let root: &mut ModuleData;
+        let offset: usize;
+        if let Some((crate_name, _)) = path.split_once("::") {
+            if self.dependencies.contains_key(crate_name) {
+                root = self.dependencies.get_mut(crate_name).unwrap();
+                offset = 1;
+            } else {
+                root = &mut self.current;
+                offset = 0;
+            }
+        } else {
+            root = &mut self.current;
+            offset = 0;
+        }
+
+        let mut current = root;
+        for i in offset..parts.len() {
+            let seg = parts[i];
+            if seg.starts_with('<') {
+                continue;
+            }
+            current.ensure_expanded(&info);
+            if !current.as_content().items.contains_key(seg) {
+                let candidates = if offset == 0 && i == offset {
+                    let mut items: Vec<String> =
+                        current.as_content().items.keys().cloned().collect();
+                    items.sort();
+                    let mut all = Vec::with_capacity(dep_keys.len() + items.len());
+                    all.extend(dep_keys.iter().cloned());
+                    all.extend(items);
+                    all
+                } else {
+                    let mut items: Vec<String> =
+                        current.as_content().items.keys().cloned().collect();
+                    items.sort();
+                    items
+                };
+                return ResolveError {
+                    path: path.to_string(),
+                    failed_segment: seg.to_string(),
+                    candidates,
+                };
+            }
+            current = current.as_content_mut().items.get_mut(seg).unwrap();
+        }
+
+        current.ensure_expanded(&info);
+        let candidates = current.as_content().items.keys().cloned().collect();
+        ResolveError {
+            path: path.to_string(),
+            failed_segment: parts.last().unwrap_or(&"").to_string(),
+            candidates,
         }
     }
 
     pub(crate) fn resolve_relative_expr_path(
-        &self,
+        &mut self,
         module_path: &[String],
         path: &str,
     ) -> Option<ResolvedExprPath> {
-        if let Some(def_id) = self.const_values.get(&normalized_path(path)) {
-            return Some(ResolvedExprPath::Const(*def_id));
-        }
         let (def_id, class) = self.resolve_relative(module_path, path)?;
         Some(ResolvedExprPath::Def(def_id, class))
     }
 
     pub(crate) fn resolve_relative(
-        &self,
+        &mut self,
         module_path: &[String],
         path: &str,
     ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
-        let parts = path.split("::").collect::<Vec<_>>();
+        let parts: Vec<&str> = path.split("::").collect();
         let first = parts.first().copied()?;
 
         if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
-            return self
-                .current
-                .resolve_path(prefix.into_iter().chain(rest.iter().copied()));
+            let info = self.dep_info();
+            let mut current = &mut self.current;
+            for segment in &prefix {
+                current = current.as_content_mut().items.get_mut(*segment)?;
+            }
+            return current.resolve_path(rest.iter().copied(), &info);
         }
 
-        // Only treat the first segment as a crate name when the path has `::` separators.
-        // A bare identifier (e.g. `memchr`) can never be a crate path — crate references
-        // always look like `crate_name::item`. Without this guard, a C extern whose name
-        // collides with a Rust dependency crate (e.g. the `memchr` crate) would be resolved
-        // against the crate instead of the current module scope.
-        let mut crate_name = first;
-        normalize_crate_name(&mut crate_name);
-        if parts.len() > 1 && self.dependencies.contains_key(crate_name) {
-            return self.resolve(path);
+        if parts.len() > 1 && self.dependencies.contains_key(first) {
+            return self.resolve(path).ok();
         }
 
         for prefix_len in (0..=module_path.len()).rev() {
             let prefix = module_path[..prefix_len].iter().map(String::as_str);
-            if let Some(found) = self
-                .current
-                .resolve_path(prefix.chain(parts.iter().copied()))
-            {
+            let info = self.dep_info();
+            let mut current = &mut self.current;
+            for segment in prefix {
+                current = current.as_content_mut().items.get_mut(segment)?;
+            }
+            if let Some(found) = current.resolve_path(parts.iter().copied(), &info) {
                 return Some(found);
             }
         }
 
-        self.resolve(path)
+        self.resolve(path).ok()
     }
 
     pub(crate) fn resolve_inherent_method(
-        &self,
+        &mut self,
         receiver_ty: Ty,
         method: &str,
     ) -> Option<(DefId, TypeQueryResult)> {
-        match receiver_ty.kind() {
-            TyKind::RigidTy(RigidTy::Adt(adt, _)) => self
-                .method_receivers
-                .get(&adt.0)
-                .and_then(|module| Self::resolve_method_in_module(module, method)),
-            TyKind::RigidTy(RigidTy::Str) => {
-                self.resolve_in_deps("core", ["str", "<impl str>", method])
+        let ty_def_id = match receiver_ty.kind() {
+            TyKind::RigidTy(RigidTy::Adt(adt, _)) => Some(adt.0),
+            TyKind::RigidTy(RigidTy::Ref(_, inner, _)) => {
+                return self.resolve_inherent_method(inner, method);
             }
-            TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
-                self.resolve_inherent_method(inner, method)
+            TyKind::RigidTy(RigidTy::RawPtr(inner, _)) => {
+                if let Some(found) = self.resolve_inherent_method(inner, method) {
+                    return Some(found);
+                }
+                None
             }
             _ => None,
+        };
+
+        if let Some(ty_def_id) = ty_def_id {
+            if let Some(module) = self.method_receivers.get(&ty_def_id) {
+                if let Some(found) = Self::resolve_method_in_module(module, method) {
+                    return Some(found);
+                }
+            }
         }
+
+        let info = self.dep_info();
+        if let Some(ty_def_id) = ty_def_id {
+            for impl_fn in info.impls(ty_def_id) {
+                let name = impl_fn.name.split("::").last().unwrap_or(&impl_fn.name);
+                if name == method {
+                    return Some((impl_fn.def_id, TypeQueryResult::Expr));
+                }
+            }
+        }
+        for impl_fn in info.incoherent_impls(receiver_ty) {
+            let name = impl_fn.name.split("::").last().unwrap_or(&impl_fn.name);
+            if name == method {
+                return Some((impl_fn.def_id, TypeQueryResult::Expr));
+            }
+        }
+        None
     }
 
-    pub(crate) fn traits_in_scope_with_method(&self, method: &str) -> Vec<(String, DefId, String)> {
+    pub(crate) fn traits_in_scope_with_method(
+        &mut self,
+        method: &str,
+    ) -> Vec<(String, DefId, String)> {
         let mut out = Vec::new();
         let mut seen_paths: HashSet<&str> = HashSet::new();
+        let info = self.dep_info();
         for scoped_trait in &self.scoped_traits {
             if !seen_paths.insert(scoped_trait.path.as_str()) {
                 continue;
             }
-            if !self.trait_methods.get(method).is_some_and(|candidates| {
-                candidates
-                    .iter()
-                    .any(|candidate| candidate.trait_path == scoped_trait.path)
-            }) {
-                continue;
+            let has_method = info
+                .children(scoped_trait.def_id)
+                .iter()
+                .any(|child| child.kind == DependencyChildKind::Function && child.name == method);
+            if has_method {
+                out.push((
+                    scoped_trait.name.clone(),
+                    scoped_trait.def_id,
+                    scoped_trait.path.clone(),
+                ));
             }
-            out.push((
-                scoped_trait.name.clone(),
-                scoped_trait.def_id,
-                scoped_trait.path.clone(),
-            ));
         }
         out
     }
 
     pub(crate) fn resolve_trait_method(
-        &self,
+        &mut self,
         trait_path: &str,
         method: &str,
     ) -> Option<(DefId, TypeQueryResult)> {
-        self.trait_methods
-            .get(method)?
-            .iter()
-            .find_map(|candidate| {
-                (candidate.trait_path == trait_path && candidate.method == method)
-                    .then_some((candidate.def_id, TypeQueryResult::Expr))
-            })
-    }
-
-    fn is_known_trait_path(&self, path: &str) -> bool {
-        self.resolve(path)
-            .is_some_and(|(_, class)| class == TypeQueryResult::Type)
+        let (trait_def_id, _) = self.resolve(trait_path).ok()?;
+        let info = self.dep_info();
+        for child in info.children(trait_def_id) {
+            if child.kind == DependencyChildKind::Function && child.name == method {
+                return Some((child.def_id, TypeQueryResult::Expr));
+            }
+        }
+        None
     }
 
     fn resolve_method_in_module(
         module: &ModuleData,
         method: &str,
     ) -> Option<(DefId, TypeQueryResult)> {
-        if let Some(found) = module.resolve_path([method].into_iter()) {
-            return Some(found);
+        let content = match module {
+            ModuleData::Expanded(c) => c,
+            ModuleData::Unexpanded(_) => return None,
+        };
+        if let Some((_, _)) = content.id {
+            if content.items.contains_key(method) {
+                if let ModuleData::Expanded(child) = &content.items[method] {
+                    return child.id;
+                }
+            }
         }
-        let mut children = module.items.iter().collect::<Vec<_>>();
+        let mut children: Vec<_> = content.items.iter().collect();
         children.sort_by_key(|(name, _)| method_search_priority(name));
         for (_, child) in children {
             if let Some(found) = Self::resolve_method_in_module(child, method) {
@@ -775,19 +1047,20 @@ impl Resolver {
 
     pub(crate) fn rebuild_method_receivers(&mut self) {
         self.method_receivers.clear();
-        for module in self.dependencies.values() {
-            Self::collect_method_receivers(module, &mut self.method_receivers);
-        }
         Self::collect_method_receivers(&self.current, &mut self.method_receivers);
     }
 
     fn collect_method_receivers(module: &ModuleData, out: &mut HashMap<DefId, ModuleData>) {
-        if let Some((def_id, TypeQueryResult::Type)) = module.id
-            && !(module.items.is_empty() && out.contains_key(&def_id))
+        let content = match module {
+            ModuleData::Expanded(c) => c,
+            ModuleData::Unexpanded(_) => return,
+        };
+        if let Some((def_id, TypeQueryResult::Type)) = content.id
+            && !(content.items.is_empty() && out.contains_key(&def_id))
         {
             out.insert(def_id, module.clone());
         }
-        for child in module.items.values() {
+        for child in content.items.values() {
             Self::collect_method_receivers(child, out);
         }
     }
@@ -796,7 +1069,6 @@ impl Resolver {
 #[derive(Debug, Clone)]
 pub enum ResolvedExprPath {
     Def(DefId, TypeQueryResult),
-    Const(DefId),
 }
 
 fn normalized_path(path: &str) -> String {
@@ -819,47 +1091,4 @@ fn method_search_priority(name: &str) -> (usize, &str) {
                 .count()
         });
     (generic_arity, name)
-}
-
-fn is_prelude_trait(name: &str) -> bool {
-    matches!(
-        name,
-        "ToOwned"
-            | "Clone"
-            | "Into"
-            | "From"
-            | "IntoIterator"
-            | "Iterator"
-            | "ToString"
-            | "AsRef"
-            | "AsMut"
-            | "Default"
-            | "PartialEq"
-            | "Eq"
-            | "PartialOrd"
-            | "Ord"
-            | "Drop"
-            | "Fn"
-            | "FnMut"
-            | "FnOnce"
-            | "Send"
-            | "Sync"
-            | "Sized"
-            | "Unpin"
-            | "Copy"
-            | "Borrow"
-            | "BorrowMut"
-            | "DoubleEndedIterator"
-            | "ExactSizeIterator"
-            | "Extend"
-            | "FromIterator"
-    )
-}
-
-fn parse_trait_method_path(path: &str) -> Option<(String, String)> {
-    if path.starts_with('<') {
-        return None;
-    }
-    let (trait_path, method) = path.rsplit_once("::")?;
-    Some((normalized_path(trait_path), method.to_owned()))
 }

@@ -8,10 +8,7 @@
 use std::{any::Any, path::PathBuf};
 
 use rustc_middle::ty::TyCtxt;
-use rustc_public::{
-    DefId,
-    ty::{AdtDef, FnDef},
-};
+use rustc_public::DefId;
 
 extern crate rustc_abi;
 extern crate rustc_ast;
@@ -41,28 +38,78 @@ pub use hir_structure::{
 };
 pub use hir_ty::{HirGenericArg, HirLifetime, HirTy, HirTyConst, HirTyKind};
 
-/// Summary of crates loaded as dependencies by rustc.
-#[derive(Debug, Clone, Default)]
-pub struct DependencyInfo {
-    pub crates: Vec<DependencyCrate>,
-    pub functions: Vec<DependencyFunction>,
-    pub values: Vec<DependencyValue>,
-    pub types: Vec<DependencyType>,
-    pub traits: Vec<DependencyTrait>,
-}
-
+/// Information about a dependency crate.
 #[derive(Debug, Clone)]
 pub struct DependencyCrate {
     pub name: String,
     pub disambiguator: String,
 }
 
+/// A child item within a module or crate, returned by `DependencyInfo::children()`.
 #[derive(Debug, Clone)]
-pub struct DependencyFunction {
-    pub path: String,
-    pub def_path_hash_hi: u64,
-    pub def_path_hash_lo: u64,
-    pub fn_def: Option<FnDef>,
+pub struct DependencyChild {
+    pub def_id: DefId,
+    pub name: String,
+    pub kind: DependencyChildKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyChildKind {
+    Module,
+    Function,
+    Struct,
+    Enum,
+    Union,
+    Trait,
+    Const,
+    Static,
+    Other,
+}
+
+/// An inherent impl function for an ADT, returned by `DependencyInfo::impls()`.
+#[derive(Debug, Clone)]
+pub struct ImplFunction {
+    pub def_id: DefId,
+    pub name: String,
+}
+
+/// Lazily queried dependency information.
+///
+/// Instead of eagerly collecting all dependency items into flat vectors,
+/// this structure queries rustc on demand via `roots()`, `children()`, and `impls()`.
+pub struct DependencyInfo<'tcx> {
+    pub tcx: TyCtxt<'tcx>,
+}
+
+impl std::fmt::Debug for DependencyInfo<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DependencyInfo").finish()
+    }
+}
+
+impl DependencyInfo<'_> {
+    pub fn roots(&self) -> Vec<(DependencyCrate, DefId)> {
+        internal::dependency_roots(self.tcx)
+    }
+
+    pub fn children(&self, def_id: DefId) -> Vec<DependencyChild> {
+        internal::dependency_children(self.tcx, def_id)
+    }
+
+    pub fn impls(&self, def_id: DefId) -> Vec<ImplFunction> {
+        internal::dependency_impls(self.tcx, def_id)
+    }
+
+    pub fn incoherent_impls(
+        &self,
+        receiver_ty: rustc_public::ty::Ty,
+    ) -> Vec<ImplFunction> {
+        internal::dependency_incoherent_impls(self.tcx, receiver_ty)
+    }
+
+    pub fn is_trait(&self, def_id: DefId) -> bool {
+        internal::dependency_is_trait(self.tcx, def_id)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -85,41 +132,11 @@ pub enum DependencyConstValue {
     F64(f64),
 }
 
-#[derive(Debug, Clone)]
-pub enum DependencyValueKind {
-    Def(DefId),
-    ConstDef(DefId),
-}
-
-#[derive(Debug, Clone)]
-pub struct DependencyValue {
-    pub kind: DependencyValueKind,
-    pub path: String,
-    pub def_path_hash_hi: u64,
-    pub def_path_hash_lo: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct DependencyType {
-    pub adt: AdtDef,
-    pub path: String,
-    pub def_path_hash_hi: u64,
-    pub def_path_hash_lo: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct DependencyTrait {
-    pub def_id: DefId,
-    pub path: String,
-    pub def_path_hash_hi: u64,
-    pub def_path_hash_lo: u64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(u32);
 
 pub struct HirStructureCtx<'tcx> {
-    tcx: TyCtxt<'tcx>,
+    pub tcx: TyCtxt<'tcx>,
     inner: internal::Context,
 }
 
@@ -129,9 +146,9 @@ impl std::fmt::Debug for HirStructureCtx<'_> {
     }
 }
 
-impl HirStructureCtx<'_> {
-    pub fn dependencies(&self) -> DependencyInfo {
-        internal::collect_dependency_info(self.tcx)
+impl<'tcx> HirStructureCtx<'tcx> {
+    pub fn dependencies(&self) -> DependencyInfo<'tcx> {
+        DependencyInfo { tcx: self.tcx }
     }
 
     pub fn add_custom_file(&self, path: impl Into<PathBuf>, contents: impl Into<String>) -> FileId {
