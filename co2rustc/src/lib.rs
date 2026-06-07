@@ -68,17 +68,17 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
                 if args[i] == "--extern" {
                     if let Some(val) = args.get(i + 1) {
                         if !val.starts_with("force:") {
-                            args[i + 1] = format!("force:{}", val);
+                            args[i + 1] = format!("force:{val}");
                             found = true;
                         }
                         i += 2;
                         continue;
                     }
-                } else if let Some(value) = args[i].strip_prefix("--extern=") {
-                    if !value.starts_with("force:") {
-                        args[i] = format!("--extern=force:{}", value);
-                        found = true;
-                    }
+                } else if let Some(value) = args[i].strip_prefix("--extern=")
+                    && !value.starts_with("force:")
+                {
+                    args[i] = format!("--extern=force:{value}");
+                    found = true;
                 }
                 i += 1;
             }
@@ -86,7 +86,9 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
         };
         if has_extern
             && !args.iter().any(|a| a == "unstable-options")
-            && !args.windows(2).any(|w| w[0] == "-Z" && w[1] == "unstable-options")
+            && !args
+                .windows(2)
+                .any(|w| w[0] == "-Z" && w[1] == "unstable-options")
         {
             args.push("-Z".to_owned());
             args.push("unstable-options".to_owned());

@@ -28,7 +28,7 @@ use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
 use rustc_middle::mir::{BorrowKind, ConstValue};
 use rustc_middle::queries::mir_borrowck::ProvidedValue as BorrowckProvidedValue;
 use rustc_middle::query::Providers as QueryProviders;
-use rustc_middle::ty::{self, fast_reject::SimplifiedType, TyCtxt};
+use rustc_middle::ty::{self, TyCtxt, TypeVisitableExt, fast_reject::SimplifiedType};
 use rustc_middle::util::Providers as UtilProviders;
 use rustc_public::rustc_internal::internal;
 use rustc_session::config::{CrateType, EntryFnType};
@@ -40,8 +40,8 @@ use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, GeneratedAtt
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{
-    CrateGeneratorState, DependencyChild, DependencyChildKind, DependencyConstValue, DependencyCrate,
-    ImplFunction, FileId,
+    CrateGeneratorState, DependencyChild, DependencyChildKind, DependencyConstValue,
+    DependencyCrate, FileId, ImplFunction,
 };
 use rustc_public::DefId;
 use rustc_public::mir::{
@@ -2312,9 +2312,8 @@ pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChil
             let mut result: Vec<DependencyChild> = mod_children
                 .iter()
                 .filter_map(|child| {
-                    let child_def_id = match child.res {
-                        Res::Def(_, def_id) => def_id,
-                        _ => return None,
+                    let Res::Def(_, child_def_id) = child.res else {
+                        return None;
                     };
                     let child_kind = tcx.def_kind(child_def_id);
                     let dep_child_kind = child_kind_from_def_kind(child_kind);
@@ -2333,7 +2332,7 @@ pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChil
             let module_name = tcx.item_name(rustc_def_id);
             let module_name_str = module_name.as_str();
             if !module_name_str.starts_with("prim_") {
-                let prim_name = Symbol::intern(&format!("prim_{}", module_name_str));
+                let prim_name = Symbol::intern(&format!("prim_{module_name_str}"));
                 // Try to find the prim_X module in the parent module
                 if let Some(parent) = tcx.opt_parent(rustc_def_id) {
                     for child in tcx.module_children(parent) {
@@ -2360,7 +2359,7 @@ pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChil
             }
             // For modules whose name matches a primitive type (like "str"), also
             // include the incoherent inherent impl methods for that primitive type.
-            let impls = dependency_incoherent_impls_for_name(tcx, &module_name_str);
+            let impls = dependency_incoherent_impls_for_name(tcx, module_name_str);
             for impl_fn in impls {
                 result.push(DependencyChild {
                     def_id: impl_fn.def_id,
@@ -2394,7 +2393,8 @@ pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChil
 
 pub fn dependency_impls(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<ImplFunction> {
     let rustc_def_id = my_def_id_to_rustc_def_id(tcx, def_id);
-    tcx.inherent_impls(rustc_def_id)
+    let mut result: Vec<ImplFunction> = tcx
+        .inherent_impls(rustc_def_id)
         .iter()
         .flat_map(|&impl_def_id| tcx.associated_item_def_ids(impl_def_id).to_vec())
         .filter(|&item_id| {
@@ -2411,7 +2411,32 @@ pub fn dependency_impls(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<ImplFunction> {
                 name,
             }
         })
-        .collect()
+        .collect();
+
+    // Include enum/struct variant constructors (e.g. Option::Some, Option::None)
+    // which are not part of inherent impl blocks.
+    if matches!(
+        tcx.def_kind(rustc_def_id),
+        DefKind::Struct | DefKind::Union | DefKind::Enum
+    ) {
+        let adt_def = tcx.adt_def(rustc_def_id);
+        for variant in adt_def.variants() {
+            if let Some(ctor_def_id) = variant.ctor_def_id()
+                && matches!(tcx.def_kind(ctor_def_id), DefKind::Ctor(_, CtorKind::Fn))
+            {
+                let full = tcx.def_path_str(ctor_def_id);
+                let name = full.split("::").last().unwrap_or(&full).to_string();
+                if !result.iter().any(|f| f.name == name) {
+                    result.push(ImplFunction {
+                        def_id: rustc_def_to_my_def(tcx, ctor_def_id),
+                        name,
+                    });
+                }
+            }
+        }
+    }
+
+    result
 }
 
 fn dependency_incoherent_simplified_type(
@@ -2449,9 +2474,9 @@ fn dependency_incoherent_simplified_type(
             RigidTy::Adt(adt, _) => {
                 Some(SimplifiedType::Adt(my_def_id_to_rustc_def_id(tcx, adt.0)))
             }
-            RigidTy::Foreign(def_id) => {
-                Some(SimplifiedType::Foreign(my_def_id_to_rustc_def_id(tcx, def_id.0)))
-            }
+            RigidTy::Foreign(def_id) => Some(SimplifiedType::Foreign(my_def_id_to_rustc_def_id(
+                tcx, def_id.0,
+            ))),
             RigidTy::Str => Some(SimplifiedType::Str),
             RigidTy::Array(_, _) => Some(SimplifiedType::Array),
             RigidTy::Slice(_) => Some(SimplifiedType::Slice),
@@ -2475,7 +2500,11 @@ pub fn dependency_incoherent_impls(
 
     tcx.crates(())
         .iter()
-        .flat_map(|&cnum| tcx.crate_incoherent_impls((cnum, simplified)).iter().copied())
+        .flat_map(|&cnum| {
+            tcx.crate_incoherent_impls((cnum, simplified))
+                .iter()
+                .copied()
+        })
         .flat_map(|impl_def_id| tcx.associated_item_def_ids(impl_def_id).to_vec())
         .filter(|&item_id| {
             matches!(
@@ -2510,7 +2539,6 @@ pub fn dependency_is_trait(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     let rustc_def_id = my_def_id_to_rustc_def_id(tcx, def_id);
     matches!(tcx.def_kind(rustc_def_id), DefKind::Trait)
 }
-
 
 fn dependency_const_value(tcx: TyCtxt<'_>, def_id: RustcDefId) -> Option<DependencyConstValue> {
     let kind = tcx.def_kind(def_id);
@@ -2586,6 +2614,85 @@ pub(crate) fn type_implements_trait(
 pub(crate) fn type_is_copy(tcx: TyCtxt<'_>, owner: DefId, ty: MirTy) -> bool {
     let copy_trait = rustc_def_to_my_def(tcx, tcx.require_lang_item(LangItem::Copy, DUMMY_SP));
     type_implements_trait(tcx, owner, ty, copy_trait)
+}
+
+/// Check that the trait bounds on a function's generic parameters
+/// are satisfied with the given concrete generic arguments.
+/// Returns `Ok(())` if all bounds are satisfied, or an error message otherwise.
+pub(crate) fn check_fn_predicates(
+    tcx: TyCtxt<'_>,
+    fn_def_id: DefId,
+    fn_generic_args: &GenericArgs,
+    owner: DefId,
+) -> Result<(), String> {
+    let rustc_fn_def_id = my_def_id_to_rustc_def_id(tcx, fn_def_id);
+    let rustc_owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let predicates = tcx.predicates_of(rustc_fn_def_id);
+    let rustc_args = tcx.mk_args_from_iter(fn_generic_args.0.iter().map(|arg| match arg {
+        GenericArgKind::Lifetime(region) => ty::GenericArg::from(mir_region_to_rustc(tcx, region)),
+        GenericArgKind::Type(ty) => ty::GenericArg::from(mir_ty_to_rustc(tcx, ty)),
+        GenericArgKind::Const(konst) => ty::GenericArg::from(internal(tcx, konst.clone())),
+    }));
+
+    let infcx = tcx.infer_ctxt().build(ty::TypingMode::non_body_analysis());
+    let param_env = tcx.param_env(rustc_owner);
+
+    for (clause, _span) in predicates.predicates {
+        let instantiated_clause: ty::Clause<'_> =
+            ty::EarlyBinder::bind(*clause).instantiate(tcx, rustc_args);
+        let clause_kind = instantiated_clause.kind().skip_binder();
+        if let ty::ClauseKind::Trait(pred) = clause_kind {
+            if pred.trait_ref.has_bound_vars() {
+                continue;
+            }
+            if !infcx
+                .type_implements_trait(pred.trait_ref.def_id, pred.trait_ref.args.iter(), param_env)
+                .must_apply_modulo_regions()
+            {
+                let trait_ref = pred.trait_ref;
+                let trait_name = tcx.def_path_str(trait_ref.def_id);
+                let args: Vec<String> = trait_ref
+                    .args
+                    .iter()
+                    .map(|arg| format!("{arg:?}"))
+                    .collect();
+                return Err(format!(
+                    "a trait bound is not satisfied: `{}` for types [{}]",
+                    trait_name,
+                    args.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// For a function definition, find which generic parameters have `FnOnce` bounds
+/// and return the mapping from the `FnOnce` parameter index to its output parameter index.
+///
+/// For example, given `fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Option<U>`,
+/// this returns `[(2, 1)]`, meaning param index 2 (`F`) has a `FnOnce` bound
+/// whose `Output` is param index 1 (`U`).
+pub(crate) fn fn_once_output_params(tcx: TyCtxt<'_>, fn_def_id: DefId) -> Vec<(u32, u32)> {
+    let rustc_fn_def_id = my_def_id_to_rustc_def_id(tcx, fn_def_id);
+    let fn_once_output = tcx.require_lang_item(LangItem::FnOnceOutput, DUMMY_SP);
+
+    let predicates = tcx.predicates_of(rustc_fn_def_id);
+    let mut result = Vec::new();
+
+    for (clause, _span) in predicates.predicates {
+        let clause = clause.kind().skip_binder();
+        if let ty::ClauseKind::Projection(proj) = clause
+            && proj.def_id() == fn_once_output
+            && let ty::TyKind::Param(self_param) = proj.self_ty().kind()
+            && let ty::TermKind::Ty(term_ty) = proj.term.kind()
+            && let ty::TyKind::Param(term_param) = term_ty.kind()
+        {
+            result.push((self_param.index, term_param.index));
+        }
+    }
+
+    result
 }
 
 pub(crate) fn normalize_ty_for_owner(tcx: TyCtxt<'_>, owner: DefId, ty: MirTy) -> MirTy {

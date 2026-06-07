@@ -388,6 +388,17 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
             Expression::LabelAddress(label) => Expression::LabelAddress(label.clone()),
             Expression::Field(e, name) => Expression::Field(e.transform(b), name.clone()),
             Expression::Arrow(e, name) => Expression::Arrow(e.transform(b), name.clone()),
+            Expression::MethodCall {
+                receiver,
+                method,
+                generics,
+                params,
+            } => Expression::MethodCall {
+                receiver: receiver.transform(b),
+                method: method.clone(),
+                generics: generics.clone(),
+                params: params.transform(b),
+            },
             Expression::Subscript(e1, e2) => {
                 Expression::Subscript(e1.transform(b), e2.transform(b))
             }
@@ -575,6 +586,7 @@ impl<A: TypeResolver> DoTransform for RustTy<A> {
                 ret_ty: ret_ty.transform(b),
             },
             RustTy::Never => RustTy::Never,
+            RustTy::Wild => RustTy::Wild,
         }
     }
 }

@@ -374,6 +374,7 @@ pub fn lexer<'src>()
 
     // ----- Character and string literals -----
     let literal_prefix = choice((
+        just("s").to(StringLiteralPrefix::Str),
         just("u8").to(StringLiteralPrefix::Utf8),
         just("u").to(StringLiteralPrefix::Utf16),
         just("U").to(StringLiteralPrefix::Utf32),

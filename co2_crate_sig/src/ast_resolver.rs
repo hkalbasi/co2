@@ -46,6 +46,14 @@ fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> bool {
                     .iter()
                     .any(|param| expr_contains_label_address(&param.0))
         }
+        Expression::MethodCall {
+            receiver, params, ..
+        } => {
+            expr_contains_label_address(&receiver.0)
+                || params
+                    .iter()
+                    .any(|param| expr_contains_label_address(&param.0))
+        }
         Expression::Update { expr, .. } | Expression::Cast { expr, .. } => {
             expr_contains_label_address(&expr.0)
         }
@@ -236,6 +244,12 @@ pub enum MethodResolutionKind {
 }
 
 impl LocalResolver {
+    pub fn dependency_info(&self) -> rustc_public_generative::DependencyInfo<'static> {
+        let guard = self.base.borrow();
+        let hir_ctx: &'static HirStructureCtx<'static> = guard.hir_ctx;
+        rustc_public_generative::DependencyInfo { tcx: hir_ctx.tcx }
+    }
+
     pub fn new(base: Rc<RefCell<LocalResolverBase>>) -> Self {
         let struct_tags = base.borrow().global_struct_tags.clone();
         let locals = base.borrow().global_locals.clone();
@@ -625,18 +639,19 @@ impl co2_ast::TypeResolver for LocalResolver {
                 DefOrLocal::UnrepresentableType(ty.clone()),
             ));
         }
-        let base_resolve = self.base.borrow_mut().resolver.resolve_relative_expr_path(
-            &self.module_path,
-            &path_pretty,
-        );
-        let expr_path_result = base_resolve.and_then(|res| match res {
-            ResolvedExprPath::Def(def_id, class) => Some((
+        let base_resolve = self
+            .base
+            .borrow_mut()
+            .resolver
+            .resolve_relative_expr_path(&self.module_path, &path_pretty);
+        let expr_path_result = base_resolve.map(|res| match res {
+            ResolvedExprPath::Def(def_id, class) => (
                 DefOrLocal::Def {
                     def_id,
                     generic_args: generic_args.clone(),
                 },
                 class,
-            )),
+            ),
         });
         let has_direct_expr_path = expr_path_result.is_some();
         let Some((def, class)) = self
@@ -682,7 +697,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                     TypeQueryResult::Expr,
                 ))
             })
-            .or_else(|| expr_path_result)
+            .or(expr_path_result)
             .or_else(|| {
                 PrimitiveTy::parse(&path_pretty)
                     .map(|prim| (DefOrLocal::Prim(prim), TypeQueryResult::Type))
@@ -704,12 +719,25 @@ impl co2_ast::TypeResolver for LocalResolver {
             let span = path.segments.first().unwrap().1;
             return Err((format!("Unresolved name {path}"), span));
         };
-        if !generic_args.is_empty() && matches!(def, DefOrLocal::Local(_) | DefOrLocal::FuncName) {
+        if !generic_args.is_empty() {
             let span = path.segments.last().unwrap().1;
-            return Err((
-                "type arguments are not allowed on local variable".to_owned(),
-                span,
-            ));
+            if matches!(def, DefOrLocal::Local(_) | DefOrLocal::FuncName) {
+                return Err((
+                    "type arguments are not allowed on local variable".to_owned(),
+                    span,
+                ));
+            }
+            if matches!(
+                def,
+                DefOrLocal::Prim(_)
+                    | DefOrLocal::Const(_)
+                    | DefOrLocal::UnrepresentableType(_)
+            ) {
+                return Err((
+                    format!("type arguments are not allowed on `{path_pretty}`"),
+                    span,
+                ));
+            }
         }
         Ok((class, def))
     }

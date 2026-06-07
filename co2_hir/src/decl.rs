@@ -326,6 +326,24 @@ impl HirCtx<'_> {
         ))
     }
 
+    /// Lower generic args that may contain `RustTy::Wild`.
+    /// `Wild` is replaced with the function's own `TyKind::Param` at the given `param_idx`,
+    /// so inference can fill it in later.
+    pub(crate) fn lower_generic_arg_with_wild(
+        &self,
+        param_idx: usize,
+        arg: &Spanned<RustTy<LocalResolver>>,
+        fn_params: &[GenericArgKind],
+    ) -> GenericArgKind {
+        match &arg.0 {
+            RustTy::Wild => fn_params
+                .get(param_idx)
+                .cloned()
+                .unwrap_or(GenericArgKind::Type(Ty::from_rigid_kind(RigidTy::Never))),
+            _ => GenericArgKind::Type(self.lower_rust_ty(arg.clone())),
+        }
+    }
+
     pub(crate) fn lower_generic_args(
         &self,
         generic_args: &[Spanned<RustTy<LocalResolver>>],
@@ -400,6 +418,12 @@ impl HirCtx<'_> {
                 })))
             }
             RustTy::Never => Ty::from_rigid_kind(RigidTy::Never),
+            RustTy::Wild => {
+                self.terminate_with_error(
+                    span,
+                    "Wild type argument `_` can only be used in function call generic arguments",
+                );
+            }
         }
     }
 

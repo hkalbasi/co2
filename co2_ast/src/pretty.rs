@@ -576,6 +576,33 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Expression<R>> {
                     pp.leaf_data("FieldName", &fmt_span(&field.1, pp.config), &field.0);
                 });
             }
+            Expression::MethodCall {
+                receiver,
+                method,
+                generics,
+                params,
+            } => {
+                pp.node("MethodCall", &sp, |pp| {
+                    receiver.pretty_print(pp);
+                    pp.leaf_data("Method", &fmt_span(&method.1, pp.config), &method.0);
+                    if !generics.is_empty() {
+                        pp.leaf(
+                            "Generics",
+                            &format!(
+                                "<{}>",
+                                generics
+                                    .iter()
+                                    .map(|g| format!("{:?}", g.0))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        );
+                    }
+                    for param in params {
+                        param.pretty_print(pp);
+                    }
+                });
+            }
             Expression::Subscript(base, index) => {
                 pp.node("Subscript", &sp, |pp| {
                     base.pretty_print(pp);
@@ -1020,6 +1047,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<RustTy<R>> {
                 });
             }
             RustTy::Never => pp.leaf("Never", &sp),
+            RustTy::Wild => pp.leaf("Wild", &sp),
         }
     }
 }

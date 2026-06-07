@@ -103,7 +103,16 @@ impl<'a> HirCtx<'a> {
     ) -> ResolvedValue {
         let ty = CrateItem(def_id).ty();
         if matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnDef(..))) {
-            ResolvedValue::Fn(FnDef(def_id), self.lower_generic_args(generic_args))
+            let fn_params = match ty.kind() {
+                TyKind::RigidTy(RigidTy::FnDef(_, GenericArgs(params))) => params.clone(),
+                _ => vec![],
+            };
+            let args: Vec<GenericArgKind> = generic_args
+                .iter()
+                .enumerate()
+                .map(|(i, arg)| self.lower_generic_arg_with_wild(i, arg, &fn_params))
+                .collect();
+            ResolvedValue::Fn(FnDef(def_id), args)
         } else if self.decl_resolver.is_constexpr_def(def_id) {
             ResolvedValue::StaticConst(def_id)
         } else {

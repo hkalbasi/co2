@@ -20,10 +20,9 @@ use co2_parser::{
 };
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
-    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature,
-    GeneratedAttr, HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule,
-    HirModuleItem, HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind,
-    StructField,
+    AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
+    HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
+    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind, StructField,
     rustc_public::{
         DefId,
         mir::Mutability,
@@ -322,6 +321,12 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         }
         Expression::Call { func, params } => {
             expr_contains_local(&func.0) || params.iter().any(|param| expr_contains_local(&param.0))
+        }
+        Expression::MethodCall {
+            receiver, params, ..
+        } => {
+            expr_contains_local(&receiver.0)
+                || params.iter().any(|param| expr_contains_local(&param.0))
         }
         Expression::AssignWithOp { lhs, rhs, .. } | Expression::BinOp(lhs, _, rhs) => {
             expr_contains_local(&lhs.0) || expr_contains_local(&rhs.0)
@@ -1939,15 +1944,24 @@ pub fn lower_crate_sig(
         transmute: FnDef(ctx.resolve("core::intrinsics::transmute").unwrap().0),
         transmute_copy: FnDef(ctx.resolve("core::mem::transmute_copy").unwrap().0),
         offset_mut: resolve_inherent_method(
-            Ty::new_ptr(Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)), Mutability::Mut),
+            Ty::new_ptr(
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)),
+                Mutability::Mut,
+            ),
             "offset",
         ),
         offset_const: resolve_inherent_method(
-            Ty::new_ptr(Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)), Mutability::Not),
+            Ty::new_ptr(
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)),
+                Mutability::Not,
+            ),
             "offset",
         ),
         offset_from: resolve_inherent_method(
-            Ty::new_ptr(Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)), Mutability::Not),
+            Ty::new_ptr(
+                Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8)),
+                Mutability::Not,
+            ),
             "offset_from",
         ),
     };

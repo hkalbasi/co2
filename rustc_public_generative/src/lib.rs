@@ -9,6 +9,7 @@ use std::{any::Any, path::PathBuf};
 
 use rustc_middle::ty::TyCtxt;
 use rustc_public::DefId;
+use rustc_public::ty::GenericArgs;
 
 extern crate rustc_abi;
 extern crate rustc_ast;
@@ -100,15 +101,25 @@ impl DependencyInfo<'_> {
         internal::dependency_impls(self.tcx, def_id)
     }
 
-    pub fn incoherent_impls(
-        &self,
-        receiver_ty: rustc_public::ty::Ty,
-    ) -> Vec<ImplFunction> {
+    pub fn incoherent_impls(&self, receiver_ty: rustc_public::ty::Ty) -> Vec<ImplFunction> {
         internal::dependency_incoherent_impls(self.tcx, receiver_ty)
     }
 
     pub fn is_trait(&self, def_id: DefId) -> bool {
         internal::dependency_is_trait(self.tcx, def_id)
+    }
+
+    pub fn fn_once_output_params(&self, fn_def_id: DefId) -> Vec<(u32, u32)> {
+        internal::fn_once_output_params(self.tcx, fn_def_id)
+    }
+
+    pub fn check_fn_predicates(
+        &self,
+        fn_def_id: DefId,
+        fn_generic_args: &GenericArgs,
+        owner: DefId,
+    ) -> Result<(), String> {
+        internal::check_fn_predicates(self.tcx, fn_def_id, fn_generic_args, owner)
     }
 }
 

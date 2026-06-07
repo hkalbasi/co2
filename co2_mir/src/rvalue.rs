@@ -81,13 +81,36 @@ impl Builder<'_, '_> {
         span: RustSpan,
     ) -> MirOperand {
         let mut bytes = s.to_vec();
-        bytes.push(0);
+        let needs_nul = !matches!(ptr_ty.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, _)));
+        if needs_nul {
+            bytes.push(0);
+        }
 
         // Allocate string bytes in static (rodata) memory via a &'static str constant.
         // TODO: This unsafe is super invalid. C allow arbitrary string literal, not just utf8.
         //       The whole code here is nonsense.
         let str_const = MirConst::from_str(unsafe { std::str::from_utf8_unchecked(&bytes) });
         let str_ref_ty = str_const.ty(); // &'static str
+
+        // If the requested type is a reference (e.g. &str for s"..." literals),
+        // return the &'static str constant directly without the raw-pointer
+        // round-trip.
+        if matches!(ptr_ty.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, _))) {
+            let str_ref_local = self.new_temp(str_ref_ty, Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(str_ref_local),
+                    Rvalue::Use(MirOperand::Constant(ConstOperand {
+                        span,
+                        user_ty: None,
+                        const_: str_const,
+                    })),
+                ),
+                span,
+            });
+            return MirOperand::Copy(place(str_ref_local));
+        }
+
         // Use Mutability::Mut so that if this assignment is inside a loop body
         // (a basic block executed multiple times), rustc does not emit E0384.
         let str_ref_local = self.new_temp(str_ref_ty, Mutability::Mut, span);

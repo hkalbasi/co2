@@ -288,6 +288,13 @@ impl<'a> Tokenizer<'a> {
                         continue;
                     }
 
+                    // s"..." - Rust &str string literal
+                    if b == b's' && self.pos + 1 < self.len && self.bytes[self.pos + 1] == b'"' {
+                        self.pos += 2;
+                        self.scan_string_body(out, StringLiteralPrefix::Str);
+                        continue;
+                    }
+
                     // String literal "
                     if b == b'"' {
                         self.pos += 1;

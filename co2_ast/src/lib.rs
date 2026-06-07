@@ -93,6 +93,12 @@ pub enum Expression<R: TypeResolver> {
     LabelAddress(Spanned<String>),
     Field(Box<Spanned<Expression<R>>>, Spanned<String>),
     Arrow(Box<Spanned<Expression<R>>>, Spanned<String>),
+    MethodCall {
+        receiver: Box<Spanned<Expression<R>>>,
+        method: Spanned<String>,
+        generics: Vec<Spanned<RustTy<StatelessResolver>>>,
+        params: Vec<Spanned<Expression<R>>>,
+    },
     Subscript(Box<Spanned<Expression<R>>>, Box<Spanned<Expression<R>>>),
     Call {
         func: Box<Spanned<Expression<R>>>,
@@ -337,6 +343,7 @@ fn rust_ty_to_pretty<R: TypeResolver>(ty: &RustTy<R>) -> String {
             format!("fn({params}) -> {}", rust_ty_to_pretty(&ret_ty.0))
         }
         RustTy::Never => "!".to_owned(),
+        RustTy::Wild => "_".to_owned(),
     }
 }
 
@@ -627,6 +634,7 @@ pub enum FloatSuffix {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StringLiteralPrefix {
     None,
+    Str,
     Utf8,
     Utf16,
     Utf32,
@@ -637,6 +645,7 @@ impl StringLiteralPrefix {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "",
+            Self::Str => "s",
             Self::Utf8 => "u8",
             Self::Utf16 => "u",
             Self::Utf32 => "U",
@@ -646,7 +655,7 @@ impl StringLiteralPrefix {
 
     pub fn element_size(self) -> usize {
         match self {
-            Self::None | Self::Utf8 => 1,
+            Self::None | Self::Str | Self::Utf8 => 1,
             Self::Utf16 => 2,
             Self::Utf32 | Self::Wide => 4,
         }
@@ -654,7 +663,7 @@ impl StringLiteralPrefix {
 
     pub fn code_unit_len(self, bytes: &[u8]) -> usize {
         match self {
-            Self::None | Self::Utf8 => bytes.len(),
+            Self::None | Self::Str | Self::Utf8 => bytes.len(),
             Self::Utf16 | Self::Utf32 | Self::Wide => {
                 String::from_utf8_lossy(bytes).chars().count()
             }
@@ -987,6 +996,7 @@ pub enum RustTy<R: TypeResolver> {
         ret_ty: Box<Spanned<RustTy<R>>>,
     },
     Never,
+    Wild,
 }
 
 #[derive(Debug, Clone)]

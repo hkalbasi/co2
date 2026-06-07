@@ -1,0 +1,10 @@
+Simple 3 42
+Simple 12 42
+Generic Debug 4 42
+Generic Debug 6 42
+GenericWrap simple: 42
+GenericWrap extra_param: 42 99
+GenericWrap extra_param: 42 100
+GenericWrap replace: 42 "hello"
+GenericWrap simple: "hello"
+GenericWrap map: "hello" 5

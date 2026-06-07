@@ -1,0 +1,23 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::mem::transmute;
+
+#include <assert.h>
+
+#[derive(Copy)]
+pub struct F1St {
+    x: u8,
+    y: u8,
+}
+
+fn f1() {
+    u16 a = 0xabcd;
+    F1St b = transmute::<_, F1St>(a);
+    assert(b.x == 0xcd);
+    assert(b.y == 0xab);
+}
+
+fn main() {
+    f1();
+}

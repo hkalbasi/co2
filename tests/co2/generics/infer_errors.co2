@@ -1,0 +1,20 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::mem::size_of;
+
+fn f1() -> usize {
+    return size_of();
+         //^^^^^^^ error: failed to infer generic args.
+}
+
+fn f2() -> usize {
+    return s"hello".parse();
+                  //^^^^^ error: failed to infer generic args.
+}
+
+
+fn main() {
+    f1();
+    f2();
+}

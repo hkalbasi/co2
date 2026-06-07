@@ -57,7 +57,9 @@ fn run_main() -> Result<()> {
 
     eprintln!(
         "summary: passed={}, failed={}, skipped={}  ({:.2}s)",
-        stats.passed, stats.failed, stats.skipped,
+        stats.passed,
+        stats.failed,
+        stats.skipped,
         elapsed.as_secs_f64(),
     );
 

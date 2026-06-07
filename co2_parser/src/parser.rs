@@ -676,6 +676,11 @@ where
             Call(Vec<Spanned<Expression<R>>>),
             Dot(Spanned<String>),
             Arrow(Spanned<String>),
+            MethodCall {
+                ident: Spanned<String>,
+                generics: Vec<Spanned<RustTy<StatelessResolver>>>,
+                params: Vec<Spanned<Expression<R>>>,
+            },
             PostInc,
             PostDec,
         }
@@ -871,9 +876,53 @@ where
         ))
         .map_with(|r, e| (r, e.span()));
 
+        let call_params = rec
+            .clone()
+            .separated_by(just(Token::Comma))
+            .collect()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+
+        let method_call_dot = just(Token::Dot)
+            .ignore_then(identifier())
+            .then(
+                just(Token::ColonColon)
+                    .ignore_then(
+                        rust_generic_arg_ty()
+                            .separated_by(just(Token::Comma))
+                            .collect::<Vec<_>>()
+                            .delimited_by(just(Token::Lt), just(Token::Gt)),
+                    )
+                    .then(call_params.clone()),
+            )
+            .map(|(ident, (generics, params))| PostfixPart::MethodCall {
+                ident,
+                generics,
+                params,
+            });
+
+        let method_call_arrow = just(Token::Arrow)
+            .ignore_then(identifier())
+            .then(
+                just(Token::ColonColon)
+                    .ignore_then(
+                        rust_generic_arg_ty()
+                            .separated_by(just(Token::Comma))
+                            .collect::<Vec<_>>()
+                            .delimited_by(just(Token::Lt), just(Token::Gt)),
+                    )
+                    .then(call_params.clone()),
+            )
+            .map(|(ident, (generics, params))| PostfixPart::MethodCall {
+                ident,
+                generics,
+                params,
+            });
+
         let postfix_expression = primary_expression
             .then(
                 choice((
+                    method_call_dot,
+                    method_call_arrow,
                     rec.clone()
                         .delimited_by(just(Token::LBracket), just(Token::RBracket))
                         .map(PostfixPart::<R>::Subscript),
@@ -907,6 +956,16 @@ where
                         },
                         PostfixPart::Dot(ident) => Expression::Field(Box::new(main), ident),
                         PostfixPart::Arrow(ident) => Expression::Arrow(Box::new(main), ident),
+                        PostfixPart::MethodCall {
+                            ident,
+                            generics,
+                            params,
+                        } => Expression::MethodCall {
+                            receiver: Box::new(main),
+                            method: ident,
+                            generics,
+                            params,
+                        },
                         PostfixPart::PostInc => Expression::Update {
                             expr: Box::new(main),
                             op: UpdateOp::Inc,
@@ -1485,6 +1544,10 @@ where
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     recursive(|rec| {
+        let wild = just(Token::Ident("_".to_string()))
+            .to(RustTy::Wild)
+            .map_with(|r, e| (r, e.span()));
+
         let path = rust_path_with_generic_args(rec.clone())
             .map(|path| (RustTy::Path((path.0, path.1)), path.1));
 
@@ -1547,7 +1610,7 @@ where
             })
             .map_with(|r, e| (r, e.span()));
 
-        choice((path, ptr, reference, never, tuple, slice_or_array))
+        choice((wild, path, ptr, reference, never, tuple, slice_or_array))
     })
 }
 

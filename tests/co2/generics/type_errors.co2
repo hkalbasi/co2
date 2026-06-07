@@ -1,0 +1,14 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::option::Option;
+use std::string::String;
+
+fn f1(x: Option<String>) -> Option<usize> {
+    return x.map(String::len);
+           //^^^ error: a trait bound is not satisfied: `std::ops::FnOnce` for types [FnDef(DefId(3:6791 ~ alloc[f16f]::string::{impl#0}::len), []), (std::string::String,)]
+}
+
+fn main() {
+    f1(Option::<String>::Some(String::new()));
+}

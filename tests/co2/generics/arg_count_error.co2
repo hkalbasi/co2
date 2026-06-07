@@ -1,0 +1,38 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::mem::{size_of, transmute};
+use std::collections::HashMap;
+use std::string::String;
+
+fn f1() {
+    size_of::<i32, i64>();
+  //^^^^^^^^^^^^^^^^^^^ Expected 1 generic argument, found 2
+}
+
+fn f2() {
+    size_of::<i32, i64, *mut ()>();
+  //^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Expected 1 generic argument, found 3
+}
+
+fn f3() {
+    HashMap::<String, i32> v = HashMap::<String, i32>::new();
+    v.get::<str, i32>("foo");
+    //^^^^^^^^^^^^^^^ Expected 1 generic argument, found 2
+}
+
+fn f4() {
+    transmute::<i32>(5);
+  //^^^^^^^^^^^^^^^^ Expected 2 generic argument, found 1
+}
+
+fn f5(x: &str) {
+    x.strip_circumfix::<&str, &str>(s"foo", s"bar");
+    x.strip_circumfix(s"foo", s"bar");
+    x.strip_circumfix::<>(s"foo", s"bar");
+    x.strip_circumfix::<&str>(s"foo", s"bar");
+    //^^^^^^^^^^^^^^^^^^^^^^^ Expected 2 generic argument, found 1
+}
+
+
+fn main() {}

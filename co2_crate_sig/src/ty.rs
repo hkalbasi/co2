@@ -834,6 +834,9 @@ impl LocalResolverBase {
                 span: rust_span,
             },
             co2_ast::RustTy::Slice(_) => panic!("slice generic arguments are not supported here"),
+            co2_ast::RustTy::Wild => {
+                panic!("Wild generic argument is not supported in crate signature context")
+            }
         }
     }
 
@@ -1291,9 +1294,9 @@ impl LocalResolverBase {
         match expr {
             Expression::Constant(Constant::String(s)) => {
                 let elem_ty = match s.prefix {
-                    StringLiteralPrefix::None | StringLiteralPrefix::Utf8 => {
-                        HirTy::signed_ty(IntTy::I8, rust_span)
-                    }
+                    StringLiteralPrefix::None
+                    | StringLiteralPrefix::Str
+                    | StringLiteralPrefix::Utf8 => HirTy::signed_ty(IntTy::I8, rust_span),
                     StringLiteralPrefix::Utf16 => HirTy::unsigned_ty(UintTy::U16, rust_span),
                     StringLiteralPrefix::Utf32 => HirTy::unsigned_ty(UintTy::U32, rust_span),
                     StringLiteralPrefix::Wide => HirTy::signed_ty(IntTy::I32, rust_span),

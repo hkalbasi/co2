@@ -1,0 +1,17 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::option::Option;
+use std::string::String;
+
+#include <assert.h>
+
+fn f(x: Option<String>) -> Option<usize> {
+    return x.as_ref().map(String::len);
+}
+
+fn main() {
+    if (f(Option::<String>::Some(s"hello".to_owned())).unwrap() != 5) {
+        assert(0);
+    }
+}

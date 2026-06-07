@@ -1,31 +1,32 @@
 use reqwest::blocking::Client;
 use serde_json::Value;
+use std::string::String;
 
 #include <stdio.h>
 
 fn main() {
     Client client = Client::builder()
-        .user_agent("reqwest-gh-stars-co2-example")
+        .user_agent::<&str>(s"reqwest-gh-stars-co2-example")
         .build()
         .unwrap();
 
     Value resp = client
-        .get("https://api.github.com/repos/rust-lang/rust")
+        .get::<&str>(s"https://api.github.com/repos/hkalbasi/co2")
         .send()
         .unwrap()
-        .json()
+        .json::<Value>()
         .unwrap();
 
     String name = resp
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("<unknown>")
+        .get::<&str>(s"name")
+        .and_then::<&str, _>(Value::as_str)
+        .unwrap_or(s"<unknown>")
         .to_owned();
 
     u64 stars = resp
-        .get("stargazers_count")
-        .and_then(Value::as_u64)
+        .get(s"stargazers_count")
+        .and_then::<u64, _>(Value::as_u64)
         .unwrap_or(0);
 
-    printf("%.*s has %lu stars\n", name.len(), name.as_ptr(), stars);
+    printf("%.*s has %lu stars\n", name.len(), name.as_str().as_ptr(), stars);
 }

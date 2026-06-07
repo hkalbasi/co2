@@ -25,5 +25,9 @@ if $run.exit_code != 0 {
     print $"app failed: ($run.stderr)"
     exit 3
 }
+if ($run.stdout | str trim) != (cat ./stdout.expected | str trim) {
+    print $"Diff in stdout: GOT\n($run.stdout)\nEXPECTED\n(cat ./stdout.expected | str trim)"
+    exit 4
+}
 
 exit 0

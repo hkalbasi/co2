@@ -1367,7 +1367,7 @@ impl Builder<'_, '_> {
             self.lower_zeroed_to_destination(place(tmp), span, dst_ty);
             return MirOperand::Copy(place(tmp));
         }
-        if src_is_ref && dst_is_ptr {
+        if src_is_ref && (dst_is_ptr || dst_is_ref) {
             let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(

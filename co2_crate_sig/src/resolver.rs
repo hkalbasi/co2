@@ -7,29 +7,11 @@ use co2_ast::{
 };
 
 #[derive(Debug, Clone)]
-pub struct ResolveError {
-    pub path: String,
-    pub failed_segment: String,
-    pub candidates: Vec<String>,
-}
+pub struct ResolveError; // TODO: add reason of failure.
 
 impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.candidates.is_empty() {
-            write!(
-                f,
-                "failed to resolve `{}`: segment `{}` not found",
-                self.path, self.failed_segment,
-            )
-        } else {
-            write!(
-                f,
-                "failed to resolve `{}`: segment `{}` not found, expected one of: {}",
-                self.path,
-                self.failed_segment,
-                self.candidates.join(", "),
-            )
-        }
+        write!(f, "failed to resolve path")
     }
 }
 use rustc_public_generative::{
@@ -92,8 +74,9 @@ fn type_query_result(kind: &DependencyChildKind) -> TypeQueryResult {
         DependencyChildKind::Struct
         | DependencyChildKind::Enum
         | DependencyChildKind::Union
-        | DependencyChildKind::Trait => TypeQueryResult::Type,
-        DependencyChildKind::Module | DependencyChildKind::Other => TypeQueryResult::Type,
+        | DependencyChildKind::Trait
+        | DependencyChildKind::Module
+        | DependencyChildKind::Other => TypeQueryResult::Type,
     }
 }
 
@@ -105,14 +88,6 @@ fn module_data_class(data: &ModuleData) -> Option<TypeQueryResult> {
 }
 
 impl ModuleData {
-
-    fn as_content(&self) -> &ModuleContent {
-        match self {
-            Self::Expanded(c) => c,
-            Self::Unexpanded(_) => panic!("ModuleData not expanded"),
-        }
-    }
-
     fn as_content_mut(&mut self) -> &mut ModuleContent {
         match self {
             Self::Expanded(c) => c,
@@ -120,14 +95,22 @@ impl ModuleData {
         }
     }
 
-    fn fill_impl_children(content: &mut ModuleContent, def_id: DefId, dep_info: &DependencyInfo<'_>) {
+    fn fill_impl_children(
+        content: &mut ModuleContent,
+        def_id: DefId,
+        dep_info: &DependencyInfo<'_>,
+    ) {
         let impls = dep_info.impls(def_id);
         for impl_fn in impls {
-            content.items.entry(impl_fn.name.clone()).or_insert_with(|| {
-                let mut c = ModuleContent::default();
-                c.id = Some((impl_fn.def_id, TypeQueryResult::Expr));
-                ModuleData::Expanded(Box::new(c))
-            });
+            content
+                .items
+                .entry(impl_fn.name.clone())
+                .or_insert_with(|| {
+                    ModuleData::Expanded(Box::new(ModuleContent {
+                        id: Some((impl_fn.def_id, TypeQueryResult::Expr)),
+                        ..Default::default()
+                    }))
+                });
         }
     }
 
@@ -141,8 +124,10 @@ impl ModuleData {
         let mut content = ModuleContent::default();
         let children = dep_info.children(def_id);
         for child in children {
-            let mut child_content = ModuleContent::default();
-            child_content.id = Some((child.def_id, type_query_result(&child.kind)));
+            let mut child_content = ModuleContent {
+                id: Some((child.def_id, type_query_result(&child.kind))),
+                ..Default::default()
+            };
             let child_data = match child.kind {
                 DependencyChildKind::Module | DependencyChildKind::Trait => {
                     ModuleData::Unexpanded(child.def_id)
@@ -212,25 +197,10 @@ impl ModuleData {
         if path[0].starts_with('<') {
             return self.resolve_path_inner(&path[1..], dep_info);
         }
-        let child = content.items.get_mut(path[0])?;
-        let result = child.resolve_path_inner(&path[1..], dep_info);
-        result
-    }
-
-    fn resolve_path_or_unique_leaf<'a>(
-        &'a mut self,
-        path: impl IntoIterator<Item = &'a str>,
-        dep_info: &DependencyInfo<'_>,
-    ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
-        let parts: Vec<&str> = path.into_iter().collect();
-        match self.resolve_path_inner(&parts, dep_info) {
-            Some(found) => Some(found),
-            None if parts.len() == 1 => {
-                self.ensure_expanded(dep_info);
-                self.as_content().lookup_unique_leaf(parts[0]).and_then(|m| m.id)
-            }
-            None => None,
-        }
+        content
+            .items
+            .get_mut(path[0])?
+            .resolve_path_inner(&path[1..], dep_info)
     }
 
     pub(crate) fn insert_alias(&mut self, alias: &str, item: ModuleData) {
@@ -250,9 +220,13 @@ impl ModuleData {
         if include_builtin_va_list {
             for name in ["__builtin_va_list", "__gnuc_va_list"] {
                 let def_id = ctx.allocate_def_id(parent, &DefData::TypeNs(name.to_owned()));
-                let mut c = ModuleContent::default();
-                c.id = Some((def_id, TypeQueryResult::Type));
-                this.items.insert(name.to_owned(), ModuleData::Expanded(Box::new(c)));
+                this.items.insert(
+                    name.to_owned(),
+                    ModuleData::Expanded(Box::new(ModuleContent {
+                        id: Some((def_id, TypeQueryResult::Type)),
+                        ..Default::default()
+                    })),
+                );
             }
         }
         for (item, _) in &ast.items {
@@ -272,17 +246,25 @@ impl ModuleData {
                         decl.clone()
                     };
                     let def_id = ctx.allocate_def_id(parent, &DefData::ValueNs(def_name));
-                    let mut c = ModuleContent::default();
-                    c.id = Some((def_id, TypeQueryResult::Expr));
-                    this.items.insert(decl.clone(), ModuleData::Expanded(Box::new(c)));
+                    this.items.insert(
+                        decl.clone(),
+                        ModuleData::Expanded(Box::new(ModuleContent {
+                            id: Some((def_id, TypeQueryResult::Expr)),
+                            ..Default::default()
+                        })),
+                    );
                 }
                 Declaration::RustTypeAlias { ident, .. }
                 | Declaration::RustStruct { ident, .. } => {
                     let name = ident.0.as_str();
                     let def_id = ctx.allocate_def_id(parent, &DefData::TypeNs(name.to_owned()));
-                    let mut c = ModuleContent::default();
-                    c.id = Some((def_id, TypeQueryResult::Type));
-                    this.items.insert(name.to_owned(), ModuleData::Expanded(Box::new(c)));
+                    this.items.insert(
+                        name.to_owned(),
+                        ModuleData::Expanded(Box::new(ModuleContent {
+                            id: Some((def_id, TypeQueryResult::Type)),
+                            ..Default::default()
+                        })),
+                    );
                 }
                 Declaration::Declaration {
                     attrs: _,
@@ -305,9 +287,13 @@ impl ModuleData {
                             }
                             let def_id =
                                 ctx.allocate_def_id(parent, &DefData::TypeNs(name.clone()));
-                            let mut c = ModuleContent::default();
-                            c.id = Some((def_id, TypeQueryResult::Type));
-                            this.items.insert(name, ModuleData::Expanded(Box::new(c)));
+                            this.items.insert(
+                                name,
+                                ModuleData::Expanded(Box::new(ModuleContent {
+                                    id: Some((def_id, TypeQueryResult::Type)),
+                                    ..Default::default()
+                                })),
+                            );
                         }
                     } else {
                         for decl in declarators {
@@ -325,9 +311,13 @@ impl ModuleData {
                             };
                             let def_id =
                                 ctx.allocate_def_id(parent, &DefData::ValueNs(name.clone()));
-                            let mut c = ModuleContent::default();
-                            c.id = Some((def_id, TypeQueryResult::Expr));
-                            this.items.insert(name, ModuleData::Expanded(Box::new(c)));
+                            this.items.insert(
+                                name,
+                                ModuleData::Expanded(Box::new(ModuleContent {
+                                    id: Some((def_id, TypeQueryResult::Expr)),
+                                    ..Default::default()
+                                })),
+                            );
                         }
                     }
                 }
@@ -335,38 +325,6 @@ impl ModuleData {
             }
         }
         ModuleData::Expanded(Box::new(this))
-    }
-}
-
-impl ModuleContent {
-    fn lookup_unique_leaf<'a>(&'a self, leaf: &str) -> Option<&'a Self> {
-        let mut matches = Vec::new();
-        self.collect_leaf_matches(leaf, &mut matches);
-        match matches.as_slice() {
-            [] => None,
-            [single] => Some(*single),
-            many => {
-                let first_id = many[0].id;
-                if first_id.is_some() && many.iter().all(|item| item.id == first_id) {
-                    Some(many[0])
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    fn collect_leaf_matches<'a>(&'a self, leaf: &str, out: &mut Vec<&'a Self>) {
-        if let Some(child) = self.items.get(leaf) {
-            if let ModuleData::Expanded(c) = child {
-                out.push(c);
-            }
-        }
-        for child in self.items.values() {
-            if let ModuleData::Expanded(c) = child {
-                c.collect_leaf_matches(leaf, out);
-            }
-        }
     }
 }
 
@@ -537,16 +495,16 @@ impl Resolver {
     }
 
     fn dep_info(&self) -> DependencyInfo<'static> {
-        DependencyInfo { tcx: self.hir_ctx.tcx }
+        DependencyInfo {
+            tcx: self.hir_ctx.tcx,
+        }
     }
 
     fn module_mut<'a>(&'a mut self, path: &[String]) -> &'a mut ModuleData {
         let mut module = &mut self.current;
         for segment in path {
             module = match module {
-                ModuleData::Expanded(c) => {
-                    c.items.entry(segment.clone()).or_default()
-                }
+                ModuleData::Expanded(c) => c.items.entry(segment.clone()).or_default(),
                 ModuleData::Unexpanded(_) => panic!("current module must be expanded"),
             };
         }
@@ -558,10 +516,11 @@ impl Resolver {
         module_path: &[String],
         path: impl IntoIterator<Item = &'a str>,
     ) -> Option<ModuleData> {
-        let parts: Vec<&str> = path.into_iter().collect();
-        let info = self.dep_info();
-
-        fn descend(node: &mut ModuleData, parts: &[&str], info: &DependencyInfo<'_>) -> Option<ModuleData> {
+        fn descend(
+            node: &mut ModuleData,
+            parts: &[&str],
+            info: &DependencyInfo<'_>,
+        ) -> Option<ModuleData> {
             node.ensure_expanded(info);
             if parts.is_empty() {
                 return Some(node.clone());
@@ -569,6 +528,9 @@ impl Resolver {
             let child = node.as_content_mut().items.get_mut(parts[0])?;
             descend(child, &parts[1..], info)
         }
+
+        let parts: Vec<&str> = path.into_iter().collect();
+        let info = self.dep_info();
 
         if let Some((prefix, rest)) = anchored_module_prefix(module_path, &parts) {
             let mut current = &mut self.current;
@@ -650,7 +612,9 @@ impl Resolver {
                 module_path,
                 use_item.path.iter().map(|(segment, _)| segment.as_str()),
             ) else {
-                if let Some((_, span)) = self.first_unresolved_use_segment(&info, module_path, use_item) {
+                if let Some((_, span)) =
+                    self.first_unresolved_use_segment(&info, module_path, use_item)
+                {
                     errors.push(co2_ast::Rich::custom(*span, "Unresolved item".to_owned()));
                 }
                 continue;
@@ -669,9 +633,10 @@ impl Resolver {
                 });
             }
             let item = if matches!(item_id, Some((_, TypeQueryResult::Expr))) {
-                let mut c = ModuleContent::default();
-                c.id = item_id;
-                ModuleData::Expanded(Box::new(c))
+                ModuleData::Expanded(Box::new(ModuleContent {
+                    id: item_id,
+                    ..Default::default()
+                }))
             } else {
                 item
             };
@@ -720,9 +685,12 @@ impl Resolver {
                         };
                         current = next;
                     }
-                    ModuleData::Unexpanded(_) => return Some(
-                        use_item.path.iter().find(|(name, _)| name.as_str() == *segment)?,
-                    ),
+                    ModuleData::Unexpanded(_) => {
+                        return use_item
+                            .path
+                            .iter()
+                            .find(|(name, _)| name.as_str() == *segment);
+                    }
                 }
             }
             return None;
@@ -786,7 +754,11 @@ impl Resolver {
         }
         let mut module = &mut self.current;
         for segment in path {
-            module = module.as_content_mut().items.entry(segment.clone()).or_default();
+            module = module
+                .as_content_mut()
+                .items
+                .entry(segment.clone())
+                .or_default();
         }
         module.insert_alias(alias, item);
     }
@@ -811,7 +783,10 @@ impl Resolver {
         self.current.resolve_path_inner(&parts, &info)
     }
 
-    pub fn resolve(&mut self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), ResolveError> {
+    pub fn resolve(
+        &mut self,
+        path: &str,
+    ) -> Result<(DefId, co2_ast::TypeQueryResult), ResolveError> {
         let parts: Vec<&str> = path.split("::").collect();
         let result = if let Some((crate_name, _)) = path.split_once("::") {
             if self.dependencies.contains_key(crate_name) {
@@ -824,68 +799,7 @@ impl Resolver {
         };
         match result {
             Some(found) => Ok(found),
-            None => Err(self.build_resolve_error(path, &parts)),
-        }
-    }
-
-    fn build_resolve_error(&mut self, path: &str, parts: &[&str]) -> ResolveError {
-        let tcx = self.hir_ctx.tcx;
-        let info = rustc_public_generative::DependencyInfo { tcx };
-
-        let dep_keys: Vec<String> = self.dependencies.keys().cloned().collect();
-
-        let root: &mut ModuleData;
-        let offset: usize;
-        if let Some((crate_name, _)) = path.split_once("::") {
-            if self.dependencies.contains_key(crate_name) {
-                root = self.dependencies.get_mut(crate_name).unwrap();
-                offset = 1;
-            } else {
-                root = &mut self.current;
-                offset = 0;
-            }
-        } else {
-            root = &mut self.current;
-            offset = 0;
-        }
-
-        let mut current = root;
-        for i in offset..parts.len() {
-            let seg = parts[i];
-            if seg.starts_with('<') {
-                continue;
-            }
-            current.ensure_expanded(&info);
-            if !current.as_content().items.contains_key(seg) {
-                let candidates = if offset == 0 && i == offset {
-                    let mut items: Vec<String> =
-                        current.as_content().items.keys().cloned().collect();
-                    items.sort();
-                    let mut all = Vec::with_capacity(dep_keys.len() + items.len());
-                    all.extend(dep_keys.iter().cloned());
-                    all.extend(items);
-                    all
-                } else {
-                    let mut items: Vec<String> =
-                        current.as_content().items.keys().cloned().collect();
-                    items.sort();
-                    items
-                };
-                return ResolveError {
-                    path: path.to_string(),
-                    failed_segment: seg.to_string(),
-                    candidates,
-                };
-            }
-            current = current.as_content_mut().items.get_mut(seg).unwrap();
-        }
-
-        current.ensure_expanded(&info);
-        let candidates = current.as_content().items.keys().cloned().collect();
-        ResolveError {
-            path: path.to_string(),
-            failed_segment: parts.last().unwrap_or(&"").to_string(),
-            candidates,
+            None => Err(ResolveError),
         }
     }
 
@@ -953,12 +867,11 @@ impl Resolver {
             _ => None,
         };
 
-        if let Some(ty_def_id) = ty_def_id {
-            if let Some(module) = self.method_receivers.get(&ty_def_id) {
-                if let Some(found) = Self::resolve_method_in_module(module, method) {
-                    return Some(found);
-                }
-            }
+        if let Some(ty_def_id) = ty_def_id
+            && let Some(module) = self.method_receivers.get(&ty_def_id)
+            && let Some(found) = Self::resolve_method_in_module(module, method)
+        {
+            return Some(found);
         }
 
         let info = self.dep_info();
@@ -968,6 +881,12 @@ impl Resolver {
                 if name == method {
                     return Some((impl_fn.def_id, TypeQueryResult::Expr));
                 }
+            }
+        }
+        for impl_fn in info.incoherent_impls(receiver_ty) {
+            let name = impl_fn.name.split("::").last().unwrap_or(&impl_fn.name);
+            if name == method {
+                return Some((impl_fn.def_id, TypeQueryResult::Expr));
             }
         }
         for impl_fn in info.incoherent_impls(receiver_ty) {
@@ -1028,12 +947,11 @@ impl Resolver {
             ModuleData::Expanded(c) => c,
             ModuleData::Unexpanded(_) => return None,
         };
-        if let Some((_, _)) = content.id {
-            if content.items.contains_key(method) {
-                if let ModuleData::Expanded(child) = &content.items[method] {
-                    return child.id;
-                }
-            }
+        if let Some((_, _)) = content.id
+            && content.items.contains_key(method)
+            && let ModuleData::Expanded(child) = &content.items[method]
+        {
+            return child.id;
         }
         let mut children: Vec<_> = content.items.iter().collect();
         children.sort_by_key(|(name, _)| method_search_priority(name));

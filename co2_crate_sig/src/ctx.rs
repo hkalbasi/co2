@@ -4,9 +4,7 @@ use rustc_public_generative::{
     DefData, FileId, HirModuleItem, HirStructureCtx, rustc_public::DefId,
 };
 
-use crate::{
-    resolver::ResolveError, LocalResolverBase, MirOwnerInfo,
-};
+use crate::{LocalResolverBase, MirOwnerInfo, resolver::ResolveError};
 
 pub(crate) struct CrateSigCtx<'a> {
     pub(crate) hir_ctx: &'a HirStructureCtx<'a>,
@@ -36,7 +34,10 @@ impl CrateSigCtx<'_> {
         self.hir_ctx.allocate_def_id(parent, data)
     }
 
-    pub(crate) fn resolve(&self, path: &str) -> Result<(DefId, co2_ast::TypeQueryResult), ResolveError> {
+    pub(crate) fn resolve(
+        &self,
+        path: &str,
+    ) -> Result<(DefId, co2_ast::TypeQueryResult), ResolveError> {
         self.resolver.borrow_mut().resolver.resolve(path)
     }
 

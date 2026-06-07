@@ -1,6 +1,25 @@
-use support_lib::{Struct1, Struct1Alias};
+use support_lib::{Struct1, Struct1Alias, GenericWrap};
+
+fn str_len(s: &str) -> usize {
+    return s.len();
+}
 
 fn main() {
     Struct1 s = Struct1::new(42);
     Struct1Alias s2 = Struct1Alias::new(43);
+
+    s.simple(3);
+    Struct1 *s_ptr = &s;
+    s_ptr.simple(12);
+
+    s.generic_debug::<i32>(4);
+    s.generic_debug(6);
+
+    GenericWrap::<i32> w = GenericWrap::<i32>::new(42);
+    w.ok();
+    w.extra_param::<i32>(99);
+    w.extra_param(100);
+    GenericWrap::<&str> ws = w.replace(s"hello");
+    ws.ok();
+    ws.map::<usize, _>(str_len);
 }
