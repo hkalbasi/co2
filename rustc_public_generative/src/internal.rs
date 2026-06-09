@@ -17,31 +17,38 @@ use rustc_data_structures::smallvec::SmallVec;
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
+use rustc_hir_analysis::autoderef::{Autoderef, AutoderefKind};
 use rustc_hir::def::{CtorKind, DefKind, Namespace, Res};
 use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefIdMap};
 use rustc_hir::definitions::{DefPathData, DisambiguatorState};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
 use rustc_index::{Idx, IndexVec};
+use rustc_infer::infer::DefineOpaqueTypes;
+use rustc_infer::traits::ObligationCause;
 use rustc_lint::Level;
 use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
 use rustc_middle::mir::{BorrowKind, ConstValue};
 use rustc_middle::queries::mir_borrowck::ProvidedValue as BorrowckProvidedValue;
 use rustc_middle::query::Providers as QueryProviders;
-use rustc_middle::ty::{self, TyCtxt, TypeVisitableExt, fast_reject::SimplifiedType};
+use rustc_middle::ty::{
+    self, GenericParamDefKind, TyCtxt, TypeVisitableExt, fast_reject::SimplifiedType,
+};
 use rustc_middle::util::Providers as UtilProviders;
 use rustc_public::rustc_internal::internal;
 use rustc_session::config::{CrateType, EntryFnType};
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
 use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
+use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 
 use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, StructField};
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{
     CrateGeneratorState, DependencyChild, DependencyChildKind, DependencyConstValue,
-    DependencyCrate, FileId, ImplFunction,
+    DependencyCrate, FileId, ImplFunction, ReceiverAdjustment, ReceiverAdjustmentStep,
+    ResolvedMethod,
 };
 use rustc_public::DefId;
 use rustc_public::mir::{
@@ -2665,6 +2672,532 @@ pub(crate) fn check_fn_predicates(
         }
     }
     Ok(())
+}
+
+pub(crate) fn resolve_inherent_method(
+    tcx: TyCtxt<'_>,
+    owner: DefId,
+    receiver_ty: MirTy,
+    method: &str,
+) -> Result<Option<ResolvedMethod>, String> {
+    resolve_method(tcx, owner, receiver_ty, method, &[])
+}
+
+pub(crate) fn resolve_method(
+    tcx: TyCtxt<'_>,
+    owner: DefId,
+    receiver_ty: MirTy,
+    method: &str,
+    traits_in_scope: &[DefId],
+) -> Result<Option<ResolvedMethod>, String> {
+    let owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let receiver_ty = normalize_ty_defaults_to_rustc(tcx, receiver_ty);
+    if receiver_ty.walk().any(|arg| matches!(arg.kind(), ty::GenericArgKind::Type(ty) if matches!(ty.kind(), ty::TyKind::Placeholder(_) | ty::TyKind::Infer(_) | ty::TyKind::Error(_)))) {
+        return Err(format!(
+            "cannot resolve method `{method}` on receiver type `{receiver_ty}` with incomplete type"
+        ));
+    }
+    let param_env = tcx.param_env(owner);
+    let infcx = tcx.infer_ctxt().build(ty::TypingMode::non_body_analysis());
+    let cause = ObligationCause::dummy();
+    let mut matches = Vec::new();
+    let owner_local = owner.as_local().unwrap_or(CRATE_DEF_ID);
+    let deref_steps = autoderef_steps(tcx, &infcx, param_env, owner_local, receiver_ty);
+    let trait_def_ids: Vec<_> = traits_in_scope
+        .iter()
+        .map(|trait_def_id| my_def_id_to_rustc_def_id(tcx, *trait_def_id))
+        .collect();
+
+    for step in deref_steps {
+        let mut step_inherent = Vec::new();
+
+        for impl_def_id in inherent_impl_def_ids_for_type(tcx, step.ty) {
+            let Some(item) = associated_fn_named(tcx, impl_def_id, method) else {
+                continue;
+            };
+            for (adjusted_self_ty, adjustment) in receiver_adjustments(tcx, &step, step.ty) {
+                if let Some(probe) = probe_inherent_method(
+                    tcx,
+                    &infcx,
+                    param_env,
+                    &cause,
+                    impl_def_id,
+                    item.def_id,
+                    step.ty,
+                    adjusted_self_ty,
+                    adjustment,
+                ) {
+                    step_inherent.push(probe);
+                }
+            }
+        }
+
+        // Inherent methods are always checked on every step.
+        step_inherent.dedup_by_key(|m| m.def_id);
+        if step_inherent.len() == 1 {
+            matches.push(step_inherent.pop().unwrap());
+            break;
+        }
+        if step_inherent.len() > 1 {
+            return Err(format!(
+                "multiple inherent methods named `{method}` apply to receiver type {:?}",
+                step.ty
+            ));
+        }
+
+        // For trait methods, skip reference and raw-pointer steps — these types are
+        // transparent in CO2 (autoderef includes them), so we want trait methods on
+        // the inner/pointee type, not blanket impls (like Clone → ToOwned) on the
+        // pointer/reference itself.
+        let mut step_trait = Vec::new();
+        if !matches!(step.ty.kind(), ty::TyKind::Ref(_, _, _) | ty::TyKind::RawPtr(_, _)) {
+            for &trait_def_id in &trait_def_ids {
+                let Some(item) = associated_fn_named(tcx, trait_def_id, method) else {
+                    continue;
+                };
+                for (adjusted_self_ty, adjustment) in receiver_adjustments(tcx, &step, step.ty) {
+                    if let Some(probe) = probe_trait_method(
+                        tcx,
+                        &infcx,
+                        param_env,
+                        &cause,
+                        trait_def_id,
+                        item.def_id,
+                        step.ty,
+                        adjusted_self_ty,
+                        adjustment,
+                    ) {
+                        step_trait.push(probe);
+                    }
+                }
+            }
+        }
+
+        step_trait.dedup_by_key(|m| m.def_id);
+        if step_trait.len() == 1 {
+            matches.push(step_trait.pop().unwrap());
+            break;
+        }
+        if step_trait.len() > 1 {
+            return Err(format!(
+                "multiple trait methods named `{method}` apply to receiver type {:?}",
+                step.ty
+            ));
+        }
+    }
+
+    if matches.is_empty() {
+        return Ok(None);
+    }
+    let matched = matches.pop().unwrap();
+    {
+        let sig = matched.sig.clone();
+        let internal_sig: ty::FnSig<'_> = rustc_public::rustc_internal::internal(tcx, sig);
+        if internal_sig.inputs_and_output.iter().any(|ty| ty.walk().any(|arg| matches!(arg.kind(), ty::GenericArgKind::Type(inner) if matches!(inner.kind(), ty::TyKind::Placeholder(_) | ty::TyKind::Infer(_) | ty::TyKind::Error(_))))) {
+            return Err(format!(
+                "cannot resolve method `{method}` on receiver type with incomplete type signature"
+            ));
+        }
+    }
+    Ok(Some(matched))
+}
+
+#[derive(Clone)]
+struct AutoderefStep<'tcx> {
+    ty: ty::Ty<'tcx>,
+    autoderefs: usize,
+    steps: Vec<ReceiverAdjustmentStep>,
+}
+
+fn autoderef_steps<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    infcx: &rustc_infer::infer::InferCtxt<'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
+    owner: LocalDefId,
+    receiver_ty: ty::Ty<'tcx>,
+) -> Vec<AutoderefStep<'tcx>> {
+    let mut out = Vec::new();
+    let mut adjustment_steps = Vec::new();
+    let mut autoderef = Autoderef::new(infcx, param_env, owner, DUMMY_SP, receiver_ty)
+        .include_raw_pointers()
+        .silence_errors();
+    while let Some((ty, autoderefs)) = autoderef.next() {
+        while adjustment_steps.len() < autoderefs {
+            let Some((source, kind)) = autoderef.steps().get(adjustment_steps.len()).copied()
+            else {
+                break;
+            };
+            let target = if adjustment_steps.len() + 1 == autoderefs {
+                ty
+            } else {
+                autoderef
+                    .steps()
+                    .get(adjustment_steps.len() + 1)
+                    .map(|(next_source, _)| *next_source)
+                    .unwrap_or(ty)
+            };
+            adjustment_steps.push(match kind {
+                AutoderefKind::Builtin => ReceiverAdjustmentStep::BuiltinDeref {
+                    source: rustc_public::rustc_internal::stable(source),
+                    target: rustc_public::rustc_internal::stable(target),
+                },
+                AutoderefKind::Overloaded => overloaded_deref_step(tcx, source, target),
+            });
+        }
+        out.push(AutoderefStep {
+            ty,
+            autoderefs,
+            steps: adjustment_steps.clone(),
+        });
+    }
+    out
+}
+
+fn overloaded_deref_step<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source: ty::Ty<'tcx>,
+    target: ty::Ty<'tcx>,
+) -> ReceiverAdjustmentStep {
+    let deref_trait = tcx.require_lang_item(LangItem::Deref, DUMMY_SP);
+    let deref_method = tcx
+        .associated_items(deref_trait)
+        .in_definition_order()
+        .find(|item| matches!(item.kind, ty::AssocKind::Fn { .. }) && item.name().as_str() == "deref")
+        .expect("Deref trait must define deref")
+        .def_id;
+    let trait_args = tcx.mk_args(&[source.into()]);
+    let method_args = ty::GenericArgs::for_item(tcx, deref_method, |param, _| {
+        let index = param.index as usize;
+        if index < trait_args.len() {
+            trait_args[index]
+        } else {
+            tcx.mk_param_from_def(param)
+        }
+    });
+    let sig = tcx.fn_sig(deref_method).instantiate(tcx, method_args);
+    let sig = tcx.instantiate_bound_regions_with_erased(sig);
+    ReceiverAdjustmentStep::OverloadedDeref {
+        source: rustc_public::rustc_internal::stable(source),
+        target: rustc_public::rustc_internal::stable(target),
+        target_ref: rustc_public::rustc_internal::stable(sig.output()),
+        method_def_id: rustc_def_to_my_def(tcx, deref_method),
+        generic_args: stable_generic_args(tcx, method_args),
+        sig: rustc_public::rustc_internal::stable(sig),
+    }
+}
+
+fn inherent_receiver_def_id(ty: ty::Ty<'_>) -> Option<RustcDefId> {
+    match ty.kind() {
+        ty::TyKind::Adt(def, _) => Some(def.did()),
+        _ => None,
+    }
+}
+
+fn inherent_impl_def_ids_for_type<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> Vec<RustcDefId> {
+    if let Some(def_id) = inherent_receiver_def_id(ty) {
+        return tcx.inherent_impls(def_id).to_vec();
+    }
+    let Some(simplified) = simplified_type_for_type(ty) else {
+        return vec![];
+    };
+    tcx.crates(())
+        .iter()
+        .flat_map(|&cnum| {
+            tcx.crate_incoherent_impls((cnum, simplified))
+                .iter()
+                .copied()
+        })
+        .collect()
+}
+
+fn simplified_type_for_type(ty: ty::Ty<'_>) -> Option<SimplifiedType> {
+    match ty.kind() {
+        ty::TyKind::Bool => Some(SimplifiedType::Bool),
+        ty::TyKind::Char => Some(SimplifiedType::Char),
+        ty::TyKind::Int(int) => Some(SimplifiedType::Int(match int {
+            IntTy::Isize => IntTy::Isize,
+            IntTy::I8 => IntTy::I8,
+            IntTy::I16 => IntTy::I16,
+            IntTy::I32 => IntTy::I32,
+            IntTy::I64 => IntTy::I64,
+            IntTy::I128 => IntTy::I128,
+        })),
+        ty::TyKind::Uint(uint) => Some(SimplifiedType::Uint(match uint {
+            UintTy::Usize => UintTy::Usize,
+            UintTy::U8 => UintTy::U8,
+            UintTy::U16 => UintTy::U16,
+            UintTy::U32 => UintTy::U32,
+            UintTy::U64 => UintTy::U64,
+            UintTy::U128 => UintTy::U128,
+        })),
+        ty::TyKind::Float(float) => Some(SimplifiedType::Float(match float {
+            FloatTy::F16 => FloatTy::F16,
+            FloatTy::F32 => FloatTy::F32,
+            FloatTy::F64 => FloatTy::F64,
+            FloatTy::F128 => FloatTy::F128,
+        })),
+        ty::TyKind::Adt(def, _) => Some(SimplifiedType::Adt(def.did())),
+        ty::TyKind::Foreign(def_id) => Some(SimplifiedType::Foreign(*def_id)),
+        ty::TyKind::Str => Some(SimplifiedType::Str),
+        ty::TyKind::Array(_, _) => Some(SimplifiedType::Array),
+        ty::TyKind::Slice(_) => Some(SimplifiedType::Slice),
+        ty::TyKind::RawPtr(_, mutability) => Some(SimplifiedType::Ptr(match mutability {
+            rustc_hir::Mutability::Mut => AstMutability::Mut,
+            rustc_hir::Mutability::Not => AstMutability::Not,
+        })),
+        _ => None,
+    }
+}
+
+fn associated_fn_named(
+    tcx: TyCtxt<'_>,
+    impl_def_id: RustcDefId,
+    method: &str,
+) -> Option<ty::AssocItem> {
+    tcx.associated_items(impl_def_id)
+        .in_definition_order()
+        .find(|item| {
+            matches!(item.kind, ty::AssocKind::Fn { .. }) && item.name().as_str() == method
+        })
+        .copied()
+}
+
+fn receiver_adjustments<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    step: &AutoderefStep<'tcx>,
+    ty: ty::Ty<'tcx>,
+) -> Vec<(ty::Ty<'tcx>, ReceiverAdjustment)> {
+    let mut out = vec![(
+        ty,
+        ReceiverAdjustment {
+            autoderefs: step.autoderefs,
+            steps: step.steps.clone(),
+            autoref: None,
+            mut_ptr_to_const_ptr: false,
+        },
+    )];
+    out.push((
+        ty::Ty::new_ref(tcx, tcx.lifetimes.re_erased, ty, rustc_hir::Mutability::Not),
+        ReceiverAdjustment {
+            autoderefs: step.autoderefs,
+            steps: step.steps.clone(),
+            autoref: Some(rustc_public::mir::Mutability::Not),
+            mut_ptr_to_const_ptr: false,
+        },
+    ));
+    out.push((
+        ty::Ty::new_ref(tcx, tcx.lifetimes.re_erased, ty, rustc_hir::Mutability::Mut),
+        ReceiverAdjustment {
+            autoderefs: step.autoderefs,
+            steps: step.steps.clone(),
+            autoref: Some(rustc_public::mir::Mutability::Mut),
+            mut_ptr_to_const_ptr: false,
+        },
+    ));
+    if let ty::TyKind::RawPtr(inner, rustc_hir::Mutability::Mut) = ty.kind() {
+        out.push((
+            ty::Ty::new_imm_ptr(tcx, *inner),
+            ReceiverAdjustment {
+                autoderefs: step.autoderefs,
+                steps: step.steps.clone(),
+                autoref: None,
+                mut_ptr_to_const_ptr: true,
+            },
+        ));
+    }
+    out
+}
+
+fn probe_inherent_method<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    infcx: &rustc_infer::infer::InferCtxt<'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
+    cause: &ObligationCause<'tcx>,
+    impl_def_id: RustcDefId,
+    method_def_id: RustcDefId,
+    step_ty: ty::Ty<'tcx>,
+    adjusted_self_ty: ty::Ty<'tcx>,
+    adjustment: ReceiverAdjustment,
+) -> Option<ResolvedMethod> {
+    infcx.probe(|_| {
+        let impl_args = infcx.fresh_args_for_item(DUMMY_SP, impl_def_id);
+        let impl_self_ty = tcx.type_of(impl_def_id).instantiate(tcx, impl_args);
+        let _ = infcx
+            .at(cause, param_env)
+            .eq(DefineOpaqueTypes::Yes, impl_self_ty, step_ty)
+            .ok()?;
+        let method_args = method_args_for_impl(tcx, infcx, method_def_id, impl_args);
+        probe_method_sig_and_obligations(
+            tcx,
+            infcx,
+            param_env,
+            cause,
+            method_def_id,
+            method_args,
+            adjusted_self_ty,
+            adjustment,
+            Some((impl_def_id, impl_args)),
+            None,
+        )
+    })
+}
+
+fn probe_trait_method<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    infcx: &rustc_infer::infer::InferCtxt<'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
+    cause: &ObligationCause<'tcx>,
+    trait_def_id: RustcDefId,
+    method_def_id: RustcDefId,
+    step_ty: ty::Ty<'tcx>,
+    adjusted_self_ty: ty::Ty<'tcx>,
+    adjustment: ReceiverAdjustment,
+) -> Option<ResolvedMethod> {
+    infcx.probe(|_| {
+        let trait_args = infcx.fresh_args_for_item(DUMMY_SP, trait_def_id);
+        let _ = infcx
+            .at(cause, param_env)
+            .eq(DefineOpaqueTypes::Yes, trait_args.type_at(0), step_ty)
+            .ok()?;
+        let method_args = method_args_for_trait(tcx, infcx, method_def_id, trait_args);
+        probe_method_sig_and_obligations(
+            tcx,
+            infcx,
+            param_env,
+            cause,
+            method_def_id,
+            method_args,
+            adjusted_self_ty,
+            adjustment,
+            None,
+            Some((trait_def_id, trait_args)),
+        )
+    })
+}
+
+fn probe_method_sig_and_obligations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    infcx: &rustc_infer::infer::InferCtxt<'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
+    cause: &ObligationCause<'tcx>,
+    method_def_id: RustcDefId,
+    method_args: ty::GenericArgsRef<'tcx>,
+    adjusted_self_ty: ty::Ty<'tcx>,
+    adjustment: ReceiverAdjustment,
+    impl_info: Option<(RustcDefId, ty::GenericArgsRef<'tcx>)>,
+    trait_info: Option<(RustcDefId, ty::GenericArgsRef<'tcx>)>,
+) -> Option<ResolvedMethod> {
+    let sig = tcx.fn_sig(method_def_id).instantiate(tcx, method_args);
+    let sig = tcx.instantiate_bound_regions_with_erased(sig);
+    let sig = infcx.resolve_vars_if_possible(sig);
+    let self_input = sig.inputs().first().copied()?;
+    let _ = infcx
+        .at(cause, param_env)
+        .eq(DefineOpaqueTypes::Yes, self_input, adjusted_self_ty)
+        .ok()?;
+
+    if let Some((impl_def_id, impl_args)) = impl_info {
+        let impl_bounds = tcx.predicates_of(impl_def_id).instantiate(tcx, impl_args);
+        for (clause, _) in impl_bounds {
+            let obligation = rustc_trait_selection::traits::Obligation::new(
+                tcx, cause.clone(), param_env, clause,
+            );
+            let result = infcx.evaluate_obligation(&obligation);
+            if matches!(result, Ok(rustc_trait_selection::traits::EvaluationResult::EvaluatedToErr { .. })) {
+                return None;
+            }
+        }
+    }
+    if let Some((trait_def_id, trait_args)) = trait_info {
+        let trait_ref = ty::TraitRef::new(tcx, trait_def_id, trait_args);
+        let obligation = rustc_trait_selection::traits::Obligation::new(
+            tcx,
+            cause.clone(),
+            param_env,
+            ty::Binder::dummy(trait_ref),
+        );
+        let result = infcx.evaluate_obligation(&obligation);
+        if matches!(result, Ok(rustc_trait_selection::traits::EvaluationResult::EvaluatedToErr { .. })) {
+            return None;
+        }
+    }
+    let method_bounds = tcx.predicates_of(method_def_id).instantiate(tcx, method_args);
+    let sized_trait = tcx.lang_items().sized_trait();
+    for (clause, _) in method_bounds {
+        // Skip implicit `Sized` bounds — method-level type params are implicitly
+        // Sized and we can't evaluate that in the caller's param_env.
+        if let Some(sized_trait) = sized_trait {
+            if let ty::ClauseKind::Trait(trait_pred) = clause.kind().skip_binder() {
+                if trait_pred.def_id() == sized_trait {
+                    continue;
+                }
+            }
+        }
+        // Skip all other method bounds too — they involve method-level generics
+        // which can't be evaluated in the caller's param_env. They will be checked
+        // at the call site after type inference from the arguments.
+    }
+
+    let resolved_args = tcx.mk_args_from_iter(
+        method_args
+            .iter()
+            .map(|arg| infcx.resolve_vars_if_possible(arg)),
+    );
+    let resolved_sig = infcx.resolve_vars_if_possible(sig);
+    Some(ResolvedMethod {
+        def_id: rustc_def_to_my_def(tcx, method_def_id),
+        generic_args: stable_generic_args(tcx, resolved_args),
+        sig: rustc_public::rustc_internal::stable(resolved_sig),
+        receiver_adjustment: adjustment,
+    })
+}
+
+fn method_args_for_impl<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    infcx: &rustc_infer::infer::InferCtxt<'tcx>,
+    method_def_id: RustcDefId,
+    impl_args: ty::GenericArgsRef<'tcx>,
+) -> ty::GenericArgsRef<'tcx> {
+    ty::GenericArgs::for_item(tcx, method_def_id, |param, _| {
+        let index = param.index as usize;
+        if index < impl_args.len() {
+            return infcx.resolve_vars_if_possible(impl_args[index]);
+        }
+        match param.kind {
+            GenericParamDefKind::Lifetime => tcx.lifetimes.re_erased.into(),
+            GenericParamDefKind::Type { .. } | GenericParamDefKind::Const { .. } => {
+                tcx.mk_param_from_def(param)
+            }
+        }
+    })
+}
+
+fn method_args_for_trait<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    infcx: &rustc_infer::infer::InferCtxt<'tcx>,
+    method_def_id: RustcDefId,
+    trait_args: ty::GenericArgsRef<'tcx>,
+) -> ty::GenericArgsRef<'tcx> {
+    ty::GenericArgs::for_item(tcx, method_def_id, |param, _| {
+        let index = param.index as usize;
+        if index < trait_args.len() {
+            return infcx.resolve_vars_if_possible(trait_args[index]);
+        }
+        match param.kind {
+            GenericParamDefKind::Lifetime => tcx.lifetimes.re_erased.into(),
+            GenericParamDefKind::Type { .. } | GenericParamDefKind::Const { .. } => {
+                tcx.mk_param_from_def(param)
+            }
+        }
+    })
+}
+
+fn stable_generic_args(_tcx: TyCtxt<'_>, args: ty::GenericArgsRef<'_>) -> GenericArgs {
+    GenericArgs(
+        args.iter()
+            .map(|arg| rustc_public::rustc_internal::stable(arg.kind()))
+            .collect(),
+    )
 }
 
 /// For a function definition, find which generic parameters have `FnOnce` bounds

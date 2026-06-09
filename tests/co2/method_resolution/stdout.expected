@@ -1,5 +1,7 @@
+--- simple ---
 Simple 3 42
 Simple 12 42
+--- generic ---
 Generic Debug 4 42
 Generic Debug 6 42
 GenericWrap simple: 42
@@ -8,3 +10,23 @@ GenericWrap extra_param: 42 100
 GenericWrap replace: 42 "hello"
 GenericWrap simple: "hello"
 GenericWrap map: "hello" 5
+--- generic_with_default ---
+GenericWrapWithDefault ok: 16 17
+GenericWrapWithDefault<i32> sum: 33
+GenericWrapWithDefault ok: 18 19
+GenericWrapWithDefault<i64> sum: 37
+--- auto_deref ---
+Simple 4 57
+Simple 5 57
+GenericWrap simple: 15
+GenericWrap extra_param: 15 99
+GenericWrap extra_param: 15 100
+GenericWrap simple: 15
+GenericWrap extra_param: 15 99
+GenericWrap extra_param: 15 100
+--- trait_methods ---
+TraitSimple 10
+--- generic_traits ---
+GenericWrap simple: 5
+GenericWrap extra_param: 5 55
+GenericWrap replace: 5 "abc"

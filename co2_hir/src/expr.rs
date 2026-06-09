@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use co2_ast::{
-    BinOp as ParsedBinOp, Constant, DoTransform as _, Expression, GenericAssociation,
-    Initializer, IntegerSuffix, RustTy, Span, Spanned, Statement, StatementOrDeclaration,
-    StringLiteral, StringLiteralPrefix, TypeName, UnaryOp as ParsedUnaryOp,
-    UpdateOp as ParsedUpdateOp,
+    BinOp as ParsedBinOp, Constant, DoTransform as _, Expression, GenericAssociation, Initializer,
+    IntegerSuffix, RustTy, Span, Spanned, Statement, StatementOrDeclaration, StringLiteral,
+    StringLiteralPrefix, TypeName, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
 use co2_crate_sig::{LocalResolver, LogicalAdtFieldKind, MethodResolutionKind};
 use la_arena::Arena;
@@ -26,7 +25,7 @@ use crate::ty::{
     is_maybe_uninit_fn_ptr_ty, is_numeric_ty, needs_implicit_cast, resolve_field_path_in_adt,
     ty_matches_expected,
 };
-use crate::{decl::hir_ty_to_ty, decl::CTy, ty::is_condition_ty};
+use crate::{decl::CTy, decl::hir_ty_to_ty, ty::is_condition_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
 fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span, String) {
@@ -40,6 +39,14 @@ fn invalid_span() -> Span {
 fn has_unresolved_params(args: &[GenericArgKind]) -> bool {
     args.iter()
         .any(|arg| matches!(arg, GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_))))
+}
+
+fn first_unresolved_generic_arg_index(args: &[GenericArgKind]) -> usize {
+    args.iter()
+        .position(
+            |arg| matches!(arg, GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_))),
+        )
+        .unwrap_or(args.len())
 }
 
 fn check_fn_predicates(
@@ -584,14 +591,31 @@ fn generic_args_extend_to_method_total(args: &mut Vec<GenericArgKind>, method_de
     }
 }
 
-fn receiver_generic_args_for_resolution(ty: Ty, kind: MethodResolutionKind) -> Vec<GenericArgKind> {
-    match kind {
-        MethodResolutionKind::Inherent => receiver_generic_args(ty),
-        MethodResolutionKind::Trait => vec![GenericArgKind::Type(trait_method_self_ty(ty))],
-    }
-}
-
 impl HirCtx<'_> {
+    fn resolve_method_for_call(
+        &self,
+        receiver_ty: Ty,
+        method: &str,
+        span: co2_ast::Span,
+    ) -> Result<Option<rustc_public_generative::ResolvedMethod>, (co2_ast::Span, String)> {
+        let trait_candidates = self
+            .decl_resolver
+            .traits_in_scope_with_method(method);
+        let trait_def_ids: Vec<_> = trait_candidates
+            .iter()
+            .map(|(_, trait_def_id, _)| *trait_def_id)
+            .collect();
+        self.decl_resolver
+            .dependency_info()
+            .resolve_method(
+                self.decl_resolver.current_owner(),
+                receiver_ty,
+                method,
+                &trait_def_ids,
+            )
+            .map_err(|msg| (span, msg))
+    }
+
     fn method_receiver_arg(&self, receiver: HirExpr, expected_ty: Ty) -> HirExpr {
         match expected_ty.kind() {
             TyKind::RigidTy(RigidTy::Ref(_, _, _) | RigidTy::RawPtr(_, _))
@@ -610,21 +634,101 @@ impl HirCtx<'_> {
         }
     }
 
+    fn apply_resolved_receiver_adjustment(
+        &self,
+        mut receiver: HirExpr,
+        adjustment: &rustc_public_generative::ReceiverAdjustment,
+        span: RustSpan,
+    ) -> HirExpr {
+        for step in &adjustment.steps {
+            match step {
+                rustc_public_generative::ReceiverAdjustmentStep::BuiltinDeref { target, .. } => {
+                    let span = receiver.span;
+                    receiver = HirExpr {
+                        kind: HirExprKind::Deref(Box::new(receiver)),
+                        ty: *target,
+                        span,
+                    };
+                }
+                rustc_public_generative::ReceiverAdjustmentStep::OverloadedDeref {
+                    method_def_id,
+                    generic_args,
+                    sig,
+                    target,
+                    target_ref,
+                    ..
+                } => {
+                    let fn_def = rustc_public_generative::rustc_public::ty::FnDef(*method_def_id);
+                    let resolved = ResolvedValue::Fn(fn_def, generic_args.0.clone());
+                    let func_ty = resolved.ty();
+                    let adjusted_receiver = sig
+                        .inputs()
+                        .first()
+                        .copied()
+                        .map(|expected| self.method_receiver_arg(receiver.clone(), expected))
+                        .unwrap_or_else(|| receiver.clone());
+                    receiver = HirExpr {
+                        kind: HirExprKind::Call {
+                            func: Box::new(HirExpr {
+                                kind: HirExprKind::Path(resolved),
+                                ty: func_ty,
+                                span,
+                            }),
+                            args: vec![adjusted_receiver],
+                        },
+                        ty: *target_ref,
+                        span: receiver.span,
+                    };
+                    receiver = HirExpr {
+                        kind: HirExprKind::Deref(Box::new(receiver)),
+                        ty: *target,
+                        span,
+                    };
+                }
+            }
+        }
+        if adjustment.mut_ptr_to_const_ptr
+            && let TyKind::RigidTy(RigidTy::RawPtr(inner, Mutability::Mut)) = receiver.ty.kind()
+        {
+            receiver = HirExpr {
+                kind: HirExprKind::Cast(Box::new(receiver.clone())),
+                ty: Ty::new_ptr(inner, Mutability::Not),
+                span: receiver.span,
+            };
+        }
+        if let Some(mutability) = adjustment.autoref {
+            let mutability = match mutability {
+                rustc_public_generative::rustc_public::mir::Mutability::Not => Mutability::Not,
+                rustc_public_generative::rustc_public::mir::Mutability::Mut => Mutability::Mut,
+            };
+            receiver = HirExpr {
+                kind: HirExprKind::AddrOf(Box::new(receiver.clone())),
+                ty: Ty::new_ptr(receiver.ty, mutability),
+                span: receiver.span,
+            };
+        }
+        receiver
+    }
+
     fn lower_method_receiver_and_params(
         &self,
         sig: &rustc_public_generative::rustc_public::ty::FnSig,
         receiver: &HirExpr,
+        adjustment: Option<&rustc_public_generative::ReceiverAdjustment>,
         params: &[Spanned<Expression<LocalResolver>>],
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<Vec<HirExpr>, (co2_ast::Span, String)> {
         let mut lowered_args = Vec::with_capacity(params.len() + 1);
-        let receiver = sig
-            .inputs()
-            .first()
-            .copied()
-            .map(|expected| self.method_receiver_arg(receiver.clone(), expected))
-            .unwrap_or(receiver.clone());
+        let receiver = if let Some(adjustment) = adjustment {
+            self.apply_resolved_receiver_adjustment(receiver.clone(), adjustment, receiver.span)
+        } else {
+            sig.inputs()
+                .first()
+                .copied()
+                .map(|expected| self.method_receiver_arg(receiver.clone(), expected))
+                .unwrap_or(receiver.clone())
+        };
         lowered_args.push(receiver);
         for param in params {
             let mut arg = self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
@@ -632,6 +736,103 @@ impl HirCtx<'_> {
             lowered_args.push(arg);
         }
         Ok(lowered_args)
+    }
+
+    fn lower_resolved_method_call(
+        &self,
+        resolved_method: rustc_public_generative::ResolvedMethod,
+        receiver: &HirExpr,
+        method_span: co2_ast::Span,
+        parser_span: co2_ast::Span,
+        generics: &[Spanned<RustTy<co2_ast::StatelessResolver>>],
+        params: &[Spanned<Expression<LocalResolver>>],
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let method_def = resolved_method.def_id;
+        let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
+        let mut resolved_generic_args = resolved_method.generic_args.0;
+        let resolver = &self.decl_resolver;
+        let turbofish_generics: Vec<Spanned<RustTy<LocalResolver>>> =
+            generics.iter().map(|g| g.transform(resolver)).collect();
+        let offset = first_unresolved_generic_arg_index(&resolved_generic_args);
+        if !turbofish_generics.is_empty() {
+            check_generic_arg_count(method_def, turbofish_generics.len(), offset, method_span)?;
+        }
+        let method_ty = CrateItem(method_def).ty();
+        let method_params = match method_ty.kind() {
+            TyKind::RigidTy(RigidTy::FnDef(_, GenericArgs(params))) => params.clone(),
+            _ => vec![],
+        };
+        for (i, gt) in turbofish_generics.iter().enumerate() {
+            let idx = offset + i;
+            if idx >= resolved_generic_args.len() {
+                resolved_generic_args.resize(idx + 1, GenericArgKind::Type(Ty::usize_ty()));
+            }
+            resolved_generic_args[idx] =
+                self.lower_generic_arg_with_wild(idx, gt, &method_params);
+        }
+        let mut sig = resolved_method.sig;
+        let mut resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
+        let mut func_ty = resolved.ty();
+        let mut lowered_args = self.lower_method_receiver_and_params(
+            &sig,
+            receiver,
+            Some(&resolved_method.receiver_adjustment),
+            params,
+            locals,
+            local_map,
+        )?;
+        let dependencies = self.decl_resolver.dependency_info();
+        infer_generic_args_from_args(
+            fn_def,
+            &mut sig,
+            &mut resolved_generic_args,
+            &mut resolved,
+            &mut func_ty,
+            &lowered_args,
+            1,
+            &dependencies,
+        );
+
+        if has_unresolved_params(&resolved_generic_args) {
+            return Err(spanned_error(method_span, "failed to infer generic args."));
+        }
+
+        // Re-derive sig from func_ty which has fully-concrete generic args now.
+        // Normalize aliases (projections) in the sig.
+        if let Some(new_sig) = callable_sig(func_ty) {
+            let mut new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
+            if new_sig.inputs().len() == sig.inputs().len() {
+                new_sig.inputs_and_output = new_sig
+                    .inputs_and_output
+                    .iter()
+                    .map(|ty| self.decl_resolver.normalize_ty_for_current_owner(*ty))
+                    .collect();
+                sig = new_sig;
+            }
+        }
+
+        check_fn_predicates(
+            &dependencies,
+            fn_def.0,
+            &resolved_generic_args,
+            self.decl_resolver.current_owner(),
+        )
+        .map_err(|msg| spanned_error(method_span, msg))?;
+        self.lower_call_args(parser_span, &sig, &mut lowered_args);
+        Ok(HirExpr {
+            kind: HirExprKind::Call {
+                func: Box::new(HirExpr {
+                    kind: HirExprKind::Path(resolved),
+                    ty: func_ty,
+                    span: self.to_rust_span(parser_span),
+                }),
+                args: lowered_args,
+            },
+            ty: sig.output(),
+            span: self.to_rust_span(parser_span),
+        })
     }
 
     fn specialize_fn_sig_from_receiver(
@@ -793,8 +994,6 @@ impl HirCtx<'_> {
         )>,
         (co2_ast::Span, String),
     > {
-        let resolver = &self.decl_resolver;
-
         let (receiver, method_name, method_span, parser_span) = match &func.0 {
             Expression::Field(base, field) => {
                 let receiver = self.lower_expr((base.0.clone(), base.1), locals, local_map)?;
@@ -816,29 +1015,26 @@ impl HirCtx<'_> {
             _ => return Ok(None),
         };
 
-        let (method_def, class, resolution_kind) =
-            match resolver.resolve_method(receiver.ty, method_name, parser_span) {
-                Ok(Some(found)) => found,
-                Ok(None) => return Ok(None),
-                Err(err) => return Err(err),
-            };
-        if class != co2_ast::TypeQueryResult::Expr {
-            return Ok(None);
-        }
-        let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
-        let mut resolved_generic_args =
-            receiver_generic_args_for_resolution(receiver.ty, resolution_kind);
-        generic_args_extend_to_method_total(&mut resolved_generic_args, method_def);
-        let Some(mut sig) =
-            self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver.ty)
+        let Some(resolved_method) =
+            self.resolve_method_for_call(receiver.ty, method_name, parser_span)?
         else {
             return Ok(None);
         };
+
+        let fn_def = rustc_public_generative::rustc_public::ty::FnDef(resolved_method.def_id);
+        let mut resolved_generic_args = resolved_method.generic_args.0;
+        let mut sig = resolved_method.sig;
         let mut resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
         let mut func_ty = resolved.ty();
 
-        let lowered_args =
-            self.lower_method_receiver_and_params(&sig, &receiver, params, locals, local_map)?;
+        let lowered_args = self.lower_method_receiver_and_params(
+            &sig,
+            &receiver,
+            Some(&resolved_method.receiver_adjustment),
+            params,
+            locals,
+            local_map,
+        )?;
 
         let dependencies = self.decl_resolver.dependency_info();
         infer_generic_args_from_args(
@@ -854,6 +1050,20 @@ impl HirCtx<'_> {
 
         if has_unresolved_params(&resolved_generic_args) {
             return Err(spanned_error(method_span, "failed to infer generic args."));
+        }
+
+        // Re-derive sig from func_ty which has fully-concrete generic args now.
+        // Normalize aliases (projections) in the sig.
+        if let Some(new_sig) = callable_sig(func_ty) {
+            let mut new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
+            if new_sig.inputs().len() == sig.inputs().len() {
+                new_sig.inputs_and_output = new_sig
+                    .inputs_and_output
+                    .iter()
+                    .map(|ty| self.decl_resolver.normalize_ty_for_current_owner(*ty))
+                    .collect();
+                sig = new_sig;
+            }
         }
 
         check_fn_predicates(
@@ -1008,9 +1218,19 @@ impl HirCtx<'_> {
             &mut resolved,
             &mut func_ty,
             &lowered_args,
-            0,
+            1,
             &dependencies,
         );
+
+        // Re-derive sig from func_ty which has fully-concrete generic args now.
+        // This ensures associated type projections (like <I as SliceIndex<T>>::Output)
+        // are properly resolved via the compiler's fn_sig query with concrete args.
+        if let Some(new_sig) = callable_sig(func_ty) {
+            let new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
+            if new_sig.inputs().len() == sig.inputs().len() {
+                sig = new_sig;
+            }
+        }
 
         if has_unresolved_params(&resolved_generic_args) {
             return Err(spanned_error(parser_span, "failed to infer generic args."));
@@ -1094,7 +1314,11 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
     ) -> Result<Ty, (co2_ast::Span, String)> {
-        match self.lower_type_name_cty_with_scope(type_name, parser_span, Some((locals, local_map)))? {
+        match self.lower_type_name_cty_with_scope(
+            type_name,
+            parser_span,
+            Some((locals, local_map)),
+        )? {
             CTy::Ty(ty) => Ok(ty),
             CTy::Function(_) => {
                 self.terminate_with_error(parser_span, "Function is invalid as a type name");
@@ -1367,69 +1591,9 @@ impl HirCtx<'_> {
             } => {
                 let receiver = self.lower_expr(*receiver, locals, local_map)?;
                 let method_name = method.0.as_str();
-                let resolver = &self.decl_resolver;
-                let (method_def, class, resolution_kind) =
-                    match resolver.resolve_method(receiver.ty, method_name, parser_span) {
-                        Ok(Some(found)) => found,
-                        Ok(None) => {
-                            return Err(spanned_error(
-                                parser_span,
-                                format!(
-                                    "unknown method `{}` on type {}",
-                                    method_name,
-                                    self.format_ty(receiver.ty)
-                                ),
-                            ));
-                        }
-                        Err(err) => return Err(err),
-                    };
-                if class != co2_ast::TypeQueryResult::Expr {
-                    return Err(spanned_error(
-                        parser_span,
-                        format!(
-                            "unknown method `{}` on type {}",
-                            method_name,
-                            self.format_ty(receiver.ty)
-                        ),
-                    ));
-                }
-                let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
-                let receiver_generic_args =
-                    receiver_generic_args_for_resolution(receiver.ty, resolution_kind);
-                let turbofish_generics: Vec<Spanned<RustTy<LocalResolver>>> =
-                    generics.iter().map(|g| g.transform(resolver)).collect();
-                if !turbofish_generics.is_empty() {
-                    let ps = parser_span.data();
-                    let generic_span = Span::from_parts(
-                        ps.context,
-                        method.1.data().start..turbofish_generics.last().unwrap().1.data().end + 1,
-                    );
-                    check_generic_arg_count(
-                        method_def,
-                        turbofish_generics.len(),
-                        receiver_generic_args.len(),
-                        generic_span,
-                    )?;
-                }
-                let method_ty = CrateItem(method_def).ty();
-                let method_params = match method_ty.kind() {
-                    TyKind::RigidTy(RigidTy::FnDef(_, GenericArgs(params))) => params.clone(),
-                    _ => vec![],
-                };
-                let mut resolved_generic_args = receiver_generic_args.clone();
-                let offset = receiver_generic_args.len();
-                for (i, gt) in turbofish_generics.iter().enumerate() {
-                    resolved_generic_args.push(self.lower_generic_arg_with_wild(
-                        offset + i,
-                        gt,
-                        &method_params,
-                    ));
-                }
-                let Some(mut sig) = self.specialize_fn_sig_from_receiver(
-                    fn_def,
-                    &resolved_generic_args,
-                    receiver.ty,
-                ) else {
+                let Some(resolved_method) =
+                    self.resolve_method_for_call(receiver.ty, method_name, parser_span)?
+                else {
                     return Err(spanned_error(
                         parser_span,
                         format!(
@@ -1439,47 +1603,16 @@ impl HirCtx<'_> {
                         ),
                     ));
                 };
-                let mut resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
-                let mut func_ty = resolved.ty();
-                let mut lowered_args = self.lower_method_receiver_and_params(
-                    &sig, &receiver, &params, locals, local_map,
-                )?;
-                let dependencies = self.decl_resolver.dependency_info();
-                infer_generic_args_from_args(
-                    fn_def,
-                    &mut sig,
-                    &mut resolved_generic_args,
-                    &mut resolved,
-                    &mut func_ty,
-                    &lowered_args,
-                    1,
-                    &dependencies,
-                );
-
-                if has_unresolved_params(&resolved_generic_args) {
-                    return Err(spanned_error(method.1, "failed to infer generic args."));
-                }
-
-                check_fn_predicates(
-                    &dependencies,
-                    fn_def.0,
-                    &resolved_generic_args,
-                    self.decl_resolver.current_owner(),
+                self.lower_resolved_method_call(
+                    resolved_method,
+                    &receiver,
+                    method.1,
+                    parser_span,
+                    &generics,
+                    &params,
+                    locals,
+                    local_map,
                 )
-                .map_err(|msg| spanned_error(parser_span, msg))?;
-                self.lower_call_args(parser_span, &sig, &mut lowered_args);
-                Ok(HirExpr {
-                    kind: HirExprKind::Call {
-                        func: Box::new(HirExpr {
-                            kind: HirExprKind::Path(resolved),
-                            ty: func_ty,
-                            span: self.to_rust_span(parser_span),
-                        }),
-                        args: lowered_args,
-                    },
-                    ty: sig.output(),
-                    span,
-                })
             }
             Expression::Field(base, field) => {
                 let base = self.lower_expr(*base, locals, local_map)?;
@@ -1516,37 +1649,8 @@ impl HirCtx<'_> {
                     };
                 }
                 // Fall back to method resolution (e.g. `(*s).as_ptr()`)
-                let resolver = &self.decl_resolver;
-                let (method_def, class, resolution_kind) =
-                    match resolver.resolve_method(base.ty, &field.0, parser_span) {
-                        Ok(Some(found)) => found,
-                        Ok(None) => {
-                            return Err(spanned_error(
-                                parser_span,
-                                format!(
-                                    "unknown field `{}` on type {}",
-                                    field.0,
-                                    self.format_ty(base.ty)
-                                ),
-                            ));
-                        }
-                        Err(err) => return Err(err),
-                    };
-                if class != co2_ast::TypeQueryResult::Expr {
-                    return Err(spanned_error(
-                        parser_span,
-                        format!(
-                            "unknown field `{}` on type {}",
-                            field.0,
-                            self.format_ty(base.ty)
-                        ),
-                    ));
-                }
-                let fn_def = rustc_public_generative::rustc_public::ty::FnDef(method_def);
-                let resolved_generic_args =
-                    receiver_generic_args_for_resolution(base.ty, resolution_kind);
-                let Some(sig) =
-                    self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, base.ty)
+                let Some(resolved_method) =
+                    self.resolve_method_for_call(base.ty, &field.0, parser_span)?
                 else {
                     return Err(spanned_error(
                         parser_span,
@@ -1557,25 +1661,16 @@ impl HirCtx<'_> {
                         ),
                     ));
                 };
-                let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args);
-                let func_ty = resolved.ty();
-                let receiver = if let Some(expected) = sig.inputs().first().copied() {
-                    self.method_receiver_arg(base, expected)
-                } else {
-                    base
-                };
-                Ok(HirExpr {
-                    kind: HirExprKind::Call {
-                        func: Box::new(HirExpr {
-                            kind: HirExprKind::Path(resolved),
-                            ty: func_ty,
-                            span: self.to_rust_span(parser_span),
-                        }),
-                        args: vec![receiver],
-                    },
-                    ty: sig.output(),
-                    span,
-                })
+                self.lower_resolved_method_call(
+                    resolved_method,
+                    &base,
+                    field.1,
+                    parser_span,
+                    &[],
+                    &[],
+                    locals,
+                    local_map,
+                )
             }
             Expression::Arrow(base, field) => {
                 let mut base = self.lower_expr(*base, locals, local_map)?;
@@ -2147,7 +2242,7 @@ impl HirCtx<'_> {
                         if is_maybe_uninit_fn_ptr_ty(inner.ty).is_some() {
                             return Ok(inner);
                         }
-                        let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = inner.ty.kind() else {
+                        let TyKind::RigidTy(RigidTy::RawPtr(pointee, _) | RigidTy::Ref(_, pointee, _)) = inner.ty.kind() else {
                             return Err(spanned_error(
                                 parser_span,
                                 format!("cannot dereference non-pointer type: {:?}", inner.ty),

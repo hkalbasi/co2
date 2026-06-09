@@ -1,17 +1,24 @@
-use support_lib::{Struct1, Struct1Alias, GenericWrap};
+use support_lib::{Struct1, Struct1Alias, GenericWrap, GenericWrapWithDefault, TraitSimple, TraitOk, TraitArg, print_name};
+use std::boxed::Box;
 
 fn str_len(s: &str) -> usize {
     return s.len();
 }
 
-fn main() {
+fn simple() {
+    print_name(s"simple");
     Struct1 s = Struct1::new(42);
     Struct1Alias s2 = Struct1Alias::new(43);
 
     s.simple(3);
     Struct1 *s_ptr = &s;
     s_ptr.simple(12);
+}
 
+fn generic() {
+    print_name(s"generic");
+    Struct1 s = Struct1::new(42);
+    
     s.generic_debug::<i32>(4);
     s.generic_debug(6);
 
@@ -22,4 +29,88 @@ fn main() {
     GenericWrap::<&str> ws = w.replace(s"hello");
     ws.ok();
     ws.map::<usize, _>(str_len);
+}
+
+fn generic_with_default() {
+    print_name(s"generic_with_default");
+    GenericWrapWithDefault::<i32> w = GenericWrapWithDefault::<i32>::new(16, 17);
+    w.ok();
+    w.sum();
+
+    GenericWrapWithDefault::<i64, i64> w2 = GenericWrapWithDefault::<i64, i64>::new(18, 19);
+    w2.ok();
+    w2.sum();    
+}
+
+fn auto_deref() {
+    print_name(s"auto_deref");
+    Struct1 s = Struct1::new(57);
+    Struct1 *s_ptr = &s;
+
+    s_ptr.simple(4);
+    (*s_ptr).simple(5);
+
+    GenericWrap::<i32> w = GenericWrap::<i32>::new(15);
+    GenericWrap::<i32> *w_ptr = &w;
+    w_ptr.ok();
+    w_ptr.extra_param::<i32>(99);
+    w_ptr.extra_param(100);
+
+    GenericWrap::<i32> **w_ptr_ptr = &w_ptr;
+    w_ptr_ptr.ok();
+    w_ptr_ptr.extra_param::<i32>(99);
+    w_ptr_ptr.extra_param(100);
+}
+
+fn trait_methods() {
+    print_name(s"trait_methods");
+    auto s = Struct1::new(10);
+
+    // basic trait
+    s.trait_simple();
+
+    // generic trait parameter inference
+    //s.trait_arg(123);
+    //s.trait_arg("hello");
+
+    // generic method inside trait
+    //s.generic_method(999);
+    //s.generic_method("abc");
+
+    // receiver by value
+    auto b = Box::new(Struct1::new(77));
+    //b.recv();
+}
+
+fn generic_traits() {
+    print_name(s"generic_traits");
+    auto g = GenericWrap::new(5);
+
+    // inherent
+    g.ok();
+
+    // same-name trait method
+    //TraitOk::ok(&g);
+
+    // ordinary trait
+    //g.wrap_trait();
+
+    // generic trait
+    //g.combine(123);
+    //g.combine("hello");
+
+    // generic inherent methods
+    usize fifty_five = 55;
+    g.extra_param(fifty_five);
+
+    g.replace(s"abc");
+}
+
+fn main() {
+    simple();
+    generic();
+    generic_with_default();
+    auto_deref();
+    trait_methods();
+    generic_traits();
 }

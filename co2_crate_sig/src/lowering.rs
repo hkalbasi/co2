@@ -1924,7 +1924,7 @@ pub fn lower_crate_sig(
             ctx.resolver
                 .borrow_mut()
                 .resolver
-                .resolve_inherent_method(receiver_ty, method)
+                .resolve_inherent_method_for_sig(receiver_ty, method)
                 .unwrap()
                 .0,
         )

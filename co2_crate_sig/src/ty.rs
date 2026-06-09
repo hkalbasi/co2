@@ -56,10 +56,7 @@ impl CompressedTypeSpecifier {
         let has_auto = specifiers.iter().any(|(spec, _)| {
             matches!(
                 spec,
-                DeclarationSpecifier::StorageSpecifier((
-                    StorageClassSpecifier::Auto,
-                    _
-                ))
+                DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Auto, _))
             )
         });
         let span = type_specifier_span(&specifiers).unwrap_or_else(|| {

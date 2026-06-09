@@ -6,9 +6,11 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -58,6 +60,9 @@ fn pending_compile_cell() -> &'static Mutex<Option<PendingCompile>> {
     static CELL: OnceLock<Mutex<Option<PendingCompile>>> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(None))
 }
+
+static DUMP_MIR_ENABLED: AtomicBool = AtomicBool::new(false);
+
 struct Co2GeneratorState {
     file_id: rustc_gen::FileId,
     file_ids: Arc<HashMap<co2_ast::FileId, rustc_gen::FileId>>,
@@ -160,7 +165,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
     fn emit_mir(&mut self, ctx: rustc_gen::HirStructureCtx, def: DefId) -> Body {
         let pending_mir = self.pending_mirs.remove(&def).unwrap();
 
-        match pending_mir {
+        let body: Body = match pending_mir {
             MirOwnerInfo::CloneMethod(adt) => {
                 build_clone_method_body(adt, ctx.span_in_file(self.file_id, 0, 0))
             }
@@ -250,6 +255,12 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                 Some(resolver),
                             );
                             time_report::accumulate_mir_lowering(mir_start.elapsed());
+                            if DUMP_MIR_ENABLED.load(Ordering::Relaxed) {
+                                let name = ctx.tcx.def_path_str(
+                                    rustc_public_generative::rustc_public::rustc_internal::internal(ctx.tcx, def.0),
+                                );
+                                dump_mir_body(&result, &name);
+                            }
                             return result;
                         }
                         std::panic::resume_unwind(payload);
@@ -286,7 +297,15 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 time_report::accumulate_mir_lowering(mir_start.elapsed());
                 result
             }
+        };
+
+        if DUMP_MIR_ENABLED.load(Ordering::Relaxed) {
+            let name = ctx.tcx.def_path_str(
+                rustc_public_generative::rustc_public::rustc_internal::internal(ctx.tcx, def),
+            );
+            dump_mir_body(&body, &name);
         }
+        body
     }
 }
 
@@ -437,6 +456,46 @@ impl Co2GeneratorState {
         time_report::accumulate_mir_lowering(mir_start.elapsed());
         result
     }
+}
+
+fn dump_mir_body(body: &Body, name: &str) {
+    let dump_dir = Path::new("co2_mir_dump");
+    let _ = fs::create_dir_all(dump_dir);
+    let file_name = name.replace([':', ' ', '(', ')', '[', ']', '<', '>', '&', '*', '"'], "_");
+    let path = dump_dir.join(format!("{file_name}.mir"));
+    if let Ok(file) = fs::File::create(&path) {
+        let mut w = std::io::BufWriter::new(file);
+        let _ = write_body_pretty(&mut w, body, name);
+    }
+}
+
+fn write_body_pretty(w: &mut impl std::io::Write, body: &Body, name: &str) -> std::io::Result<()> {
+    write!(w, "fn {name}(")?;
+    let mut sep = "";
+    for (i, local) in body.arg_locals().iter().enumerate() {
+        write!(w, "{sep}_{}: {}", i + 1, local.ty)?;
+        sep = ", ";
+    }
+    writeln!(w, ") -> {} {{", body.ret_local().ty)?;
+
+    let arg_count = body.arg_locals().len();
+    for (i, local) in body.locals().iter().enumerate() {
+        if i > arg_count {
+            let m = if local.mutability == Mutability::Mut { "mut " } else { "" };
+            writeln!(w, "    let {m}_{i}: {};", local.ty)?;
+        }
+    }
+
+    for (i, block) in body.blocks.iter().enumerate() {
+        writeln!(w, "    bb{i}: {{")?;
+        for stmt in &block.statements {
+            writeln!(w, "        {:?};", stmt.kind)?;
+        }
+        writeln!(w, "        {:?};", block.terminator.kind)?;
+        writeln!(w, "    }}")?;
+    }
+    writeln!(w, "}}")?;
+    Ok(())
 }
 
 fn fn_const_operand(
@@ -664,6 +723,9 @@ pub fn compile_co2_file_for_miri(
         dyn for<'tcx> FnOnce(rustc_middle::ty::TyCtxt<'tcx>) -> rustc_driver::Compilation + Send,
     >,
 ) {
+    let dump_mir = rustc_args.iter().any(|a| a.contains("dump-mir"))
+        || std::env::var("CO2_DUMP_MIR").is_ok();
+    DUMP_MIR_ENABLED.store(dump_mir, Ordering::Relaxed);
     let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &Vec::new()));
     install_pending_compile(CompileMode::RUST, co2_file.to_path_buf(), preprocessed);
     rustc_gen::generate_with_args_and_after_analysis::<Co2GeneratorState>(
@@ -681,6 +743,10 @@ pub fn compile_co2_source(
     preprocessed: Arc<PreprocessedSource>,
     rustc_args: Vec<String>,
 ) {
+    let dump_mir = rustc_args.iter().any(|a| a.contains("dump-mir"))
+        || std::env::var("CO2_DUMP_MIR").is_ok();
+    DUMP_MIR_ENABLED.store(dump_mir, Ordering::Relaxed);
+
     install_pending_compile(mode, source_path, preprocessed);
 
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {

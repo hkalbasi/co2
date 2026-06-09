@@ -43,6 +43,7 @@ fn run_main() -> Result<()> {
         &root,
         cli.filter.as_deref(),
         coverage_dir.as_deref(),
+        cli.dump_mir,
         &mut stats,
     )?;
     let elapsed = start.elapsed();
@@ -56,7 +57,7 @@ fn run_main() -> Result<()> {
     }
 
     eprintln!(
-        "summary: passed={}, failed={}, skipped={}  ({:.2}s)",
+        "\nsummary: passed={}, failed={}, skipped={}  ({:.2}s)",
         stats.passed,
         stats.failed,
         stats.skipped,

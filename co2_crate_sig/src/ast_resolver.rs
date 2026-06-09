@@ -250,6 +250,11 @@ impl LocalResolver {
         rustc_public_generative::DependencyInfo { tcx: hir_ctx.tcx }
     }
 
+    pub fn normalize_ty_defaults(&self, ty: Ty) -> Ty {
+        let guard = self.base.borrow();
+        guard.hir_ctx.normalize_ty_defaults(ty)
+    }
+
     pub fn new(base: Rc<RefCell<LocalResolverBase>>) -> Self {
         let struct_tags = base.borrow().global_struct_tags.clone();
         let locals = base.borrow().global_locals.clone();
@@ -392,6 +397,10 @@ impl LocalResolver {
             .normalize_ty_for_owner_with_self(self.current_owner, ty, self_ty)
     }
 
+    pub fn traits_in_scope_with_method(&self, method: &str) -> Vec<(String, DefId, String)> {
+        self.base.borrow_mut().resolver.traits_in_scope_with_method(method)
+    }
+
     pub fn resolve_method(
         &self,
         receiver_ty: Ty,
@@ -399,16 +408,6 @@ impl LocalResolver {
         span: co2_ast::Span,
     ) -> Result<Option<(DefId, TypeQueryResult, MethodResolutionKind)>, (co2_ast::Span, String)>
     {
-        if let Some(found) = self
-            .base
-            .borrow_mut()
-            .resolver
-            .resolve_inherent_method(receiver_ty, method)
-        {
-            let (method_def, class) = found;
-            return Ok(Some((method_def, class, MethodResolutionKind::Inherent)));
-        }
-
         let trait_candidates = self
             .base
             .borrow_mut()
@@ -452,7 +451,7 @@ impl LocalResolver {
                         .base
                         .borrow_mut()
                         .resolver
-                        .resolve_inherent_method(ref_ty, method)
+                        .resolve_inherent_method_for_sig(ref_ty, method)
                     {
                         let (method_def, class) = found;
                         return Ok(Some((method_def, class, MethodResolutionKind::Inherent)));
@@ -513,6 +512,17 @@ impl LocalResolver {
                 ),
             )),
         }
+    }
+
+    pub fn resolve_inherent_method(
+        &self,
+        receiver_ty: Ty,
+        method: &str,
+        span: co2_ast::Span,
+    ) -> Result<Option<rustc_public_generative::ResolvedMethod>, (co2_ast::Span, String)> {
+        self.dependency_info()
+            .resolve_inherent_method(self.current_owner, receiver_ty, method)
+            .map_err(|msg| (span, msg))
     }
 
     fn register_array_len_const(
@@ -729,9 +739,7 @@ impl co2_ast::TypeResolver for LocalResolver {
             }
             if matches!(
                 def,
-                DefOrLocal::Prim(_)
-                    | DefOrLocal::Const(_)
-                    | DefOrLocal::UnrepresentableType(_)
+                DefOrLocal::Prim(_) | DefOrLocal::Const(_) | DefOrLocal::UnrepresentableType(_)
             ) {
                 return Err((
                     format!("type arguments are not allowed on `{path_pretty}`"),

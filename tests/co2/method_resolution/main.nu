@@ -1,5 +1,15 @@
 #@ run-status: 0
 
+def diff [a: string, b: string] {
+    let f1 = (mktemp)
+    let f2 = (mktemp)
+
+    $a | save -f $f1
+    $b | save -f $f2
+
+    ^diff $f1 $f2
+}
+
 let test_dir = $env.CO2_TEST_DIR
 let lib_rlib = ($test_dir | path join "libsupport_lib.rlib")
 let app = ($test_dir | path join "app")
@@ -25,8 +35,17 @@ if $run.exit_code != 0 {
     print $"app failed: ($run.stderr)"
     exit 3
 }
-if ($run.stdout | str trim) != (cat ./stdout.expected | str trim) {
-    print $"Diff in stdout: GOT\n($run.stdout)\nEXPECTED\n(cat ./stdout.expected | str trim)"
+
+let actual = ($run.stdout | str trim)
+let expected = (cat ./stdout.expected | str trim)
+
+if $actual != $expected {
+    print "--- GOT ---"
+    print $actual
+    print "--- EXPECTED ---"
+    print $expected
+    print "--- Diff ---"
+    diff $expected $actual
     exit 4
 }
 

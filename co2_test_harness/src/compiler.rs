@@ -177,6 +177,7 @@ pub fn compile_test(
     test: &TestCase,
     json_diagnostics: bool,
     coverage_dir: Option<&Path>,
+    dump_mir: bool,
 ) -> Result<CompileResult> {
     let temp = TempDirBuilder::new()
         .prefix("co2-ct-")
@@ -209,6 +210,10 @@ pub fn compile_test(
             let mut cmd = Command::new(root.join("target").join("debug").join("co2cc"));
             cmd.arg(&c_src).arg("-o").arg(&exe_path).args(compile_flags);
             cmd.arg("-I").arg(test_dir);
+            if dump_mir {
+                cmd.env("RUSTFLAGS", "-Zdump-mir=all");
+                cmd.arg("-Zdump-mir=all");
+            }
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
             }
@@ -238,6 +243,10 @@ pub fn compile_test(
                 .arg("-o")
                 .arg(&exe_path)
                 .args(compile_flags);
+            if dump_mir {
+                cmd.env("RUSTFLAGS", "-Zdump-mir=all");
+                cmd.arg("-Zdump-mir=all");
+            }
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
             }
@@ -266,6 +275,10 @@ pub fn compile_test(
                 .arg("-o")
                 .arg(&exe_path)
                 .args(compile_flags);
+            if dump_mir {
+                cmd.env("RUSTFLAGS", "-Zdump-mir=all");
+                cmd.arg("-Zdump-mir=all");
+            }
             if json_diagnostics {
                 cmd.env("CO2_FORCE_JSON_DIAGNOSTICS", "1");
             }

@@ -440,10 +440,13 @@ impl HirCtx<'_> {
             co2_crate_sig::DefOrLocal::Def {
                 def_id,
                 generic_args,
-            } => Ty::from_rigid_kind(RigidTy::Adt(
-                AdtDef(*def_id),
-                GenericArgs(self.lower_generic_args(generic_args)),
-            )),
+            } => {
+                let ty = Ty::from_rigid_kind(RigidTy::Adt(
+                    AdtDef(*def_id),
+                    GenericArgs(self.lower_generic_args(generic_args)),
+                ));
+                self.decl_resolver.normalize_ty_defaults(ty)
+            }
             co2_crate_sig::DefOrLocal::Const(_) => panic!("Invalid const in type position"),
             co2_crate_sig::DefOrLocal::AssocMethod { .. } => {
                 panic!("Invalid associated method in type position")
@@ -532,7 +535,8 @@ impl HirCtx<'_> {
                         let ty = match cty {
                             CTy::Ty(ty) => ty,
                             CTy::Function(sig) => {
-                                let fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
+                                let fn_ptr_ty =
+                                    Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
                                 self.maybe_uninit_of(fn_ptr_ty)
                             }
                             CTy::UnsizedArray(_) => {

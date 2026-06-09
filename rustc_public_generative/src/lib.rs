@@ -9,7 +9,7 @@ use std::{any::Any, path::PathBuf};
 
 use rustc_middle::ty::TyCtxt;
 use rustc_public::DefId;
-use rustc_public::ty::GenericArgs;
+use rustc_public::ty::{FnSig, GenericArgs, Ty};
 
 extern crate rustc_abi;
 extern crate rustc_ast;
@@ -17,7 +17,9 @@ extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hashes;
 extern crate rustc_hir;
+extern crate rustc_hir_analysis;
 extern crate rustc_index;
+extern crate rustc_infer;
 extern crate rustc_interface;
 extern crate rustc_lint;
 extern crate rustc_middle;
@@ -121,6 +123,57 @@ impl DependencyInfo<'_> {
     ) -> Result<(), String> {
         internal::check_fn_predicates(self.tcx, fn_def_id, fn_generic_args, owner)
     }
+
+    pub fn resolve_inherent_method(
+        &self,
+        owner: DefId,
+        receiver_ty: Ty,
+        method: &str,
+    ) -> Result<Option<ResolvedMethod>, String> {
+        internal::resolve_inherent_method(self.tcx, owner, receiver_ty, method)
+    }
+
+    pub fn resolve_method(
+        &self,
+        owner: DefId,
+        receiver_ty: Ty,
+        method: &str,
+        traits_in_scope: &[DefId],
+    ) -> Result<Option<ResolvedMethod>, String> {
+        internal::resolve_method(self.tcx, owner, receiver_ty, method, traits_in_scope)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedMethod {
+    pub def_id: DefId,
+    pub generic_args: GenericArgs,
+    pub sig: FnSig,
+    pub receiver_adjustment: ReceiverAdjustment,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReceiverAdjustment {
+    pub autoderefs: usize,
+    pub steps: Vec<ReceiverAdjustmentStep>,
+    pub autoref: Option<rustc_public::mir::Mutability>,
+    pub mut_ptr_to_const_ptr: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum ReceiverAdjustmentStep {
+    BuiltinDeref {
+        source: Ty,
+        target: Ty,
+    },
+    OverloadedDeref {
+        source: Ty,
+        target: Ty,
+        target_ref: Ty,
+        method_def_id: DefId,
+        generic_args: GenericArgs,
+        sig: FnSig,
+    },
 }
 
 #[derive(Debug, Clone)]

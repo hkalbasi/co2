@@ -440,7 +440,7 @@ impl Resolver {
             ),
         ];
         for &(receiver_ty, method, aliases) in builtin_mappings {
-            if let Some(def) = this.resolve_inherent_method(receiver_ty, method) {
+            if let Some(def) = this.resolve_inherent_method_for_sig(receiver_ty, method) {
                 for &alias in aliases {
                     this.current.insert_path([alias].into_iter(), Some(def));
                 }
@@ -848,7 +848,8 @@ impl Resolver {
         self.resolve(path).ok()
     }
 
-    pub(crate) fn resolve_inherent_method(
+    /// Lower inherent methods where rustc infra is not available.
+    pub(crate) fn resolve_inherent_method_for_sig(
         &mut self,
         receiver_ty: Ty,
         method: &str,
@@ -856,10 +857,10 @@ impl Resolver {
         let ty_def_id = match receiver_ty.kind() {
             TyKind::RigidTy(RigidTy::Adt(adt, _)) => Some(adt.0),
             TyKind::RigidTy(RigidTy::Ref(_, inner, _)) => {
-                return self.resolve_inherent_method(inner, method);
+                return self.resolve_inherent_method_for_sig(inner, method);
             }
             TyKind::RigidTy(RigidTy::RawPtr(inner, _)) => {
-                if let Some(found) = self.resolve_inherent_method(inner, method) {
+                if let Some(found) = self.resolve_inherent_method_for_sig(inner, method) {
                     return Some(found);
                 }
                 None
@@ -881,12 +882,6 @@ impl Resolver {
                 if name == method {
                     return Some((impl_fn.def_id, TypeQueryResult::Expr));
                 }
-            }
-        }
-        for impl_fn in info.incoherent_impls(receiver_ty) {
-            let name = impl_fn.name.split("::").last().unwrap_or(&impl_fn.name);
-            if name == method {
-                return Some((impl_fn.def_id, TypeQueryResult::Expr));
             }
         }
         for impl_fn in info.incoherent_impls(receiver_ty) {

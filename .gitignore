@@ -3,6 +3,7 @@
 /playground
 /test-bed
 /mir_dump
+/co2_mir_dump
 rustc-ice*
 synthetic
 .gavcode

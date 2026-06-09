@@ -30,6 +30,7 @@ pub fn run_tests(
     root: &Path,
     filter: Option<&str>,
     coverage_dir: Option<&Path>,
+    dump_mir: bool,
     stats: &mut Stats,
 ) -> Result<()> {
     let tests = collect_tests(root, filter)?;
@@ -37,14 +38,14 @@ pub fn run_tests(
 
     for test in tests {
         let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
-        match run_test(root, &test, coverage_dir) {
+        match run_test(root, &test, coverage_dir, dump_mir) {
             Ok(TestOutcome::Pass) => {
                 stats.passed += 1;
-                eprintln!("ok   {name}");
+                eprint!(".");
             }
             Ok(TestOutcome::Skip(reason)) => {
                 stats.skipped += 1;
-                eprintln!("skip {name} ({reason})");
+                eprintln!("\nskip {name} ({reason})");
             }
             Err(err) => {
                 stats.failed += 1;
@@ -56,13 +57,13 @@ pub fn run_tests(
                     .to_string();
                 stats.failed_names.push(name.clone());
                 if let Some(e) = err.downcast_ref::<TestError>() {
-                    eprintln!("FAIL {name}");
+                    eprintln!("\nFAIL {name}");
                     render_test_error(&test.path, e);
                 } else if let Some(e) = err.downcast_ref::<UiTestError>() {
-                    eprintln!("FAIL {name}");
+                    eprintln!("\nFAIL {name}");
                     render_ui_error(e);
                 } else {
-                    eprintln!("FAIL {name}\n{err:#}");
+                    eprintln!("\nFAIL {name}\n{err:#}");
                 }
             }
         }
@@ -70,13 +71,13 @@ pub fn run_tests(
     Ok(())
 }
 
-fn run_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) -> Result<TestOutcome> {
+fn run_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>, dump_mir: bool) -> Result<TestOutcome> {
     if let Some(reason) = directive_text(test, "skip") {
         return Ok(TestOutcome::Skip(reason));
     }
 
     if test.kind == TestKind::NuDir {
-        run_nu_dir_test(root, test, coverage_dir)?;
+        run_nu_dir_test(root, test, coverage_dir, dump_mir)?;
         return Ok(TestOutcome::Pass);
     }
 
@@ -93,7 +94,7 @@ fn run_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) -> Result
         .get("compile-warning")
         .cloned()
         .unwrap_or_default();
-    let compile = compile_test(root, mode, test, true, coverage_dir)?;
+    let compile = compile_test(root, mode, test, true, coverage_dir, dump_mir)?;
     if test.directives.contains_key("compile-fail") {
         check_ui(test, mode, &compile.output, &compile_annotations, sources)?;
         return Ok(TestOutcome::Pass);
@@ -171,7 +172,12 @@ fn collect_compile_annotations(
     Ok((annotations, sources))
 }
 
-fn run_nu_dir_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) -> Result<()> {
+fn run_nu_dir_test(
+    root: &Path,
+    test: &TestCase,
+    coverage_dir: Option<&Path>,
+    dump_mir: bool,
+) -> Result<()> {
     let temp = TempDirBuilder::new()
         .prefix("co2-ct-dir-")
         .tempdir()
@@ -205,6 +211,11 @@ fn run_nu_dir_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) ->
         .env("CO2_TEST_DIR", &temp_path)
         .env("CO2_BIN_DIR", &compiler_bin);
 
+    if dump_mir {
+        cmd.env("CO2_DUMP_MIR", "1");
+        cmd.env("RUSTFLAGS", "-Zdump-mir=all");
+    }
+
     if let Some(dir) = coverage_dir {
         cmd.env(
             "LLVM_PROFILE_FILE",
@@ -219,6 +230,10 @@ fn run_nu_dir_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) ->
         .output()
         .with_context(|| format!("failed to execute Nushell test {}", main_nu.display()))?;
 
+    if dump_mir {
+        copy_dump_dirs(&temp_path, root);
+    }
+
     let got_status = output.status.code().unwrap_or(-1);
     if got_status != run_status {
         bail!(
@@ -229,6 +244,28 @@ fn run_nu_dir_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>) ->
     }
 
     Ok(())
+}
+
+fn copy_dump_dirs(src_root: &Path, dst_root: &Path) {
+    for dir in ["co2_mir_dump", "mir_dump"] {
+        let src = src_root.join(dir);
+        if src.exists() {
+            let dst = dst_root.join(dir);
+            let _ = fs::create_dir_all(&dst);
+            if let Ok(entries) = fs::read_dir(&src) {
+                for entry in entries.flatten() {
+                    let ty = entry.file_type().ok();
+                    let name = entry.file_name();
+                    let dst_path = dst.join(&name);
+                    if ty.is_some_and(|t| t.is_dir()) {
+                        let _ = copy_dir_all(&entry.path(), &dst_path);
+                    } else {
+                        let _ = fs::copy(&entry.path(), &dst_path);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn check_run(test: &TestCase, compile: &CompileResult, _coverage_dir: Option<&Path>) -> Result<()> {
