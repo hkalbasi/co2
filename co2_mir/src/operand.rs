@@ -530,9 +530,15 @@ impl Builder<'_, '_> {
     pub(crate) fn lower_expr_to_operand(&mut self, expr: &HirExpr) -> MirOperand {
         match &expr.kind {
             HirExprKind::ArrayToPointer(inner) => {
-                let base_place = self
-                    .lower_expr_to_place(inner)
-                    .expect("array decay expects place-expressible operand");
+                let base_place = self.lower_expr_to_place(inner).unwrap_or_else(|| {
+                    let tmp = self.new_temp(inner.ty, Mutability::Mut, inner.span);
+                    let value = self.lower_expr_to_operand(inner);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
+                        span: inner.span,
+                    });
+                    place(tmp)
+                });
                 let rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
                     rustc_public_generative::rustc_public::ty::RigidTy::Array(_, _),
                 ) = inner.ty.kind()

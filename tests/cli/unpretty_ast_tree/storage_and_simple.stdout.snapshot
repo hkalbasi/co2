@@ -112,7 +112,7 @@ TranslationUnit
     TypeSpecifier@src/storage_and_simple.co2:309..312
       Int@src/storage_and_simple.co2:309..312
     InitDeclarator@src/storage_and_simple.co2:313..328
-      PointerDeclarator@src/storage_and_simple.co2:314..324
+      PointerDeclarator@src/storage_and_simple.co2:313..324
         Identifier@src/storage_and_simple.co2:314..324 "global_ptr"
       Expr@src/storage_and_simple.co2:327..328
         Constant@src/storage_and_simple.co2:327..328
@@ -122,7 +122,7 @@ TranslationUnit
       Struct@src/storage_and_simple.co2:330..348
         Specifier@src/storage_and_simple.co2:337..348 Declared { ident: ("PackedPoint", 337..348) }
     InitDeclarator@src/storage_and_simple.co2:349..363
-      PointerDeclarator@src/storage_and_simple.co2:350..359
+      PointerDeclarator@src/storage_and_simple.co2:349..359
         Identifier@src/storage_and_simple.co2:350..359 "point_ptr"
       Expr@src/storage_and_simple.co2:362..363
         Constant@src/storage_and_simple.co2:362..363
@@ -249,7 +249,7 @@ TranslationUnit
     TypeSpecifier@src/storage_and_simple.co2:716..720
       Void@src/storage_and_simple.co2:716..720
     InitDeclarator@src/storage_and_simple.co2:721..736
-      PointerDeclarator@src/storage_and_simple.co2:722..732
+      PointerDeclarator@src/storage_and_simple.co2:721..732
         Identifier@src/storage_and_simple.co2:722..732 "opaque_ptr"
       Expr@src/storage_and_simple.co2:735..736
         Constant@src/storage_and_simple.co2:735..736
@@ -260,7 +260,7 @@ TranslationUnit
     TypeSpecifier@src/storage_and_simple.co2:744..748
       Char@src/storage_and_simple.co2:744..748
     InitDeclarator@src/storage_and_simple.co2:749..776
-      PointerDeclarator@src/storage_and_simple.co2:750..757
+      PointerDeclarator@src/storage_and_simple.co2:749..757
         Identifier@src/storage_and_simple.co2:750..757 "message"
       Expr@src/storage_and_simple.co2:760..776
         Constant@src/storage_and_simple.co2:760..776

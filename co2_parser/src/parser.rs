@@ -2474,15 +2474,17 @@ where
 
         just(Token::Star)
             .ignore_then(type_qualifier().repeated().collect())
+            .map_with(|qualifiers, e| (qualifiers, e.span()))
             .repeated()
             .collect()
             .then(direct_declarator)
-            .map(|(pointers, mut base): (Vec<Vec<_>>, _)| {
-                for qualifiers in pointers.into_iter().rev() {
+            .map(|(pointers, mut base): (Vec<(Vec<_>, Span)>, _)| {
+                for (qualifiers, star_span) in pointers.into_iter().rev() {
                     base.0 = Declarator::PointerDeclarator {
                         declarator: Box::new((base.0, base.1)),
                         qualifiers,
                     };
+                    base.1 = join_spans(star_span, base.1);
                 }
                 base
             })

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
-    Initializer, RustTy, Span, Spanned, TypeName, TypeQualifier,
+    Initializer, RustTy, Span, Spanned, StorageClassSpecifier, TypeName, TypeQualifier,
 };
 use co2_crate_sig::{CompressedTypeSpecifier, LocalResolver, LogicalAdtFieldKind};
 use co2_parser::parse_expression_tokens;
@@ -496,6 +496,7 @@ impl HirCtx<'_> {
                     let _ = self.base_ty_of_decl(declaration_specifiers, parser_span);
                     return Ok(());
                 }
+                let is_auto_decl = has_auto_decl_specs(&declaration_specifiers);
                 for init in declarators {
                     let InitDeclarator {
                         declarator,
@@ -505,6 +506,65 @@ impl HirCtx<'_> {
                     let is_constexpr = declaration_specifiers
                         .iter()
                         .any(|spec| spec.0.is_constexpr());
+
+                    if is_auto_decl {
+                        let parser_span = declarator.1;
+                        let ((local_id, name), _ident_span) = match &declarator.0 {
+                            Declarator::Identifier(ident) => ident.clone(),
+                            _ => {
+                                self.terminate_with_error(
+                                    parser_span,
+                                    "`auto` requires a plain identifier, possibly with attributes, as declarator",
+                                );
+                            }
+                        };
+                        let Some((Initializer::Expr(init_expr), _)) = initializer.as_ref() else {
+                            self.terminate_with_error(
+                                parser_span,
+                                if initializer.is_some() {
+                                    "`auto` cannot be used with initializer lists"
+                                } else {
+                                    "`auto` requires an initializer"
+                                },
+                            );
+                        };
+                        let cty = self.lower_typeof_expr(init_expr, locals, local_map)?;
+                        let ty = match cty {
+                            CTy::Ty(ty) => ty,
+                            CTy::Function(sig) => {
+                                let fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
+                                self.maybe_uninit_of(fn_ptr_ty)
+                            }
+                            CTy::UnsizedArray(_) => {
+                                self.terminate_with_error(
+                                    parser_span,
+                                    "`auto` cannot deduce unsized array type",
+                                );
+                            }
+                        };
+
+                        let span = self.to_rust_span(parser_span);
+                        let local = locals.alloc(HirLocal {
+                            name,
+                            ty,
+                            span,
+                            read_only: is_constexpr,
+                        });
+                        local_map.insert(local_id, local);
+
+                        let mut expr = self.lower_expr(init_expr.clone(), locals, local_map)?;
+                        if is_array_ty(expr.ty) && !is_array_ty(ty) {
+                            expr = self.array_to_pointer_decay(&expr);
+                        }
+
+                        out.push(HirStmt::Decl(HirDecl {
+                            local,
+                            initializer: Some(expr),
+                            span,
+                        }));
+                        continue;
+                    }
+
                     let raw_initializer = initializer.clone();
                     let declarator_for_checks = declarator.0.clone();
                     let ((name, parser_span), ty) = self.lower_value_decl_type(
@@ -726,7 +786,7 @@ impl HirCtx<'_> {
         Ok(c_ty_matches_expected(&ty1, &ty2))
     }
 
-    fn lower_type_name_cty_with_scope(
+    pub(crate) fn lower_type_name_cty_with_scope(
         &self,
         type_name: TypeName<LocalResolver>,
         span: co2_ast::Span,
@@ -877,6 +937,9 @@ impl HirCtx<'_> {
                         .unwrap_or_else(|err| self.terminate_with_spanned_error(err)),
                     specifiers,
                 );
+            }
+            CompressedTypeSpecifier::Auto => {
+                self.terminate_with_error(span, "`auto` requires an initializer");
             }
         };
 
@@ -1568,6 +1631,15 @@ fn has_const_qualifier_in_decl_specs(
         matches!(
             spec,
             DeclarationSpecifier::TypeQualifier((TypeQualifier::Const, _))
+        )
+    })
+}
+
+fn has_auto_decl_specs(specs: &[Spanned<DeclarationSpecifier<LocalResolver>>]) -> bool {
+    specs.iter().any(|(spec, _)| {
+        matches!(
+            spec,
+            DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Auto, _))
         )
     })
 }

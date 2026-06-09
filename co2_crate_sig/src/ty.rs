@@ -37,6 +37,7 @@ pub enum CompressedTypeSpecifier {
     TypedefName(Spanned<<LocalResolver as TypeResolver>::ResolvedRustPath>),
     TypeofType(TypeName<LocalResolver>),
     TypeofExpr(Spanned<Expression<LocalResolver>>),
+    Auto,
 }
 
 fn spanned_error(span: Span, msg: impl Into<String>) -> (Span, String) {
@@ -52,6 +53,15 @@ impl CompressedTypeSpecifier {
             Double,
             Char,
         }
+        let has_auto = specifiers.iter().any(|(spec, _)| {
+            matches!(
+                spec,
+                DeclarationSpecifier::StorageSpecifier((
+                    StorageClassSpecifier::Auto,
+                    _
+                ))
+            )
+        });
         let span = type_specifier_span(&specifiers).unwrap_or_else(|| {
             specifiers
                 .first()
@@ -68,6 +78,9 @@ impl CompressedTypeSpecifier {
             })
             .collect::<Vec<_>>();
         if specifiers.is_empty() {
+            if has_auto {
+                return Ok(CompressedTypeSpecifier::Auto);
+            }
             return Err(spanned_error(span, "no type specifier found"));
         }
         if let [specifier] = specifiers.as_slice() {
@@ -1864,6 +1877,12 @@ impl LocalResolverBase {
             }
             CompressedTypeSpecifier::TypeofExpr(expr) => {
                 return CTy::Ty(self.type_of_expr_for_sizeof(&expr));
+            }
+            CompressedTypeSpecifier::Auto => {
+                CrateSigCtx::<'_>::terminate_with_error(
+                    type_span,
+                    "`auto` requires an initializer",
+                );
             }
         };
         CTy::Ty(ty)

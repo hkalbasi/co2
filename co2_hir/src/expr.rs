@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use co2_ast::{
     BinOp as ParsedBinOp, Constant, DoTransform as _, Expression, GenericAssociation,
-    IntegerSuffix, RustTy, Span, Spanned, Statement, StatementOrDeclaration, StringLiteral,
-    StringLiteralPrefix, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
+    Initializer, IntegerSuffix, RustTy, Span, Spanned, Statement, StatementOrDeclaration,
+    StringLiteral, StringLiteralPrefix, TypeName, UnaryOp as ParsedUnaryOp,
+    UpdateOp as ParsedUpdateOp,
 };
 use co2_crate_sig::{LocalResolver, LogicalAdtFieldKind, MethodResolutionKind};
 use la_arena::Arena;
@@ -13,7 +14,7 @@ use rustc_public_generative::rustc_public::{
     mir::Mutability,
     ty::{
         FloatTy, GenericArgKind, GenericArgs, IntTy, Region, RegionKind, RigidTy, Span as RustSpan,
-        Ty, TyKind, UintTy,
+        Ty, TyConst, TyKind, UintTy,
     },
 };
 
@@ -25,7 +26,7 @@ use crate::ty::{
     is_maybe_uninit_fn_ptr_ty, is_numeric_ty, needs_implicit_cast, resolve_field_path_in_adt,
     ty_matches_expected,
 };
-use crate::{decl::hir_ty_to_ty, ty::is_condition_ty};
+use crate::{decl::hir_ty_to_ty, decl::CTy, ty::is_condition_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
 fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span, String) {
@@ -1058,19 +1059,6 @@ impl HirCtx<'_> {
         *expr = self.fn_def_to_c_fn_ptr_decay(expr.clone());
     }
 
-    fn fn_def_to_fn_ptr_decay(&self, expr: HirExpr) -> HirExpr {
-        let sig = expr
-            .ty
-            .kind()
-            .fn_sig()
-            .expect("FnDef should have fn signature");
-        HirExpr {
-            span: expr.span,
-            kind: HirExprKind::Cast(Box::new(expr)),
-            ty: Ty::from_rigid_kind(RigidTy::FnPtr(sig)),
-        }
-    }
-
     fn fn_def_to_c_fn_ptr_decay(&self, expr: HirExpr) -> HirExpr {
         let sig = expr
             .ty
@@ -1094,6 +1082,31 @@ impl HirCtx<'_> {
                 span: expr.span,
                 ty,
                 kind: HirExprKind::Cast(Box::new(expr)),
+            }
+        }
+    }
+
+    fn lower_compound_literal_type(
+        &self,
+        type_name: TypeName<LocalResolver>,
+        initializer: &Spanned<Initializer<LocalResolver>>,
+        parser_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut HashMap<usize, LocalId>,
+    ) -> Result<Ty, (co2_ast::Span, String)> {
+        match self.lower_type_name_cty_with_scope(type_name, parser_span, Some((locals, local_map)))? {
+            CTy::Ty(ty) => Ok(ty),
+            CTy::Function(_) => {
+                self.terminate_with_error(parser_span, "Function is invalid as a type name");
+            }
+            CTy::UnsizedArray(elem) => {
+                let count = match &initializer.0 {
+                    Initializer::List(items) => items.len(),
+                    Initializer::Expr(_) => 1,
+                };
+                let ty_const = TyConst::try_from_target_usize(count as u64)
+                    .map_err(|_| spanned_error(parser_span, "compound literal array too large"))?;
+                Ok(Ty::from_rigid_kind(RigidTy::Array(elem, ty_const)))
             }
         }
     }
@@ -1246,7 +1259,8 @@ impl HirCtx<'_> {
             Expression::Constant(Constant::Float(v, suffix)) => {
                 let float_ty = match suffix {
                     co2_ast::FloatSuffix::Float => FloatTy::F32,
-                    co2_ast::FloatSuffix::None | co2_ast::FloatSuffix::Long => FloatTy::F64,
+                    co2_ast::FloatSuffix::None => FloatTy::F64,
+                    co2_ast::FloatSuffix::Long => FloatTy::F128,
                 };
                 Ok(HirExpr {
                     kind: HirExprKind::ConstFloat(v),
@@ -1915,11 +1929,38 @@ impl HirCtx<'_> {
                 type_name,
                 initializer,
             } => {
-                let target_ty =
-                    self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
+                let target_ty = self.lower_compound_literal_type(
+                    *type_name,
+                    &initializer,
+                    parser_span,
+                    locals,
+                    local_map,
+                )?;
                 let tree =
                     self.lower_to_initializer_tree(target_ty, *initializer, locals, local_map);
                 let init_expr = self.initializer_tree_to_expr(&tree, target_ty, parser_span);
+                // Compound literals are lvalues in C. Scalar compound literals lower
+                // to non-place expressions (e.g. ConstInt), so wrap them in
+                // Deref(AddrOf(...)) to produce a place expression.
+                let span = self.to_rust_span(parser_span);
+                if !is_place_expr(&init_expr)
+                    && !matches!(
+                        init_expr.kind,
+                        HirExprKind::Aggregate { .. }
+                            | HirExprKind::UnionAggregate { .. }
+                            | HirExprKind::Zeroed
+                    )
+                {
+                    return Ok(HirExpr {
+                        kind: HirExprKind::Deref(Box::new(HirExpr {
+                            kind: HirExprKind::AddrOf(Box::new(init_expr)),
+                            ty: Ty::new_ptr(target_ty, Mutability::Mut),
+                            span,
+                        })),
+                        ty: target_ty,
+                        span,
+                    });
+                }
                 Ok(init_expr)
             }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
@@ -2074,11 +2115,9 @@ impl HirCtx<'_> {
                 let inner = self.lower_expr(*expr, locals, local_map)?;
                 match op {
                     ParsedUnaryOp::AddrOf => {
-                        if is_array_ty(inner.ty) {
-                            return Ok(self.array_to_pointer_decay(&inner));
-                        }
+                        // & on an array gives T(*)[N], not T* — do NOT decay.
                         if matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _))) {
-                            return Ok(self.fn_def_to_fn_ptr_decay(inner));
+                            return Ok(self.fn_def_to_c_fn_ptr_decay(inner));
                         }
                         if !is_place_expr(&inner) {
                             if matches!(
