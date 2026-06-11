@@ -257,7 +257,9 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                             time_report::accumulate_mir_lowering(mir_start.elapsed());
                             if DUMP_MIR_ENABLED.load(Ordering::Relaxed) {
                                 let name = ctx.tcx.def_path_str(
-                                    rustc_public_generative::rustc_public::rustc_internal::internal(ctx.tcx, def.0),
+                                    rustc_public_generative::rustc_public::rustc_internal::internal(
+                                        ctx.tcx, def.0,
+                                    ),
                                 );
                                 dump_mir_body(&result, &name);
                             }
@@ -481,7 +483,11 @@ fn write_body_pretty(w: &mut impl std::io::Write, body: &Body, name: &str) -> st
     let arg_count = body.arg_locals().len();
     for (i, local) in body.locals().iter().enumerate() {
         if i > arg_count {
-            let m = if local.mutability == Mutability::Mut { "mut " } else { "" };
+            let m = if local.mutability == Mutability::Mut {
+                "mut "
+            } else {
+                ""
+            };
             writeln!(w, "    let {m}_{i}: {};", local.ty)?;
         }
     }
@@ -723,8 +729,8 @@ pub fn compile_co2_file_for_miri(
         dyn for<'tcx> FnOnce(rustc_middle::ty::TyCtxt<'tcx>) -> rustc_driver::Compilation + Send,
     >,
 ) {
-    let dump_mir = rustc_args.iter().any(|a| a.contains("dump-mir"))
-        || std::env::var("CO2_DUMP_MIR").is_ok();
+    let dump_mir =
+        rustc_args.iter().any(|a| a.contains("dump-mir")) || std::env::var("CO2_DUMP_MIR").is_ok();
     DUMP_MIR_ENABLED.store(dump_mir, Ordering::Relaxed);
     let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &Vec::new()));
     install_pending_compile(CompileMode::RUST, co2_file.to_path_buf(), preprocessed);
@@ -743,8 +749,8 @@ pub fn compile_co2_source(
     preprocessed: Arc<PreprocessedSource>,
     rustc_args: Vec<String>,
 ) {
-    let dump_mir = rustc_args.iter().any(|a| a.contains("dump-mir"))
-        || std::env::var("CO2_DUMP_MIR").is_ok();
+    let dump_mir =
+        rustc_args.iter().any(|a| a.contains("dump-mir")) || std::env::var("CO2_DUMP_MIR").is_ok();
     DUMP_MIR_ENABLED.store(dump_mir, Ordering::Relaxed);
 
     install_pending_compile(mode, source_path, preprocessed);

@@ -545,6 +545,13 @@ impl<A: TypeResolver> DoTransform for RustPathSegment<A> {
         match self {
             RustPathSegment::Ident(s) => RustPathSegment::Ident(s.clone()),
             RustPathSegment::Generics(tys) => RustPathSegment::Generics(tys.transform(b)),
+            RustPathSegment::Qualified {
+                type_segments,
+                trait_segments,
+            } => RustPathSegment::Qualified {
+                type_segments: type_segments.transform(b),
+                trait_segments: trait_segments.transform(b),
+            },
         }
     }
 }

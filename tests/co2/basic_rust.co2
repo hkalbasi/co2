@@ -46,6 +46,15 @@ fn main() {
     if (*v.get_unchecked(one_usize) != 5) {
         std::process::exit(3);    
     }
+    if (*v.get(1_usize).unwrap() != 5) {
+        std::process::exit(3);    
+    }
+    if (*v.get((usize)1).unwrap() != 5) {
+        std::process::exit(3);    
+    }
+    if (*v.get::<usize>(1).unwrap() != 5) {
+        std::process::exit(3);    
+    }
 
     Vec<Vec<i32> > vv = Vec::<Vec<i32> > ::new();
     vv.push(v);

@@ -1,8 +1,15 @@
-use support_lib::{Struct1, Struct1Alias, GenericWrap, GenericWrapWithDefault, TraitSimple, TraitOk, TraitArg, print_name};
+use support_lib::{
+    Struct1, Struct1Alias, GenericWrap, GenericWrapWithDefault, TraitSimple, TraitOk, ReceiverTrait,
+    TraitGenericMethod, TraitArg, MyTrait, MyAssocProvider, print_name, WrapTrait, Combine,
+};
 use std::boxed::Box;
 
 fn str_len(s: &str) -> usize {
     return s.len();
+}
+
+fn str_len_wrapped(s: &str) -> GenericWrap<usize> {
+    return GenericWrap::new(s.len());
 }
 
 fn simple() {
@@ -29,6 +36,10 @@ fn generic() {
     GenericWrap::<&str> ws = w.replace(s"hello");
     ws.ok();
     ws.map::<usize, _>(str_len);
+    ws.and_then(str_len_wrapped);
+    GenericWrap::<i32> w2 = GenericWrap::<i32>::new(99);
+    i32 assoc_val = w2.use_assoc(MyAssocProvider::new(777));
+    s.generic_debug(assoc_val);
 }
 
 fn generic_with_default() {
@@ -70,16 +81,16 @@ fn trait_methods() {
     s.trait_simple();
 
     // generic trait parameter inference
-    //s.trait_arg(123);
-    //s.trait_arg("hello");
+    s.trait_arg(123);
+    s.trait_arg(s"hello");
 
     // generic method inside trait
-    //s.generic_method(999);
-    //s.generic_method("abc");
+    s.generic_method(999);
+    s.generic_method(s"abc");
 
     // receiver by value
     auto b = Box::new(Struct1::new(77));
-    //b.recv();
+    b.recv();
 }
 
 fn generic_traits() {
@@ -90,14 +101,15 @@ fn generic_traits() {
     g.ok();
 
     // same-name trait method
-    //TraitOk::ok(&g);
+    <GenericWrap<i32> as TraitOk>::ok(&g);
+    TraitOk::ok(&g);
 
     // ordinary trait
-    //g.wrap_trait();
+    g.wrap_trait();
 
     // generic trait
-    //g.combine(123);
-    //g.combine("hello");
+    g.combine(123);
+    g.combine(s"hello");
 
     // generic inherent methods
     usize fifty_five = 55;

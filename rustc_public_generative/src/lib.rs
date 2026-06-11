@@ -139,8 +139,29 @@ impl DependencyInfo<'_> {
         receiver_ty: Ty,
         method: &str,
         traits_in_scope: &[DefId],
+        arg_tys: &[Ty],
     ) -> Result<Option<ResolvedMethod>, String> {
-        internal::resolve_method(self.tcx, owner, receiver_ty, method, traits_in_scope)
+        internal::resolve_method(
+            self.tcx,
+            owner,
+            receiver_ty,
+            method,
+            traits_in_scope,
+            arg_tys,
+        )
+    }
+
+    /// Given a function with partially-resolved generic args (some may still be `Param` types),
+    /// infer the remaining type params by unifying the function's input types with the
+    /// provided argument types.
+    pub fn infer_fn_args(
+        &self,
+        fn_def_id: DefId,
+        fn_generic_args: &GenericArgs,
+        arg_tys: &[Ty],
+        skip: usize,
+    ) -> Result<(GenericArgs, FnSig), String> {
+        internal::infer_fn_args(self.tcx, fn_def_id, fn_generic_args, arg_tys, skip)
     }
 }
 

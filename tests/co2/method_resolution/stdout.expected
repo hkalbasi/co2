@@ -10,6 +10,8 @@ GenericWrap extra_param: 42 100
 GenericWrap replace: 42 "hello"
 GenericWrap simple: "hello"
 GenericWrap map: "hello" 5
+GenericWrap and_then: "hello" 5
+Generic Debug 777 42
 --- generic_with_default ---
 GenericWrapWithDefault ok: 16 17
 GenericWrapWithDefault<i32> sum: 33
@@ -26,7 +28,17 @@ GenericWrap extra_param: 15 99
 GenericWrap extra_param: 15 100
 --- trait_methods ---
 TraitSimple 10
+TraitArg<i32> 10 123
+TraitArg<&str> 10 hello
+TraitGenericMethod 999 10
+TraitGenericMethod "abc" 10
+ReceiverTrait 77
 --- generic_traits ---
 GenericWrap simple: 5
+TraitOk 5
+TraitOk 5
+WrapTrait 5
+Combine 5 123
+Combine 5 "hello"
 GenericWrap extra_param: 5 55
 GenericWrap replace: 5 "abc"

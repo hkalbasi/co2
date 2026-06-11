@@ -854,36 +854,72 @@ impl<'a> Tokenizer<'a> {
         if start + 5 <= self.len {
             let five = std::str::from_utf8(&self.bytes[start..start + 5]).unwrap_or("");
             match five {
-                "usize" => { self.pos += 5; return IntegerSuffix::Usize; }
-                "isize" => { self.pos += 5; return IntegerSuffix::Isize; }
+                "usize" => {
+                    self.pos += 5;
+                    return IntegerSuffix::Usize;
+                }
+                "isize" => {
+                    self.pos += 5;
+                    return IntegerSuffix::Isize;
+                }
                 _ => {}
             }
         }
         if start + 4 <= self.len {
             let four = std::str::from_utf8(&self.bytes[start..start + 4]).unwrap_or("");
             match four {
-                "u128" => { self.pos += 4; return IntegerSuffix::U128; }
-                "i128" => { self.pos += 4; return IntegerSuffix::I128; }
+                "u128" => {
+                    self.pos += 4;
+                    return IntegerSuffix::U128;
+                }
+                "i128" => {
+                    self.pos += 4;
+                    return IntegerSuffix::I128;
+                }
                 _ => {}
             }
         }
         if start + 3 <= self.len {
             let tri = std::str::from_utf8(&self.bytes[start..start + 3]).unwrap_or("");
             match tri {
-                "u32" => { self.pos += 3; return IntegerSuffix::U32; }
-                "u64" => { self.pos += 3; return IntegerSuffix::U64; }
-                "u16" => { self.pos += 3; return IntegerSuffix::U16; }
-                "i32" => { self.pos += 3; return IntegerSuffix::I32; }
-                "i64" => { self.pos += 3; return IntegerSuffix::I64; }
-                "i16" => { self.pos += 3; return IntegerSuffix::I16; }
+                "u32" => {
+                    self.pos += 3;
+                    return IntegerSuffix::U32;
+                }
+                "u64" => {
+                    self.pos += 3;
+                    return IntegerSuffix::U64;
+                }
+                "u16" => {
+                    self.pos += 3;
+                    return IntegerSuffix::U16;
+                }
+                "i32" => {
+                    self.pos += 3;
+                    return IntegerSuffix::I32;
+                }
+                "i64" => {
+                    self.pos += 3;
+                    return IntegerSuffix::I64;
+                }
+                "i16" => {
+                    self.pos += 3;
+                    return IntegerSuffix::I16;
+                }
                 _ => {}
             }
         }
         if start + 2 <= self.len {
             let pair = std::str::from_utf8(&self.bytes[start..start + 2]).unwrap_or("");
             match pair {
-                "u8"  => { self.pos += 2; return IntegerSuffix::U8; }
-                "i8"  => { self.pos += 2; return IntegerSuffix::I8; }
+                "u8" => {
+                    self.pos += 2;
+                    return IntegerSuffix::U8;
+                }
+                "i8" => {
+                    self.pos += 2;
+                    return IntegerSuffix::I8;
+                }
                 _ => {}
             }
         }

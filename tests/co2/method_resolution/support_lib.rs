@@ -47,6 +47,12 @@ impl<T: Debug + Copy> GenericWrap<T> {
         println!("GenericWrap map: {:?} {:?}", self.val, u);
         GenericWrap { val: u }
     }
+
+    pub fn and_then<U: Debug, F: FnOnce(T) -> GenericWrap<U>>(&self, f: F) -> GenericWrap<U> {
+        let u = f(self.val);
+        println!("GenericWrap and_then: {:?} {:?}", self.val, u.val);
+        u
+    }
 }
 
 pub struct GenericWrapWithDefault<A, B = i32> {
@@ -182,6 +188,36 @@ impl<T: Debug + Copy> ReplaceTrait for GenericWrap<T> {
 }
 
 // -----------------------------------------------------------------------------
+// Associated type on a trait used in method bound
+// -----------------------------------------------------------------------------
+
+pub trait MyTrait {
+    type Assoc;
+    fn get_assoc(&self) -> Self::Assoc;
+}
+
+pub struct MyAssocProvider(i32);
+
+impl MyAssocProvider {
+    pub fn new(v: i32) -> Self {
+        Self(v)
+    }
+}
+
+impl MyTrait for MyAssocProvider {
+    type Assoc = i32;
+    fn get_assoc(&self) -> i32 {
+        self.0
+    }
+}
+
+impl<T: Debug + Copy> GenericWrap<T> {
+    pub fn use_assoc<U, F: MyTrait<Assoc = U>>(&self, _f: F) -> U {
+        _f.get_assoc()
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Blanket impl
 // -----------------------------------------------------------------------------
 
@@ -243,9 +279,7 @@ impl DynTrait for Struct1 {
 
 impl Debug for Struct1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Struct1")
-            .field("f1", &self.f1)
-            .finish()
+        f.debug_struct("Struct1").field("f1", &self.f1).finish()
     }
 }
 

@@ -36,11 +36,6 @@ fn invalid_span() -> Span {
     Span::from_parts(co2_ast::FileId::INVALID, 0..0)
 }
 
-fn has_unresolved_params(args: &[GenericArgKind]) -> bool {
-    args.iter()
-        .any(|arg| matches!(arg, GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_))))
-}
-
 fn first_unresolved_generic_arg_index(args: &[GenericArgKind]) -> usize {
     args.iter()
         .position(
@@ -513,58 +508,6 @@ fn normalize_stable_defaulted_ty(ty: Ty) -> Ty {
     }
 }
 
-fn infer_generic_args_from_args(
-    fn_def: rustc_public_generative::rustc_public::ty::FnDef,
-    sig: &mut rustc_public_generative::rustc_public::ty::FnSig,
-    resolved_generic_args: &mut Vec<GenericArgKind>,
-    resolved: &mut ResolvedValue,
-    func_ty: &mut Ty,
-    lowered_args: &[HirExpr],
-    skip: usize,
-    dependencies: &rustc_public_generative::DependencyInfo<'_>,
-) {
-    let mut arg_bindings = BTreeMap::new();
-    for (i, arg) in lowered_args.iter().enumerate().skip(skip) {
-        if let Some(expected_ty) = sig.inputs().get(i) {
-            collect_param_bindings_for_receiver(*expected_ty, arg.ty, &mut arg_bindings);
-        }
-    }
-
-    // Propagate return types through FnOnce bounds:
-    // When a generic param is bound to a FnDef, check if it has a FnOnce bound,
-    // and if so, infer the output param from the FnDef's return type.
-    if !arg_bindings.is_empty() {
-        let fn_once_params = dependencies.fn_once_output_params(fn_def.0);
-        for (fn_param_idx, output_param_idx) in &fn_once_params {
-            if let Some(bound_ty) = arg_bindings.get(fn_param_idx)
-                && let Some(callable) = callable_sig(*bound_ty)
-                && let fn_return = callable.skip_binder().output()
-                && !matches!(fn_return.kind(), TyKind::Param(_))
-            {
-                arg_bindings.entry(*output_param_idx).or_insert(fn_return);
-            }
-        }
-    }
-
-    if arg_bindings.is_empty() {
-        return;
-    }
-    sig.inputs_and_output = sig
-        .inputs_and_output
-        .iter()
-        .map(|ty| normalize_stable_defaulted_ty(substitute_ty_params(*ty, &arg_bindings)))
-        .collect();
-    for (idx, ty) in &arg_bindings {
-        let idx = *idx as usize;
-        if idx >= resolved_generic_args.len() {
-            resolved_generic_args.resize(idx + 1, GenericArgKind::Type(Ty::usize_ty()));
-        }
-        resolved_generic_args[idx] = GenericArgKind::Type(*ty);
-    }
-    *resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
-    *func_ty = resolved.ty();
-}
-
 fn receiver_generic_args(ty: Ty) -> Vec<GenericArgKind> {
     match ty.kind() {
         TyKind::RigidTy(RigidTy::Adt(_, args)) => args.0.clone(),
@@ -597,10 +540,9 @@ impl HirCtx<'_> {
         receiver_ty: Ty,
         method: &str,
         span: co2_ast::Span,
+        arg_tys: &[Ty],
     ) -> Result<Option<rustc_public_generative::ResolvedMethod>, (co2_ast::Span, String)> {
-        let trait_candidates = self
-            .decl_resolver
-            .traits_in_scope_with_method(method);
+        let trait_candidates = self.decl_resolver.traits_in_scope_with_method(method);
         let trait_def_ids: Vec<_> = trait_candidates
             .iter()
             .map(|(_, trait_def_id, _)| *trait_def_id)
@@ -612,6 +554,7 @@ impl HirCtx<'_> {
                 receiver_ty,
                 method,
                 &trait_def_ids,
+                arg_tys,
             )
             .map_err(|msg| (span, msg))
     }
@@ -642,7 +585,9 @@ impl HirCtx<'_> {
     ) -> HirExpr {
         for step in &adjustment.steps {
             match step {
-                rustc_public_generative::ReceiverAdjustmentStep::BuiltinDeref { target, .. } => {
+                rustc_public_generative::ReceiverAdjustmentStep::BuiltinDeref {
+                    target, ..
+                } => {
                     let span = receiver.span;
                     receiver = HirExpr {
                         kind: HirExprKind::Deref(Box::new(receiver)),
@@ -769,14 +714,10 @@ impl HirCtx<'_> {
             if idx >= resolved_generic_args.len() {
                 resolved_generic_args.resize(idx + 1, GenericArgKind::Type(Ty::usize_ty()));
             }
-            resolved_generic_args[idx] =
-                self.lower_generic_arg_with_wild(idx, gt, &method_params);
+            resolved_generic_args[idx] = self.lower_generic_arg_with_wild(idx, gt, &method_params);
         }
-        let mut sig = resolved_method.sig;
-        let mut resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
-        let mut func_ty = resolved.ty();
         let mut lowered_args = self.lower_method_receiver_and_params(
-            &sig,
+            &resolved_method.sig,
             receiver,
             Some(&resolved_method.receiver_adjustment),
             params,
@@ -784,23 +725,17 @@ impl HirCtx<'_> {
             local_map,
         )?;
         let dependencies = self.decl_resolver.dependency_info();
-        infer_generic_args_from_args(
-            fn_def,
-            &mut sig,
-            &mut resolved_generic_args,
-            &mut resolved,
-            &mut func_ty,
-            &lowered_args,
-            1,
-            &dependencies,
-        );
-
-        if has_unresolved_params(&resolved_generic_args) {
-            return Err(spanned_error(method_span, "failed to infer generic args."));
-        }
-
+        // Resolve remaining method-level generic params from argument types
+        let arg_tys: Vec<Ty> = lowered_args.iter().skip(1).map(|a| a.ty).collect();
+        let (new_args, _) = dependencies
+            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys, 1)
+            .map_err(|msg| spanned_error(method_span, msg))?;
+        resolved_generic_args = new_args.0;
         // Re-derive sig from func_ty which has fully-concrete generic args now.
         // Normalize aliases (projections) in the sig.
+        let mut sig = resolved_method.sig;
+        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
+        let func_ty = resolved.ty();
         if let Some(new_sig) = callable_sig(func_ty) {
             let mut new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
             if new_sig.inputs().len() == sig.inputs().len() {
@@ -1015,20 +950,25 @@ impl HirCtx<'_> {
             _ => return Ok(None),
         };
 
+        let param_tys: Vec<Ty> = params
+            .iter()
+            .map(|p| {
+                self.lower_expr((p.0.clone(), p.1), locals, local_map)
+                    .map(|e| e.ty)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let Some(resolved_method) =
-            self.resolve_method_for_call(receiver.ty, method_name, parser_span)?
+            self.resolve_method_for_call(receiver.ty, method_name, parser_span, &param_tys)?
         else {
             return Ok(None);
         };
 
         let fn_def = rustc_public_generative::rustc_public::ty::FnDef(resolved_method.def_id);
-        let mut resolved_generic_args = resolved_method.generic_args.0;
-        let mut sig = resolved_method.sig;
-        let mut resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
-        let mut func_ty = resolved.ty();
+        let resolved_generic_args = resolved_method.generic_args.0;
 
         let lowered_args = self.lower_method_receiver_and_params(
-            &sig,
+            &resolved_method.sig,
             &receiver,
             Some(&resolved_method.receiver_adjustment),
             params,
@@ -1037,23 +977,19 @@ impl HirCtx<'_> {
         )?;
 
         let dependencies = self.decl_resolver.dependency_info();
-        infer_generic_args_from_args(
-            fn_def,
-            &mut sig,
-            &mut resolved_generic_args,
-            &mut resolved,
-            &mut func_ty,
-            &lowered_args,
-            1,
-            &dependencies,
-        );
 
-        if has_unresolved_params(&resolved_generic_args) {
-            return Err(spanned_error(method_span, "failed to infer generic args."));
-        }
-
+        let resolved_generic_args = {
+            let arg_tys: Vec<Ty> = lowered_args.iter().skip(1).map(|a| a.ty).collect();
+            let (new_args, _) = dependencies
+                .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys, 1)
+                .map_err(|msg| spanned_error(method_span, msg))?;
+            new_args.0
+        };
         // Re-derive sig from func_ty which has fully-concrete generic args now.
-        // Normalize aliases (projections) in the sig.
+        // This normalizes any Alias(Projection) types that the MIR builder handles.
+        let mut sig = resolved_method.sig;
+        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
+        let func_ty = resolved.ty();
         if let Some(new_sig) = callable_sig(func_ty) {
             let mut new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
             if new_sig.inputs().len() == sig.inputs().len() {
@@ -1101,32 +1037,55 @@ impl HirCtx<'_> {
     > {
         let resolver = &self.decl_resolver;
 
-        let (receiver, parsed_receiver_generic_args, method_name, parser_span) = match &func.0 {
-            Expression::Identifier((
-                co2_crate_sig::DefOrLocal::AssocMethod {
-                    receiver,
-                    method,
+        let (receiver, parsed_receiver_generic_args, method_name, ufcs_trait, parser_span) =
+            match &func.0 {
+                Expression::Identifier((
+                    co2_crate_sig::DefOrLocal::AssocMethod {
+                        receiver,
+                        method,
+                        receiver_generic_args,
+                        ufcs_trait,
+                    },
+                    _,
+                )) => (
+                    *receiver,
                     receiver_generic_args,
-                },
-                _,
-            )) => (*receiver, receiver_generic_args, method.as_str(), func.1),
-            _ => {
-                return Ok(None);
-            }
-        };
-        let receiver_ty = if parsed_receiver_generic_args.is_empty() {
-            CrateItem(receiver).ty()
-        } else {
-            self.ty_of_resolved_path(
-                &co2_crate_sig::DefOrLocal::Def {
-                    def_id: receiver,
-                    generic_args: parsed_receiver_generic_args.clone(),
-                },
-                parser_span,
-            )
-        };
+                    method.as_str(),
+                    *ufcs_trait,
+                    func.1,
+                ),
+                _ => {
+                    return Ok(None);
+                }
+            };
+        // TODO: not generic enough?
+        let (receiver_ty, ufcs_trait) =
+            if ufcs_trait.is_none() && resolver.dependency_info().is_trait(receiver) {
+                let lowered = match params.first() {
+                    Some(p) => match self.lower_expr((p.0.clone(), p.1), locals, local_map) {
+                        Ok(lowered) => lowered,
+                        Err(_) => return Ok(None),
+                    },
+                    None => return Ok(None),
+                };
+                let concrete_ty = trait_method_self_ty(lowered.ty);
+                (concrete_ty, Some(receiver))
+            } else {
+                let base_ty = if parsed_receiver_generic_args.is_empty() {
+                    CrateItem(receiver).ty()
+                } else {
+                    self.ty_of_resolved_path(
+                        &co2_crate_sig::DefOrLocal::Def {
+                            def_id: receiver,
+                            generic_args: parsed_receiver_generic_args.clone(),
+                        },
+                        parser_span,
+                    )
+                };
+                (base_ty, ufcs_trait)
+            };
         let (method_def, class, resolution_kind) =
-            match resolver.resolve_method(receiver_ty, method_name, parser_span) {
+            match resolver.resolve_method(receiver_ty, method_name, parser_span, ufcs_trait) {
                 Ok(Some(found)) => found,
                 Ok(None) => return Ok(None),
                 Err(err) => return Err(err),
@@ -1195,13 +1154,11 @@ impl HirCtx<'_> {
                 args
             }
         };
-        let Some(mut sig) =
+        let Some(_sig) =
             self.specialize_fn_sig_from_receiver(fn_def, &resolved_generic_args, receiver_ty)
         else {
             return Ok(None);
         };
-        let mut resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
-        let mut func_ty = resolved.ty();
 
         let mut lowered_args = Vec::with_capacity(params.len());
         for param in params {
@@ -1211,30 +1168,14 @@ impl HirCtx<'_> {
         }
 
         let dependencies = self.decl_resolver.dependency_info();
-        infer_generic_args_from_args(
-            fn_def,
-            &mut sig,
-            &mut resolved_generic_args,
-            &mut resolved,
-            &mut func_ty,
-            &lowered_args,
-            1,
-            &dependencies,
-        );
-
-        // Re-derive sig from func_ty which has fully-concrete generic args now.
-        // This ensures associated type projections (like <I as SliceIndex<T>>::Output)
-        // are properly resolved via the compiler's fn_sig query with concrete args.
-        if let Some(new_sig) = callable_sig(func_ty) {
-            let new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
-            if new_sig.inputs().len() == sig.inputs().len() {
-                sig = new_sig;
-            }
-        }
-
-        if has_unresolved_params(&resolved_generic_args) {
-            return Err(spanned_error(parser_span, "failed to infer generic args."));
-        }
+        let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty).collect();
+        let (new_args, new_sig) = dependencies
+            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys, 1)
+            .map_err(|msg| spanned_error(parser_span, msg))?;
+        resolved_generic_args = new_args.0;
+        let sig = new_sig;
+        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
+        let func_ty = resolved.ty();
 
         check_fn_predicates(
             &dependencies,
@@ -1536,23 +1477,20 @@ impl HirCtx<'_> {
                         func_expr.ty.kind()
                     {
                         let mut resolved_generic_args = args.clone();
-                        let mut resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
-                        let mut func_ty = resolved.ty();
 
-                        infer_generic_args_from_args(
-                            fn_def,
-                            &mut sig,
-                            &mut resolved_generic_args,
-                            &mut resolved,
-                            &mut func_ty,
-                            &lowered_args,
-                            0,
-                            &dependencies,
-                        );
-
-                        if has_unresolved_params(&resolved_generic_args) {
-                            return Err(spanned_error(func.1, "failed to infer generic args."));
-                        }
+                        let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty).collect();
+                        let (new_args, new_sig) = dependencies
+                            .infer_fn_args(
+                                fn_def.0,
+                                &GenericArgs(resolved_generic_args),
+                                &arg_tys,
+                                0,
+                            )
+                            .map_err(|msg| spanned_error(func.1, msg))?;
+                        resolved_generic_args = new_args.0;
+                        sig = new_sig;
+                        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
+                        let func_ty = resolved.ty();
 
                         check_fn_predicates(
                             &dependencies,
@@ -1591,8 +1529,19 @@ impl HirCtx<'_> {
             } => {
                 let receiver = self.lower_expr(*receiver, locals, local_map)?;
                 let method_name = method.0.as_str();
-                let Some(resolved_method) =
-                    self.resolve_method_for_call(receiver.ty, method_name, parser_span)?
+                let param_tys: Vec<Ty> = params
+                    .iter()
+                    .map(|p| {
+                        self.lower_expr((p.0.clone(), p.1), locals, local_map)
+                            .map(|e| e.ty)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let Some(resolved_method) = self.resolve_method_for_call(
+                    receiver.ty,
+                    method_name,
+                    parser_span,
+                    &param_tys,
+                )?
                 else {
                     return Err(spanned_error(
                         parser_span,
@@ -1650,7 +1599,7 @@ impl HirCtx<'_> {
                 }
                 // Fall back to method resolution (e.g. `(*s).as_ptr()`)
                 let Some(resolved_method) =
-                    self.resolve_method_for_call(base.ty, &field.0, parser_span)?
+                    self.resolve_method_for_call(base.ty, &field.0, parser_span, &[])?
                 else {
                     return Err(spanned_error(
                         parser_span,
@@ -2242,7 +2191,10 @@ impl HirCtx<'_> {
                         if is_maybe_uninit_fn_ptr_ty(inner.ty).is_some() {
                             return Ok(inner);
                         }
-                        let TyKind::RigidTy(RigidTy::RawPtr(pointee, _) | RigidTy::Ref(_, pointee, _)) = inner.ty.kind() else {
+                        let TyKind::RigidTy(
+                            RigidTy::RawPtr(pointee, _) | RigidTy::Ref(_, pointee, _),
+                        ) = inner.ty.kind()
+                        else {
                             return Err(spanned_error(
                                 parser_span,
                                 format!("cannot dereference non-pointer type: {:?}", inner.ty),

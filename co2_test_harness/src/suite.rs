@@ -71,7 +71,12 @@ pub fn run_tests(
     Ok(())
 }
 
-fn run_test(root: &Path, test: &TestCase, coverage_dir: Option<&Path>, dump_mir: bool) -> Result<TestOutcome> {
+fn run_test(
+    root: &Path,
+    test: &TestCase,
+    coverage_dir: Option<&Path>,
+    dump_mir: bool,
+) -> Result<TestOutcome> {
     if let Some(reason) = directive_text(test, "skip") {
         return Ok(TestOutcome::Skip(reason));
     }

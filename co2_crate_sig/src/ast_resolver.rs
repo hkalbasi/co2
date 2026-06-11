@@ -7,7 +7,7 @@ use std::{
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Declarator, DoTransform as _, EnumSpecifier, Expression,
-    InitDeclarator, Initializer, RustPath, Span, Spanned, StatelessResolver,
+    InitDeclarator, Initializer, RustPath, RustTy, Span, Spanned, StatelessResolver,
     StructOrUnionSpecifier, TypeQueryResult, TypeResolver,
 };
 use co2_parser::parse_expression_tokens;
@@ -398,7 +398,10 @@ impl LocalResolver {
     }
 
     pub fn traits_in_scope_with_method(&self, method: &str) -> Vec<(String, DefId, String)> {
-        self.base.borrow_mut().resolver.traits_in_scope_with_method(method)
+        self.base
+            .borrow_mut()
+            .resolver
+            .traits_in_scope_with_method(method)
     }
 
     pub fn resolve_method(
@@ -406,6 +409,7 @@ impl LocalResolver {
         receiver_ty: Ty,
         method: &str,
         span: co2_ast::Span,
+        ufcs_trait: Option<DefId>,
     ) -> Result<Option<(DefId, TypeQueryResult, MethodResolutionKind)>, (co2_ast::Span, String)>
     {
         let trait_candidates = self
@@ -417,6 +421,12 @@ impl LocalResolver {
         let hir_ctx = self.base.borrow().hir_ctx;
         let mut applicable = Vec::new();
         for (trait_name, trait_def, trait_path) in trait_candidates {
+            // If UFCS, only check the specified trait
+            if let Some(ufcs_trait_def) = ufcs_trait {
+                if trait_def != ufcs_trait_def {
+                    continue;
+                }
+            }
             if hir_ctx.type_implements_trait(self.current_owner, receiver_ty, trait_def)
                 && let Some((method_def, class)) = self
                     .base
@@ -430,13 +440,17 @@ impl LocalResolver {
 
         match applicable.len() {
             0 => {
+                // UFCS with specified trait: no fallback to auto-deref/auto-ref
+                if ufcs_trait.is_some() {
+                    return Ok(None);
+                }
                 // Auto-deref: resolve method on the pointee of Ref/RawPtr
                 if let rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
                     rustc_public_generative::rustc_public::ty::RigidTy::Ref(_, inner, _)
                     | rustc_public_generative::rustc_public::ty::RigidTy::RawPtr(inner, _),
                 ) = receiver_ty.kind()
                 {
-                    return self.resolve_method(inner, method, span);
+                    return self.resolve_method(inner, method, span, None);
                 }
                 // Auto-ref: try &T and &mut T
                 for mutability in [Mutability::Not, Mutability::Mut] {
@@ -594,7 +608,8 @@ pub enum DefOrLocal {
     AssocMethod {
         receiver: DefId,
         method: String,
-        receiver_generic_args: Vec<Spanned<co2_ast::RustTy<LocalResolver>>>,
+        receiver_generic_args: Vec<Spanned<RustTy<LocalResolver>>>,
+        ufcs_trait: Option<DefId>,
     },
     Local(u32),
     FuncName,
@@ -623,7 +638,8 @@ impl co2_ast::TypeResolver for LocalResolver {
                     co2_ast::RustPathSegment::Ident(ident) => {
                         Some((co2_ast::RustPathSegment::Ident(ident.clone()), *span))
                     }
-                    co2_ast::RustPathSegment::Generics(_) => None,
+                    co2_ast::RustPathSegment::Generics(_)
+                    | co2_ast::RustPathSegment::Qualified { .. } => None,
                 })
                 .collect(),
         };
@@ -670,6 +686,61 @@ impl co2_ast::TypeResolver for LocalResolver {
             .get(&path_pretty)
             .cloned()
             .or_else(|| {
+                // UFCS: <Type as Trait>::method
+                if stripped_path.segments.len() == 1
+                    && let Some((co2_ast::RustPathSegment::Ident(method), _)) =
+                        stripped_path.segments.last()
+                    && let Some((
+                        co2_ast::RustPathSegment::Qualified {
+                            type_segments,
+                            trait_segments,
+                        },
+                        _,
+                    )) = path.segments.first()
+                {
+                    let type_path = co2_ast::RustPath {
+                        segments: type_segments.clone(),
+                    };
+                    let (receiver_class, receiver) = self.classify_path(&type_path).ok()?;
+                    if receiver_class != TypeQueryResult::Type {
+                        return None;
+                    }
+                    let DefOrLocal::Def {
+                        def_id: receiver,
+                        generic_args: receiver_generic_args,
+                    } = receiver
+                    else {
+                        return None;
+                    };
+                    let trait_path = co2_ast::RustPath {
+                        segments: trait_segments.clone(),
+                    };
+                    let ufcs_trait =
+                        self.classify_path(&trait_path)
+                            .ok()
+                            .and_then(|(class, def)| {
+                                if class == TypeQueryResult::Type {
+                                    match def {
+                                        DefOrLocal::Def { def_id, .. } => Some(def_id),
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            });
+                    return Some((
+                        DefOrLocal::AssocMethod {
+                            receiver,
+                            method: method.clone(),
+                            receiver_generic_args,
+                            ufcs_trait,
+                        },
+                        TypeQueryResult::Expr,
+                    ));
+                }
+                None
+            })
+            .or_else(|| {
                 let Some((co2_ast::RustPathSegment::Ident(method), _)) =
                     stripped_path.segments.last()
                 else {
@@ -696,13 +767,19 @@ impl co2_ast::TypeResolver for LocalResolver {
                     return None;
                 };
                 if receiver_generic_args.is_empty() && has_direct_expr_path {
-                    return None;
+                    // For non-trait receivers (inherent methods on structs),
+                    // the direct expr path is sufficient. For trait receivers,
+                    // we need AssocMethod handling to infer concrete Self type.
+                    if !self.dependency_info().is_trait(receiver) {
+                        return None;
+                    }
                 }
                 Some((
                     DefOrLocal::AssocMethod {
                         receiver,
                         method: method.clone(),
                         receiver_generic_args,
+                        ufcs_trait: None,
                     },
                     TypeQueryResult::Expr,
                 ))

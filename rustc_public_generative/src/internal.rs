@@ -17,15 +17,15 @@ use rustc_data_structures::smallvec::SmallVec;
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
-use rustc_hir_analysis::autoderef::{Autoderef, AutoderefKind};
 use rustc_hir::def::{CtorKind, DefKind, Namespace, Res};
 use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefIdMap};
 use rustc_hir::definitions::{DefPathData, DisambiguatorState};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
+use rustc_hir_analysis::autoderef::{Autoderef, AutoderefKind};
 use rustc_index::{Idx, IndexVec};
 use rustc_infer::infer::DefineOpaqueTypes;
-use rustc_infer::traits::ObligationCause;
+use rustc_infer::traits::{ObligationCause, PredicateObligation};
 use rustc_lint::Level;
 use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
 use rustc_middle::mir::{BorrowKind, ConstValue};
@@ -40,6 +40,7 @@ use rustc_session::config::{CrateType, EntryFnType};
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
 use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
+use rustc_trait_selection::traits::ObligationCtxt;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 
 use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, StructField};
@@ -57,7 +58,7 @@ use rustc_public::mir::{
     StatementKind as MirStatementKind, TerminatorKind as MirTerminatorKind,
 };
 use rustc_public::ty::{
-    AdtDef, FnDef, GenericArgKind, GenericArgs, RigidTy, Span as PublicSpan, Ty as MirTy,
+    AdtDef, FnDef, FnSig, GenericArgKind, GenericArgs, RigidTy, Span as PublicSpan, Ty as MirTy,
     VariantIdx,
 };
 
@@ -2652,6 +2653,14 @@ pub(crate) fn check_fn_predicates(
             if pred.trait_ref.has_bound_vars() {
                 continue;
             }
+            // Skip bounds that involve unresolved generic params — assume they'd hold
+            if pred.trait_ref.args.iter().any(|arg| {
+                arg.walk().any(|inner| {
+                    matches!(inner.kind(), ty::GenericArgKind::Type(ty) if matches!(ty.kind(), ty::TyKind::Param(_)))
+                })
+            }) {
+                continue;
+            }
             if !infcx
                 .type_implements_trait(pred.trait_ref.def_id, pred.trait_ref.args.iter(), param_env)
                 .must_apply_modulo_regions()
@@ -2680,7 +2689,7 @@ pub(crate) fn resolve_inherent_method(
     receiver_ty: MirTy,
     method: &str,
 ) -> Result<Option<ResolvedMethod>, String> {
-    resolve_method(tcx, owner, receiver_ty, method, &[])
+    resolve_method(tcx, owner, receiver_ty, method, &[], &[])
 }
 
 pub(crate) fn resolve_method(
@@ -2689,6 +2698,7 @@ pub(crate) fn resolve_method(
     receiver_ty: MirTy,
     method: &str,
     traits_in_scope: &[DefId],
+    arg_tys: &[MirTy],
 ) -> Result<Option<ResolvedMethod>, String> {
     let owner = my_def_id_to_rustc_def_id(tcx, owner);
     let receiver_ty = normalize_ty_defaults_to_rustc(tcx, receiver_ty);
@@ -2706,6 +2716,10 @@ pub(crate) fn resolve_method(
     let trait_def_ids: Vec<_> = traits_in_scope
         .iter()
         .map(|trait_def_id| my_def_id_to_rustc_def_id(tcx, *trait_def_id))
+        .collect();
+    let internal_arg_tys: Vec<ty::Ty<'_>> = arg_tys
+        .iter()
+        .map(|ty| normalize_ty_defaults_to_rustc(tcx, *ty))
         .collect();
 
     for step in deref_steps {
@@ -2726,6 +2740,7 @@ pub(crate) fn resolve_method(
                     step.ty,
                     adjusted_self_ty,
                     adjustment,
+                    Some(&internal_arg_tys),
                 ) {
                     step_inherent.push(probe);
                 }
@@ -2750,7 +2765,10 @@ pub(crate) fn resolve_method(
         // the inner/pointee type, not blanket impls (like Clone → ToOwned) on the
         // pointer/reference itself.
         let mut step_trait = Vec::new();
-        if !matches!(step.ty.kind(), ty::TyKind::Ref(_, _, _) | ty::TyKind::RawPtr(_, _)) {
+        if !matches!(
+            step.ty.kind(),
+            ty::TyKind::Ref(_, _, _) | ty::TyKind::RawPtr(_, _)
+        ) {
             for &trait_def_id in &trait_def_ids {
                 let Some(item) = associated_fn_named(tcx, trait_def_id, method) else {
                     continue;
@@ -2766,6 +2784,7 @@ pub(crate) fn resolve_method(
                         step.ty,
                         adjusted_self_ty,
                         adjustment,
+                        Some(&internal_arg_tys),
                     ) {
                         step_trait.push(probe);
                     }
@@ -2799,6 +2818,7 @@ pub(crate) fn resolve_method(
             ));
         }
     }
+
     Ok(Some(matched))
 }
 
@@ -2862,7 +2882,9 @@ fn overloaded_deref_step<'tcx>(
     let deref_method = tcx
         .associated_items(deref_trait)
         .in_definition_order()
-        .find(|item| matches!(item.kind, ty::AssocKind::Fn { .. }) && item.name().as_str() == "deref")
+        .find(|item| {
+            matches!(item.kind, ty::AssocKind::Fn { .. }) && item.name().as_str() == "deref"
+        })
         .expect("Deref trait must define deref")
         .def_id;
     let trait_args = tcx.mk_args(&[source.into()]);
@@ -3018,6 +3040,7 @@ fn probe_inherent_method<'tcx>(
     step_ty: ty::Ty<'tcx>,
     adjusted_self_ty: ty::Ty<'tcx>,
     adjustment: ReceiverAdjustment,
+    arg_tys: Option<&[ty::Ty<'tcx>]>,
 ) -> Option<ResolvedMethod> {
     infcx.probe(|_| {
         let impl_args = infcx.fresh_args_for_item(DUMMY_SP, impl_def_id);
@@ -3038,6 +3061,7 @@ fn probe_inherent_method<'tcx>(
             adjustment,
             Some((impl_def_id, impl_args)),
             None,
+            arg_tys,
         )
     })
 }
@@ -3052,6 +3076,7 @@ fn probe_trait_method<'tcx>(
     step_ty: ty::Ty<'tcx>,
     adjusted_self_ty: ty::Ty<'tcx>,
     adjustment: ReceiverAdjustment,
+    arg_tys: Option<&[ty::Ty<'tcx>]>,
 ) -> Option<ResolvedMethod> {
     infcx.probe(|_| {
         let trait_args = infcx.fresh_args_for_item(DUMMY_SP, trait_def_id);
@@ -3071,6 +3096,7 @@ fn probe_trait_method<'tcx>(
             adjustment,
             None,
             Some((trait_def_id, trait_args)),
+            arg_tys,
         )
     })
 }
@@ -3086,6 +3112,7 @@ fn probe_method_sig_and_obligations<'tcx>(
     adjustment: ReceiverAdjustment,
     impl_info: Option<(RustcDefId, ty::GenericArgsRef<'tcx>)>,
     trait_info: Option<(RustcDefId, ty::GenericArgsRef<'tcx>)>,
+    arg_tys: Option<&[ty::Ty<'tcx>]>,
 ) -> Option<ResolvedMethod> {
     let sig = tcx.fn_sig(method_def_id).instantiate(tcx, method_args);
     let sig = tcx.instantiate_bound_regions_with_erased(sig);
@@ -3096,14 +3123,32 @@ fn probe_method_sig_and_obligations<'tcx>(
         .eq(DefineOpaqueTypes::Yes, self_input, adjusted_self_ty)
         .ok()?;
 
+    if let Some(arg_tys) = arg_tys {
+        let inputs = sig.inputs();
+        for (i, &arg_ty) in arg_tys.iter().enumerate() {
+            if let Some(&input_ty) = inputs.get(i + 1) {
+                let _ = infcx
+                    .at(cause, param_env)
+                    .eq(DefineOpaqueTypes::Yes, input_ty, arg_ty)
+                    .ok();
+            }
+        }
+    }
+
     if let Some((impl_def_id, impl_args)) = impl_info {
         let impl_bounds = tcx.predicates_of(impl_def_id).instantiate(tcx, impl_args);
         for (clause, _) in impl_bounds {
             let obligation = rustc_trait_selection::traits::Obligation::new(
-                tcx, cause.clone(), param_env, clause,
+                tcx,
+                cause.clone(),
+                param_env,
+                clause,
             );
             let result = infcx.evaluate_obligation(&obligation);
-            if matches!(result, Ok(rustc_trait_selection::traits::EvaluationResult::EvaluatedToErr { .. })) {
+            if matches!(
+                result,
+                Ok(rustc_trait_selection::traits::EvaluationResult::EvaluatedToErr { .. })
+            ) {
                 return None;
             }
         }
@@ -3117,11 +3162,16 @@ fn probe_method_sig_and_obligations<'tcx>(
             ty::Binder::dummy(trait_ref),
         );
         let result = infcx.evaluate_obligation(&obligation);
-        if matches!(result, Ok(rustc_trait_selection::traits::EvaluationResult::EvaluatedToErr { .. })) {
+        if matches!(
+            result,
+            Ok(rustc_trait_selection::traits::EvaluationResult::EvaluatedToErr { .. })
+        ) {
             return None;
         }
     }
-    let method_bounds = tcx.predicates_of(method_def_id).instantiate(tcx, method_args);
+    let method_bounds = tcx
+        .predicates_of(method_def_id)
+        .instantiate(tcx, method_args);
     let sized_trait = tcx.lang_items().sized_trait();
     for (clause, _) in method_bounds {
         // Skip implicit `Sized` bounds — method-level type params are implicitly
@@ -3190,6 +3240,152 @@ fn method_args_for_trait<'tcx>(
             }
         }
     })
+}
+
+/// Given a function definition with partially-resolved generic args (some may still be
+/// `Param` types from generic params not yet inferred), use rustc's inference context to
+/// resolve them by unifying the function's input types with the provided argument types.
+///
+/// Returns the fully-resolved `GenericArgs` and `FnSig`.
+pub(crate) fn infer_fn_args(
+    tcx: TyCtxt<'_>,
+    fn_def_id: DefId,
+    fn_generic_args: &GenericArgs,
+    arg_tys: &[MirTy],
+    skip: usize,
+) -> Result<(GenericArgs, FnSig), String> {
+    let rustc_fn_def_id = my_def_id_to_rustc_def_id(tcx, fn_def_id);
+    let param_env = tcx.param_env(rustc_fn_def_id);
+    let infcx = tcx.infer_ctxt().build(ty::TypingMode::non_body_analysis());
+    let cause = ObligationCause::dummy();
+
+    // Convert current generic args to rustc, replacing Param types with fresh inference vars
+    let mut infer_for_param: Vec<Option<ty::Ty<'_>>> = vec![None; fn_generic_args.0.len()];
+    let rustc_args: Vec<ty::GenericArg<'_>> = fn_generic_args
+        .0
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| match arg {
+            GenericArgKind::Lifetime(region) => {
+                ty::GenericArg::from(mir_region_to_rustc(tcx, region))
+            }
+            GenericArgKind::Type(ty) => {
+                let rustc_ty = mir_ty_to_rustc(tcx, ty);
+                if matches!(rustc_ty.kind(), ty::TyKind::Param(_)) {
+                    let var = infcx.next_ty_var(DUMMY_SP);
+                    infer_for_param[idx] = Some(var);
+                    ty::GenericArg::from(var)
+                } else {
+                    ty::GenericArg::from(rustc_ty)
+                }
+            }
+            GenericArgKind::Const(konst) => ty::GenericArg::from(internal(tcx, konst.clone())),
+        })
+        .collect();
+    let rustc_args = tcx.mk_args_from_iter(rustc_args.into_iter());
+
+    // Get the fn sig with inference vars for unresolved params
+    let fn_sig = tcx.fn_sig(rustc_fn_def_id).instantiate(tcx, rustc_args);
+    let fn_sig = tcx.instantiate_bound_regions_with_erased(fn_sig);
+
+    // Convert arg types to rustc
+    let internal_arg_tys: Vec<ty::Ty<'_>> = arg_tys
+        .iter()
+        .map(|ty| normalize_ty_defaults_to_rustc(tcx, *ty))
+        .collect();
+
+    // Unify remaining inputs (after skip) with argument types.
+    // Failure to unify is ignored — the caller will catch unresolved params.
+    let inputs = fn_sig.inputs();
+    for (i, &arg_ty) in internal_arg_tys.iter().enumerate() {
+        if let Some(&input_ty) = inputs.get(i + skip) {
+            let _ = infcx
+                .at(&cause, param_env)
+                .eq(DefineOpaqueTypes::Yes, input_ty, arg_ty);
+        }
+    }
+
+    // Register the function's predicates as obligations and process them
+    // to resolve associated type projections generically through the trait solver.
+    let ocx = ObligationCtxt::new(&infcx);
+    let predicates = tcx.predicates_of(rustc_fn_def_id);
+    for (clause, _span) in predicates.predicates {
+        let instantiated_clause = ty::EarlyBinder::bind(*clause).instantiate(tcx, rustc_args);
+        // Skip predicates that still involve unresolved Param types
+        if instantiated_clause.has_param() {
+            continue;
+        }
+        ocx.register_obligation(PredicateObligation {
+            cause: ObligationCause::dummy(),
+            param_env,
+            recursion_depth: 0,
+            predicate: instantiated_clause.as_predicate(),
+        });
+    }
+    // Process — errors are ignored; check_fn_predicates catches them later.
+    let _ = ocx.try_evaluate_obligations();
+
+    let resolved_args = infcx.resolve_vars_if_possible(rustc_args);
+
+    // For any param that was originally a Param type and is still an inference var
+    // (i.e., not resolved by unification), convert it back to the original Param type.
+    let final_args: Vec<ty::GenericArg<'_>> = resolved_args
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| {
+            if let Some(infer_ty) = infer_for_param[idx] {
+                let resolved = infcx.resolve_vars_if_possible(infer_ty);
+                if matches!(resolved.kind(), ty::TyKind::Infer(_)) {
+                    // Not resolved — use the original Param type
+                    let orig = &fn_generic_args.0[idx];
+                    match orig {
+                        GenericArgKind::Lifetime(region) => {
+                            ty::GenericArg::from(mir_region_to_rustc(tcx, region))
+                        }
+                        GenericArgKind::Type(ty) => ty::GenericArg::from(mir_ty_to_rustc(tcx, ty)),
+                        GenericArgKind::Const(konst) => {
+                            ty::GenericArg::from(internal(tcx, konst.clone()))
+                        }
+                    }
+                } else {
+                    arg.into()
+                }
+            } else {
+                arg.into()
+            }
+        })
+        .collect();
+    let final_args = tcx.mk_args_from_iter(final_args.into_iter());
+
+    // Re-derive sig with the final args so inferences that did resolve are reflected
+    let final_sig = tcx.fn_sig(rustc_fn_def_id).instantiate(tcx, final_args);
+    let final_sig = tcx.instantiate_bound_regions_with_erased(final_sig);
+    let resolved_sig = infcx.resolve_vars_if_possible(final_sig);
+
+    // Check if any generic params that were originally Param are still unresolved.
+    // If ALL such params remain unresolved, inference failed entirely.
+    let param_count = infer_for_param.iter().filter(|x| x.is_some()).count();
+    if param_count > 0 {
+        let unresolved_count = final_args
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| {
+                infer_for_param[*idx].is_some()
+                    && matches!(
+                        final_args[*idx].kind(),
+                        ty::GenericArgKind::Type(ty) if matches!(ty.kind(), ty::TyKind::Param(_))
+                    )
+            })
+            .count();
+        if unresolved_count == param_count {
+            return Err("failed to infer generic args.".to_string());
+        }
+    }
+
+    Ok((
+        stable_generic_args(tcx, final_args),
+        rustc_public::rustc_internal::stable(resolved_sig),
+    ))
 }
 
 fn stable_generic_args(_tcx: TyCtxt<'_>, args: ty::GenericArgsRef<'_>) -> GenericArgs {

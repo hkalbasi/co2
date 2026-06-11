@@ -843,11 +843,31 @@ where
                 .map(|body| Expression::GnuStatementExpr {
                     body: Box::new(body),
                 }),
-            rust_path_expr_simple().try_map({
-                let resolver = resolver.clone();
-                move |path, _| {
+            {
+                let generic_ty = rust_generic_arg_ty();
+                let ufcs_path = just(Token::Lt)
+                    .ignore_then(rust_path_with_generic_args(generic_ty.clone()))
+                    .then_ignore(just(Token::Ident("as".to_string())))
+                    .then(rust_path_with_generic_args(generic_ty))
+                    .then_ignore(just(Token::Gt))
+                    .then_ignore(just(Token::ColonColon))
+                    .then(identifier())
+                    .map(|((type_path, trait_path), method)| {
+                        let type_segments = type_path.0.segments;
+                        let trait_segments = trait_path.0.segments;
+                        let method_segment = (RustPathSegment::Ident(method.0), method.1);
+                        let qual_span = join_spans(type_path.1, trait_path.1);
+                        let qual_segment = (RustPathSegment::<StatelessResolver>::Qualified {
+                            type_segments,
+                            trait_segments,
+                        }, qual_span);
+                        let span = qual_span;
+                        (RustPath { segments: vec![qual_segment, method_segment] }, span)
+                    });
+                let map_resolver = resolver.clone();
+                let ufcs_or_normal = ufcs_path.try_map(move |path, _| {
                     let path_span = rust_path_span(&path.0, path.1);
-                    match resolver.classify_path(&path.0) {
+                    match map_resolver.classify_path(&path.0) {
                     Ok((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
                         Ok(Expression::Identifier((resolved, path_span)))
                     }
@@ -856,8 +876,24 @@ where
                     }
                     Err((msg, span)) => Err(Rich::custom(span, msg)),
                     }
-                }
-            }),
+                })
+                .or(rust_path_expr_simple().try_map({
+                    let resolver = resolver.clone();
+                    move |path, _| {
+                        let path_span = rust_path_span(&path.0, path.1);
+                        match resolver.classify_path(&path.0) {
+                        Ok((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
+                            Ok(Expression::Identifier((resolved, path_span)))
+                        }
+                        Ok((TypeQueryResult::Type, _)) => {
+                            Err(Rich::custom(path_span, "expected expression, found type name"))
+                        }
+                        Err((msg, span)) => Err(Rich::custom(span, msg)),
+                        }
+                    }
+                }));
+                ufcs_or_normal
+            },
             select! {
                 Token::StringLit(s) => s,
             }

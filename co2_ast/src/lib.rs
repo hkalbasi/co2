@@ -265,6 +265,10 @@ pub struct RustPath<R: TypeResolver> {
 pub enum RustPathSegment<R: TypeResolver> {
     Ident(String),
     Generics(Vec<Spanned<RustTy<R>>>),
+    Qualified {
+        type_segments: Vec<Spanned<RustPathSegment<R>>>,
+        trait_segments: Vec<Spanned<RustPathSegment<R>>>,
+    },
 }
 
 impl<R: TypeResolver> RustPath<R> {
@@ -299,6 +303,18 @@ impl<R: TypeResolver> RustPath<R> {
                         .join(", ");
                     format!("<{inner}>")
                 }
+                RustPathSegment::Qualified {
+                    type_segments,
+                    trait_segments,
+                } => {
+                    let type_path = RustPath {
+                        segments: type_segments.clone(),
+                    };
+                    let trait_path = RustPath {
+                        segments: trait_segments.clone(),
+                    };
+                    format!("<{} as {}>", type_path.to_pretty(), trait_path.to_pretty())
+                }
             })
             .collect::<Vec<_>>()
             .join("::")
@@ -317,6 +333,18 @@ impl<R: TypeResolver> Display for RustPath<R> {
                         "<{}>",
                         rust_tys.iter().map(|x| rust_ty_to_pretty(&x.0)).join(", ")
                     ),
+                    RustPathSegment::Qualified {
+                        type_segments,
+                        trait_segments,
+                    } => {
+                        let type_path = RustPath {
+                            segments: type_segments.clone(),
+                        };
+                        let trait_path = RustPath {
+                            segments: trait_segments.clone(),
+                        };
+                        format!("<{} as {}>", type_path, trait_path)
+                    }
                 })
                 .join("::"),
         )
