@@ -1,0 +1,18 @@
+//@ mode: co2
+//@ run-status: 0
+
+#include <assert.h>
+
+#define ASSERT_LIT_TYPE(lit, ty) { auto a = (lit); assert(_Generic(a, ty: 1, default: 0)); }
+
+fn main() {
+    ASSERT_LIT_TYPE(123, int);
+    ASSERT_LIT_TYPE(123l, long int);
+    ASSERT_LIT_TYPE(123usize, usize);
+    ASSERT_LIT_TYPE(123_000, int);
+    ASSERT_LIT_TYPE(123_000_000_000, i64);
+    ASSERT_LIT_TYPE(123u32, u32);
+    ASSERT_LIT_TYPE(123i8, i8);
+    ASSERT_LIT_TYPE(123_i64, i64);
+    ASSERT_LIT_TYPE(123_000_i128, i128);
+}

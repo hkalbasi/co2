@@ -242,6 +242,18 @@ pub enum IntegerSuffix {
     LongLong,
     UnsignedLong,
     UnsignedLongLong,
+    Usize,
+    Isize,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
 }
 
 #[derive(Debug, Clone)]
@@ -796,6 +808,18 @@ impl Display for Token {
                     IntegerSuffix::LongLong => write!(f, "ll"),
                     IntegerSuffix::UnsignedLong => write!(f, "ul"),
                     IntegerSuffix::UnsignedLongLong => write!(f, "ull"),
+                    IntegerSuffix::Usize => write!(f, "usize"),
+                    IntegerSuffix::Isize => write!(f, "isize"),
+                    IntegerSuffix::U8 => write!(f, "u8"),
+                    IntegerSuffix::U16 => write!(f, "u16"),
+                    IntegerSuffix::U32 => write!(f, "u32"),
+                    IntegerSuffix::U64 => write!(f, "u64"),
+                    IntegerSuffix::U128 => write!(f, "u128"),
+                    IntegerSuffix::I8 => write!(f, "i8"),
+                    IntegerSuffix::I16 => write!(f, "i16"),
+                    IntegerSuffix::I32 => write!(f, "i32"),
+                    IntegerSuffix::I64 => write!(f, "i64"),
+                    IntegerSuffix::I128 => write!(f, "i128"),
                 }
             }
             Token::FloatLit(num, suffix) => {
@@ -1322,6 +1346,9 @@ pub fn co2_test_symbol_suffix(module_path: &[String], name: &str) -> String {
 }
 
 pub fn parse_unsigned_integer_constant(text: &str) -> Option<u128> {
+    let stripped: String = text.chars().filter(|&c| c != '_').collect();
+    let text = &stripped;
+
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         return u128::from_str_radix(hex, 16).ok();
     }

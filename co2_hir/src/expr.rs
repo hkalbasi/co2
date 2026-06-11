@@ -3338,6 +3338,18 @@ fn int_suffix_ty(suffix: &IntegerSuffix, value: i128) -> Ty {
         IntegerSuffix::UnsignedLong | IntegerSuffix::UnsignedLongLong => {
             Ty::unsigned_ty(UintTy::U64)
         }
+        IntegerSuffix::Usize => Ty::usize_ty(),
+        IntegerSuffix::Isize => Ty::signed_ty(IntTy::Isize),
+        IntegerSuffix::U8 => Ty::unsigned_ty(UintTy::U8),
+        IntegerSuffix::U16 => Ty::unsigned_ty(UintTy::U16),
+        IntegerSuffix::U32 => Ty::unsigned_ty(UintTy::U32),
+        IntegerSuffix::U64 => Ty::unsigned_ty(UintTy::U64),
+        IntegerSuffix::U128 => Ty::unsigned_ty(UintTy::U128),
+        IntegerSuffix::I8 => Ty::signed_ty(IntTy::I8),
+        IntegerSuffix::I16 => Ty::signed_ty(IntTy::I16),
+        IntegerSuffix::I32 => Ty::signed_ty(IntTy::I32),
+        IntegerSuffix::I64 => Ty::signed_ty(IntTy::I64),
+        IntegerSuffix::I128 => Ty::signed_ty(IntTy::I128),
     }
 }
 

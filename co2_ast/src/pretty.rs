@@ -179,6 +179,18 @@ impl PrettyPrint for Constant {
                     IntegerSuffix::LongLong => format!("{v}ll"),
                     IntegerSuffix::UnsignedLong => format!("{v}ul"),
                     IntegerSuffix::UnsignedLongLong => format!("{v}ull"),
+                    IntegerSuffix::Usize => format!("{v}usize"),
+                    IntegerSuffix::Isize => format!("{v}isize"),
+                    IntegerSuffix::U8 => format!("{v}u8"),
+                    IntegerSuffix::U16 => format!("{v}u16"),
+                    IntegerSuffix::U32 => format!("{v}u32"),
+                    IntegerSuffix::U64 => format!("{v}u64"),
+                    IntegerSuffix::U128 => format!("{v}u128"),
+                    IntegerSuffix::I8 => format!("{v}i8"),
+                    IntegerSuffix::I16 => format!("{v}i16"),
+                    IntegerSuffix::I32 => format!("{v}i32"),
+                    IntegerSuffix::I64 => format!("{v}i64"),
+                    IntegerSuffix::I128 => format!("{v}i128"),
                 };
                 pp.leaf_data("Int", "", &s);
             }

@@ -426,6 +426,11 @@ impl<'a> Tokenizer<'a> {
                         self.state = State::DecimalFloatExponent;
                         continue;
                     }
+                    if b == b'_' {
+                        self.buf.push(b);
+                        self.pos += 1;
+                        continue;
+                    }
                     self.finish_integer(out);
                     continue;
                 }
@@ -446,6 +451,11 @@ impl<'a> Tokenizer<'a> {
                         self.buf.push(b);
                         self.pos += 1;
                         self.state = State::HexFloatExponent;
+                        continue;
+                    }
+                    if b == b'_' {
+                        self.buf.push(b);
+                        self.pos += 1;
                         continue;
                     }
                     self.finish_int_suffix(out);
@@ -503,6 +513,11 @@ impl<'a> Tokenizer<'a> {
                         self.state = State::DecimalFloatFraction;
                         continue;
                     }
+                    if b == b'_' {
+                        self.buf.push(b);
+                        self.pos += 1;
+                        continue;
+                    }
                     self.finish_int_suffix(out);
                     continue;
                 }
@@ -523,6 +538,11 @@ impl<'a> Tokenizer<'a> {
                         self.buf.push(b);
                         self.pos += 1;
                         self.state = State::DecimalFloatExponent;
+                        continue;
+                    }
+                    if b == b'_' {
+                        self.buf.push(b);
+                        self.pos += 1;
                         continue;
                     }
                     self.finish_int_suffix(out);
@@ -827,6 +847,48 @@ impl<'a> Tokenizer<'a> {
 
     fn parse_int_suffix(&mut self) -> IntegerSuffix {
         let start = self.pos;
+
+        // Try Rust-style integer suffixes (longest first to avoid partial matches).
+        // Check from longest suffix to shortest, so that e.g. "u32" is not
+        // misidentified as "u" + "32".
+        if start + 5 <= self.len {
+            let five = std::str::from_utf8(&self.bytes[start..start + 5]).unwrap_or("");
+            match five {
+                "usize" => { self.pos += 5; return IntegerSuffix::Usize; }
+                "isize" => { self.pos += 5; return IntegerSuffix::Isize; }
+                _ => {}
+            }
+        }
+        if start + 4 <= self.len {
+            let four = std::str::from_utf8(&self.bytes[start..start + 4]).unwrap_or("");
+            match four {
+                "u128" => { self.pos += 4; return IntegerSuffix::U128; }
+                "i128" => { self.pos += 4; return IntegerSuffix::I128; }
+                _ => {}
+            }
+        }
+        if start + 3 <= self.len {
+            let tri = std::str::from_utf8(&self.bytes[start..start + 3]).unwrap_or("");
+            match tri {
+                "u32" => { self.pos += 3; return IntegerSuffix::U32; }
+                "u64" => { self.pos += 3; return IntegerSuffix::U64; }
+                "u16" => { self.pos += 3; return IntegerSuffix::U16; }
+                "i32" => { self.pos += 3; return IntegerSuffix::I32; }
+                "i64" => { self.pos += 3; return IntegerSuffix::I64; }
+                "i16" => { self.pos += 3; return IntegerSuffix::I16; }
+                _ => {}
+            }
+        }
+        if start + 2 <= self.len {
+            let pair = std::str::from_utf8(&self.bytes[start..start + 2]).unwrap_or("");
+            match pair {
+                "u8"  => { self.pos += 2; return IntegerSuffix::U8; }
+                "i8"  => { self.pos += 2; return IntegerSuffix::I8; }
+                _ => {}
+            }
+        }
+
+        // C-style suffixes
         if start + 3 <= self.len {
             let quad = std::str::from_utf8(&self.bytes[start..start + 3]).unwrap_or("");
             match quad {

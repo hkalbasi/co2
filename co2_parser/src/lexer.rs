@@ -180,7 +180,23 @@ fn decode_literal_bytes<'src>(
 
 // Helper function to parse integer suffixes
 fn integer_suffix_parser<'src>() -> impl Parser<'src, &'src str, IntegerSuffix, LexerExtra<'src>> {
-    // First try to parse combinations
+    // Rust-style suffixes (longest first to avoid partial matches like "u" + "32")
+    let rust_suffix = choice((
+        just("usize").to(IntegerSuffix::Usize),
+        just("isize").to(IntegerSuffix::Isize),
+        just("u128").to(IntegerSuffix::U128),
+        just("i128").to(IntegerSuffix::I128),
+        just("u32").to(IntegerSuffix::U32),
+        just("u64").to(IntegerSuffix::U64),
+        just("u16").to(IntegerSuffix::U16),
+        just("i32").to(IntegerSuffix::I32),
+        just("i64").to(IntegerSuffix::I64),
+        just("i16").to(IntegerSuffix::I16),
+        just("u8").to(IntegerSuffix::U8),
+        just("i8").to(IntegerSuffix::I8),
+    ));
+
+    // C-style suffixes
     let unsigned_long_long = just("ull")
         .or(just("ULL"))
         .or(just("llu"))
@@ -197,9 +213,16 @@ fn integer_suffix_parser<'src>() -> impl Parser<'src, &'src str, IntegerSuffix, 
     let unsigned = just('u').or(just('U')).to(IntegerSuffix::Unsigned);
     let long = just('l').or(just('L')).to(IntegerSuffix::Long);
 
-    choice((unsigned_long_long, unsigned_long, long_long, unsigned, long))
-        .or_not()
-        .map(|opt| opt.unwrap_or(IntegerSuffix::None))
+    choice((
+        rust_suffix,
+        unsigned_long_long,
+        unsigned_long,
+        long_long,
+        unsigned,
+        long,
+    ))
+    .or_not()
+    .map(|opt| opt.unwrap_or(IntegerSuffix::None))
 }
 
 // Helper function to parse float suffixes
