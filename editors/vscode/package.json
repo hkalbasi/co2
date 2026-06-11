@@ -1,0 +1,43 @@
+{
+	"name": "co2-language",
+	"displayName": "CO2 Language Support",
+	"description": "Syntax highlighting for CO2 - a C-compatible language with Rust interop",
+	"version": "0.1.0",
+	"publisher": "co2",
+	"license": "MIT",
+	"engines": {
+		"vscode": "^1.84.0"
+	},
+	"categories": [
+		"Programming Languages"
+	],
+	"keywords": [
+		"co2",
+		"c",
+		"rust",
+		"syntax",
+		"highlighting"
+	],
+	"contributes": {
+		"languages": [
+			{
+				"id": "co2",
+				"aliases": [
+					"CO2",
+					"co2"
+				],
+				"extensions": [
+					".co2"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "co2",
+				"scopeName": "source.co2",
+				"path": "./syntaxes/co2.tmLanguage.json"
+			}
+		]
+	}
+}
