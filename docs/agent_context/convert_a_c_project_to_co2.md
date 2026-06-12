@@ -117,4 +117,4 @@ This will:
 * A: You are defining a type in multiple modules (maybe by `#include`ing it). Define type in one module
   and `use` it in others to fix this warning.
 * Q: In replacing stdlib includes with `use libc::{item1, item2}`, what to do with macros?
-* A: Use Rust std conterparts, e.g. `std::ptr::null_mut::<()>()` instead of `NULL`.
+* A: Use Rust std counterparts, e.g. `std::ptr::null_mut::<()>()` instead of `NULL`.

@@ -12,7 +12,7 @@ A Result becomes an error code. The richness of modern type systems is lost in t
 safety guarantees that compilers could otherwise enforce across language boundaries.
 
 For example, C++ and Rust both have (although somehow incompatible) generics.
-But since they are forced to talk to each other using C, they lose or severly limit their generic types
+But since they are forced to talk to each other using C, they lose or severely limit their generic types
 at the FFI boundary.
 
 ## The core language inside Rust
@@ -59,20 +59,20 @@ can talk C.
 ## C++ as a Cargo lang
 
 C++ as a Cargo language would be a more ambitious undertaking. While I definitely think a CO2++ language is feasible,
-there are some challanges relative to CO2 since there was support for C features in Rust/Cargo lang,
-even obscure features like C-variadics, but it isn't the case for C++. Some notable challanges:
+there are some challenges relative to CO2 since there was support for C features in Rust/Cargo lang,
+even obscure features like C-variadics, but it isn't the case for C++. Some notable challenges:
 * Overloaded functions
 * Templates, which are not compatible with Rust generics completely
 * Inheritance
 
 The CO2++ can easily get these working in a single crate (by doing what a normal C++ compiler does) but the problem
 is that we need to somehow encode these things in the crate API, so that at least C++ libraries become able to
-get splitted into multiple crates.
+get split into multiple crates.
 
 ## Empowering new system languages with crates ecosystem
 
 Decades from now, there will probably be a new revolutionary language which solves a problem that Rust
-can't solve in a backward compatible way, like how Rust iself solved the safe memory management without GC.
+can't solve in a backward compatible way, like how Rust itself solved the safe memory management without GC.
 Having Cargo lang as the new lingua franca, it can make that language able to seamlessly reuse Rust crates,
 maybe reducing the need of Rewrite-it-in-that-language projects.
 

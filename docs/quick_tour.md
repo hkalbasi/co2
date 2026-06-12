@@ -13,7 +13,7 @@ It installs `co2cc`, `co2rustc` and `co2cargo` in your PATH. See [installation p
 ## CO2 as a C compiler
 
 The `co2cc` is a drop in replacement for a C compiler like gcc.
-You can compile almost every (See [incompatibilities](./known_incompatibilties_with_c.md)) C code like:
+You can compile almost every (See [incompatibilities](./known_incompatibilities_with_c.md)) C code like:
 ```
 co2cc foo.c
 ```
@@ -52,7 +52,7 @@ i32 c_style_function2(int a, int b) {
 }
 
 int main() {
-    Vec<i32> v = Vec::<i32>::new(); // You can use generic Rust types and functions.
+    Vec::<i32> v = Vec::<i32>::new(); // You can use generic Rust types and functions.
     for (int i = 0; i < 5; i++) {
         v.push(2 * i); // You can call Rust methods.
     }
@@ -61,7 +61,7 @@ int main() {
 }
 ```
 
-## Integeration with Rust
+## Integration with Rust
 
 While with `co2cc` you can use the Rust standard library, for adding Rust dependencies,
 and using the co2 code as a Rust crate, you need `co2cargo`.

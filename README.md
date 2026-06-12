@@ -1,7 +1,7 @@
 # CO2
 
 CO2 (oxidized C) is a programming language which is backward compatible with
-C (See [incompatibilities](./docs/known_incompatibilties_with_c.md)) but with
+C (See [incompatibilities](./docs/known_incompatibilities_with_c.md)) but with
 direct access to the Rust ecosystem. CO2 and Rust can use each other crates seamlessly,
 with no FFI boundaries or extra tooling required. 
 
@@ -17,7 +17,7 @@ But Rust has a not great story in integrating with C:
   * The API becomes an unsafe and unidiomatic Rust, which probably needs a wrapper
   * They are not distributed by Cargo, and often distributed in binary form, limiting things like LTO or cross compilation
 * Rust libraries are not usable in C, needing an special C wrapper
-  * Losing Rust types and fallbacking to things like `void*`
+  * Losing Rust types and falling back to things like `void*`
   * Some things (like `HashMap`) are impossible to use in C without performance loss
   * Time consuming to develop
 
@@ -87,7 +87,7 @@ For converting a C project to Rust, you can:
 2. Use Rust dependencies instead of C
   1. Use Rust std instead of libc
   2. Use crates.io instead of hand coded things
-  3. Use Rust wrappers of C dependencies instead of themself.
+  3. Use Rust wrappers of C dependencies instead of themselves.
 3. Split your project into multiple crates
   1. Make the public API of each crate minimal and idiomatic in Rust
 4. Rewrite each crate into Rust, one by one.

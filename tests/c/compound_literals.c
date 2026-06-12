@@ -116,7 +116,7 @@ int main(void) {
     }
 
     // ------------------------------------------------------------
-    // side effects in initialiser list (evaluated once, in order)
+    // side effects in initializer list (evaluated once, in order)
     // ------------------------------------------------------------
     {
         sidefx_counter = 0;

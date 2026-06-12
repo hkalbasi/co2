@@ -7,7 +7,7 @@ This guide assumes your are familiar with C and Rust, and makes references to th
 ## C as the base language
 
 CO2 strives to be a spec-compliant C23 compiler. Most valid C code compiles as-is,
-and [minor incompatibilities are documented](./known_incompatibilties_with_c.md).
+and [minor incompatibilities are documented](./known_incompatibilities_with_c.md).
 Incompatibilities beyond that list are considered a bug.
 
 In addition to the C standard, CO2 supports some popular GNU extensions:
@@ -58,7 +58,7 @@ Every place which C accepts an identifier, CO2 accepts a Rust path. Here are som
 
 Declaration specifiers:
 ```
-int f1(some::rust::Path1 *p) {} // p becomes a pointer to the path1 type.
+int f1(some::rust::Path1 *p) {} // p becomes a pointer to the `Path1` type.
 
 typedef some::rust::Path2 new_type[10]; // new_type becomes a `[some::rust::Path2; 10]`
 ```
@@ -72,7 +72,7 @@ int main() {
 
 ## Generic functions and types
 
-Rust paths in the CO2 are more powerful than paths in the `use` statements, they can have generic arguemnts:
+Rust paths in the CO2 are more powerful than paths in the `use` statements, they can have generic arguments:
 
 ```
 use std::vec::Vec;

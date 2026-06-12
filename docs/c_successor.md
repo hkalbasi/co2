@@ -54,15 +54,15 @@ Writing a standalone CO2 compiler probably needs millions of lines of code. Some
 like Hare, have implementation simplicity as a goal.
 
 But implementation simplicity is not important on its own, and there are secondary goals which this is a proxy for them,
-and CO2 achives some of these by other means:
-* Portability: It is easy to port a simple compiler and language to other niche systems and archituctures,
+and CO2 achieves some of these by other means:
+* Portability: It is easy to port a simple compiler and language to other niche systems and architectures,
   and C is the most portable language partly due to this. While porting Rust/CO2 toolchain is not an easy task by any definition of easy,
   massive amount of work is done on the Rust toolchain to make it portable. The Rust compiler supports many backends,
   including llvm, gcc, cranelift, and a C generating backend. CO2 inherits all of these,
   so it is much more portable than many of the simpler C successors.
 * Learning curve: If a language is easy to implement, there is more chance that it is also easier to learn.
   CO2 is a bit special in this regard. It expects the target audience to know C, and if they know C they already know most of the CO2.
-  There are some new concepts and syntaxs, but the learning curve is much simpler than a from zero language.
+  There are some new concepts and syntax, but the learning curve is much simpler than a from zero language.
 * Bootstrapping: Compilers are usually implemented in their own language, so for building them you need a version of them.
   The process of building a version of a self-host compiler from zero is called bootstrapping.
   Rust is not an easy language to bootstrap, but it is not very hard either and there are good tools like `mrustc` to help with this.

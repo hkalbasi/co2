@@ -461,9 +461,9 @@ fn deduplicate_tu_items(
     }
     use TuItemKind::*;
     impl TuItemKind {
-        fn check_mergable(self, other: Self) -> Option<Self> {
+        fn check_mergeable(self, other: Self) -> Option<Self> {
             if self < other {
-                return other.check_mergable(self);
+                return other.check_mergeable(self);
             }
             match (self, other) {
                 (Typedef, Typedef) => Some(Typedef),
@@ -511,7 +511,7 @@ fn deduplicate_tu_items(
                 match name_to_important_def.entry(name) {
                     std::collections::hash_map::Entry::Occupied(mut entry) => {
                         let (_, old_kind) = *entry.get();
-                        if old_kind.check_mergable(kind).is_none() {
+                        if old_kind.check_mergeable(kind).is_none() {
                             errors.push(co2_ast::Rich::custom(
                                 signature.ident_span().unwrap(),
                                 format!(
@@ -539,7 +539,7 @@ fn deduplicate_tu_items(
                 match name_to_important_def.entry(name) {
                     std::collections::hash_map::Entry::Occupied(entry) => {
                         let (_, old_kind) = *entry.get();
-                        if old_kind.check_mergable(kind).is_none() {
+                        if old_kind.check_mergeable(kind).is_none() {
                             errors.push(co2_ast::Rich::custom(
                                 ident.1,
                                 format!("the name `{}` is defined multiple times", ident.0),
@@ -593,7 +593,7 @@ fn deduplicate_tu_items(
                     match name_to_important_def.entry(name.clone()) {
                         std::collections::hash_map::Entry::Occupied(mut entry) => {
                             let (_, old_kind) = *entry.get();
-                            if old_kind.check_mergable(kind).is_none() {
+                            if old_kind.check_mergeable(kind).is_none() {
                                 let err_span = decl.0.declarator.0.ident_span().unwrap();
                                 errors.push(co2_ast::Rich::custom(
                                     err_span,

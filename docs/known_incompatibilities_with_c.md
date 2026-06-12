@@ -1,4 +1,4 @@
-# List of incompatibilites with C
+# List of incompatibilities with C
 
 CO2 tries to be a spec-compliant C compiler, but in some cases, it can't. This document tries to list the
 cases when CO2 miscompiles or reject valid C code.
@@ -27,4 +27,4 @@ int array_decl[(intptr_t)some_pointer]; // Valid (although not useful) in C, com
   pointer to integer and integer to pointer casts. This is similar to PNVI-ae-udi, which is not part of the C standard,
   but all major optimizing C compilers have some assumptions similar to it. It is not known if this makes any difference
   for C codes in practice, please open an issue if you found an example impacted by this.
-* Reading uninitialized memory in C gives you undereminate value, but in CO2 it is UB.
+* Reading uninitialized memory in C gives you indeterminate value, but in CO2 it is UB.

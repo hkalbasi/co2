@@ -13,7 +13,7 @@ Comparing CO2++ with Carbon is more apple to apple.
 Carbon wants to be a new language, which is (somehow?) memory safe and is free of "decades of technical dept",
 while maintaining interoperability with the old C++. CO2++ does not do anything on making the C++ better,
 it sticks to the C++ syntax and semantics, and is backward compatible to the C++ so it can't do anything
-about safety or fixing C++ technical depts. But if you consider Rust and CO2++ as a package,
+about safety or fixing C++ technical debt. But if you consider Rust and CO2++ as a package,
 they can compete with Carbon. Rust is the memory safe and modern language part,
 while CO2++ acts as the interop and migration layer.
 
@@ -47,7 +47,7 @@ Benefits of CO2 over C2Rust:
 Benefits of C2Rust over CO2:
 * CO2 does not support all Rust tooling currently, specially third party ones.
 
-## CO2 vs bindge, cbindge, Zngur, CXX, Crubit, ...
+## CO2 vs bindgen, cbindgen, Zngur, CXX, Crubit, ...
 
 There are other family of tools for interoperability between C/C++ and Rust.
 These tools are binding generators: They generate some code in both language to bridge things.

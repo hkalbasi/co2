@@ -1,3 +1,6 @@
+[tools]
+cspell = "9.4.0"
+
 [tasks.test]
 description = "Run all co2 tests"
 run = "cargo run -q --locked -p co2_test_harness"

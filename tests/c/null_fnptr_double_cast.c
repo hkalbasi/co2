@@ -1,19 +1,6 @@
 //@ mode: c
 //@ run-status: 0
 
-/* Lua's loadlib.c uses a double __extension__ cast to convert the void*
- * returned by dlsym() to a C function pointer:
- *
- *   #define cast_func(p)   (__extension__ (voidf)(p))
- *   #define cast_Lfunc(p)  ((lua_CFunction)(cast_func(p)))
- *
- * When dlsym() returns NULL the resulting function pointer must compare
- * equal to NULL.  A co2cc bug caused LLVM to tag the intermediate Rust
- * fn() value as nonnull, so the comparison was optimised to always-false.
- *
- * The test uses a volatile sink to prevent the compiler from folding away
- * the NULL at compile time. */
-
 typedef void (*voidf)(void);
 typedef int (*FnPtr)(void *);
 
