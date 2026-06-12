@@ -19,7 +19,7 @@ But Rust has a not great story in integrating with C:
 * Rust libraries are not usable in C, needing an special C wrapper
   * Losing Rust types and falling back to things like `void*`
   * Some things (like `HashMap`) are impossible to use in C without performance loss
-  * Time consuming to develop
+  * A C wrapper is time consuming to develop
 
 These issues lead to a trend of RIIR (Rewrite It In Rust) which is taking an existing C or C++ project and rewriting it entirely
 in Rust to gain safety and modern tooling. This may work for small projects or organizations with massive resources,
@@ -60,13 +60,17 @@ It is safer than C because:
 * CO2 code has access to fat pointers, smart pointers and Rust containers,
   which enables bound checking and other safety guarantees if used.
 * Some kind of borrow checker is still running, which kicks in specially when using Rust code wrongly.
+  The borrow checker only emits warning, and the programmer is responsible for everything,
+  but it can still be useful in detecting memory bugs.
 * It enables using safe Rust dependencies, with its original API, not an unsafe FFI wrapper around it.
 * It enables rewriting safety critical parts of code to Rust, which is memory safe.
 
 But it is not a safe language like Rust:
 * There is no `unsafe` block (You can declare your functions as unsafe but it is only for your
-  Rust dependents).
-* You can freely call every C function, e.g. all libc functions, which most of them are super unsafe.
+  Rust dependents). CO2 allows you to freely dereferencing raw pointers coming from C, calling unsafe Rust functions,
+  using unions, and many other things which can easily cause UB.
+* You can freely call every C function, e.g. all libc functions, which most of them are super unsafe,
+  and have non-trivial preconditions that the caller should abide for memory safety.
 
 ### Is C++ syntax supported?
 

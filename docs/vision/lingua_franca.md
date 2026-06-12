@@ -89,4 +89,27 @@ so it might be easy to introduce its progress in Rust itself.
 
 ## Official cargo langs
 
-## Rust editions as independent Cargo langs
+While Cargo langs can become a great test bed for language experiments, they can also split the ecosystem.
+If every library can have a language for itself, we may reach a point where people can't read or modify
+other codes in the ecosystem since there are too many languages to learn.
+
+To prevent this, we can split Cargo langs into official and unofficial.
+Every Cargo lang start's its life as an unofficial language. For using an unofficial language,
+users need to install the compiler manually, and they are discouraged to publish crates on crates.io.
+(They can still use git dependencies, and use available crates on crates.io)
+When an unofficial language gets major adoption, it can be proposed to become an official language.
+Proposing a language to become official could use the current RFC system.
+The language that is going to be official, should have some properties:
+e.g. it should impose no additional semver requirements for Rust (and other official langs) crates.
+
+When a language becomes official, its compiler will get released using the rustup,
+and it become allowed to publish in crates.io. The bar of entry for new official languages should be very high,
+and no language should be accepted as a new official language due purely aesthetic differences.
+
+## Implementation
+
+Cargo lang compilers can emit something similar to a `.rlib` or `.rmeta` file, containing the items,
+type definitions, documents, and polymorphic MIR of the functions. Then the backend, cargo doc, miri,
+and similar tools can consume this file:
+
+![alt text](<middle.svg>)

@@ -51,7 +51,7 @@ fn main() {
     // is solely responsible for avoiding UB.
     Vec::<i32> *v_ptr = &v;
 
-    v_ptr.push(1000);
+    v_ptr.push(1000); // A customized auto dereference mechanism is available.
     Vec::<i32>::push(&v, 60);
     v.push(16);
 

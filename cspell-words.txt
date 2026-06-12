@@ -523,7 +523,6 @@ unord
 Unord
 Unsize
 Unsuffixed
-usecases
 useconds
 USHRT
 UVALUE

@@ -1,5 +1,11 @@
 # CO2 as a C successor language
 
+In recent years, many languages have been proposed as successors to C, such as Zig, Hare, Odin, C3, and others. 
+They have different goals and make different tradeoffs, but they all try to improve some aspects of C while preserving some of its strengths.
+
+While the original goal of CO2 was not to be a C successor language,
+it has some of the properties that people want from such a language. So some people may find CO2 a viable C successor.
+
 ## What people want from a C successor which CO2 has
 
 ### Modern package manager and build system
@@ -14,7 +20,7 @@ C can not have a Cargo-like build system with all features, because you will hit
 CO2 supports functions with mangled symbols, so you can use cargo with arbitrary complex trees.
 Also there is a habit of distributing C libraries in binary form, limiting cross compilation and link time optimizations.
 Other C successors may have fixed the language side problem, but they will need to use these binary distributed C libs,
-losing the build system benefit. CO2 projects can use the entire ~250K Rust crates in crates.io, so it doesn't have this problem.
+losing the build system benefit. CO2 projects can use a large portion of ~250K Rust crates in crates.io, so it doesn't have this problem.
 
 ### Safety
 
@@ -33,7 +39,7 @@ Header files are a nice and simple way to manage code in multiple files and tran
 but they are dreaded due to manual duplicate definitions, which may desync,
 having unwanted implications on inlining and similar things, and their impact on compile times.
 
-CO2 provide the same module/crate system of Rust, so you can avoid writing header files.
+CO2 provides the same module/crate system of Rust, so you can avoid writing header files.
 
 ### Compatibility with C
 
@@ -44,16 +50,16 @@ and compatibility with C ensures that the migration is possible in an incrementa
 CO2 goes further than most other C successors,
 because it is designed as a superset of C rather than a completely separate language.
 
-## What people want from a C successor which CO2 has not
+## What people want from a C successor which CO2 does not have
 
 ### Implementation simplicity
 
 C is a simple language, and you can implement a compiler for a great subset of it in ~10K lines of code.
-While CO2 repository has not much more codes than this, it is tightly coupled with the Rust compiler.
+While CO2 repository has not much more code than this, it is tightly coupled with the Rust compiler.
 Writing a standalone CO2 compiler probably needs millions of lines of code. Some of the C successors,
 like Hare, have implementation simplicity as a goal.
 
-But implementation simplicity is not important on its own, and there are secondary goals which this is a proxy for them,
+But implementation simplicity is not very important on its own, and there are secondary goals which this is a proxy for them,
 and CO2 achieves some of these by other means:
 * Portability: It is easy to port a simple compiler and language to other niche systems and architectures,
   and C is the most portable language partly due to this. While porting Rust/CO2 toolchain is not an easy task by any definition of easy,
@@ -66,7 +72,7 @@ and CO2 achieves some of these by other means:
 * Bootstrapping: Compilers are usually implemented in their own language, so for building them you need a version of them.
   The process of building a version of a self-host compiler from zero is called bootstrapping.
   Rust is not an easy language to bootstrap, but it is not very hard either and there are good tools like `mrustc` to help with this.
-  CO2 is just as hard as Rust (you just need to build a Rust compiler since CO2 compiler is not self host and is written in Rust) but
+  CO2 is just as hard as Rust (you just need to build a Rust compiler since CO2 compiler is not self-hosted and is written in Rust) but
   language with simpler implementations are usually easier to bootstrap.
 
 ### Modern macro/meta programming system
@@ -75,6 +81,6 @@ Like header files, preprocessor directives are a nice and simple macro system, b
 C successors usually have some interesting features in this area, which enables things like converting a struct to json.
 
 While CO2 could use Rust macro system or invent its own system, it only supports the C preprocessor.
-CO2 needed the C preprocessor for backward compatibility, and it is enough for some common usecases.
+CO2 needed the C preprocessor for backward compatibility, and it is enough for some common use cases.
 If you need more, instead of incorporating Rust macros, CO2 enables you to write that part of your code in Rust,
 and use it in the rest of your CO2 project.
