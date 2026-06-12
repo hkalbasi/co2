@@ -10,7 +10,7 @@ workspace = true
 co2rustc = { path = "../co2rustc" }
 co2_driver_lib = { path = "../co2_driver_lib" }
 co2_ast = { path = "../co2_ast" }
-miri = { git = "https://github.com/rust-lang/miri/", rev = "0bbff3d7" }
+miri = { git = "https://github.com/rust-lang/miri/", rev = "9625a6a0b78cf72b3e92265453cd29e8552d94ea" }
 
 [package.metadata.rust-analyzer]
 rustc_private = true

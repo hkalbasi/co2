@@ -5,7 +5,7 @@ use rustc_public_generative::rustc_public::{
         AggregateKind, BorrowKind, CastKind, ConstOperand, MutBorrowKind, Mutability,
         Operand as MirOperand, PointerCoercion, ProjectionElem as MirProjection, RawPtrKind,
         Rvalue, Safety, Statement as MirStatement, StatementKind as MirStatementKind,
-        SwitchTargets, TerminatorKind,
+        SwitchTargets, TerminatorKind, WithRetag,
     },
     ty::{
         FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
@@ -145,7 +145,7 @@ impl Builder<'_, '_> {
             .projection
             .push(MirProjection::Field(0, payload_ty));
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(enum_op)),
+            kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(enum_op, WithRetag::Yes)),
             span,
         });
         self.place_operand_for_ty(payload_place, payload_ty)
@@ -469,7 +469,7 @@ impl Builder<'_, '_> {
             projection: vec![MirProjection::Deref],
         };
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(value_place, Rvalue::Use(value_op)),
+            kind: MirStatementKind::Assign(value_place, Rvalue::Use(value_op, WithRetag::Yes)),
             span,
         });
         MirOperand::Copy(place(dst_local))
@@ -485,7 +485,7 @@ impl Builder<'_, '_> {
         let src_place = {
             let tmp = self.new_temp(op_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(op)),
+                kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(op, WithRetag::Yes)),
                 span,
             });
             place(tmp)
@@ -520,7 +520,7 @@ impl Builder<'_, '_> {
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(
                 place(out_local),
-                Rvalue::Use(MirOperand::Copy(value_place)),
+                Rvalue::Use(MirOperand::Copy(value_place), WithRetag::Yes),
             ),
             span,
         });
@@ -534,7 +534,7 @@ impl Builder<'_, '_> {
                     let tmp = self.new_temp(inner.ty, Mutability::Mut, inner.span);
                     let value = self.lower_expr_to_operand(inner);
                     self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
+                        kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value, WithRetag::Yes)),
                         span: inner.span,
                     });
                     place(tmp)
@@ -1134,7 +1134,7 @@ impl Builder<'_, '_> {
                     .expect("assignment lhs should be place-expressible");
                 let rhs_value = self.lower_expr_to_operand(rhs);
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(rhs_value)),
+                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(rhs_value, WithRetag::Yes)),
                     span: expr.span,
                 });
                 MirOperand::Copy(lhs_place)
@@ -1198,7 +1198,7 @@ impl Builder<'_, '_> {
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         place(old_lhs),
-                        Rvalue::Use(MirOperand::Copy(lhs_place.clone())),
+                        Rvalue::Use(MirOperand::Copy(lhs_place.clone()), WithRetag::Yes),
                     ),
                     span: expr.span,
                 });
@@ -1223,7 +1223,7 @@ impl Builder<'_, '_> {
                     lhs.span,
                 );
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(new_val_casted)),
+                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(new_val_casted, WithRetag::Yes)),
                     span: expr.span,
                 });
                 match return_semantic {
@@ -1243,7 +1243,7 @@ impl Builder<'_, '_> {
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(
                         place(old_lhs),
-                        Rvalue::Use(MirOperand::Copy(lhs_place.clone())),
+                        Rvalue::Use(MirOperand::Copy(lhs_place.clone()), WithRetag::Yes),
                     ),
                     span: expr.span,
                 });
@@ -1262,7 +1262,7 @@ impl Builder<'_, '_> {
                     expr.span,
                 );
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(new_ptr)),
+                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(new_ptr, WithRetag::Yes)),
                     span: expr.span,
                 });
                 match return_semantic {
@@ -1283,7 +1283,7 @@ impl Builder<'_, '_> {
                     let tmp_target = self.new_temp(inner.ty, Mutability::Mut, inner.span);
                     let value = self.lower_expr_to_operand(inner);
                     self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(place(tmp_target), Rvalue::Use(value)),
+                        kind: MirStatementKind::Assign(place(tmp_target), Rvalue::Use(value, WithRetag::Yes)),
                         span: inner.span,
                     });
                     place(tmp_target)
@@ -1399,7 +1399,7 @@ impl Builder<'_, '_> {
             let mut tmp1_deref = tmp1_place.clone();
             tmp1_deref.projection.push(MirProjection::Deref);
             self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(tmp1_place, Rvalue::Use(inner_op)),
+                kind: MirStatementKind::Assign(tmp1_place, Rvalue::Use(inner_op, WithRetag::Yes)),
                 span,
             });
             let tmp2 = self.new_temp(dst_ty, Mutability::Mut, span);
@@ -1814,7 +1814,7 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero_init)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero_init, WithRetag::Yes)),
             span,
         });
 
@@ -1844,7 +1844,7 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(lhs_short_operand)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(lhs_short_operand, WithRetag::Yes)),
             span,
         });
         let lhs_short_exit =
@@ -1873,7 +1873,7 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(rhs_false_operand)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(rhs_false_operand, WithRetag::Yes)),
             span,
         });
         let rhs_false_exit =
@@ -1886,7 +1886,7 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(rhs_true_operand)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(rhs_true_operand, WithRetag::Yes)),
             span,
         });
         let rhs_true_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -1917,7 +1917,7 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero_init)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero_init, WithRetag::Yes)),
             span,
         });
         debug_assert!(matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
@@ -1942,7 +1942,7 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(one)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(one, WithRetag::Yes)),
             span,
         });
         let true_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -1954,7 +1954,7 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero, WithRetag::Yes)),
             span,
         });
         let false_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -1994,7 +1994,7 @@ impl Builder<'_, '_> {
         let then_bb = self.blocks.len();
         let then_op = self.lower_expr_to_operand(then_expr);
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(then_op)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(then_op, WithRetag::Yes)),
             span: then_expr.span,
         });
         let then_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -2002,7 +2002,7 @@ impl Builder<'_, '_> {
         let else_bb = self.blocks.len();
         let else_op = self.lower_expr_to_operand(else_expr);
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(else_op)),
+            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(else_op, WithRetag::Yes)),
             span: else_expr.span,
         });
         let else_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -2096,7 +2096,7 @@ impl Builder<'_, '_> {
                 let tmp = self.new_temp(arg.ty, Mutability::Mut, arg.span);
                 let value = self.lower_expr_to_operand(arg);
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
+                    kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value, WithRetag::Yes)),
                     span: arg.span,
                 });
                 place(tmp)

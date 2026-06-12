@@ -2,7 +2,7 @@ use co2_hir::{HirDecl, HirExpr, HirExprKind, HirStmt, LabelId};
 use rustc_public_generative::rustc_public::{
     mir::{
         Rvalue, Statement as MirStatement, StatementKind as MirStatementKind, SwitchTargets,
-        Terminator as MirTerminator, TerminatorKind, UnwindAction,
+        Terminator as MirTerminator, TerminatorKind, UnwindAction, WithRetag,
     },
     ty::{RigidTy, Span as RustSpan, Ty, TyKind},
 };
@@ -19,7 +19,7 @@ impl Builder<'_, '_> {
                 if let Some(init) = initializer {
                     let value = self.lower_expr_to_operand(init);
                     self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(place(local_index), Rvalue::Use(value)),
+                        kind: MirStatementKind::Assign(place(local_index), Rvalue::Use(value, WithRetag::Yes)),
                         span: init.span,
                     });
                 }
@@ -70,7 +70,7 @@ impl Builder<'_, '_> {
                     } else {
                         let value = self.lower_expr_to_operand(expr);
                         self.stmts.push(MirStatement {
-                            kind: MirStatementKind::Assign(place(0), Rvalue::Use(value)),
+                            kind: MirStatementKind::Assign(place(0), Rvalue::Use(value, WithRetag::Yes)),
                             span: expr.span,
                         });
                     }

@@ -1,7 +1,7 @@
 use co2_ast::StructOrUnionKind;
 use co2_crate_sig::LocalResolver;
 use rustc_public_generative::rustc_public::{
-    CrateDef,
+    CrateDef, CrateDefType,
     mir::Mutability,
     ty::{Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx},
 };

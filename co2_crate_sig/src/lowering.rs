@@ -1938,7 +1938,7 @@ pub fn lower_crate_sig(
                 .0,
         ),
         valist: AdtDef(ctx.resolve("core::ffi::VaList").unwrap().0),
-        valist_fn_arg: FnDef(ctx.resolve("core::ffi::VaList::<'f>::arg").unwrap().0),
+        valist_fn_arg: FnDef(ctx.resolve("core::ffi::VaList::<'f>::next_arg").unwrap().0),
         clone: FnDef(ctx.resolve("core::clone::Clone::clone").unwrap().0),
         zeroed: FnDef(ctx.resolve("core::mem::zeroed").unwrap().0),
         transmute: FnDef(ctx.resolve("core::intrinsics::transmute").unwrap().0),

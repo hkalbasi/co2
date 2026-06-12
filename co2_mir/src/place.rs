@@ -3,7 +3,7 @@ use rustc_public_generative::rustc_public::{
     CrateItem,
     mir::{
         Mutability, Place as MirPlace, ProjectionElem as MirProjection, Rvalue,
-        Statement as MirStatement, StatementKind as MirStatementKind,
+        Statement as MirStatement, StatementKind as MirStatementKind, WithRetag,
     },
     ty::Ty,
 };
@@ -67,7 +67,7 @@ impl Builder<'_, '_> {
             let tmp = self.new_temp(inner.ty, Mutability::Mut, inner.span);
             let value = self.lower_expr_to_operand(inner);
             self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value)),
+                kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value, WithRetag::Yes)),
                 span: inner.span,
             });
             place(tmp)

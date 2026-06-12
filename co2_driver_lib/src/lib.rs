@@ -27,7 +27,7 @@ use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
     mir::{
         BasicBlock, Body, ConstOperand, LocalDecl, Mutability, Operand, Rvalue, Statement,
-        StatementKind, Terminator, TerminatorKind,
+        StatementKind, Terminator, TerminatorKind, WithRetag,
     },
     ty::{
         AdtDef, FnDef, GenericArgKind, GenericArgs, MirConst, Region, RegionKind, RigidTy, Ty,
@@ -702,7 +702,7 @@ fn build_clone_method_body(
     let statements = vec![Statement {
         kind: StatementKind::Assign(
             return_place.clone(),
-            Rvalue::Use(Operand::Copy(deref_place)),
+            Rvalue::Use(Operand::Copy(deref_place), WithRetag::Yes),
         ),
         span,
     }];

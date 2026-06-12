@@ -10,7 +10,7 @@
 ## Language reference
 
 * The CO2 language reference
-* [Known incompatibilties with C](./known_incompatibilities_with_c.md)
+* [Known incompatibilities with C](./known_incompatibilities_with_c.md)
 
 ## Design decisions and future possibilities
 

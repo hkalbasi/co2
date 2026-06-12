@@ -3,7 +3,7 @@ use rustc_public_generative::rustc_public::{
     mir::{
         BinOp as MirBinOp, CastKind, ConstOperand, Mutability, Operand as MirOperand,
         Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind, Rvalue,
-        Statement as MirStatement, StatementKind as MirStatementKind,
+        Statement as MirStatement, StatementKind as MirStatementKind, WithRetag,
     },
     ty::{IntTy, MirConst, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
 };
@@ -104,7 +104,7 @@ impl Builder<'_, '_> {
                         span,
                         user_ty: None,
                         const_: str_const,
-                    })),
+                    }), WithRetag::Yes),
                 ),
                 span,
             });
@@ -121,7 +121,7 @@ impl Builder<'_, '_> {
                     span,
                     user_ty: None,
                     const_: str_const,
-                })),
+                }), WithRetag::Yes),
             ),
             span,
         });
