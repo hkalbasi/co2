@@ -10,13 +10,13 @@ use rustc_abi::ExternAbi;
 use rustc_ast::token::{CommentKind, DocFragmentKind, Token};
 use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_ast::{Attribute, FloatTy, IntTy, Mutability as AstMutability, UintTy};
-use rustc_errors::LintBuffer;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
 use rustc_data_structures::packed::Pu128;
 use rustc_data_structures::smallvec::SmallVec;
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::thin_vec::ThinVec;
+use rustc_errors::LintBuffer;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Namespace, Res};
 use rustc_hir::def_id::{CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefIdMap};
@@ -1706,7 +1706,9 @@ impl DefinedCrateState {
             DefinedItemKind::Module(_) => DefKind::Mod,
             DefinedItemKind::Function { .. } | DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
             DefinedItemKind::ForeignType(_) => DefKind::ForeignTy,
-            DefinedItemKind::Const(_) => DefKind::Const { is_type_const: true },
+            DefinedItemKind::Const(_) => DefKind::Const {
+                is_type_const: true,
+            },
             DefinedItemKind::AnonConst(_) => DefKind::AnonConst,
             DefinedItemKind::Static { .. } => DefKind::Static {
                 safety: hir::Safety::Safe,
@@ -1961,8 +1963,15 @@ pub fn allocate_def_id(
         crate::DefData::Impl => DefPathData::Impl,
         crate::DefData::AnonConst => DefPathData::AnonConst,
     };
-    let def_id = DEF_DISAMBIGUATORS
-        .with_borrow_mut(|disamb| defs_mut.create_def(parent, data, disamb.entry(parent).or_insert_with(|| PerParentDisambiguatorState::new(parent))));
+    let def_id = DEF_DISAMBIGUATORS.with_borrow_mut(|disamb| {
+        defs_mut.create_def(
+            parent,
+            data,
+            disamb
+                .entry(parent)
+                .or_insert_with(|| PerParentDisambiguatorState::new(parent)),
+        )
+    });
     rustc_def_to_my_def(tcx, def_id.to_def_id())
 }
 
@@ -2672,8 +2681,9 @@ pub(crate) fn check_fn_predicates(
     let param_env = tcx.param_env(rustc_owner);
 
     for (clause, _span) in predicates.predicates {
-        let instantiated_clause: ty::Clause<'_> =
-            ty::EarlyBinder::bind(*clause).instantiate(tcx, rustc_args).skip_normalization();
+        let instantiated_clause: ty::Clause<'_> = ty::EarlyBinder::bind(*clause)
+            .instantiate(tcx, rustc_args)
+            .skip_normalization();
         let clause_kind = instantiated_clause.kind().skip_binder();
         if let ty::ClauseKind::Trait(pred) = clause_kind {
             if pred.trait_ref.has_bound_vars() {
@@ -3077,7 +3087,11 @@ fn probe_inherent_method<'tcx>(
         let impl_self_ty = tcx.type_of(impl_def_id).instantiate(tcx, impl_args);
         let _ = infcx
             .at(cause, param_env)
-            .eq(DefineOpaqueTypes::Yes, impl_self_ty.skip_normalization(), step_ty)
+            .eq(
+                DefineOpaqueTypes::Yes,
+                impl_self_ty.skip_normalization(),
+                step_ty,
+            )
             .ok()?;
         let method_args = method_args_for_impl(tcx, infcx, method_def_id, impl_args);
         probe_method_sig_and_obligations(
@@ -3797,7 +3811,12 @@ fn augment_resolutions_with_items(
                 },
                 local_def_id.to_def_id(),
             ),
-            DefinedItemKind::Const(_) => Res::Def(DefKind::Const { is_type_const: true }, local_def_id.to_def_id()),
+            DefinedItemKind::Const(_) => Res::Def(
+                DefKind::Const {
+                    is_type_const: true,
+                },
+                local_def_id.to_def_id(),
+            ),
             _ => continue,
         };
         let child = rustc_middle::metadata::ModChild {
@@ -3860,7 +3879,9 @@ fn augment_resolutions_with_items(
                 mutability: ty::Mutability::Mut,
                 nested: false,
             },
-            DefinedItemKind::Const(_) => DefKind::Const { is_type_const: true },
+            DefinedItemKind::Const(_) => DefKind::Const {
+                is_type_const: true,
+            },
             _ => continue,
         };
         let parent = item
@@ -3941,7 +3962,9 @@ fn augment_resolutions_with_items(
                                 if name == &prefix
                                     && matches!(
                                         kind,
-                                        DefKind::Fn | DefKind::Const { is_type_const: _ } | DefKind::Static { .. }
+                                        DefKind::Fn
+                                            | DefKind::Const { is_type_const: _ }
+                                            | DefKind::Static { .. }
                                     )
                                 {
                                     Some(Res::Def(*kind, id.to_def_id()))
@@ -3976,7 +3999,10 @@ fn augment_resolutions_with_items(
                     Some(Res::Def(*kind, id.to_def_id())),
                 );
             }
-            if matches!(kind, DefKind::Fn | DefKind::Const { is_type_const: _ } | DefKind::Static { .. }) {
+            if matches!(
+                kind,
+                DefKind::Fn | DefKind::Const { is_type_const: _ } | DefKind::Static { .. }
+            ) {
                 map.insert(
                     (sym, Namespace::ValueNS),
                     Some(Res::Def(*kind, id.to_def_id())),
@@ -4352,7 +4378,6 @@ fn generated_def_kind(tcx: TyCtxt<'_>, key: LocalDefId) -> DefKind {
         eprintln!("generated_def_kind {key:?}");
     }
     with_generated_and_original(tcx, |generated, original| {
-
         if let Some(kind) = generated.def_kind(tcx, key) {
             return kind;
         }
@@ -4670,9 +4695,7 @@ fn build_mir_body<'tcx>(
                     unwind: _,
                 } => {
                     let func = mir_operand_to_rustc(tcx, func);
-                    let args: Box<
-                        [rustc_span::Spanned<rustc_middle::mir::Operand<'tcx>>],
-                    > = args
+                    let args: Box<[rustc_span::Spanned<rustc_middle::mir::Operand<'tcx>>]> = args
                         .iter()
                         .map(|arg| rustc_span::Spanned {
                             node: mir_operand_to_rustc(tcx, arg),
@@ -4757,7 +4780,10 @@ fn mir_rvalue_to_rustc<'tcx>(
     rvalue: &MirRvalue,
 ) -> rustc_middle::mir::Rvalue<'tcx> {
     match rvalue {
-        MirRvalue::Use(op, _) => rustc_middle::mir::Rvalue::Use(mir_operand_to_rustc(tcx, op), rustc_middle::mir::WithRetag::Yes),
+        MirRvalue::Use(op, _) => rustc_middle::mir::Rvalue::Use(
+            mir_operand_to_rustc(tcx, op),
+            rustc_middle::mir::WithRetag::Yes,
+        ),
         MirRvalue::ThreadLocalRef(item) => {
             let def_id = internal(tcx, *item);
             // Skip thread-local checks for Const DefKinds - they shouldn't have MIR bodies

@@ -1,15 +1,18 @@
 use co2_hir::{HirExpr, HirExprKind, HirLogicalOp, ResolvedValue, ReturnSemantic, WellknownDefs};
-use rustc_public_generative::rustc_public::{
-    CrateDefType,
-    mir::{
-        AggregateKind, BorrowKind, CastKind, ConstOperand, MutBorrowKind, Mutability,
-        Operand as MirOperand, PointerCoercion, ProjectionElem as MirProjection, RawPtrKind,
-        Rvalue, Safety, Statement as MirStatement, StatementKind as MirStatementKind,
-        SwitchTargets, TerminatorKind, WithRetag,
-    },
-    ty::{
-        FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
-        Span as RustSpan, Ty, TyKind, UintTy,
+use rustc_public_generative::{
+    DependencyConstValue,
+    rustc_public::{
+        CrateDefType,
+        mir::{
+            AggregateKind, BorrowKind, CastKind, ConstOperand, MutBorrowKind, Mutability,
+            Operand as MirOperand, PointerCoercion, ProjectionElem as MirProjection, RawPtrKind,
+            Rvalue, Safety, Statement as MirStatement, StatementKind as MirStatementKind,
+            SwitchTargets, TerminatorKind, WithRetag,
+        },
+        ty::{
+            FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
+            Span as RustSpan, Ty, TyKind, UintTy,
+        },
     },
 };
 
@@ -534,7 +537,10 @@ impl Builder<'_, '_> {
                     let tmp = self.new_temp(inner.ty, Mutability::Mut, inner.span);
                     let value = self.lower_expr_to_operand(inner);
                     self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value, WithRetag::Yes)),
+                        kind: MirStatementKind::Assign(
+                            place(tmp),
+                            Rvalue::Use(value, WithRetag::Yes),
+                        ),
                         span: inner.span,
                     });
                     place(tmp)
@@ -1114,7 +1120,10 @@ impl Builder<'_, '_> {
                         self.lower_cast(const_op, src_ty, expr.ty, expr.span)
                     }
                 }
-                ResolvedValue::Static(_) | ResolvedValue::StaticConst(_) => {
+                ResolvedValue::Static(def) | ResolvedValue::StaticConst(def) => {
+                    if let Some(const_value) = self.ctx.dependency_const_value(*def) {
+                        return self.lower_dependency_const_value(const_value, expr.ty, expr.span);
+                    }
                     let place = self
                         .lower_expr_to_place(expr)
                         .expect("static path should be place-expressible");
@@ -1134,7 +1143,10 @@ impl Builder<'_, '_> {
                     .expect("assignment lhs should be place-expressible");
                 let rhs_value = self.lower_expr_to_operand(rhs);
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(rhs_value, WithRetag::Yes)),
+                    kind: MirStatementKind::Assign(
+                        lhs_place.clone(),
+                        Rvalue::Use(rhs_value, WithRetag::Yes),
+                    ),
                     span: expr.span,
                 });
                 MirOperand::Copy(lhs_place)
@@ -1223,7 +1235,10 @@ impl Builder<'_, '_> {
                     lhs.span,
                 );
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(new_val_casted, WithRetag::Yes)),
+                    kind: MirStatementKind::Assign(
+                        lhs_place.clone(),
+                        Rvalue::Use(new_val_casted, WithRetag::Yes),
+                    ),
                     span: expr.span,
                 });
                 match return_semantic {
@@ -1262,7 +1277,10 @@ impl Builder<'_, '_> {
                     expr.span,
                 );
                 self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(lhs_place.clone(), Rvalue::Use(new_ptr, WithRetag::Yes)),
+                    kind: MirStatementKind::Assign(
+                        lhs_place.clone(),
+                        Rvalue::Use(new_ptr, WithRetag::Yes),
+                    ),
                     span: expr.span,
                 });
                 match return_semantic {
@@ -1283,7 +1301,10 @@ impl Builder<'_, '_> {
                     let tmp_target = self.new_temp(inner.ty, Mutability::Mut, inner.span);
                     let value = self.lower_expr_to_operand(inner);
                     self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(place(tmp_target), Rvalue::Use(value, WithRetag::Yes)),
+                        kind: MirStatementKind::Assign(
+                            place(tmp_target),
+                            Rvalue::Use(value, WithRetag::Yes),
+                        ),
                         span: inner.span,
                     });
                     place(tmp_target)
@@ -1787,6 +1808,79 @@ impl Builder<'_, '_> {
         );
     }
 
+    fn lower_dependency_const_value(
+        &mut self,
+        value: DependencyConstValue,
+        target_ty: Ty,
+        span: RustSpan,
+    ) -> MirOperand {
+        match value {
+            DependencyConstValue::Bool(v) => {
+                let c = MirConst::try_from_uint(v as u128, UintTy::U8).expect("bool const");
+                let op = MirOperand::Constant(ConstOperand {
+                    span,
+                    user_ty: None,
+                    const_: c,
+                });
+                self.lower_cast(op, Ty::unsigned_ty(UintTy::U8), target_ty, span)
+            }
+            DependencyConstValue::Char(v) => {
+                let c = MirConst::try_from_uint(v as u128, UintTy::U32).expect("char const");
+                let op = MirOperand::Constant(ConstOperand {
+                    span,
+                    user_ty: None,
+                    const_: c,
+                });
+                self.lower_cast(op, Ty::unsigned_ty(UintTy::U32), target_ty, span)
+            }
+            DependencyConstValue::I8(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::I16(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::I32(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::I64(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::I128(v) => self.make_int_const(v, target_ty, span),
+            DependencyConstValue::Isize(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::U8(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::U16(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::U32(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::U64(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::U128(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::Usize(v) => self.make_int_const(v as i128, target_ty, span),
+            DependencyConstValue::F32(v) => self.make_float_const(v as f64, target_ty, span),
+            DependencyConstValue::F64(v) => self.make_float_const(v, target_ty, span),
+        }
+    }
+
+    fn make_int_const(&mut self, v: i128, target_ty: Ty, span: RustSpan) -> MirOperand {
+        let (uint_ty, bits) = crate::rvalue::int_literal_bits(v, target_ty);
+        let c = MirConst::try_from_uint(bits, uint_ty).expect("int const");
+        let const_op = MirOperand::Constant(ConstOperand {
+            span,
+            user_ty: None,
+            const_: c,
+        });
+        let src_ty = Ty::unsigned_ty(uint_ty);
+        if src_ty == target_ty {
+            const_op
+        } else {
+            self.lower_cast(const_op, src_ty, target_ty, span)
+        }
+    }
+
+    fn make_float_const(&mut self, v: f64, target_ty: Ty, span: RustSpan) -> MirOperand {
+        let c = MirConst::try_from_float(v, FloatTy::F64).expect("float const");
+        let const_op = MirOperand::Constant(ConstOperand {
+            span,
+            user_ty: None,
+            const_: c,
+        });
+        self.lower_cast(
+            const_op,
+            Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
+            target_ty,
+            span,
+        )
+    }
+
     pub(crate) fn lower_call_expr(
         &mut self,
         func: &HirExpr,
@@ -1814,7 +1908,10 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero_init, WithRetag::Yes)),
+            kind: MirStatementKind::Assign(
+                place(result_local),
+                Rvalue::Use(zero_init, WithRetag::Yes),
+            ),
             span,
         });
 
@@ -1844,7 +1941,10 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(lhs_short_operand, WithRetag::Yes)),
+            kind: MirStatementKind::Assign(
+                place(result_local),
+                Rvalue::Use(lhs_short_operand, WithRetag::Yes),
+            ),
             span,
         });
         let lhs_short_exit =
@@ -1873,7 +1973,10 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(rhs_false_operand, WithRetag::Yes)),
+            kind: MirStatementKind::Assign(
+                place(result_local),
+                Rvalue::Use(rhs_false_operand, WithRetag::Yes),
+            ),
             span,
         });
         let rhs_false_exit =
@@ -1886,7 +1989,10 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(rhs_true_operand, WithRetag::Yes)),
+            kind: MirStatementKind::Assign(
+                place(result_local),
+                Rvalue::Use(rhs_true_operand, WithRetag::Yes),
+            ),
             span,
         });
         let rhs_true_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -1917,7 +2023,10 @@ impl Builder<'_, '_> {
             span,
         });
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero_init, WithRetag::Yes)),
+            kind: MirStatementKind::Assign(
+                place(result_local),
+                Rvalue::Use(zero_init, WithRetag::Yes),
+            ),
             span,
         });
         debug_assert!(matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
@@ -1994,7 +2103,10 @@ impl Builder<'_, '_> {
         let then_bb = self.blocks.len();
         let then_op = self.lower_expr_to_operand(then_expr);
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(then_op, WithRetag::Yes)),
+            kind: MirStatementKind::Assign(
+                place(result_local),
+                Rvalue::Use(then_op, WithRetag::Yes),
+            ),
             span: then_expr.span,
         });
         let then_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -2002,7 +2114,10 @@ impl Builder<'_, '_> {
         let else_bb = self.blocks.len();
         let else_op = self.lower_expr_to_operand(else_expr);
         self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(else_op, WithRetag::Yes)),
+            kind: MirStatementKind::Assign(
+                place(result_local),
+                Rvalue::Use(else_op, WithRetag::Yes),
+            ),
             span: else_expr.span,
         });
         let else_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);

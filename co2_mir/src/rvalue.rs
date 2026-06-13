@@ -100,11 +100,14 @@ impl Builder<'_, '_> {
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(
                     place(str_ref_local),
-                    Rvalue::Use(MirOperand::Constant(ConstOperand {
-                        span,
-                        user_ty: None,
-                        const_: str_const,
-                    }), WithRetag::Yes),
+                    Rvalue::Use(
+                        MirOperand::Constant(ConstOperand {
+                            span,
+                            user_ty: None,
+                            const_: str_const,
+                        }),
+                        WithRetag::Yes,
+                    ),
                 ),
                 span,
             });
@@ -117,11 +120,14 @@ impl Builder<'_, '_> {
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(
                 place(str_ref_local),
-                Rvalue::Use(MirOperand::Constant(ConstOperand {
-                    span,
-                    user_ty: None,
-                    const_: str_const,
-                }), WithRetag::Yes),
+                Rvalue::Use(
+                    MirOperand::Constant(ConstOperand {
+                        span,
+                        user_ty: None,
+                        const_: str_const,
+                    }),
+                    WithRetag::Yes,
+                ),
             ),
             span,
         });

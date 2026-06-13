@@ -1,6 +1,6 @@
 //@ mode: co2
 //@ run-status: 0
-//@ run-stdout: co2\nok 2\n
+//@ run-stdout: co2\nok 2\nPI is 3.14\n
 
 use libc::puts;
 
@@ -8,4 +8,5 @@ fn main() {
     puts("co2");
     int x = 2;
     libc::printf("ok %d\n", x);
+    libc::printf("PI is %.2f\n", std::f64::consts::PI);
 }

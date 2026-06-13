@@ -1,4 +1,5 @@
 //@ mode: c
+//@ run-status: 0
 
 int main(void) {
     double x = 0x1p4;

@@ -19,7 +19,10 @@ impl Builder<'_, '_> {
                 if let Some(init) = initializer {
                     let value = self.lower_expr_to_operand(init);
                     self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(place(local_index), Rvalue::Use(value, WithRetag::Yes)),
+                        kind: MirStatementKind::Assign(
+                            place(local_index),
+                            Rvalue::Use(value, WithRetag::Yes),
+                        ),
                         span: init.span,
                     });
                 }
@@ -70,7 +73,10 @@ impl Builder<'_, '_> {
                     } else {
                         let value = self.lower_expr_to_operand(expr);
                         self.stmts.push(MirStatement {
-                            kind: MirStatementKind::Assign(place(0), Rvalue::Use(value, WithRetag::Yes)),
+                            kind: MirStatementKind::Assign(
+                                place(0),
+                                Rvalue::Use(value, WithRetag::Yes),
+                            ),
                             span: expr.span,
                         });
                     }
