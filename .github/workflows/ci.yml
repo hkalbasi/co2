@@ -27,6 +27,10 @@ jobs:
         uses: hustcer/setup-nu@v3
         with:
           version: "0.110.0"
+      - name: "copy nushell to /usr/bin"
+        run: |
+          sudo cp $(which nu) /usr/bin/
+      
 
       - name: Get co2-changes commit SHA
         id: rustc-sha
@@ -124,14 +128,14 @@ jobs:
       - name: Run bundle test
         run: |
           source "$HOME/.cargo/env"
-          bash ./test_bundle.sh
+          nu ./bundler/test-bundle.nu
 
-      - name: Create release bundle artifact
+      - name: Build release bundle artifact
         if: github.event_name != 'pull_request'
         run: |
           source "$HOME/.cargo/env"
           cargo +co2 build -p co2-multicall --release
-          bash create_bundle.sh
+          nu ./bundler/build-bundle.nu
 
       - name: Upload bundle artifact
         if: github.event_name != 'pull_request'
