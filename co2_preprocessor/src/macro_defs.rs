@@ -723,7 +723,7 @@ impl MacroTable {
             .collect();
 
         // Step 3+4: Expand body — handle #/## and substitute params in one pass.
-        let body = if mac.has_stringify_or_paste || !mac.params.is_empty() {
+        let body = if mac.has_stringify_or_paste || !mac.params.is_empty() || mac.is_variadic {
             self.expand_body(
                 &mac.tokenized_body,
                 &mac.params,
