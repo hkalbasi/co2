@@ -252,9 +252,27 @@ fn fixup_project(project_dir: &Path, is_lib: bool) -> Result<(), CargoInitError>
     });
 
     let co2_template = if is_lib {
-        "fn add(a: i32, b: i32) -> i32 {\n    return a + b;\n}\n"
+        r#"
+mod tests {
+    #include <assert.h>
+
+    #[test]
+    fn it_works() {
+        i32 result = add(2, 2);
+        assert(result == 4);
+    }
+}
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}"#
     } else {
-        "fn main() {}\n"
+        r#"#include <stdio.h>
+
+fn main() {
+    printf("Hello world from CO2!\n");
+}
+"#
     };
 
     fs::write(&co2_file, co2_template).map_err(|source| CargoInitError::WriteFile {

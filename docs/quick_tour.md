@@ -70,3 +70,7 @@ Using `co2cargo init`, you can create a co2 binary crate. You can run it with `c
 add dependencies using `co2cargo add dep`, and almost all cargo commands which are supported.
 Cargo commands which are dependent on a separate tool (like `cargo fmt`, `cargo clippy`, ...)
 are not supported.
+
+## Next steps
+
+* [Learn more about the language](./language_guide.md)

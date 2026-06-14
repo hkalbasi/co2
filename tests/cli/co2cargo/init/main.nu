@@ -39,6 +39,10 @@ if $status.exit_code != 0 {
     print $"Running co2cargo init generated code failed with status: ($status)"
     exit 1
 }
+if not ($status.stdout | str contains "Hello world from CO2!") {
+    print $"Binary output did not contain expected text: ($status.stdout)"
+    exit 1
+}
 
 print "co2cargo init binary test passed"
 exit 0

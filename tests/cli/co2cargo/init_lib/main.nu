@@ -33,5 +33,16 @@ if not ($co2_content | str contains "fn add(") {
     exit 1
 }
 
+cd $project_dir
+let test_status = (do { ^co2cargo test } | complete)
+if $test_status.exit_code != 0 {
+    print $"co2cargo test failed: ($test_status.stderr)"
+    exit 1
+}
+if not ($test_status.stdout | str contains "1 passed") {
+    print $"Test output did not show 1 passed: ($test_status.stdout)"
+    exit 1
+}
+
 print "co2cargo init lib test passed"
 exit 0
