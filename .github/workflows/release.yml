@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    uses: ./.github/workflows/build-bundle.yml
+    uses: ./.github/workflows/ci.yml
 
   release:
     needs: build
