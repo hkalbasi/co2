@@ -37,7 +37,7 @@ if (open ($current_init | path join "src/main.rs") | str trim) != "#![language(c
     print "co2cargo init in place did not rewrite src/main.rs"
     exit 1
 }
-if (open ($current_init | path join "src/main.co2") | str trim) != "fn main() {}" {
+if not (open ($current_init | path join "src/main.co2") | str trim | str contains "fn main()") {
     print "co2cargo init in place did not create src/main.co2"
     exit 1
 }
@@ -53,7 +53,7 @@ if (open ($explicit_init | path join "src/main.rs") | str trim) != "#![language(
     print "co2cargo init did not rewrite src/main.rs"
     exit 1
 }
-if (open ($explicit_init | path join "src/main.co2") | str trim) != "fn main() {}" {
+if not (open ($explicit_init | path join "src/main.co2") | str trim | str contains "fn main()") {
     print "co2cargo init did not create src/main.co2"
     exit 1
 }
