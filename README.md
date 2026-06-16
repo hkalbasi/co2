@@ -75,7 +75,7 @@ But it is not a safe language like Rust:
 ### Is C++ syntax supported?
 
 No. We can imagine a CO2++ language which is backward compatible with C++. But CO2 is just compatible with C.
-For more details on CO2++, see [this page](./docs/vision/lingua_franca.md). 
+For more details on CO2++, see [this page](./docs/vision/co2pp.md). 
 
 ### Why the compiler binary is so huge?
 
