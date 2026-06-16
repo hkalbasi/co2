@@ -20,6 +20,7 @@ enum LinkOutputKind {
 
 struct CcArgs {
     emit_obj_only: bool,
+    emit_asm_only: bool,
     link_kind: LinkOutputKind,
     pic: bool,
     time_report: bool,
@@ -46,7 +47,7 @@ impl fmt::Display for ParseArgsError {
             }
             Self::MissingArgumentAfter(flag) => write!(f, "missing argument after {flag}"),
             Self::InvalidObjectEmissionInputs => {
-                f.write_str("object emission mode expects exactly one C input file")
+                f.write_str("-c/-S mode expects exactly one C input file")
             }
         }
     }
@@ -64,6 +65,7 @@ Usage: co2cc [options] file...
 
 Options:
   -c                   Compile to object file only
+  -S                   Compile to assembly only
   -o <file>            Write output to <file>
   -shared              Build a shared library
   -I <dir>             Add directory to include search path
@@ -161,6 +163,52 @@ fn run_co2c(args: &CcArgs) {
         }
     };
 
+    if args.emit_asm_only {
+        let input = args
+            .inputs
+            .first()
+            .cloned()
+            .expect("missing C input file for asm emission");
+        let resolved = resolve_stdin(&input);
+
+        if args.time_report {
+            co2_driver_lib::time_report::enable_timing();
+        }
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, &args.cpp_args));
+        if args.time_report {
+            co2_driver_lib::time_report::mark_preprocess_done();
+        }
+        let rustc_args = build_rustc_asm_args(
+            &resolved,
+            args.output.as_deref(),
+            args.opt_level.as_deref(),
+            args.debuginfo,
+            force_pic,
+        );
+        compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
+        if args.time_report {
+            co2_driver_lib::time_report::finalize_timing();
+            if let Some(t) = co2_driver_lib::time_report::take_timing() {
+                eprintln!("Time report:");
+                eprintln!("  Preprocess:    {:.3}s", t.preprocess.as_secs_f64());
+                eprintln!(
+                    "  Parse:         {:.3}s + {:.3}s",
+                    t.parse.as_secs_f64(),
+                    t.parse_slack.as_secs_f64()
+                );
+                eprintln!("  Lowering:      {:.3}s", t.lowering.as_secs_f64());
+                eprintln!("    Body Parse:  {:.3}s", t.body_parse.as_secs_f64());
+                eprintln!("    HIR:         {:.3}s", t.hir_lowering.as_secs_f64());
+                eprintln!("    MIR:         {:.3}s", t.mir_lowering.as_secs_f64());
+                eprintln!("  Codegen:       {:.3}s", t.codegen.as_secs_f64());
+            }
+        }
+        if has_stdin {
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
+        return;
+    }
+
     if args.emit_obj_only {
         let input = args
             .inputs
@@ -251,6 +299,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     }
 
     let mut emit_obj_only = false;
+    let mut emit_asm_only = false;
     let mut link_kind = LinkOutputKind::Executable;
     let mut pic = false;
     let mut time_report = false;
@@ -267,6 +316,9 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
         match arg.as_str() {
             "-c" => {
                 emit_obj_only = true;
+            }
+            "-S" => {
+                emit_asm_only = true;
             }
             "-shared" => {
                 link_kind = LinkOutputKind::SharedLib;
@@ -351,7 +403,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     if inputs.is_empty() {
         return Err(ParseArgsError::MissingInputFile);
     }
-    if emit_obj_only {
+    if emit_obj_only || emit_asm_only {
         let c_count = inputs
             .iter()
             .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("c") || p.as_os_str() == "-")
@@ -362,6 +414,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     }
     Ok(CcArgs {
         emit_obj_only,
+        emit_asm_only,
         link_kind,
         pic,
         time_report,
@@ -394,6 +447,54 @@ fn build_rustc_object_args(
         "--crate-type=bin".to_owned(),
         "--edition=2024".to_owned(),
         "--emit=obj".to_owned(),
+    ];
+
+    if let Some(out) = output {
+        rustc_args.push("-o".to_owned());
+        rustc_args.push(out.to_string_lossy().into_owned());
+    }
+
+    rustc_args.push(no_main_host_file().to_string_lossy().into_owned());
+
+    if let Some(level) = opt_level {
+        rustc_args.push("-C".to_owned());
+        rustc_args.push(format!("opt-level={level}"));
+    }
+
+    let dbg = debuginfo.unwrap_or(0);
+    rustc_args.push("-C".to_owned());
+    rustc_args.push(format!("debuginfo={dbg}"));
+
+    if pic {
+        rustc_args.push("-C".to_owned());
+        rustc_args.push("relocation-model=pic".to_owned());
+    }
+
+    rustc_args.extend(shared_rust_flags());
+
+    rustc_args
+}
+
+fn build_rustc_asm_args(
+    input: &Path,
+    output: Option<&Path>,
+    opt_level: Option<&str>,
+    debuginfo: Option<u8>,
+    pic: bool,
+) -> Vec<String> {
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("co2c_out")
+        .replace('-', "_");
+
+    let mut rustc_args = vec![
+        "rustc".to_owned(),
+        "--crate-name".to_owned(),
+        stem,
+        "--crate-type=bin".to_owned(),
+        "--edition=2024".to_owned(),
+        "--emit=asm".to_owned(),
     ];
 
     if let Some(out) = output {

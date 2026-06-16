@@ -44,6 +44,7 @@ fn run_main() -> Result<()> {
         cli.filter.as_deref(),
         coverage_dir.as_deref(),
         cli.dump_mir,
+        cli.verbose,
         &mut stats,
     )?;
     let elapsed = start.elapsed();

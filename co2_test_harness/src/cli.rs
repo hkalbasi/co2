@@ -13,4 +13,7 @@ pub struct Cli {
     /// Dump MIR of the test using RUSTFLAGS="-Zdump-mir=all".
     #[arg(long)]
     pub dump_mir: bool,
+
+    #[arg(short, long)]
+    pub verbose: bool,
 }

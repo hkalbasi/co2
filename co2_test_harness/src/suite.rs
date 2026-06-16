@@ -31,6 +31,7 @@ pub fn run_tests(
     filter: Option<&str>,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
+    verbose: bool,
     stats: &mut Stats,
 ) -> Result<()> {
     let tests = collect_tests(root, filter)?;
@@ -38,10 +39,14 @@ pub fn run_tests(
 
     for test in tests {
         let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
-        match run_test(root, &test, coverage_dir, dump_mir) {
+        match run_test(root, &test, coverage_dir, dump_mir, verbose) {
             Ok(TestOutcome::Pass) => {
                 stats.passed += 1;
-                eprint!(".");
+                if verbose {
+                    eprintln!("ok {name}");
+                } else {
+                    eprint!(".");
+                }
             }
             Ok(TestOutcome::Skip(reason)) => {
                 stats.skipped += 1;
@@ -76,13 +81,14 @@ fn run_test(
     test: &TestCase,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
+    verbose: bool,
 ) -> Result<TestOutcome> {
     if let Some(reason) = directive_text(test, "skip") {
         return Ok(TestOutcome::Skip(reason));
     }
 
     if test.kind == TestKind::NuDir {
-        run_nu_dir_test(root, test, coverage_dir, dump_mir)?;
+        run_nu_dir_test(root, test, coverage_dir, dump_mir, verbose)?;
         return Ok(TestOutcome::Pass);
     }
 
@@ -182,6 +188,7 @@ fn run_nu_dir_test(
     test: &TestCase,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
+    verbose: bool,
 ) -> Result<()> {
     let temp = TempDirBuilder::new()
         .prefix("co2-ct-dir-")
@@ -192,6 +199,10 @@ fn run_nu_dir_test(
             .file_name()
             .context("directory test path has no final component")?,
     );
+    if verbose {
+        println!("Temp dir path = {:?}", temp_path);
+        std::mem::forget(temp);
+    }
     copy_dir_all(&test.path, &temp_path)?;
 
     let main_nu = temp_path.join("main.nu");
