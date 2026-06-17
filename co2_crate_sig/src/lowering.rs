@@ -127,12 +127,19 @@ fn is_known_fn_word_attr(name: &str) -> bool {
 
 fn validate_attrs_for_fn(
     attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>],
+    is_c_style: bool,
 ) -> Vec<co2_ast::Rich<'static, String, co2_ast::Span>> {
     let mut errors = Vec::new();
     for (attr, _) in attrs {
         let path: Vec<&str> = attr.path.iter().map(|seg| seg.0.as_str()).collect();
         match path.as_slice() {
             ["doc"] => {}
+            ["no_mangle"] if is_c_style => {
+                errors.push(co2_ast::Rich::custom(
+                    attr.path[0].1,
+                    "C style functions are already no_mangle, remove this.",
+                ));
+            }
             ["derive"] => {
                 errors.push(co2_ast::Rich::custom(
                     attr.path[0].1,
@@ -207,9 +214,10 @@ fn collect_attr_errors_from_tu(
                 signature,
                 ..
             } => {
-                errors.extend(validate_attrs_for_fn(decl_attrs));
+                let is_c_style = matches!(signature, co2_ast::FunctionDefinitionSignature::C { .. });
+                errors.extend(validate_attrs_for_fn(decl_attrs, is_c_style));
                 if let co2_ast::FunctionDefinitionSignature::Rust(sig) = signature {
-                    errors.extend(validate_attrs_for_fn(&sig.attrs));
+                    errors.extend(validate_attrs_for_fn(&sig.attrs, false));
                 }
             }
             co2_ast::Declaration::RustStruct { attrs, .. } => {
@@ -1107,9 +1115,12 @@ fn lower_translation_unit_items(
                         (name, sig, lower_generated_attrs(&decl_attrs), !is_static)
                     }
                     FunctionDefinitionSignature::Rust(sig) => {
-                        let attrs = lower_generated_attrs(&sig.attrs);
+                        let sig_attrs = lower_generated_attrs(&sig.attrs);
+                        let mut attrs = lower_generated_attrs(&decl_attrs);
+                        attrs.extend(sig_attrs);
                         let (name, lower_sig) = ctx.lower_rust_function_signature(sig.clone());
-                        (name, lower_sig, attrs, false)
+                        let no_mangle = has_word_attr(&attrs, "no_mangle");
+                        (name, lower_sig, attrs, no_mangle)
                     }
                 };
 

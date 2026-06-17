@@ -29,4 +29,10 @@ pub struct Foo {}
      //^^^^^^^ error: unrecognized representation hint `Unknown`
 pub struct Foo2 {}
 
+#[no_mangle]
+//^^^^^^^^^ error: C style functions are already no_mangle, remove this.
+int foo4() {
+     
+}
+
 fn main() {}

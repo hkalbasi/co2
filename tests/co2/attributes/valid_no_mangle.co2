@@ -1,0 +1,28 @@
+//@ mode: co2
+//@ run-status: 0
+//@ compile-flags: -C link-args=-Wl,-export-dynamic
+
+use libc::dlopen;
+use libc::dlsym;
+use libc::dlclose;
+use libc::RTLD_LAZY;
+
+#[no_mangle]
+fn foo() -> i32 {
+    return 42;
+}
+
+fn main() {
+    auto handle = dlopen(std::ptr::null::<i8>(), RTLD_LAZY);
+    auto ptr = dlsym(handle, "foo");
+    if (ptr == std::ptr::null::<i8>()) {
+        std::process::exit(1);
+    }
+    // TODO: this uses C ABI and is wrong, but currently we don't have rust function pointers.
+    auto f = (i32 (*)())ptr;
+    i32 result = f();
+    if (result != 42) {
+        std::process::exit(2);
+    }
+    dlclose(handle);
+}
