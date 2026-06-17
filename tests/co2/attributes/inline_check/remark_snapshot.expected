@@ -1,0 +1,4 @@
+note: main.co2:27:9 inline (missed): 'never_short' not inlined into <caller> because it should never be inlined (cost=never): noinline function attribute
+note: main.co2:30:9 inline (success): 'always_short' inlined into <caller> with (cost=always): always inline attribute;
+note: main.co2:33:9 inline (success): 'hint_short' inlined into <caller> with (cost=-30, threshold=487);
+note: main.co2:36:9 inline (success): 'noattr_short' inlined into <caller> with (cost=-30, threshold=337);

@@ -53,6 +53,8 @@ fn run_main() -> Result<()> {
         generate_coverage_report(&root, &dir);
     }
 
+    eprintln!();
+
     for name in &stats.failed_names {
         eprintln!("FAIL {name}");
     }

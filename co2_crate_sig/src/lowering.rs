@@ -22,7 +22,8 @@ use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
     HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
-    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind, StructField,
+    HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind, InlineHint,
+    StructField,
     rustc_public::{
         DefId,
         mir::Mutability,
@@ -86,6 +87,20 @@ fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> 
                     comment: String::from_utf8_lossy(&doc_text).into_owned(),
                     inner: attr.is_inner(),
                 })
+            } else if path == ["inline"] {
+                let inner_args: &[co2_ast::Spanned<co2_ast::Token>] = match attr.args.as_slice() {
+                    [(co2_ast::Token::LParen, _), inner @ .., (co2_ast::Token::RParen, _)] => {
+                        inner
+                    }
+                    other => other,
+                };
+                let hint = match inner_args {
+                    [] => Some(InlineHint::Hint),
+                    [(co2_ast::Token::Ident(s), _)] if s == "always" => Some(InlineHint::Always),
+                    [(co2_ast::Token::Ident(s), _)] if s == "never" => Some(InlineHint::Never),
+                    _ => None,
+                };
+                hint.map(GeneratedAttr::InlineHint)
             } else if attr.args.is_empty() {
                 Some(GeneratedAttr::Word { path })
             } else {
@@ -106,6 +121,7 @@ fn lower_module_file_attrs_for_decl_item(
                 inner: false,
             },
             GeneratedAttr::Word { path } => GeneratedAttr::Word { path },
+            GeneratedAttr::InlineHint(hint) => GeneratedAttr::InlineHint(hint),
         })
         .collect()
 }
@@ -122,7 +138,7 @@ fn has_derive_attr(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>], trait_nam
 }
 
 fn is_known_fn_word_attr(name: &str) -> bool {
-    matches!(name, "test" | "ignore" | "should_panic" | "no_mangle")
+    matches!(name, "test" | "ignore" | "should_panic" | "no_mangle" | "inline")
 }
 
 fn validate_attrs_for_fn(
@@ -151,6 +167,19 @@ fn validate_attrs_for_fn(
                     attr.path[0].1,
                     "`repr` is not applicable to functions",
                 ));
+            }
+            ["inline"] => {
+                for (tok, span) in &attr.args {
+                    if let co2_ast::Token::Ident(s) = tok
+                        && s != "always"
+                        && s != "never"
+                    {
+                        errors.push(co2_ast::Rich::custom(
+                            *span,
+                            format!("unknown inline hint `{s}`"),
+                        ));
+                    }
+                }
             }
             [name] if attr.args.is_empty() && !is_known_fn_word_attr(name) => {
                 errors.push(co2_ast::Rich::custom(

@@ -44,7 +44,7 @@ use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
 use rustc_trait_selection::traits::ObligationCtxt;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 
-use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, StructField};
+use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, InlineHint, StructField};
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{
@@ -4346,6 +4346,14 @@ fn generated_attr(attr: &GeneratedAttr) -> Option<hir::Attribute> {
         },
         GeneratedAttr::Word { path } if path.as_slice() == ["no_main"] => {
             hir::attrs::AttributeKind::NoMain
+        }
+        GeneratedAttr::InlineHint(hint) => {
+            let inline_attr = match hint {
+                InlineHint::Hint => hir::attrs::InlineAttr::Hint,
+                InlineHint::Always => hir::attrs::InlineAttr::Always,
+                InlineHint::Never => hir::attrs::InlineAttr::Never,
+            };
+            hir::attrs::AttributeKind::Inline(inline_attr, DUMMY_SP)
         }
         GeneratedAttr::Word { .. } => return None,
     };

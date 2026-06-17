@@ -38,7 +38,7 @@ mod internal;
 pub use hir_structure::{
     AdtRepr, ForeignModItem, FunctionAbi, FunctionInput, FunctionSignature, GeneratedAttr,
     HirAdtKind, HirImplItem, HirImplItemKind, HirModule, HirModuleItem, HirSelfKind, HirStructure,
-    StructField,
+    InlineHint, StructField,
 };
 pub use hir_ty::{HirGenericArg, HirLifetime, HirTy, HirTyConst, HirTyKind};
 

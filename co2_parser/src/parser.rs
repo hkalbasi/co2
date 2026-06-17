@@ -105,6 +105,61 @@ where
         })
 }
 
+fn keyword_token_str(token: &Token) -> Option<&'static str> {
+    Some(match token {
+        Token::Auto => "auto",
+        Token::Bool => "_Bool",
+        Token::Break => "break",
+        Token::Case => "case",
+        Token::Char => "char",
+        Token::Const => "const",
+        Token::Constexpr => "constexpr",
+        Token::Continue => "continue",
+        Token::Default => "default",
+        Token::Do => "do",
+        Token::Double => "double",
+        Token::Else => "else",
+        Token::Enum => "enum",
+        Token::Extern => "extern",
+        Token::Float => "float",
+        Token::For => "for",
+        Token::Goto => "goto",
+        Token::If => "if",
+        Token::Inline => "inline",
+        Token::Int => "int",
+        Token::Long => "long",
+        Token::Register => "register",
+        Token::Restrict => "restrict",
+        Token::Return => "return",
+        Token::Short => "short",
+        Token::Signed => "signed",
+        Token::Sizeof => "sizeof",
+        Token::Typeof => "typeof",
+        Token::Alignof => "_Alignof",
+        Token::Offsetof => "offsetof",
+        Token::Static => "static",
+        Token::Atomic => "_Atomic",
+        Token::Struct => "struct",
+        Token::Switch => "switch",
+        Token::Typedef => "typedef",
+        Token::Union => "union",
+        Token::Unsigned => "unsigned",
+        Token::Void => "void",
+        Token::Volatile => "volatile",
+        Token::While => "while",
+        Token::Generic => "_Generic",
+        Token::VaStart => "va_start",
+        Token::VaArg => "va_arg",
+        Token::VaCopy => "va_copy",
+        Token::VaEnd => "va_end",
+        Token::BuiltinInf => "__builtin_inf",
+        Token::BuiltinNan => "__builtin_nan",
+        Token::BuiltinConstantP => "__builtin_constant_p",
+        Token::BuiltinTypesCompatibleP => "__builtin_types_compatible_p",
+        _ => return None,
+    })
+}
+
 fn parse_rust_attr(
     tokens: Vec<Spanned<Token>>,
     span: Span,
@@ -112,10 +167,14 @@ fn parse_rust_attr(
     let mut idx = 0;
     let mut path = Vec::new();
     while let Some((token, token_span)) = tokens.get(idx) {
-        let Token::Ident(segment) = token else {
-            break;
+        let segment = match token {
+            Token::Ident(s) => s.clone(),
+            other => match keyword_token_str(other) {
+                Some(s) => s.to_string(),
+                None => break,
+            },
         };
-        path.push((segment.clone(), *token_span));
+        path.push((segment, *token_span));
         idx += 1;
         if !matches!(tokens.get(idx), Some((Token::ColonColon, _))) {
             break;

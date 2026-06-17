@@ -1,0 +1,29 @@
+//@ mode: co2
+//@ run-status: 0
+
+#[inline]
+fn inline_hint() -> i32 {
+    return 1;
+}
+
+#[inline(always)]
+fn inline_always() -> i32 {
+    return 2;
+}
+
+#[inline(never)]
+fn inline_never() -> i32 {
+    return 3;
+}
+
+fn main() {
+    if (inline_hint() != 1) {
+        std::process::exit(1);
+    }
+    if (inline_always() != 2) {
+        std::process::exit(2);
+    }
+    if (inline_never() != 3) {
+        std::process::exit(3);
+    }
+}

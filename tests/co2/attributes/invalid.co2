@@ -35,4 +35,8 @@ int foo4() {
      
 }
 
+#[inline(invalid)]
+//       ^^^^^^^ error: unknown inline hint `invalid`
+fn foo5() {}
+
 fn main() {}

@@ -2,10 +2,18 @@ use rustc_public::ty::{AdtDef, FnDef, Span};
 
 use crate::{DefId, HirLifetime, HirTy};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineHint {
+    Hint,
+    Always,
+    Never,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeneratedAttr {
     Word { path: Vec<String> },
     DocComment { comment: String, inner: bool },
+    InlineHint(InlineHint),
 }
 
 #[derive(Debug, Clone)]

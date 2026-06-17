@@ -1,0 +1,4 @@
+note: rust_inline.rs:17:8 inline (missed): 'never_short' not inlined into <caller> because it should never be inlined (cost=never): noinline function attribute
+note: rust_inline.rs:18:8 inline (success): 'always_short' inlined into <caller> with (cost=always): always inline attribute;
+note: rust_inline.rs:19:8 inline (success): 'hint_short' inlined into <caller> with (cost=-30, threshold=487);
+note: rust_inline.rs:20:8 inline (success): 'noattr_short' inlined into <caller> with (cost=-30, threshold=337);
