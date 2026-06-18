@@ -30,6 +30,7 @@ struct CcArgs {
     debuginfo: Option<u8>,
     cpp_args: Vec<String>,
     linker_args: Vec<String>,
+    asm_flavor: Option<String>,
 }
 
 #[derive(Debug)]
@@ -37,6 +38,7 @@ enum ParseArgsError {
     MissingInputFile,
     MissingArgumentAfter(String),
     InvalidObjectEmissionInputs,
+    InvalidArgument(String),
 }
 
 impl fmt::Display for ParseArgsError {
@@ -49,6 +51,7 @@ impl fmt::Display for ParseArgsError {
             Self::InvalidObjectEmissionInputs => {
                 f.write_str("-c/-S mode expects exactly one C input file")
             }
+            Self::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
         }
     }
 }
@@ -85,6 +88,7 @@ Options:
   -L <dir>             Add library search path
   -Wl,<option>         Pass option to linker
   -Xlinker <option>    Pass option to linker
+  -masm=<flavor>       Use given assembly style (att/intel) for -S output
   -ftime-report        Print timing report"
     );
 }
@@ -184,6 +188,7 @@ fn run_co2c(args: &CcArgs) {
             args.opt_level.as_deref(),
             args.debuginfo,
             force_pic,
+            args.asm_flavor.as_deref(),
         );
         compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
         if args.time_report {
@@ -303,6 +308,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     let mut link_kind = LinkOutputKind::Executable;
     let mut pic = false;
     let mut time_report = false;
+    let mut asm_flavor = None;
     let mut inputs = Vec::new();
     let mut output = None;
     let mut opt_level = None;
@@ -356,6 +362,17 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
                     .ok_or_else(|| ParseArgsError::MissingArgumentAfter(flag.clone()))?;
                 linker_args.push(flag);
                 linker_args.push(val.clone());
+            }
+            f if f.starts_with("-masm=") => {
+                let flavor = f.strip_prefix("-masm=").unwrap().to_owned();
+                match flavor.as_str() {
+                    "att" | "intel" => asm_flavor = Some(flavor),
+                    _ => {
+                        return Err(ParseArgsError::InvalidArgument(format!(
+                            "'-masm={flavor}'; valid values: att, intel"
+                        )));
+                    }
+                }
             }
             "-fPIC" | "-fpic" => pic = true,
             "-ftime-report" => time_report = true,
@@ -424,6 +441,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
         debuginfo,
         cpp_args,
         linker_args,
+        asm_flavor,
     })
 }
 
@@ -481,6 +499,7 @@ fn build_rustc_asm_args(
     opt_level: Option<&str>,
     debuginfo: Option<u8>,
     pic: bool,
+    asm_flavor: Option<&str>,
 ) -> Vec<String> {
     let stem = input
         .file_stem()
@@ -516,6 +535,11 @@ fn build_rustc_asm_args(
     if pic {
         rustc_args.push("-C".to_owned());
         rustc_args.push("relocation-model=pic".to_owned());
+    }
+
+    if let Some(flavor) = asm_flavor {
+        rustc_args.push("-C".to_owned());
+        rustc_args.push(format!("llvm-args=-x86-asm-syntax={flavor}"));
     }
 
     rustc_args.extend(shared_rust_flags());

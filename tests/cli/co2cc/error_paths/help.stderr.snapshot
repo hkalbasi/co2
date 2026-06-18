@@ -22,4 +22,5 @@ Options:
   -L <dir>             Add library search path
   -Wl,<option>         Pass option to linker
   -Xlinker <option>    Pass option to linker
+  -masm=<flavor>       Use given assembly style (att/intel) for -S output
   -ftime-report        Print timing report

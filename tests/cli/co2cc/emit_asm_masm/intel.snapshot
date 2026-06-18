@@ -1,0 +1,17 @@
+	.intel_syntax noprefix
+	.section	.text.f,"ax",@progbits
+	.globl	f
+	.p2align	4
+	.type	f,@function
+f:
+	.cfi_startproc
+	mov	eax, 42
+	ret
+.Lfunc_end0:
+	.size	f, .Lfunc_end0-f
+	.cfi_endproc
+
+	.globl	main
+	.type	main,@function
+main = f
+	.section	".note.GNU-stack","",@progbits
