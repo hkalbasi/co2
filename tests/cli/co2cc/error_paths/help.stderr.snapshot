@@ -2,6 +2,7 @@ Usage: co2cc [options] file...
 
 Options:
   -c                   Compile to object file only
+  -S                   Compile to assembly only
   -o <file>            Write output to <file>
   -shared              Build a shared library
   -I <dir>             Add directory to include search path

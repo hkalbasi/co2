@@ -1,0 +1,14 @@
+#[unsafe(no_mangle)]
+pub fn func() -> i32 {
+    return 42;
+}
+
+#[inline(never)]
+pub fn main_inner(x: i32) -> i32 {
+    return x * 5;
+}
+
+#[inline(never)]
+pub fn main() {
+    main_inner(2);
+}

@@ -4376,7 +4376,7 @@ fn generated_entry_fn(tcx: TyCtxt<'_>, key: ()) -> Option<(RustcDefId, EntryFnTy
         (guard.defined_crate.entry_fn(tcx, key), no_main, original)
     };
     if no_main {
-        return generated_entry;
+        return None;
     }
     generated_entry.or_else(|| (original.entry_fn)(tcx, key))
 }

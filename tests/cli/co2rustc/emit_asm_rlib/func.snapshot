@@ -1,0 +1,37 @@
+	.section	.text._RNvCsXXXX_3crate_name10main_inner,"ax",@progbits
+	.globl	crate_name::main_inner
+	.p2align	4
+	.type	crate_name::main_inner,@function
+crate_name::main_inner:
+	.cfi_startproc
+	leal	(%rdi,%rdi,4), %eax
+	retq
+.Lfunc_end0:
+	.size	crate_name::main_inner, .Lfunc_end0-crate_name::main_inner
+	.cfi_endproc
+
+	.section	.text._RNvCsXXXX_3crate_name4main,"ax",@progbits
+	.globl	crate_name::main
+	.p2align	4
+	.type	crate_name::main,@function
+crate_name::main:
+	.cfi_startproc
+	retq
+.Lfunc_end1:
+	.size	crate_name::main, .Lfunc_end1-crate_name::main
+	.cfi_endproc
+
+	.section	.text.func,"ax",@progbits
+	.globl	func
+	.p2align	4
+	.type	func,@function
+func:
+	.cfi_startproc
+	movl	$42, %eax
+	retq
+.Lfunc_end2:
+	.size	func, .Lfunc_end2-func
+	.cfi_endproc
+
+	.ident	"rustc version 1.98.0-dev"
+	.section	".note.GNU-stack","",@progbits

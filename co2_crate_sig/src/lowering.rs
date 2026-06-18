@@ -1148,6 +1148,14 @@ fn lower_translation_unit_items(
                         let mut attrs = lower_generated_attrs(&decl_attrs);
                         attrs.extend(sig_attrs);
                         let (name, lower_sig) = ctx.lower_rust_function_signature(sig.clone());
+                        if !no_main && module_path.is_empty() && name == "main"
+                            && !sig.params.is_empty()
+                        {
+                            CrateSigCtx::<'_>::terminate_with_error(
+                                ident_span,
+                                "Rust main function can not take arguments. Use `std::env::args()`.",
+                            );
+                        }
                         let no_mangle = has_word_attr(&attrs, "no_mangle");
                         (name, lower_sig, attrs, no_mangle)
                     }

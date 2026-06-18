@@ -1,1 +1,1 @@
-co2cc: object emission mode expects exactly one C input file
+co2cc: -c/-S mode expects exactly one C input file

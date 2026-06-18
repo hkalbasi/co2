@@ -1,0 +1,7 @@
+pub fn foo_func() -> i32 {
+    return 42;
+}
+
+pub fn main(x: i32) -> i32 {
+    return x * 5;
+}

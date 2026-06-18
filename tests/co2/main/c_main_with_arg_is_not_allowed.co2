@@ -1,0 +1,7 @@
+//@ mode: co2
+//@ compile-fail
+
+int main(int argc, char** argv) {
+  //^^^^ error: Main function with C ABI is not accepted in cargo projects. Use `fn main()` or `#![no_main]`.
+    return 0;
+}

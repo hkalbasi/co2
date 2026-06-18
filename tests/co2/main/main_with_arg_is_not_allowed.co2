@@ -1,0 +1,7 @@
+//@ mode: co2
+//@ compile-fail
+
+fn main(input: i32) {
+ //^^^^ error: Rust main function can not take arguments. Use `std::env::args()`.
+    return;
+}

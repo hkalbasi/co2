@@ -1,0 +1,5 @@
+use foo::foo_func;
+
+fn main() {
+    std::process::exit(foo_func() + foo::main(2));
+}

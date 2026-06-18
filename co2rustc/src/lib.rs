@@ -100,8 +100,27 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     }
 
     let is_test = args.iter().any(|arg| arg == "--test");
+    let get_crate_types = || {
+        let mut types = Vec::new();
+        let mut i = 1;
+        while i < args.len() {
+            if let Some(v) = args[i].strip_prefix("--crate-type=") {
+                types.extend(v.split(',').map(|s| s.to_owned()));
+            } else if args[i] == "--crate-type" {
+                if let Some(v) = args.get(i + 1) {
+                    types.extend(v.split(',').map(|s| s.to_owned()));
+                }
+            }
+            i += 1;
+        }
+        types
+    };
+    let crate_types = get_crate_types();
+    let is_lib = !crate_types.is_empty() && crate_types.iter().all(|ct| ct != "bin");
     let mode = if is_test {
         CompileMode::RUST_TEST
+    } else if is_lib {
+        CompileMode { no_main: true, ..CompileMode::RUST }
     } else {
         CompileMode::RUST
     };
