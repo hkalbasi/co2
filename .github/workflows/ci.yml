@@ -144,3 +144,19 @@ jobs:
           name: co2-multicall-linux-x86_64
           path: target/co2-multicall.run
           if-no-files-found: error
+
+      - name: Build CE bundle
+        if: github.event_name != 'pull_request'
+        run: |
+          source "$HOME/.cargo/env"
+          ln -sf co2-multicall target/release/co2cargo
+          ln -sf co2-multicall target/release/co2miri
+          nu ./bundler/build-ce-bundle.nu
+
+      - name: Upload CE bundle artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: co2-ce-linux-x86_64
+          path: target/co2-ce.tar.zstd
+          if-no-files-found: error
