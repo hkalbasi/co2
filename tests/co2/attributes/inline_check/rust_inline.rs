@@ -11,11 +11,11 @@ fn always_short() -> i32 { 43 }
 fn hint_short() -> i32 { 44 }
 
 #[no_mangle]
-fn noattr_short() -> i32 { 45 }
+fn no_attr_short() -> i32 { 45 }
 
 fn main() {
     if never_short() != 42 { std::process::exit(1); }
     if always_short() != 43 { std::process::exit(2); }
     if hint_short() != 44 { std::process::exit(3); }
-    if noattr_short() != 45 { std::process::exit(4); }
+    if no_attr_short() != 45 { std::process::exit(4); }
 }

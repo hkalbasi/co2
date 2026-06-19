@@ -14,7 +14,7 @@ if $run.exit_code != 0 {
     print $"co2 exit ($run.exit_code)"; exit 1
 }
 
-let our_funcs = [never_short always_short hint_short noattr_short]
+let our_funcs = [never_short always_short hint_short no_attr_short]
 let actual_co2 = ($compile.stderr | lines | where {|line| $our_funcs | any {|f| ($line | str contains $f)} } | each {|line|
     $line | str replace --regex '^note: .+?main\.co2:' 'note: main.co2:' | str replace --regex 'inlined into [^ ]+' 'inlined into <caller>' | str replace --regex ' at callsite [^;]*;' ';'
 } | sort | str join "\n")
@@ -40,7 +40,7 @@ let actual_rust = ($rust_compile.stderr | lines | where {|line| $our_funcs | any
 let expected_rust = (open ($test_dir | path join "rust_remark_snapshot.expected") | str trim)
 if $actual_rust != $expected_rust {
     print "FAIL: Rust remark snapshot mismatch"
-    print "--- actual rust ---\n($actual_rust)\n--- expected rust ---\n($expected_rust)"; exit 1
+    print $"--- actual rust ---\n($actual_rust)\n--- expected rust ---\n($expected_rust)"; exit 1
 }
 
 print "PASS"

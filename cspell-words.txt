@@ -155,7 +155,6 @@ frod
 ftime
 funclike
 gotos
-hamid
 hexdigit
 huhu
 idents
@@ -550,3 +549,19 @@ Zunpretty
 Καλημέρα
 Retag
 wfcheck
+readlink
+masm
+rlibs
+rmetas
+startproc
+endproc
+dlsym
+dlclose
+RTLD
+libfoo
+filt
+demangling
+progbits
+globl
+retq
+movl

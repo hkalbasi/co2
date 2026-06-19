@@ -1,7 +1,7 @@
 # CO2++
 
 CO2 helps with integrating Rust and C projects, but the more interesting and important problem is the Rust and C++ integration.
-Rust already can talk C, and C types are a subset of Rust types. But C++ and Rust need to use C as a linua franca,
+Rust already can talk C, and C types are a subset of Rust types. But C++ and Rust need to use C as a lingua franca,
 losing features such as templates (generics), operator overloading, destructors, and ... which both languages have but C doesn't.
 
 ## CO2 would not be a subset of CO2++
