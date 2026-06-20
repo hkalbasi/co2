@@ -1,0 +1,40 @@
+name: Release Trunk
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: co2-multicall-linux-x86_64
+
+      - name: Download CE bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: co2-ce-linux-x86_64
+
+      - name: Upload to trunk release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: trunk
+          name: trunk
+          allowUpdates: true
+          omitBodyDuringUpdate: true
+          omitPrereleaseDuringUpdate: true
+          replacesArtifacts: true
+          artifacts: "co2-multicall.run,co2-ce.tar.zstd"
+          token: ${{ secrets.GITHUB_TOKEN }}

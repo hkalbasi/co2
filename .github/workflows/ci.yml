@@ -5,15 +5,10 @@ on:
   workflow_dispatch:
   pull_request:
   merge_group:
-  push:
-    branches:
-      - main
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout co2
@@ -169,15 +164,3 @@ jobs:
           path: target/co2-ce.tar.zstd
           if-no-files-found: error
 
-      - name: Upload to trunk release
-        if: github.event_name != 'pull_request'
-        uses: ncipollo/release-action@v1
-        with:
-          tag: trunk
-          name: trunk
-          allowUpdates: true
-          omitBodyDuringUpdate: true
-          omitPrereleaseDuringUpdate: true
-          replacesArtifacts: true
-          artifacts: "target/co2-multicall.run,target/co2-ce.tar.zstd"
-          token: ${{ secrets.GITHUB_TOKEN }}
