@@ -89,9 +89,11 @@ fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> 
                 })
             } else if path == ["inline"] {
                 let inner_args: &[co2_ast::Spanned<co2_ast::Token>] = match attr.args.as_slice() {
-                    [(co2_ast::Token::LParen, _), inner @ .., (co2_ast::Token::RParen, _)] => {
-                        inner
-                    }
+                    [
+                        (co2_ast::Token::LParen, _),
+                        inner @ ..,
+                        (co2_ast::Token::RParen, _),
+                    ] => inner,
                     other => other,
                 };
                 let hint = match inner_args {
@@ -138,7 +140,10 @@ fn has_derive_attr(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>], trait_nam
 }
 
 fn is_known_fn_word_attr(name: &str) -> bool {
-    matches!(name, "test" | "ignore" | "should_panic" | "no_mangle" | "inline")
+    matches!(
+        name,
+        "test" | "ignore" | "should_panic" | "no_mangle" | "inline"
+    )
 }
 
 fn validate_attrs_for_fn(
@@ -243,7 +248,8 @@ fn collect_attr_errors_from_tu(
                 signature,
                 ..
             } => {
-                let is_c_style = matches!(signature, co2_ast::FunctionDefinitionSignature::C { .. });
+                let is_c_style =
+                    matches!(signature, co2_ast::FunctionDefinitionSignature::C { .. });
                 errors.extend(validate_attrs_for_fn(decl_attrs, is_c_style));
                 if let co2_ast::FunctionDefinitionSignature::Rust(sig) = signature {
                     errors.extend(validate_attrs_for_fn(&sig.attrs, false));
@@ -1148,7 +1154,9 @@ fn lower_translation_unit_items(
                         let mut attrs = lower_generated_attrs(&decl_attrs);
                         attrs.extend(sig_attrs);
                         let (name, lower_sig) = ctx.lower_rust_function_signature(sig.clone());
-                        if !no_main && module_path.is_empty() && name == "main"
+                        if !no_main
+                            && module_path.is_empty()
+                            && name == "main"
                             && !sig.params.is_empty()
                         {
                             CrateSigCtx::<'_>::terminate_with_error(

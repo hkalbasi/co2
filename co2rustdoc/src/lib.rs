@@ -28,7 +28,7 @@ pub fn main_with_args(args: Vec<String>) -> ExitCode {
         return rustdoc::run_with_callbacks(&raw_args(&args), &mut NoCallbacks);
     }
 
-    let mut callbacks = Co2Callbacks::new(input_file.with_extension("co2"));
+    let mut callbacks = Co2Callbacks::new(input_file.with_extension("co2"), &expanded_args);
     match std::panic::catch_unwind(AssertUnwindSafe(|| {
         rustdoc::run_with_callbacks(&raw_args(&args), &mut callbacks)
     })) {
@@ -58,9 +58,9 @@ struct Co2Callbacks {
 }
 
 impl Co2Callbacks {
-    fn new(co2_file: PathBuf) -> Self {
+    fn new(co2_file: PathBuf, rustc_args: &[String]) -> Self {
         Self {
-            inner: co2_driver_lib::Co2RustdocCallbacks::new(&co2_file),
+            inner: co2_driver_lib::Co2RustdocCallbacks::new(&co2_file, rustc_args),
         }
     }
 }

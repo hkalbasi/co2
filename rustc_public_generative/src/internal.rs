@@ -44,7 +44,9 @@ use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
 use rustc_trait_selection::traits::ObligationCtxt;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 
-use crate::hir_structure::{AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, InlineHint, StructField};
+use crate::hir_structure::{
+    AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, InlineHint, StructField,
+};
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
 use crate::{

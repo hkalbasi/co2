@@ -95,8 +95,10 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
         }
     }
 
+    let cpp_args = co2_driver_lib::extract_feature_defines(&args);
+
     if dump_ast_tree {
-        return dump_ast_tree_for_file(&co2_file);
+        return dump_ast_tree_for_file(&co2_file, &cpp_args);
     }
 
     let is_test = args.iter().any(|arg| arg == "--test");
@@ -120,12 +122,15 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     let mode = if is_test {
         CompileMode::RUST_TEST
     } else if is_lib {
-        CompileMode { no_main: true, ..CompileMode::RUST }
+        CompileMode {
+            no_main: true,
+            ..CompileMode::RUST
+        }
     } else {
         CompileMode::RUST
     };
     let temp_host = if is_test {
-        match write_test_host(&co2_file) {
+        match write_test_host(&co2_file, &cpp_args) {
             Ok(path) => Some(path),
             Err(err) => {
                 eprintln!("co2rustc: failed to write test host: {err}");
@@ -171,8 +176,11 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-fn write_test_host(co2_file: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
-    let preprocessed = co2_preprocessor::preprocess(co2_file, &[]);
+fn write_test_host(
+    co2_file: &std::path::Path,
+    cpp_args: &[String],
+) -> std::io::Result<std::path::PathBuf> {
+    let preprocessed = co2_preprocessor::preprocess(co2_file, cpp_args);
     let ast = co2_parser::parse_translation_unit_from_preprocessed(
         &co2_file.display().to_string(),
         &preprocessed,
@@ -187,6 +195,7 @@ fn write_test_host(co2_file: &std::path::Path) -> std::io::Result<std::path::Pat
             &mut Vec::new(),
             &root_module_dir(co2_file),
             &mut tests,
+            cpp_args,
         );
         for test in &tests {
             let _ = writeln!(source, "unsafe extern \"Rust\" {{ fn {}(); }}", test.symbol);
@@ -233,6 +242,7 @@ fn collect_tests_from_translation_unit(
     module_path: &mut Vec<String>,
     module_dir: &std::path::Path,
     tests: &mut Vec<Co2Test>,
+    cpp_args: &[String],
 ) {
     for (item, _) in &ast.items {
         let co2_ast::Declaration::FunctionDefinition { signature, .. } = item else {
@@ -270,11 +280,12 @@ fn collect_tests_from_translation_unit(
                 module_path,
                 &module_dir.join(&mod_item.name.0),
                 tests,
+                cpp_args,
             );
         } else if let Some(module_path_on_disk) =
             resolve_module_source(module_dir, &mod_item.name.0)
         {
-            let preprocessed = co2_preprocessor::preprocess(&module_path_on_disk, &[]);
+            let preprocessed = co2_preprocessor::preprocess(&module_path_on_disk, cpp_args);
             let source_name = module_path_on_disk.to_string_lossy().into_owned();
             if let Some(child) = co2_parser::parse_translation_unit_from_preprocessed(
                 &source_name,
@@ -286,6 +297,7 @@ fn collect_tests_from_translation_unit(
                     module_path,
                     &child_module_dir(&module_path_on_disk),
                     tests,
+                    cpp_args,
                 );
             }
         }
@@ -370,8 +382,11 @@ fn take_unpretty_ast_tree_flag(args: Vec<String>) -> (Vec<String>, bool) {
     (filtered, dump_ast_tree)
 }
 
-fn dump_ast_tree_for_file(co2_file: &std::path::Path) -> std::process::ExitCode {
-    let preprocessed = co2_preprocessor::preprocess(co2_file, &[]);
+fn dump_ast_tree_for_file(
+    co2_file: &std::path::Path,
+    cpp_args: &[String],
+) -> std::process::ExitCode {
+    let preprocessed = co2_preprocessor::preprocess(co2_file, cpp_args);
     let filename = co2_file.display().to_string();
     let Some(ast) = co2_parser::parse_translation_unit_from_preprocessed(
         &filename,

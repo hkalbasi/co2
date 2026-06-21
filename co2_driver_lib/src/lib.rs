@@ -717,8 +717,45 @@ fn build_clone_method_body(
     Body::new(vec![return_block], locals, 1, vec![], None, span)
 }
 
+pub fn extract_feature_defines(rustc_args: &[String]) -> Vec<String> {
+    let mut defines = Vec::new();
+    let mut i = 0;
+    while i < rustc_args.len() {
+        if rustc_args[i] == "--cfg" {
+            if let Some(val) = rustc_args.get(i + 1) {
+                if let Some(feature) = val.strip_prefix("feature=\"") {
+                    if let Some(feature_name) = feature.strip_suffix('"') {
+                        let define = format!(
+                            "CFG_FEATURE_{}",
+                            feature_name.to_uppercase().replace('-', "_")
+                        );
+                        defines.push("-D".to_string());
+                        defines.push(define);
+                    }
+                }
+            }
+            i += 2;
+            continue;
+        } else if let Some(val) = rustc_args[i].strip_prefix("--cfg=") {
+            if let Some(feature) = val.strip_prefix("feature=\"") {
+                if let Some(feature_name) = feature.strip_suffix('"') {
+                    let define = format!(
+                        "CFG_FEATURE_{}",
+                        feature_name.to_uppercase().replace('-', "_")
+                    );
+                    defines.push("-D".to_string());
+                    defines.push(define);
+                }
+            }
+        }
+        i += 1;
+    }
+    defines
+}
+
 pub fn compile_co2_file(mode: CompileMode, co2_file: &Path, rustc_args: Vec<String>) {
-    let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &Vec::new()));
+    let cpp_args = extract_feature_defines(&rustc_args);
+    let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &cpp_args));
     compile_co2_source(mode, co2_file.to_path_buf(), preprocessed, rustc_args);
 }
 
@@ -732,7 +769,8 @@ pub fn compile_co2_file_for_miri(
     let dump_mir =
         rustc_args.iter().any(|a| a.contains("dump-mir")) || std::env::var("CO2_DUMP_MIR").is_ok();
     DUMP_MIR_ENABLED.store(dump_mir, Ordering::Relaxed);
-    let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &Vec::new()));
+    let cpp_args = extract_feature_defines(&rustc_args);
+    let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &cpp_args));
     install_pending_compile(CompileMode::RUST, co2_file.to_path_buf(), preprocessed);
     rustc_gen::generate_with_args_and_after_analysis::<Co2GeneratorState>(
         rustc_args,
@@ -798,8 +836,9 @@ pub fn compile_co2_source(
 }
 
 impl Co2RustdocCallbacks {
-    pub fn new(co2_file: &Path) -> Self {
-        let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &Vec::new()));
+    pub fn new(co2_file: &Path, rustc_args: &[String]) -> Self {
+        let cpp_args = extract_feature_defines(rustc_args);
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(co2_file, &cpp_args));
         install_pending_compile(CompileMode::RUST, co2_file.to_path_buf(), preprocessed);
         Self {
             inner: rustc_gen::InterfaceCallbacks::new_without_original_owners(),

@@ -1,0 +1,24 @@
+#include <stdio.h>
+
+#ifdef CFG_FEATURE_FEAT1
+/// A function only available with feat1
+fn feat1() {
+    printf("feat1 enabled\n");
+}
+#endif
+#ifdef CFG_FEATURE_FEAT_TWO
+/// A function only available with feat-two
+fn feat_two() {
+    printf("feat-two enabled\n");
+}
+#endif
+
+fn main() {
+    printf("Hello world from CO2!\n");
+    #ifdef CFG_FEATURE_FEAT1
+        feat1();
+    #endif
+    #ifdef CFG_FEATURE_FEAT_TWO
+        feat_two();
+    #endif
+}
