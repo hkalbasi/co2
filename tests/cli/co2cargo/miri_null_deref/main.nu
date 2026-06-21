@@ -5,6 +5,8 @@
 # cargo-miri via `rustup which`, mirroring the plain `cargo miri run`
 # user experience.
 
+use ./snapshot-utils.nu *
+
 let bin_dir = $env.CO2_BIN_DIR
 let test_dir = $env.CO2_TEST_DIR
 
@@ -73,16 +75,7 @@ let stderr_normalized = (
 )
 
 let expected_path = ($env.CO2_WORKSPACE_ROOT | path join "tests" "cli" "co2cargo" "miri_null_deref" "stderr.expected")
-let expected = (open --raw $expected_path)
-
-if $stderr_normalized != $expected {
-    print "FAIL: miri stderr does not match expected output"
-    print "── expected ──────────────────────────────"
-    print $expected
-    print "── got (normalized) ──────────────────────"
-    print $stderr_normalized
-    exit 1
-}
+assert-snapshot "miri stderr" $stderr_normalized $expected_path
 
 print "co2cargo miri null-deref UB detection test passed"
 exit 0

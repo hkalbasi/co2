@@ -1,5 +1,7 @@
 #@ run-status: 0
 
+use ./snapshot-utils.nu *
+
 let co2rustc = ($env.CO2_BIN_DIR | path join "co2rustc")
 let test_dir = $env.CO2_TEST_DIR
 let expected_dir = ($env.CO2_WORKSPACE_ROOT | path join "tests" "cli" "co2rustc" "emit_asm_rlib")
@@ -30,25 +32,9 @@ let normalize = {|s|
 let foo_text = (do $normalize $foo_raw | lines | skip 1 | str join "\n")
 let bar_text = (do $normalize $bar_raw | lines | skip 1 | str join "\n")
 
-let snapshot = (open ($expected_dir | path join "func.snapshot"))
-
-if $foo_text != $snapshot {
-    print "FAIL: foo.s does not match snapshot!"
-    print "--- foo.s ---"
-    print $foo_text
-    print "--- snapshot ---"
-    print $snapshot
-    exit 1
-}
-
-if $bar_text != $snapshot {
-    print "FAIL: bar.s does not match snapshot!"
-    print "--- bar.s ---"
-    print $bar_text
-    print "--- snapshot ---"
-    print $snapshot
-    exit 1
-}
+let snapshot_path = ($expected_dir | path join "func.snapshot")
+assert-snapshot "foo.s" $foo_text $snapshot_path
+assert-snapshot "bar.s" $bar_text $snapshot_path
 
 print "PASS"
 exit 0

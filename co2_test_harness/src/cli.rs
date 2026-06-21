@@ -14,6 +14,10 @@ pub struct Cli {
     #[arg(long)]
     pub dump_mir: bool,
 
+    /// Update snapshot files with actual output instead of comparing.
+    #[arg(long)]
+    pub update_snapshots: bool,
+
     #[arg(short, long)]
     pub verbose: bool,
 }

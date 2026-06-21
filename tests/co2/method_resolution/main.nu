@@ -1,14 +1,6 @@
 #@ run-status: 0
 
-def diff [a: string, b: string] {
-    let f1 = (mktemp)
-    let f2 = (mktemp)
-
-    $a | save -f $f1
-    $b | save -f $f2
-
-    ^diff $f1 $f2
-}
+use ./snapshot-utils.nu *
 
 let test_dir = $env.CO2_TEST_DIR
 let lib_rlib = ($test_dir | path join "libsupport_lib.rlib")
@@ -37,16 +29,6 @@ if $run.exit_code != 0 {
 }
 
 let actual = ($run.stdout | str trim)
-let expected = (cat ./stdout.expected | str trim)
-
-if $actual != $expected {
-    print "--- GOT ---"
-    print $actual
-    print "--- EXPECTED ---"
-    print $expected
-    print "--- Diff ---"
-    diff $expected $actual
-    exit 4
-}
+assert-snapshot "stdout" $actual ($test_dir | path join "stdout.expected")
 
 exit 0

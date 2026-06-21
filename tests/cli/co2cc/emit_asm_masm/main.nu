@@ -1,5 +1,7 @@
 #@ run-status: 0
 
+use ./snapshot-utils.nu *
+
 let test_dir = $env.CO2_TEST_DIR
 let source = ($test_dir | path join "trivial.c")
 let expected_dir = ($env.CO2_WORKSPACE_ROOT | path join "tests" "cli" "co2cc" "emit_asm_masm")
@@ -31,15 +33,7 @@ def test-flavor [flavor: string, snapshot_file: string] {
         } | str join "\n"
     }
     let actual = (do $normalize $asm_text)
-    let snapshot = (open ($expected_dir | path join $snapshot_file))
-    if $actual != $snapshot {
-        print $"FAIL: -masm=($flavor) assembly does not match snapshot!"
-        print "--- actual ---"
-        print $actual
-        print "--- snapshot ---"
-        print $snapshot
-        exit 1
-    }
+    assert-snapshot $"-masm=($flavor) assembly" $actual ($expected_dir | path join $snapshot_file)
 
     # assemble and link, then verify they produce the expected exit code
     let link = (do { gcc $asm_file -o $bin_file } | complete)

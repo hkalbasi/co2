@@ -1,14 +1,6 @@
 #@ run-status: 0
 
-def diff [a: string, b: string] {
-    let f1 = (mktemp)
-    let f2 = (mktemp)
-
-    $a | save -f $f1
-    $b | save -f $f2
-
-    ^diff $f1 $f2
-}
+use ./snapshot-utils.nu *
 
 def validate-spans [test_dir: string, actual: string, name: string] {
     let dump = (mktemp)
@@ -23,21 +15,6 @@ def validate-spans [test_dir: string, actual: string, name: string] {
         if ($status.stderr | str trim) != "" {
             print $status.stderr
         }
-        exit 1
-    }
-}
-
-def assert-snapshot [name: string, actual: string, snapshot_path: string] {
-    let snapshot = (open $snapshot_path | str trim)
-
-    if $actual != $snapshot {
-        print $"stdout mismatch for ($name)!"
-        print "--- GOT ---"
-        print $actual
-        print "--- EXPECTED ---"
-        print $snapshot
-        print "--- Diff ---"
-        diff $snapshot $actual
         exit 1
     }
 }

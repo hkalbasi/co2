@@ -31,6 +31,7 @@ pub fn run_tests(
     filter: Option<&str>,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
+    update_snapshots: bool,
     verbose: bool,
     stats: &mut Stats,
 ) -> Result<()> {
@@ -39,7 +40,7 @@ pub fn run_tests(
 
     for test in tests {
         let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
-        match run_test(root, &test, coverage_dir, dump_mir, verbose) {
+        match run_test(root, &test, coverage_dir, dump_mir, update_snapshots, verbose) {
             Ok(TestOutcome::Pass) => {
                 stats.passed += 1;
                 if verbose {
@@ -81,6 +82,7 @@ fn run_test(
     test: &TestCase,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
+    update_snapshots: bool,
     verbose: bool,
 ) -> Result<TestOutcome> {
     if let Some(reason) = directive_text(test, "skip") {
@@ -88,7 +90,7 @@ fn run_test(
     }
 
     if test.kind == TestKind::NuDir {
-        run_nu_dir_test(root, test, coverage_dir, dump_mir, verbose)?;
+        run_nu_dir_test(root, test, coverage_dir, dump_mir, update_snapshots, verbose)?;
         return Ok(TestOutcome::Pass);
     }
 
@@ -188,6 +190,7 @@ fn run_nu_dir_test(
     test: &TestCase,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
+    update_snapshots: bool,
     verbose: bool,
 ) -> Result<()> {
     let temp = TempDirBuilder::new()
@@ -204,6 +207,12 @@ fn run_nu_dir_test(
         std::mem::forget(temp);
     }
     copy_dir_all(&test.path, &temp_path)?;
+
+    let snapshot_utils_src = root.join("tests").join("snapshot-utils.nu");
+    if snapshot_utils_src.exists() {
+        std::fs::copy(&snapshot_utils_src, temp_path.join("snapshot-utils.nu"))
+            .context("failed to copy snapshot-utils.nu to test temp dir")?;
+    }
 
     let main_nu = temp_path.join("main.nu");
     let run_status = directive_i32(test, "run-status")?.unwrap_or(0);
@@ -226,6 +235,10 @@ fn run_nu_dir_test(
         .env("CO2_WORKSPACE_ROOT", root)
         .env("CO2_TEST_DIR", &temp_path)
         .env("CO2_BIN_DIR", &compiler_bin);
+
+    if update_snapshots {
+        cmd.env("CO2_UPDATE_SNAPSHOTS", "1");
+    }
 
     if dump_mir {
         cmd.env("CO2_DUMP_MIR", "1");

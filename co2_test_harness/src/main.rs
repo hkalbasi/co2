@@ -44,6 +44,7 @@ fn run_main() -> Result<()> {
         cli.filter.as_deref(),
         coverage_dir.as_deref(),
         cli.dump_mir,
+        cli.update_snapshots,
         cli.verbose,
         &mut stats,
     )?;

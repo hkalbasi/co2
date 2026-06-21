@@ -1,14 +1,6 @@
 #@ run-status: 0
 
-def diff [a: string, b: string] {
-    let f1 = (mktemp)
-    let f2 = (mktemp)
-
-    $a | save -f $f1
-    $b | save -f $f2
-
-    ^diff $f1 $f2
-}
+use ./snapshot-utils.nu *
 
 let test_dir = $env.CO2_TEST_DIR
 cd ($test_dir | path join "demo")
@@ -36,18 +28,7 @@ if $normalized.exit_code != 0 {
 }
 
 let actual = ($normalized.stdout | str trim)
-let snapshot = (open ($test_dir | path join "doc_json.snapshot") | str trim)
-
-if $actual != $snapshot {
-    print "rustdoc json snapshot mismatch!"
-    print "--- GOT ---"
-    print $actual
-    print "--- EXPECTED ---"
-    print $snapshot
-    print "--- Diff ---"
-    diff $snapshot $actual
-    exit 1
-}
+assert-snapshot "rustdoc json" $actual ($test_dir | path join "doc_json.snapshot")
 
 let stderr_file = (mktemp)
 $doc.stderr | save -f $stderr_file
@@ -57,14 +38,4 @@ if $stderr_normalized.exit_code != 0 {
     exit 5
 }
 
-let stderr_expected = (open ($test_dir | path join "doc_json.stderr.snapshot"))
-if $stderr_normalized.stdout != $stderr_expected {
-    print "rustdoc stderr snapshot mismatch!"
-    print "--- GOT ---"
-    print $stderr_normalized.stdout
-    print "--- EXPECTED ---"
-    print $stderr_expected
-    print "--- Diff ---"
-    diff $stderr_expected $stderr_normalized.stdout
-    exit 1
-}
+assert-snapshot "rustdoc stderr" $stderr_normalized.stdout ($test_dir | path join "doc_json.stderr.snapshot")

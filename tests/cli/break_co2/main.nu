@@ -1,5 +1,7 @@
 #@ run-status: 0
 
+use ./snapshot-utils.nu *
+
 def normalize [s: string] {
     $s
     | str replace --all --regex '\(\d+\) panicked' '(PID) panicked'
@@ -19,8 +21,6 @@ def normalize [s: string] {
 
 let test_dir = $env.CO2_TEST_DIR
 let expected_dir = ($env.CO2_WORKSPACE_ROOT | path join "tests" "cli" "break_co2")
-
-mut failed = false
 
 # ---- co2cc ----
 let c_src = ($test_dir | path join "test.c")
@@ -55,62 +55,27 @@ let co2miri_stderr = (normalize $co2miri_result.stderr)
 let co2miri_status = $co2miri_result.exit_code
 
 # ---- snapshot checks ----
-let expected_co2cc_stderr = (open ($expected_dir | path join "co2cc.stderr.snapshot") | str trim)
-let expected_co2rustc_stderr = (open ($expected_dir | path join "co2rustc.stderr.snapshot") | str trim)
-let expected_co2rustdoc_stderr = (open ($expected_dir | path join "co2rustdoc.stderr.snapshot") | str trim)
-let expected_co2miri_stderr = (open ($expected_dir | path join "co2miri.stderr.snapshot") | str trim)
-
 if $co2cc_status != 101 {
     print $"FAIL: co2cc exit code expected 101, got ($co2cc_status)"
-    $failed = true
+    exit 1
 }
 if $co2rustc_status != 101 {
     print $"FAIL: co2rustc exit code expected 101, got ($co2rustc_status)"
-    $failed = true
+    exit 1
 }
 if $co2rustdoc_status != 101 {
     print $"FAIL: co2rustdoc exit code expected 101, got ($co2rustdoc_status)"
-    $failed = true
+    exit 1
 }
 if $co2miri_status != 101 {
     print $"FAIL: co2miri exit code expected 101, got ($co2miri_status)"
-    $failed = true
+    exit 1
 }
 
-if $co2cc_stderr != $expected_co2cc_stderr {
-    print "FAIL: co2cc stderr mismatch!"
-    print "--- GOT ---"
-    print $co2cc_stderr
-    print "--- EXPECTED ---"
-    print $expected_co2cc_stderr
-    $failed = true
-}
-if $co2rustc_stderr != $expected_co2rustc_stderr {
-    print "FAIL: co2rustc stderr mismatch!"
-    print "--- GOT ---"
-    print $co2rustc_stderr
-    print "--- EXPECTED ---"
-    print $expected_co2rustc_stderr
-    $failed = true
-}
-if $co2rustdoc_stderr != $expected_co2rustdoc_stderr {
-    print "FAIL: co2rustdoc stderr mismatch!"
-    print "--- GOT ---"
-    print $co2rustdoc_stderr
-    print "--- EXPECTED ---"
-    print $expected_co2rustdoc_stderr
-    $failed = true
-}
-if $co2miri_stderr != $expected_co2miri_stderr {
-    print "FAIL: co2miri stderr mismatch!"
-    print "--- GOT ---"
-    print $co2miri_stderr
-    print "--- EXPECTED ---"
-    print $expected_co2miri_stderr
-    $failed = true
-}
-
-if $failed { exit 1 }
+assert-snapshot "co2cc stderr" $co2cc_stderr ($expected_dir | path join "co2cc.stderr.snapshot")
+assert-snapshot "co2rustc stderr" $co2rustc_stderr ($expected_dir | path join "co2rustc.stderr.snapshot")
+assert-snapshot "co2rustdoc stderr" $co2rustdoc_stderr ($expected_dir | path join "co2rustdoc.stderr.snapshot")
+assert-snapshot "co2miri stderr" $co2miri_stderr ($expected_dir | path join "co2miri.stderr.snapshot")
 
 print "break_co2 test passed"
 exit 0

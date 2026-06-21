@@ -1,0 +1,19 @@
+co2cargo: A wrapper around cargo that supports CO2 language features.
+
+Usage: co2cargo <subcommand> [args...]
+
+CO2 Specific Commands:
+    init        Initialize a new co2 project in an existing directory.
+                Creates src/main.co2 and adds #![language(co2)] to src/main.rs.
+
+Common Cargo Commands (forwarded with RUSTC=co2rustc):
+    build, b    Compile the current package
+    check, c    Analyze the current package and report errors
+    doc         Build this package's documentation
+    run, r      Run a binary or example of the local package
+    test, t     Run the tests
+    add         Add dependencies to a manifest file
+    miri        Run the project under miri via cargo-miri.
+                Requires cargo-miri to be installed.
+
+All other cargo commands are supported and forwarded to cargo.
