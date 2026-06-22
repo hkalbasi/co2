@@ -37,6 +37,24 @@ pub fn take_errors() -> Vec<Rich<'static, Token, Span>> {
     std::mem::take(&mut *guard)
 }
 
+pub fn byte_to_line_col(src: &str, byte_pos: usize) -> (usize, usize) {
+    let byte_pos = byte_pos.min(src.len());
+    let mut line = 1;
+    let mut col = 1;
+    for (i, c) in src.char_indices() {
+        if i >= byte_pos {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
 pub fn safe_range(span: Span, src_len: usize) -> std::ops::Range<usize> {
     let span = span.data();
     let mut start = span.start.min(src_len);
@@ -251,6 +269,8 @@ fn emit_json_diagnostic(
     if let Some(mapped) = get_diagnostic_info(*e.span()) {
         let range = mapped.start..mapped.end;
         let display_name = relativize_path(&mapped.file_name);
+        let (ls, cs) = byte_to_line_col(&mapped.source, mapped.start);
+        let (le, ce) = byte_to_line_col(&mapped.source, mapped.end);
         let mut rendered = Vec::new();
         Report::build(level.report_kind(), (display_name.clone(), range.clone()))
             .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
@@ -272,7 +292,7 @@ fn emit_json_diagnostic(
             "message": e.to_string(),
             "code": null,
             "level": level.json_level(),
-            "spans": [json_span(&display_name, range, true, Some(&label))],
+            "spans": [json_span(&display_name, range, true, Some(&label), ls, cs, le, ce)],
             "children": [],
             "rendered": String::from_utf8(rendered).unwrap(),
         });
@@ -282,20 +302,33 @@ fn emit_json_diagnostic(
 
     let range = safe_range(*e.span(), src.len());
     let display_name = relativize_path(filename);
+    let (ls, cs) = byte_to_line_col(src, range.start);
+    let (le, ce) = byte_to_line_col(src, range.end);
     let primary_label = e.reason().to_string();
     let mut spans = vec![json_span(
         &display_name,
         range.clone(),
         true,
         Some(&primary_label),
+        ls,
+        cs,
+        le,
+        ce,
     )];
     spans.extend(e.contexts().map(|(label, span)| {
         let context_label = format!("while parsing this {label}");
+        let span_range = safe_range(*span, src.len());
+        let (sl, sc) = byte_to_line_col(src, span_range.start);
+        let (el, ec) = byte_to_line_col(src, span_range.end);
         json_span(
             &display_name,
-            safe_range(*span, src.len()),
+            span_range,
             false,
             Some(&context_label),
+            sl,
+            sc,
+            el,
+            ec,
         )
     }));
     let mut rendered = Vec::new();
@@ -336,11 +369,19 @@ fn json_span(
     range: std::ops::Range<usize>,
     is_primary: bool,
     label: Option<&str>,
+    line_start: usize,
+    col_start: usize,
+    line_end: usize,
+    col_end: usize,
 ) -> serde_json::Value {
     json!({
         "file_name": filename,
         "byte_start": range.start,
         "byte_end": range.end,
+        "line_start": line_start,
+        "line_end": line_end,
+        "column_start": col_start,
+        "column_end": col_end,
         "is_primary": is_primary,
         "text": [],
         "label": label,
