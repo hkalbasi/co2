@@ -1,0 +1,59 @@
+//@ mode: co2
+//@ compile-flags: -g
+
+//@ gdb-command:run
+//@ gdb-command:print x
+//@ gdb-check:[...] false
+//@ gdb-command:print y
+//@ gdb-check:[...] true
+//@ gdb-command:continue
+//@ gdb-command:print x
+//@ gdb-check:[...] 10
+//@ gdb-command:continue
+//@ gdb-command:print x
+//@ gdb-check:[...] 10.5
+//@ gdb-command:print y
+//@ gdb-check:[...] 20
+//@ gdb-command:continue
+//@ gdb-command:print x
+//@ gdb-check:[...] 11.5
+//@ gdb-command:continue
+
+#include <stdbool.h>
+
+fn zzz() {}
+fn sentinel() {}
+
+fn main() {
+    {
+        bool x = false;
+        bool y = true;
+
+        zzz(); // #break
+        sentinel();
+    }
+
+    {
+        i64 x = 10;
+
+        zzz(); // #break
+        sentinel();
+    }
+
+    {
+        f64 x = 10.5;
+        i64 y = 20;
+
+        zzz(); // #break
+        sentinel();
+    }
+
+    {
+        f64 x = 11.5;
+
+        zzz(); // #break
+        sentinel();
+    }
+
+    sentinel();
+}

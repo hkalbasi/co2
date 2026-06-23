@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use tempfile::Builder as TempDirBuilder;
 
 use crate::compiler::{CompileResult, MiriRun, compile_test, run_miri_test};
+use crate::debuginfo;
 use crate::error::{TestError, UiTestError, render_test_error, render_ui_error};
 use crate::test_case::{
     Mode, TestCase, TestKind, TestOutcome, collect_tests, directive_args, directive_i32,
@@ -40,7 +41,14 @@ pub fn run_tests(
 
     for test in tests {
         let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
-        match run_test(root, &test, coverage_dir, dump_mir, update_snapshots, verbose) {
+        match run_test(
+            root,
+            &test,
+            coverage_dir,
+            dump_mir,
+            update_snapshots,
+            verbose,
+        ) {
             Ok(TestOutcome::Pass) => {
                 stats.passed += 1;
                 if verbose {
@@ -90,7 +98,14 @@ fn run_test(
     }
 
     if test.kind == TestKind::NuDir {
-        run_nu_dir_test(root, test, coverage_dir, dump_mir, update_snapshots, verbose)?;
+        run_nu_dir_test(
+            root,
+            test,
+            coverage_dir,
+            dump_mir,
+            update_snapshots,
+            verbose,
+        )?;
         return Ok(TestOutcome::Pass);
     }
 
@@ -127,6 +142,14 @@ fn run_test(
             format_named_output("stdout", &String::from_utf8_lossy(&compile.output.stdout)),
             format_named_output("stderr", &String::from_utf8_lossy(&compile.output.stderr)),
         );
+    }
+
+    let is_debuginfo =
+        test.directives.contains_key("gdb-command") || test.directives.contains_key("gdb-check");
+
+    if is_debuginfo {
+        debuginfo::run_debuginfo_test(test, &compile)?;
+        return Ok(TestOutcome::Pass);
     }
 
     if !test.directives.contains_key("miri-error") {

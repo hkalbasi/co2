@@ -3,6 +3,7 @@ use clap::Parser;
 
 mod cli;
 mod compiler;
+mod debuginfo;
 mod error;
 mod suite;
 mod test_case;

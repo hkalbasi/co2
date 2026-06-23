@@ -1,0 +1,38 @@
+//@ mode: co2
+//@ compile-flags: -g
+
+//@ gdb-command:run
+//@ gdb-command:print no_padding
+//@ gdb-check:[...]x[...]10000[...]y[...]-10001
+//@ gdb-command:print internal_padding
+//@ gdb-check:[...]x[...]10012[...]y[...]-10013
+//@ gdb-command:print padding_at_end
+//@ gdb-check:[...]x[...]-10014[...]y[...]10015
+//@ gdb-command:continue
+
+#include <stddef.h>
+
+pub struct NoPadding {
+    x: u16,
+    y: i16,
+}
+
+pub struct InternalPadding {
+    x: u16,
+    y: i64,
+}
+
+pub struct PaddingAtEnd {
+    x: i64,
+    y: u16,
+}
+
+fn zzz() { return; }
+
+fn main() {
+    NoPadding no_padding = { .x = 10000, .y = -10001 };
+    InternalPadding internal_padding = { .x = 10012, .y = -10013 };
+    PaddingAtEnd padding_at_end = { .x = -10014, .y = 10015 };
+
+    zzz(); // #break
+}

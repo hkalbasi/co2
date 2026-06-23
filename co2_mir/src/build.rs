@@ -1,15 +1,23 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use co2_hir::{HirBody, LabelId, LocalId, LocalResolver, WellknownDefs};
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
     CrateDefType, DefId,
-    mir::{Body, ConstOperand, LocalDecl as MirLocalDecl, Mutability},
+    mir::{
+        Body, ConstOperand, LocalDecl as MirLocalDecl, Mutability, Place, SourceInfo, VarDebugInfo,
+        VarDebugInfoContents,
+    },
     ty::{
         FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Span as RustSpan, Ty, TyKind,
         VariantIdx,
     },
 };
+
+pub struct MirBodyResult {
+    pub body: Body,
+    pub block_scopes: Vec<u32>,
+}
 
 pub fn build_mir_for_body(
     body: &HirBody,
@@ -18,7 +26,7 @@ pub fn build_mir_for_body(
     file_id: rustc_gen::FileId,
     wellknown_defs: WellknownDefs,
     decl_resolver: Option<LocalResolver>,
-) -> Body {
+) -> MirBodyResult {
     let span = ctx.span_in_file(file_id, 0, 0);
 
     let mut locals = Vec::with_capacity(body.locals.len());
@@ -31,6 +39,39 @@ pub fn build_mir_for_body(
             mutability: Mutability::Mut,
         });
         local_indices.insert(local_id, idx);
+    }
+
+    let param_indices: HashSet<usize> = body
+        .params
+        .iter()
+        .map(|param_id| local_indices[param_id])
+        .collect();
+
+    let mut var_debug_info = Vec::new();
+    let mut local_vdi_map = HashMap::new();
+    for (idx, (_, local)) in body.locals.iter().enumerate() {
+        if local.name == "_ret" || local.name.starts_with("__co2_") {
+            continue;
+        }
+        let argument_index = if param_indices.contains(&idx) {
+            body.params
+                .iter()
+                .position(|p| local_indices[p] == idx)
+                .map(|p| p as u16 + 1)
+        } else {
+            None
+        };
+        local_vdi_map.insert(idx, var_debug_info.len());
+        var_debug_info.push(VarDebugInfo {
+            name: local.name.clone(),
+            source_info: SourceInfo {
+                span: local.span,
+                scope: 0,
+            },
+            composite: None,
+            value: VarDebugInfoContents::Place(Place::from(idx)),
+            argument_index,
+        });
     }
 
     let mut builder = Builder {
@@ -55,6 +96,11 @@ pub fn build_mir_for_body(
         span,
         wellknown_defs,
         decl_resolver,
+        var_debug_info,
+        local_vdi_map,
+        scope_stack: vec![0],
+        next_scope: 1,
+        block_scopes: Vec::new(),
     };
 
     for stmt in &body.stmts {
@@ -64,14 +110,17 @@ pub fn build_mir_for_body(
     builder.terminate_fallthrough();
     builder.locals.extend(builder.extra_locals);
 
-    Body::new(
-        builder.blocks,
-        builder.locals,
-        body.params.len(),
-        vec![],
-        None,
-        span,
-    )
+    MirBodyResult {
+        body: Body::new(
+            builder.blocks,
+            builder.locals,
+            body.params.len(),
+            builder.var_debug_info,
+            None,
+            span,
+        ),
+        block_scopes: builder.block_scopes,
+    }
 }
 
 pub(crate) struct Builder<'ctx, 'tcx> {
@@ -90,6 +139,28 @@ pub(crate) struct Builder<'ctx, 'tcx> {
     pub(crate) pending_indirect_gotos: Vec<usize>,
     pub(crate) span: RustSpan,
     pub(crate) c_variadic_local: Option<usize>,
+    pub(crate) var_debug_info: Vec<VarDebugInfo>,
+    pub(crate) local_vdi_map: HashMap<usize, usize>,
+    pub(crate) scope_stack: Vec<u32>,
+    pub(crate) next_scope: u32,
+    pub(crate) block_scopes: Vec<u32>,
+}
+
+impl Builder<'_, '_> {
+    pub(crate) fn current_scope(&self) -> u32 {
+        *self.scope_stack.last().unwrap_or(&0)
+    }
+
+    pub(crate) fn enter_scope(&mut self) -> u32 {
+        let scope = self.next_scope;
+        self.next_scope += 1;
+        self.scope_stack.push(scope);
+        scope
+    }
+
+    pub(crate) fn exit_scope(&mut self) {
+        self.scope_stack.pop();
+    }
 }
 
 impl Builder<'_, '_> {

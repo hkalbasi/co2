@@ -34,7 +34,9 @@ pub fn main_with_args(args: &[String]) -> i32 {
     let is_top_level_help = |a: &[String]| -> bool {
         let user_args = if a.is_empty() { &[] } else { &a[1..] };
         user_args.iter().any(|x| x == "--help" || x == "-h")
-            && !user_args.iter().any(|x| x != "--help" && x != "-h" && !x.starts_with('-'))
+            && !user_args
+                .iter()
+                .any(|x| x != "--help" && x != "-h" && !x.starts_with('-'))
     };
     if is_top_level_help(args) {
         println!("co2cargo: A wrapper around cargo that supports CO2 language features.");

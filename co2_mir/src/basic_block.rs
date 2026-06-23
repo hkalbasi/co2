@@ -26,6 +26,9 @@ impl Builder<'_, '_> {
                         span: init.span,
                     });
                 }
+                if let Some(&vdi_idx) = self.local_vdi_map.get(&local_index) {
+                    self.var_debug_info[vdi_idx].source_info.scope = self.current_scope();
+                }
             }
             HirStmt::Expr(expr) => {
                 let _ = self.lower_expr_to_operand(expr);
@@ -92,6 +95,13 @@ impl Builder<'_, '_> {
             } => {
                 self.lower_if_stmt(cond, then_stmts, else_stmts, *span);
             }
+            HirStmt::Block(stmts, _span) => {
+                self.enter_scope();
+                for stmt in stmts {
+                    self.lower_stmt(stmt);
+                }
+                self.exit_scope();
+            }
         }
     }
 
@@ -106,6 +116,7 @@ impl Builder<'_, '_> {
         let cond_op = self.lower_expr_to_operand(cond);
         let entry_span = span;
         let entry_idx = self.blocks.len();
+        self.block_scopes.push(self.current_scope());
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
                 statements: std::mem::take(&mut self.stmts),
@@ -178,6 +189,7 @@ impl Builder<'_, '_> {
         span: rustc_public_generative::rustc_public::ty::Span,
     ) {
         let next = self.blocks.len() + 1;
+        self.block_scopes.push(self.current_scope());
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
                 statements: std::mem::take(&mut self.stmts),
@@ -200,6 +212,7 @@ impl Builder<'_, '_> {
         span: rustc_public_generative::rustc_public::ty::Span,
     ) -> usize {
         let idx = self.blocks.len();
+        self.block_scopes.push(self.current_scope());
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
                 statements: std::mem::take(&mut self.stmts),

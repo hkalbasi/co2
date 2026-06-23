@@ -27,6 +27,7 @@ pub enum HirStmt {
         else_stmts: Vec<HirStmt>,
         span: RustSpan,
     },
+    Block(Vec<HirStmt>, RustSpan),
 }
 
 impl HirCtx<'_> {
@@ -412,8 +413,10 @@ impl HirCtx<'_> {
             }
             Statement::Compound(nested) => {
                 let outer_scope = local_map.clone();
-                self.lower_compound_items(nested.0, out, locals, local_map);
+                let mut block_stmts = Vec::new();
+                self.lower_compound_items(nested.0, &mut block_stmts, locals, local_map);
                 *local_map = outer_scope;
+                out.push(HirStmt::Block(block_stmts, span));
             }
         }
     }

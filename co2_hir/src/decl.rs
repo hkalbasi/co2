@@ -560,6 +560,7 @@ impl HirCtx<'_> {
                         if is_array_ty(expr.ty) && !is_array_ty(ty) {
                             expr = self.array_to_pointer_decay(&expr);
                         }
+                        self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
 
                         out.push(HirStmt::Decl(HirDecl {
                             local,

@@ -162,57 +162,57 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         (state, result)
     }
 
-    fn emit_mir(&mut self, ctx: rustc_gen::HirStructureCtx, def: DefId) -> Body {
+    fn emit_mir(&mut self, ctx: rustc_gen::HirStructureCtx, def: DefId) -> (Body, Vec<u32>) {
         let pending_mir = self.pending_mirs.remove(&def).unwrap();
 
-        let body: Body = match pending_mir {
-            MirOwnerInfo::CloneMethod(adt) => {
-                build_clone_method_body(adt, ctx.span_in_file(self.file_id, 0, 0))
-            }
-            MirOwnerInfo::Const => {
-                // Const items don't have bodies; return a placeholder
-                build_zeroed_static_initializer_body(
-                    &self.wellknown_defs,
-                    CrateItem(def).ty(),
-                    ctx.span_in_file(self.file_id, 0, 0),
-                )
-            }
+        let wrap = |body: Body| (body, Vec::new());
+
+        match pending_mir {
+            MirOwnerInfo::CloneMethod(adt) => wrap(build_clone_method_body(
+                adt,
+                ctx.span_in_file(self.file_id, 0, 0),
+            )),
+            MirOwnerInfo::Const => wrap(build_zeroed_static_initializer_body(
+                &self.wellknown_defs,
+                CrateItem(def).ty(),
+                ctx.span_in_file(self.file_id, 0, 0),
+            )),
             MirOwnerInfo::EnumConstPrevPlus(prev, span) => {
-                self.build_enum_prev_plus_body(prev, span, &ctx)
+                wrap(self.build_enum_prev_plus_body(prev, span, &ctx))
             }
             MirOwnerInfo::EnumConstExplicit {
                 initializer,
                 resolver,
             } => {
                 let span = initializer.1;
-                self.lower_explicit_static_mir(
+                wrap(self.lower_explicit_static_mir(
                     &ctx,
                     def,
                     resolver,
                     (Initializer::Expr(initializer), span),
-                )
+                ))
             }
             MirOwnerInfo::Static {
                 resolver,
                 initializer,
-            } => self.lower_explicit_static_mir(&ctx, def, resolver, initializer),
+            } => wrap(self.lower_explicit_static_mir(&ctx, def, resolver, initializer)),
             MirOwnerInfo::StaticWithArrayLen {
                 resolver,
                 initializer,
                 array_len,
-            } => self.lower_explicit_static_mir_with_array_len(
+            } => wrap(self.lower_explicit_static_mir_with_array_len(
                 &ctx,
                 def,
                 resolver,
                 initializer,
                 array_len,
-            ),
+            )),
             MirOwnerInfo::StaticZeroed | MirOwnerInfo::EnumConstZeroed => {
-                build_zeroed_static_initializer_body(
+                wrap(build_zeroed_static_initializer_body(
                     &self.wellknown_defs,
                     CrateItem(def).ty(),
                     ctx.span_in_file(self.file_id, 0, 0),
-                )
+                ))
             }
             MirOwnerInfo::Fn {
                 def,
@@ -246,7 +246,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                 ctx.span_in_file(self.file_id, 0, 0),
                             );
                             let mir_start = Instant::now();
-                            let result = co2_mir::build_mir_for_body(
+                            let mir_result = co2_mir::build_mir_for_body(
                                 &hir,
                                 &ctx,
                                 def.0,
@@ -261,16 +261,16 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                         ctx.tcx, def.0,
                                     ),
                                 );
-                                dump_mir_body(&result, &name);
+                                dump_mir_body(&mir_result.body, &name);
                             }
-                            return result;
+                            return (mir_result.body, mir_result.block_scopes);
                         }
                         std::panic::resume_unwind(payload);
                     }
                 };
 
                 let mir_start = Instant::now();
-                let result = co2_mir::build_mir_for_body(
+                let mir_result = co2_mir::build_mir_for_body(
                     &hir,
                     &ctx,
                     def.0,
@@ -279,7 +279,15 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     Some(resolver),
                 );
                 time_report::accumulate_mir_lowering(mir_start.elapsed());
-                result
+                if DUMP_MIR_ENABLED.load(Ordering::Relaxed) {
+                    let name = ctx.tcx.def_path_str(
+                        rustc_public_generative::rustc_public::rustc_internal::internal(
+                            ctx.tcx, def.0,
+                        ),
+                    );
+                    dump_mir_body(&mir_result.body, &name);
+                }
+                (mir_result.body, mir_result.block_scopes)
             }
             MirOwnerInfo::FnBodyError { def, body_span } => {
                 let hir = build_error_fn_body(
@@ -288,7 +296,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     self.map_co2_span(&ctx, body_span),
                 );
                 let mir_start = Instant::now();
-                let result = co2_mir::build_mir_for_body(
+                let mir_result = co2_mir::build_mir_for_body(
                     &hir,
                     &ctx,
                     def.0,
@@ -297,17 +305,17 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     None,
                 );
                 time_report::accumulate_mir_lowering(mir_start.elapsed());
-                result
+                if DUMP_MIR_ENABLED.load(Ordering::Relaxed) {
+                    let name = ctx.tcx.def_path_str(
+                        rustc_public_generative::rustc_public::rustc_internal::internal(
+                            ctx.tcx, def.0,
+                        ),
+                    );
+                    dump_mir_body(&mir_result.body, &name);
+                }
+                (mir_result.body, mir_result.block_scopes)
             }
-        };
-
-        if DUMP_MIR_ENABLED.load(Ordering::Relaxed) {
-            let name = ctx.tcx.def_path_str(
-                rustc_public_generative::rustc_public::rustc_internal::internal(ctx.tcx, def),
-            );
-            dump_mir_body(&body, &name);
         }
-        body
     }
 }
 
@@ -357,7 +365,7 @@ impl Co2GeneratorState {
         time_report::accumulate_hir_lowering(hir_start.elapsed());
 
         let mir_start = Instant::now();
-        let result = co2_mir::build_mir_for_body(
+        let mir_result = co2_mir::build_mir_for_body(
             &hir,
             ctx,
             def,
@@ -366,7 +374,7 @@ impl Co2GeneratorState {
             Some(resolver),
         );
         time_report::accumulate_mir_lowering(mir_start.elapsed());
-        result
+        mir_result.body
     }
 
     fn lower_explicit_static_mir_with_array_len(
@@ -411,7 +419,7 @@ impl Co2GeneratorState {
         time_report::accumulate_hir_lowering(hir_start.elapsed());
 
         let mir_start = Instant::now();
-        let result = co2_mir::build_mir_for_body(
+        let mir_result = co2_mir::build_mir_for_body(
             &hir,
             ctx,
             def,
@@ -420,7 +428,7 @@ impl Co2GeneratorState {
             Some(resolver),
         );
         time_report::accumulate_mir_lowering(mir_start.elapsed());
-        result
+        mir_result.body
     }
 
     fn build_enum_prev_plus_body(
@@ -453,10 +461,10 @@ impl Co2GeneratorState {
         )];
 
         let mir_start = Instant::now();
-        let result =
+        let mir_result =
             co2_mir::build_mir_for_body(&hir, ctx, prev, self.file_id, self.wellknown_defs, None);
         time_report::accumulate_mir_lowering(mir_start.elapsed());
-        result
+        mir_result.body
     }
 }
 

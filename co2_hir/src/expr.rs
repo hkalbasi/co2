@@ -2439,12 +2439,15 @@ impl HirCtx<'_> {
         let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else {
             return None;
         };
-        self.decl_resolver.adt_logical_fields(def.0).map(|fields| {
-            fields
-                .into_iter()
-                .map(|field| hir_ty_to_ty(&field.ty))
-                .collect()
-        })
+        match self.decl_resolver.adt_logical_fields(def.0) {
+            Some(fields) => Some(
+                fields
+                    .into_iter()
+                    .map(|field| hir_ty_to_ty(&field.ty))
+                    .collect(),
+            ),
+            None => adt_field_tys(ty),
+        }
     }
 
     pub(crate) fn resolve_logical_field_path(

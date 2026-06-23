@@ -1,0 +1,36 @@
+//@ mode: co2
+//@ compile-flags: -g
+
+//@ gdb-command:run
+//@ gdb-command:print x
+//@ gdb-check:[...] 42
+//@ gdb-command:continue
+//@ gdb-command:print x
+//@ gdb-check:[...] 3.14[...]
+//@ gdb-command:continue
+//@ gdb-command:print x
+//@ gdb-check:[...] 99
+//@ gdb-command:continue
+
+#include <stddef.h>
+
+fn zzz() { return; }
+
+fn int_fn(x: i64) -> i64 {
+    zzz(); // #break
+    return x;
+}
+
+fn f64_fn(x: f64) -> f64 {
+    zzz(); // #break
+    return x;
+}
+
+fn main() {
+    i64 a = int_fn(42);
+    f64 b = f64_fn(3.14);
+    (void)a;
+    (void)b;
+    i64 c = int_fn(99);
+    (void)c;
+}

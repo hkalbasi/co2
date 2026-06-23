@@ -4467,7 +4467,7 @@ fn generated_mir_built<S: CrateGeneratorState>(
 
     let key = rustc_def_to_my_def(tcx, def_id.to_def_id());
 
-    let mir = {
+    let (mir, block_scopes) = {
         let mut guard = MIR_STATE.get().unwrap().try_lock().unwrap();
         let MirState(state, context) = &mut *guard;
         let state = state.downcast_mut::<S>().unwrap();
@@ -4481,7 +4481,7 @@ fn generated_mir_built<S: CrateGeneratorState>(
         )
     };
 
-    let body = build_mir_body(tcx, &mir, def_id);
+    let body = build_mir_body(tcx, &mir, def_id, &block_scopes);
 
     unsafe { std::mem::transmute(leak(Steal::new(body))) }
 }
@@ -4623,19 +4623,37 @@ fn build_mir_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &MirBody,
     owner: LocalDefId,
+    block_scopes: &[u32],
 ) -> rustc_middle::mir::Body<'static> {
-    let source_scope = rustc_middle::mir::SourceScope::from_usize(0);
-    let source_scopes = IndexVec::from_iter([rustc_middle::mir::SourceScopeData {
-        span: rustc_public::rustc_internal::internal(tcx, body.span),
-        parent_scope: None,
-        inlined: None,
-        inlined_parent_scope: None,
-        local_data: rustc_middle::mir::ClearCrossCrate::Set(
-            rustc_middle::mir::SourceScopeLocalData {
-                lint_root: HirId::make_owner(owner),
+    let max_vdi_scope = body
+        .var_debug_info
+        .iter()
+        .map(|info| info.source_info.scope)
+        .max()
+        .unwrap_or(0);
+    let max_block_scope = block_scopes.iter().copied().max().unwrap_or(0);
+    let max_scope = max_vdi_scope.max(max_block_scope) as usize;
+    let source_scopes: IndexVec<
+        rustc_middle::mir::SourceScope,
+        rustc_middle::mir::SourceScopeData,
+    > = (0..=max_scope)
+        .map(|i| rustc_middle::mir::SourceScopeData {
+            span: rustc_public::rustc_internal::internal(tcx, body.span),
+            parent_scope: if i == 0 {
+                None
+            } else {
+                Some(rustc_middle::mir::SourceScope::from_usize(0))
             },
-        ),
-    }]);
+            inlined: None,
+            inlined_parent_scope: None,
+            local_data: rustc_middle::mir::ClearCrossCrate::Set(
+                rustc_middle::mir::SourceScopeLocalData {
+                    lint_root: HirId::make_owner(owner),
+                },
+            ),
+        })
+        .collect();
+    let source_scope = rustc_middle::mir::SourceScope::from_usize(0);
 
     let locals: Vec<rustc_middle::mir::LocalDecl<'tcx>> = body
         .locals()
@@ -4658,7 +4676,12 @@ fn build_mir_body<'tcx>(
         .collect();
 
     let mut blocks = Vec::new();
-    for block in &body.blocks {
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        let block_scope = block_scopes
+            .get(block_idx)
+            .copied()
+            .map(|s| rustc_middle::mir::SourceScope::from_usize(s as usize))
+            .unwrap_or(source_scope);
         let mut statements = Vec::new();
         for stmt in &block.statements {
             match &stmt.kind {
@@ -4668,7 +4691,7 @@ fn build_mir_body<'tcx>(
                     statements.push(rustc_middle::mir::Statement::new(
                         rustc_middle::mir::SourceInfo {
                             span: rustc_public::rustc_internal::internal(tcx, stmt.span),
-                            scope: source_scope,
+                            scope: block_scope,
                         },
                         rustc_middle::mir::StatementKind::Assign(Box::new((place, rvalue))),
                     ));
@@ -4680,7 +4703,7 @@ fn build_mir_body<'tcx>(
         let terminator = rustc_middle::mir::Terminator {
             source_info: rustc_middle::mir::SourceInfo {
                 span: rustc_public::rustc_internal::internal(tcx, block.terminator.span),
-                scope: source_scope,
+                scope: block_scope,
             },
             kind: match &block.terminator.kind {
                 MirTerminatorKind::Goto { target } => rustc_middle::mir::TerminatorKind::Goto {
@@ -4741,6 +4764,34 @@ fn build_mir_body<'tcx>(
 
     let basic_blocks = IndexVec::from_iter(blocks);
     let local_decls = IndexVec::from_iter(locals);
+
+    let var_debug_info: Vec<rustc_middle::mir::VarDebugInfo<'tcx>> = body
+        .var_debug_info
+        .iter()
+        .map(|info| {
+            let value = match &info.value {
+                rustc_public::mir::VarDebugInfoContents::Place(place) => {
+                    rustc_middle::mir::VarDebugInfoContents::Place(mir_place_to_rustc(tcx, place))
+                }
+                rustc_public::mir::VarDebugInfoContents::Const(_) => {
+                    todo!("VarDebugInfoContents::Const conversion not yet implemented")
+                }
+            };
+            rustc_middle::mir::VarDebugInfo {
+                name: rustc_span::Symbol::intern(&info.name),
+                source_info: rustc_middle::mir::SourceInfo {
+                    span: rustc_public::rustc_internal::internal(tcx, info.source_info.span),
+                    scope: rustc_middle::mir::SourceScope::from_usize(
+                        info.source_info.scope as usize,
+                    ),
+                },
+                composite: None,
+                value,
+                argument_index: info.argument_index,
+            }
+        })
+        .collect();
+
     let body = rustc_middle::mir::Body::new(
         rustc_middle::mir::MirSource::item(owner.to_def_id()),
         basic_blocks,
@@ -4748,7 +4799,7 @@ fn build_mir_body<'tcx>(
         local_decls,
         IndexVec::new(),
         body.arg_locals().len(),
-        Vec::new(),
+        var_debug_info,
         rustc_public::rustc_internal::internal(tcx, body.span),
         None,
         None,

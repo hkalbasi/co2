@@ -1,0 +1,29 @@
+//@ mode: co2
+//@ compile-flags: -g
+
+//@ gdb-command:run
+//@ gdb-command:print *stack_val_ref
+//@ gdb-check:[...]x[...]10[...]y[...]23.5
+//@ gdb-command:print *stack_val_interior_ref
+//@ gdb-check:[...] 10
+//@ gdb-command:continue
+
+#include <stddef.h>
+
+pub struct SomeStruct {
+    x: i64,
+    y: f64,
+}
+
+fn zzz() { return; }
+
+fn main() {
+    SomeStruct stack_val = { .x = 10, .y = 23.5 };
+    SomeStruct *stack_val_ref = &stack_val;
+    i64 *stack_val_interior_ref = &stack_val.x;
+
+    (void)stack_val_ref;
+    (void)stack_val_interior_ref;
+
+    zzz(); // #break
+}

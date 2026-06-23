@@ -444,7 +444,8 @@ pub trait CrateGeneratorState: Sync + Send + Any + Sized {
     }
 
     fn hir_structure(ctx: HirStructureCtx) -> (Self, HirStructure);
-    fn emit_mir(&mut self, ctx: HirStructureCtx, def: DefId) -> rustc_public::mir::Body;
+    fn emit_mir(&mut self, ctx: HirStructureCtx, def: DefId)
+    -> (rustc_public::mir::Body, Vec<u32>);
 }
 
 pub struct InterfaceCallbacks<S: CrateGeneratorState> {

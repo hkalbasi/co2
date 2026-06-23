@@ -1,0 +1,31 @@
+//@ mode: co2
+//@ compile-flags: -g
+
+//@ gdb-command:run
+//@ gdb-command:whatis simple_struct
+//@ gdb-check:[...]Struct1
+//@ gdb-command:whatis ptr_var
+//@ gdb-check:[...]Struct1[...]
+//@ gdb-command:continue
+
+#include <stddef.h>
+
+pub struct Struct1 {
+    a: i64,
+    b: f64,
+}
+
+fn zzz() { return; }
+
+fn main() {
+    Struct1 simple_struct = { .a = 10, .b = 3.14 };
+    Struct1 *ptr_var = &simple_struct;
+    i64 int_var = 42;
+    f64 f64_var = 3.14;
+
+    (void)ptr_var;
+    (void)int_var;
+    (void)f64_var;
+
+    zzz(); // #break
+}
