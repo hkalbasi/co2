@@ -46,7 +46,7 @@ You can use CO2 in two ways:
 
 * As a standalone C compiler: `co2cc` is a drop-in replacement for gcc, compatible in flags and CLI interface. You can use it directly or plug it into build systems like CMake. It compiles standard C, but also enables some CO2-specific extensions and use of the Rust standard library.
 
-* As a Cargo-based project: `co2cargo` wraps Rust's cargo, letting you create binary crates that mix .co2 and .rs files. Run co2cargo init to scaffold a project, `co2cargo add <dep>` to pull in Rust crates, and co2cargo run to build and execute. The two languages share a common compiler backend, so calls between them carry zero overhead.
+* As a Cargo-based project: `co2cargo` wraps Rust's cargo, letting you create co2 binary and library crates dependent on Rust crates, and vise versa. Run `co2cargo init` to scaffold a project, `co2cargo add <dep>` to pull in Rust crates, and `co2cargo run` to build and execute (See [all available commands](./docs/cargo_third_party.md)). The two languages share a common compiler backend, so calls between them carry zero overhead, and the syntax added to C by CO2 provides a seamless experience in using Rust crates with their original API.
 
 For a step-by-step walkthrough covering installation, language features, and project setup, see the [Quick Tour](./docs/quick_tour.md).
 

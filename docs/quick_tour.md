@@ -69,7 +69,7 @@ and using the co2 code as a Rust crate, you need `co2cargo`.
 Using `co2cargo init`, you can create a co2 binary crate. You can run it with `co2cargo run`,
 add dependencies using `co2cargo add dep`, and almost all cargo commands which are supported.
 Cargo commands which are dependent on a separate tool (like `cargo fmt`, `cargo clippy`, ...)
-are not supported.
+are not supported (see [exact list here](./cargo_third_party.md)).
 
 ## Next steps
 
