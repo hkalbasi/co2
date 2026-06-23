@@ -62,6 +62,8 @@ fn smoke_test() {
 
 co2cargo test
 
+co2rustc src/lib.rs --edition 2024 -C instrument-coverage --test
+
 cd ..
 
 print "Bundle test PASSED"

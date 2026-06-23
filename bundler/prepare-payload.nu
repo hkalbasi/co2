@@ -63,7 +63,7 @@ def --env prepare-payload [] {
         miniz_oxide addr2line    object       gimli
         hashbrown  adler2        memchr       rustc_demangle
         rustc_literal_escaper cfg_if
-        proc_macro
+        proc_macro profiler_builtins
     ]
 
     let sysroot_lib_dir = ($sysroot | path join "lib" "rustlib" "x86_64-unknown-linux-gnu" "lib")
