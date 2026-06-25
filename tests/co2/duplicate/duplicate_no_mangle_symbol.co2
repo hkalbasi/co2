@@ -12,5 +12,4 @@ mod m2 {
   //^^^^^^^^^^^^^^^^^^^^^^^ error: symbol `foo` is already defined
 }
 
-fn main() {
-}
+fn main() {}

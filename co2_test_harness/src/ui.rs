@@ -64,6 +64,7 @@ pub fn check_ui(
     let expected_status = match mode {
         Mode::Rust => 1,
         Mode::C | Mode::Co2 => 5,
+        Mode::Format => unreachable!("format tests do not support compile-fail"),
     };
     let got_status = output.status.code().unwrap_or(-1);
     if got_status != expected_status {

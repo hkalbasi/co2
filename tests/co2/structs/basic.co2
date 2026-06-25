@@ -14,8 +14,8 @@ pub struct St {
 
 fn main() {
     St st1 = { .field1 = 1, .field2 = 5, .field3 = 2 };
-    assert(st1.field1 == 1); 
-    assert(st1.field2 == 5); 
+    assert(st1.field1 == 1);
+    assert(st1.field2 == 5);
     assert(st1.field3 == 2);
 
     Range::<i32> r1 = { .start = 2, .end = 6 };

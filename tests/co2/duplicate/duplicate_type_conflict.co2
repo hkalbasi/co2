@@ -23,5 +23,4 @@ typedef i32 T4;
 type T4 = i32;
 //   ^^ error: the name `T4` is defined multiple times
 
-fn main() {
-}
+fn main() {}

@@ -1,0 +1,16 @@
+//@ mode: format
+
+fn f1() {
+    Vec::<i32> v = Vec::<i32>::new();
+}
+
+type Foo = A<B>;
+
+fn f2(x: *mut A<B>, y: A<B<C>>) {
+    Vec::<Vec<i32>> v = x;
+}
+
+pub struct Foo {
+    a: *mut A<B>,
+    b: A<B<C>>,
+}

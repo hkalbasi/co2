@@ -46,5 +46,4 @@ i32 f6() {
     return 1;
 }
 
-fn main() {
-}
+fn main() {}

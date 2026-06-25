@@ -1,0 +1,17 @@
+//@ mode: format
+
+fn foo() -> i32 {
+    int x = 2;
+}
+
+fn foo2() -> i32 {
+    int x = 2;
+}
+
+fn foo3() -> i32 {
+    x->some_field += 2;
+}
+
+fn foo4() -> i32 {
+    x()->some_field += 2;
+}

@@ -10,6 +10,7 @@ pub enum Mode {
     C,
     Co2,
     Rust,
+    Format,
 }
 
 impl Mode {
@@ -18,6 +19,7 @@ impl Mode {
             "c" => Ok(Self::C),
             "co2" => Ok(Self::Co2),
             "rust" => Ok(Self::Rust),
+            "format" => Ok(Self::Format),
             _ => bail!("unknown mode: {s}"),
         }
     }

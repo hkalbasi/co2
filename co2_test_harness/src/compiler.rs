@@ -25,6 +25,7 @@ pub fn run_miri_test(root: &Path, mode: Mode, test: &TestCase) -> Result<MiriRun
         Mode::C | Mode::Rust => {
             bail!("`run-miri` is currently supported only for `//@ mode: co2` tests")
         }
+        Mode::Format => unreachable!("format tests do not support miri"),
     }
 }
 
@@ -294,6 +295,7 @@ pub fn compile_test(
             cmd.output()
                 .context("failed to execute co2rustc for Rust test")?
         }
+        Mode::Format => unreachable!("format tests are handled before compilation"),
     };
 
     Ok(CompileResult {

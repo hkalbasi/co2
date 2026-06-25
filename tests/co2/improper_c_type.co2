@@ -23,5 +23,4 @@ fn good(inp: ImproperCType) -> ImproperCType {
     return inp;
 }
 
-fn main() {
-}
+fn main() {}

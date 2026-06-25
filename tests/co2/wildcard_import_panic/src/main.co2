@@ -1,4 +1,3 @@
 mod qjs;
 
-fn main() {
-}
+fn main() {}

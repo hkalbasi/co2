@@ -31,9 +31,7 @@ pub struct Foo2 {}
 
 #[no_mangle]
 //^^^^^^^^^ error: C style functions are already no_mangle, remove this.
-int foo4() {
-     
-}
+int foo4() {}
 
 #[inline(invalid)]
 //       ^^^^^^^ error: unknown inline hint `invalid`

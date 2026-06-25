@@ -113,8 +113,12 @@ fn run_test(
         test.directives
             .get("mode")
             .and_then(|v| v.first())
-            .context("missing `//@ mode: c|co2|rust` directive")?,
+            .context("missing `//@ mode: c|co2|rust|format` directive")?,
     )?;
+
+    if mode == Mode::Format {
+        return run_format_test(root, test, update_snapshots);
+    }
 
     let (compile_annotations, sources) = collect_compile_annotations(test, mode)?;
     let directive_warning_expectations = test
@@ -318,6 +322,94 @@ fn copy_dump_dirs(src_root: &Path, dst_root: &Path) {
             }
         }
     }
+}
+
+fn run_format_test(root: &Path, test: &TestCase, update_snapshots: bool) -> Result<TestOutcome> {
+    let test_dir = test.path.parent().context("test path has no parent")?;
+    let stem = test.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let ugly_path = test_dir.join(format!("{stem}.ugly.co2"));
+    if !ugly_path.exists() {
+        bail!(
+            "format test requires corresponding `{}.ugly.co2` file (expected at {})",
+            stem,
+            ugly_path.display()
+        );
+    }
+
+    let output = std::process::Command::new(root.join("target").join("debug").join("co2fmt"))
+        .arg(&ugly_path)
+        .output()
+        .with_context(|| format!("failed to execute co2fmt on {}", ugly_path.display()))?;
+
+    if !output.status.success() {
+        bail!(
+            "co2fmt failed on {}\n{}",
+            ugly_path.display(),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let actual =
+        String::from_utf8(output.stdout).with_context(|| "co2fmt output is not valid UTF-8")?;
+
+    if update_snapshots {
+        write_snapshot(test, &actual)?;
+        return Ok(TestOutcome::Pass);
+    }
+
+    let expected: String = test
+        .source
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//@"))
+        .skip_while(|l| l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected = expected.trim().to_owned() + "\n";
+    let actual = actual.trim().to_owned() + "\n";
+    if actual != *expected {
+        bail!(
+            "format mismatch\n--- expected ({}):\n||\n{}||\n--- actual ({:?} bytes):\n||\n{}||\n",
+            test.path.display(),
+            expected,
+            actual.len(),
+            actual,
+        );
+    }
+    Ok(TestOutcome::Pass)
+}
+
+fn write_snapshot(test: &TestCase, actual: &str) -> Result<()> {
+    let path = &test.path;
+    let source_lines: Vec<&str> = test.source.lines().collect();
+    let mut directive_lines = Vec::new();
+    let mut found_directives = false;
+
+    for line in &source_lines {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//@") || trimmed.starts_with("#@") {
+            directive_lines.push(*line);
+            found_directives = true;
+        } else if found_directives && trimmed.is_empty() {
+            // blank line after directives
+            directive_lines.push(*line);
+        } else if found_directives {
+            break;
+        } else {
+            break;
+        }
+    }
+
+    let mut out = String::new();
+    for line in &directive_lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str(actual);
+
+    std::fs::write(path, &out)
+        .with_context(|| format!("failed to write snapshot to {}", path.display()))?;
+    eprintln!("  updated snapshot: {}", path.display());
+    Ok(())
 }
 
 fn check_run(test: &TestCase, compile: &CompileResult, _coverage_dir: Option<&Path>) -> Result<()> {

@@ -14,7 +14,7 @@ members = [
   "co2-multicall",
   "co2_test_harness",
   "co2_crate_sig",
-  "co2_ast",
+  "co2_ast", "co2fmt",
 ]
 resolver = "2"
 

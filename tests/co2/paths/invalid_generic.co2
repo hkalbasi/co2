@@ -23,5 +23,4 @@ fn turbo_fish_is_forced() {
        //^^^ error: expected expression, found type name
 }
 
-fn main() {
-}
+fn main() {}

@@ -1,0 +1,13 @@
+//@ mode: format
+
+fn foo() {
+    // Comment 1
+    int x = 2;
+    // Comment 2
+}
+
+fn foo2() {
+    // Comment 1
+    int x = 2;
+  //^^^ This is int
+}

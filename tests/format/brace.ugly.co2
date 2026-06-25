@@ -1,0 +1,42 @@
+fn foo()
+{
+    int x = 2;
+}
+
+int bar(int x)
+{
+    x += 2;
+}
+
+fn foo(x: i32)
+{
+    if (x)
+    {
+        if (x)
+        {
+            if (x)
+            {
+                x = 3;
+            }
+        } else
+            if (x) {
+                x = 5;
+            }
+            else {
+                for (int x = 2; x < 5; x += 1)
+                {
+                    x *= 3;
+                }
+            }
+    }
+}
+
+fn foo() {
+}
+
+fn foo()
+{
+}
+
+fn foo()
+{}
