@@ -13,6 +13,21 @@ use config::Config;
 
 static C_EXTENSIONS: &[&str] = &["c", "cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx"];
 
+#[derive(Debug, Clone, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum EmitMode {
+    Stdout,
+    Files,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum ColorWhen {
+    Always,
+    Never,
+    Auto,
+}
+
 #[derive(Parser)]
 #[command(
     name = "funky",
@@ -20,21 +35,45 @@ static C_EXTENSIONS: &[&str] = &["c", "cc", "cpp", "cxx", "c++", "h", "hh", "hpp
     about = "C/C++ formatter with Unicode support"
 )]
 struct Cli {
-    /// Source file(s) or director(ies) to format. Use `-` to read from stdin.
-    #[arg(required = true)]
+    /// Source file(s) or director(ies) to format. Use `-` to read from stdin. If no file is given, reads from stdin.
+    #[arg()]
     files: Vec<PathBuf>,
 
-    /// Path to TOML config file (default: look for funky.toml in cwd).
-    #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,
+    /// Path to the configuration file
+    #[arg(long = "config-path", short = 'c', value_name = "PATH")]
+    config_path: Option<PathBuf>,
 
-    /// Edit file(s) in place instead of writing to stdout.
-    #[arg(short = 'i', long)]
-    in_place: bool,
+    /// What data to emit and how: `stdout` (default) or `files`
+    #[arg(long, value_name = "MODE", default_value = "stdout", value_parser = clap::value_parser!(EmitMode))]
+    emit: EmitMode,
 
-    /// Check mode: exit 1 if any file would change; do not write.
+    /// Run in 'check' mode. Exits with 0 if input is formatted correctly.
     #[arg(long)]
     check: bool,
+
+    /// Ignored
+    #[arg(long)]
+    edition: Option<String>,
+
+    /// Ignored
+    #[arg(long, value_name = "WHEN", default_value = "auto", value_parser = clap::value_parser!(ColorWhen))]
+    color: ColorWhen,
+
+    /// Prints the names of files that would be reformatted
+    #[arg(short = 'l', long)]
+    files_with_diff: bool,
+
+    /// Ignored
+    #[arg(long, value_name = "KEY=VAL", value_delimiter = ',')]
+    config: Vec<String>,
+
+    /// Ignored
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Ignored
+    #[arg(short = 'q', long)]
+    quiet: bool,
 
     /// Recurse into directories and format all C/C++ source files found.
     #[arg(short = 'r', long)]
@@ -48,16 +87,21 @@ struct Cli {
 pub fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    if cli.check && cli.in_place {
-        anyhow::bail!("--check and --in-place are mutually exclusive");
+    if cli.check && cli.emit == EmitMode::Files {
+        anyhow::bail!("--check and --emit=files are mutually exclusive");
     }
 
-    let config = load_config(cli.config.as_deref())?;
-    let expanded = expand_paths(&cli.files, cli.recursive, &config)?;
+    let config = load_config(cli.config_path.as_deref())?;
+    let expanded = if cli.files.is_empty() {
+        vec![PathBuf::from("-")]
+    } else {
+        expand_paths(&cli.files, cli.recursive, &config)?
+    };
 
     let mut any_changed = false;
 
     for path in &expanded {
+        let is_stdin = path == Path::new("-");
         let source = read_source(path)?;
         let (tokens, warnings) = lexer::tokenize(&source, path.display().to_string())?;
         for w in &warnings {
@@ -75,10 +119,14 @@ pub fn main() -> anyhow::Result<()> {
 
         if cli.check {
             if source != formatted {
-                eprintln!("{}: would reformat", path.display());
+                if cli.files_with_diff && !is_stdin {
+                    println!("{}", path.display());
+                } else {
+                    eprintln!("{}: would reformat", path.display());
+                }
                 any_changed = true;
             }
-        } else if cli.in_place {
+        } else if cli.emit == EmitMode::Files && !is_stdin {
             if source != formatted {
                 std::fs::write(path, formatted.as_bytes())
                     .map_err(|e| anyhow::anyhow!("could not write {}: {}", path.display(), e))?;

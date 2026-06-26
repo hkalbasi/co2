@@ -6,7 +6,7 @@ def main [] {
     let payload_dir = (prepare-payload)
 
     # 1. Create wrapper scripts in bin/ that source env.sh and forward to co2-multicall
-    for applet in ["co2cc", "co2rustc", "co2miri"] {
+    for applet in ["co2cc", "co2rustc", "co2miri", "co2fmt"] {
         let wrapper = ([
             '#!/bin/bash'
             'source "$(dirname "$(readlink -f "$0")")/../env.sh"'

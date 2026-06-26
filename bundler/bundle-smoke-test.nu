@@ -66,4 +66,16 @@ co2rustc src/lib.rs --edition 2024 -C instrument-coverage --test
 
 cd ..
 
+print "Testing co2fmt..."
+
+"
+#include <stdio.h>
+int main(void) {
+    printf(\"Hello, world!\\n\");
+    return 0;
+}
+" | save --force hello.c
+
+co2fmt --check hello.c
+
 print "Bundle test PASSED"

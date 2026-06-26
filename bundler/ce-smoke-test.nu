@@ -48,4 +48,16 @@ fn main() {
 
 /opt/compiler-explorer/bin/co2miri --sysroot /opt/compiler-explorer/miri-sysroot /tmp/hello-miri.rs
 
+print "Testing co2fmt..."
+
+"
+#include <stdio.h>
+int main(void) {
+    printf(\"Hello from co2fmt on CE!\\n\");
+    return 0;
+}
+" | save --force /tmp/hello-fmt.c
+
+/opt/compiler-explorer/bin/co2fmt --check /tmp/hello-fmt.c
+
 print "CE bundle test PASSED"
