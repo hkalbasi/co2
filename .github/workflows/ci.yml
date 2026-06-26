@@ -56,7 +56,7 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap gcc build-essential
+          sudo apt-get install -y bubblewrap gcc build-essential gdb
 
       - name: Install bootstrap Rust (for building the fork)
         if: steps.cache-rustc.outputs.cache-hit != 'true'
