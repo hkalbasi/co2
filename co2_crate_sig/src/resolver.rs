@@ -76,6 +76,7 @@ fn type_query_result(kind: &DependencyChildKind) -> TypeQueryResult {
         | DependencyChildKind::Union
         | DependencyChildKind::Trait
         | DependencyChildKind::Module
+        | DependencyChildKind::TypeAlias
         | DependencyChildKind::Other => TypeQueryResult::Type,
     }
 }

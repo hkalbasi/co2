@@ -2343,6 +2343,7 @@ fn child_kind_from_def_kind(kind: DefKind) -> DependencyChildKind {
         DefKind::Trait => DependencyChildKind::Trait,
         DefKind::Const { is_type_const: _ } => DependencyChildKind::Const,
         DefKind::Static { .. } => DependencyChildKind::Static,
+        DefKind::TyAlias { .. } => DependencyChildKind::TypeAlias,
         _ => DependencyChildKind::Other,
     }
 }

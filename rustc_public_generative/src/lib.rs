@@ -67,6 +67,7 @@ pub enum DependencyChildKind {
     Trait,
     Const,
     Static,
+    TypeAlias,
     Other,
 }
 
