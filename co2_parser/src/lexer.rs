@@ -450,7 +450,6 @@ pub fn lexer<'src>()
         just("<<=").to(Token::ShlAssign),
         just(">>=").to(Token::ShrAssign),
         just("<<").to(Token::Shl),
-        just(">>").to(Token::Shr),
         just("<=").to(Token::Le),
         just(">=").to(Token::Ge),
         just("==").to(Token::EqEq),

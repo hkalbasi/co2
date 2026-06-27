@@ -1205,7 +1205,7 @@ where
         let add = just(Token::Plus).to(BinOp::Add);
         let sub = just(Token::Minus).to(BinOp::Sub);
         let shl = just(Token::Shl).to(BinOp::Shl);
-        let shr = just(Token::Shr).to(BinOp::Shr);
+        let shr = just(Token::Gt).then(just(Token::Gt)).map(|_| BinOp::Shr);
         let lt = just(Token::Lt).to(BinOp::Lt);
         let le = just(Token::Le).to(BinOp::Le);
         let gt = just(Token::Gt).to(BinOp::Gt);

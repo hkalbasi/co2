@@ -6,9 +6,16 @@ use std::time::Instant;
 use std::time::Duration;
 use std::thread;
 use std::vec::Vec;
+use std::mem::drop;
 
 typedef Instant MyInstant;
 typedef Vec<i32> MyVec;
+
+fn vec_vec_consumer(vv: Vec<Vec<i32>>) {
+    Vec::<Vec<Vec<i32>>> vvv = Vec::<Vec<Vec<i32>>>::new();
+    vvv.push(vv);
+    drop(vvv);
+}
 
 fn main() {
     if (PI < 3.14 || std::f64::consts::PI > 3.15) {

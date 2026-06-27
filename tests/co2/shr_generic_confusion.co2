@@ -1,0 +1,172 @@
+//@ mode: co2
+//@ run-status: 0
+
+#include <stdbool.h>
+
+use std::vec::Vec;
+use std::string::String;
+use std::option::Option;
+use std::result::Result;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::RwLock;
+use std::mem;
+use std::mem::drop;
+use std::boxed::Box;
+
+fn main() {
+    //
+    // ------------------------------------------------------------
+    // Nested generics: these should parse as multiple `>` tokens.
+    // ------------------------------------------------------------
+    //
+
+    Vec::<Vec<u8>> _a;
+
+    Vec::<Vec<Vec<u8>>> _b;
+
+    Vec::<Vec<Vec<Vec<u8>>>> _c;
+
+    Option::<Vec<u8>> _d;
+
+    Option::<Option<Vec<u8>>> _e;
+
+    Result::<Vec<u8>, String> _f;
+
+    Result::<Option<Vec<u8>>, String> _g;
+
+    Result::<Vec<Vec<u8>>, Vec<String>> _h;
+
+    HashMap::<String, Vec<u8>> _i;
+
+    HashMap::<String, Vec<Vec<u8>>> _j;
+
+    HashMap::<String, HashMap<String, Vec<u8>>> _k;
+
+    BTreeMap::<String, HashMap<String, Vec<u8>>> _l;
+
+    HashSet::<Vec<u8>> _m;
+
+    Arc::<Vec<u8>> _n;
+
+    Arc::<Mutex<Vec<u8>>> _o;
+
+    Arc::<RwLock<Vec<u8>>> _p;
+
+    Arc::<Mutex<HashMap<String, Vec<u8>>>> _q;
+
+    Arc::<RwLock<HashMap<String, Vec<Vec<u8>>>>> _r;
+
+    //
+    // ------------------------------------------------------------
+    // Turbofish syntax with nested generics.
+    // ------------------------------------------------------------
+    //
+
+    Vec::<Vec<u8>> _s = Vec::<Vec<u8>>::new();
+
+    HashMap::<String, Vec<u8>> _t =
+        HashMap::<String, Vec<u8>>::new();
+
+    HashMap::<String, HashMap<String, Vec<u8>>> _u =
+        HashMap::<String, HashMap<String, Vec<u8>>>::new();
+
+    Arc::<Mutex<Vec<u8>>> _v =
+        Arc::<Mutex<Vec<u8>>>::new(Mutex::new(Vec::<u8>::new()));
+
+    drop(Vec::<Vec<Vec<u8>>>::new());
+
+    drop(HashMap::<String, Vec<Vec<u8>>>::new());
+
+    drop(Arc::<Mutex<HashMap<String, Vec<u8>>>>::new(
+        Mutex::new(HashMap::<String, Vec<u8>>::new())
+    ));
+
+    //
+    // ------------------------------------------------------------
+    // Actual shift expressions: these should remain SHR tokens.
+    // ------------------------------------------------------------
+    //
+
+    u32 a = 64u32 >> 1;
+
+    u32 b = (64u32 + 32) >> 2;
+
+    u64 c = ((1u64 << 20) + 1) >> 5;
+
+    usize d = 123456789usize >> 3;
+
+    //
+    // ------------------------------------------------------------
+    // Generic close followed by shift operator.
+    // ------------------------------------------------------------
+    //
+
+    usize e =
+        mem::size_of::<Vec<u8>>() >> 1;
+
+    usize f =
+        mem::size_of::<Vec<Vec<u8>>>() >> 1;
+
+    usize g =
+        mem::size_of::<HashMap<String, Vec<u8>>>() >> 1;
+
+    usize h =
+        mem::size_of::<Arc<Mutex<Vec<u8>>>>() >> 1;
+
+    usize i =
+        mem::size_of::<Arc<RwLock<HashMap<String, Vec<u8>>>>>() >> 1;
+
+    //
+    // ------------------------------------------------------------
+    // Comparisons immediately after nested generic closes.
+    // ------------------------------------------------------------
+    //
+
+    bool _w =
+        mem::size_of::<Vec<Vec<u8>>>() > 0;
+
+    bool _x =
+        mem::size_of::<HashMap<String, Vec<u8>>>() > 0;
+
+    //
+    // ------------------------------------------------------------
+    // No-whitespace variants.
+    // ------------------------------------------------------------
+    //
+
+    Vec::<Vec<Vec<u8>>> _y;
+
+    usize _z = mem::size_of::<Vec<Vec<u8>>>() >> 1;
+
+    usize _aa = mem::size_of::<HashMap<String, Vec<u8>>>() >> 1;
+
+    usize _ab = mem::size_of::<Arc<Mutex<Vec<u8>>>>() >> 1;
+
+    //
+    // ------------------------------------------------------------
+    // Large nested case.
+    // ------------------------------------------------------------
+    //
+
+    Arc::<
+        Mutex<
+            HashMap<
+                String,
+                Vec<
+                    Arc<
+                        RwLock<
+                            HashMap<
+                                String,
+                                Vec<u8>
+                            >
+                        >
+                    >
+                >
+            >
+        >
+    > _ac;
+}

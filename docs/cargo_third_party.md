@@ -44,6 +44,7 @@ Note: Tools marked with (+) are tested in CI.
 
 * `co2cargo fmt`: No formatter is implemented yet for CO2.
 * `cbindgen`: Uses `syn` to parse Rust code. Use `cheadergen` instead which is rustdoc based.
+* `bindgen`: Fundamentally not needed in CO2. Just `#include` the header you want.
 * `co2cargo clippy`
 * `co2cargo expand`: In theory it could work, needs `-Zunpretty=expanded` support in `co2rustc`. Meanwhile, use `co2cc -E` to expand macros.
 * `co2cargo geiger`: There is no `unsafe` keyword in CO2, and everything is unsafe.

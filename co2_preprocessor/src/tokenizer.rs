@@ -1003,7 +1003,6 @@ impl<'a> Tokenizer<'a> {
                 "++" => Some(Token::Inc),
                 "--" => Some(Token::Dec),
                 "<<" => Some(Token::Shl),
-                ">>" => Some(Token::Shr),
                 "<=" => Some(Token::Le),
                 ">=" => Some(Token::Ge),
                 "==" => Some(Token::EqEq),
