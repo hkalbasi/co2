@@ -1,0 +1,21 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::vec::Vec;
+
+fn f1(x: Vec<i32>) {
+    x.len += 2;
+    //^^^ error: field `len` of struct `Vec` is private
+}
+
+fn f2() {
+    Vec::<i32> x = { .len = 2 };
+                 //^^^^^^^^^^^^ error: can not initialize struct with private fields using initializer list
+}
+
+fn f3() {
+    Vec::<i32> x = {};
+                 //^^ error: can not initialize struct with private fields using initializer list
+}
+
+fn main() {}

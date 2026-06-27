@@ -3515,6 +3515,21 @@ pub(crate) fn normalize_ty_for_owner_with_self(
         )
 }
 
+pub(crate) fn check_field_visibility(
+    tcx: TyCtxt<'_>,
+    owner: DefId,
+    field_def_id: DefId,
+) -> bool {
+    let rustc_field = my_def_id_to_rustc_def_id(tcx, field_def_id);
+    let vis = tcx.visibility(rustc_field);
+    let rustc_owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let module = rustc_owner
+        .as_local()
+        .map(|local| tcx.parent_module_from_def_id(local).to_def_id())
+        .unwrap_or(CRATE_DEF_ID.to_def_id());
+    vis.is_accessible_from(module, tcx)
+}
+
 pub(crate) fn normalize_ty_defaults(tcx: TyCtxt<'_>, ty: MirTy) -> MirTy {
     rustc_public::rustc_internal::stable(normalize_ty_defaults_to_rustc(tcx, ty))
 }

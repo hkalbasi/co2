@@ -703,6 +703,8 @@ impl HirCtx<'_> {
                                     locals,
                                     local_map,
                                 );
+                                let init_span = init.1;
+                                self.check_aggregate_init_privacy(ty, init_span)?;
                                 let expr = self.initializer_tree_to_expr(&tree, ty, parser_span);
                                 Some(expr)
                             }

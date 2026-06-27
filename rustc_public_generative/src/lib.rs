@@ -155,6 +155,10 @@ impl DependencyInfo<'_> {
     /// Given a function with partially-resolved generic args (some may still be `Param` types),
     /// infer the remaining type params by unifying the function's input types with the
     /// provided argument types.
+    pub fn is_field_accessible(&self, owner: DefId, field_def_id: DefId) -> bool {
+        internal::check_field_visibility(self.tcx, owner, field_def_id)
+    }
+
     pub fn infer_fn_args(
         &self,
         fn_def_id: DefId,

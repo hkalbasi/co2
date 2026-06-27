@@ -8,7 +8,7 @@ use co2_ast::{
 use co2_crate_sig::{LocalResolver, LogicalAdtFieldKind, MethodResolutionKind};
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
-    CrateDefType, CrateItem, DefId,
+    CrateDef, CrateDefType, CrateItem, DefId,
     abi::FieldsShape,
     mir::Mutability,
     ty::{
@@ -23,7 +23,7 @@ use crate::stmt::HirStmt;
 use crate::ty::{
     adt_field_tys, array_elem_ty, callable_sig, common_numeric_ty, enum_payload_ty, is_array_ty,
     is_maybe_uninit_fn_ptr_ty, is_numeric_ty, needs_implicit_cast, resolve_field_path_in_adt,
-    ty_matches_expected,
+    ty_matches_expected, variant_idx,
 };
 use crate::{decl::CTy, decl::hir_ty_to_ty, ty::is_condition_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
@@ -1566,6 +1566,7 @@ impl HirCtx<'_> {
             Expression::Field(base, field) => {
                 let base = self.lower_expr(*base, locals, local_map)?;
                 if let Some(resolved) = self.resolve_struct_field_access(base.ty, &field.0) {
+                    self.check_field_privacy(base.ty, &field.0, field.1)?;
                     return match resolved {
                         ResolvedFieldAccess::Direct { path, ty } => {
                             self.project_field_path(base, &path, ty, span)
@@ -1635,7 +1636,7 @@ impl HirCtx<'_> {
                     ty: pointee,
                     span,
                 };
-                match self
+                let resolved = self
                     .resolve_struct_field_access(deref_base.ty, &field.0)
                     .ok_or_else(|| {
                         spanned_error(
@@ -1646,7 +1647,9 @@ impl HirCtx<'_> {
                                 self.format_ty(deref_base.ty)
                             ),
                         )
-                    })? {
+                    })?;
+                self.check_field_privacy(deref_base.ty, &field.0, field.1)?;
+                match resolved {
                     ResolvedFieldAccess::Direct { path, ty } => {
                         self.project_field_path(deref_base, &path, ty, span)
                     }
@@ -1980,8 +1983,13 @@ impl HirCtx<'_> {
                     locals,
                     local_map,
                 )?;
-                let tree =
-                    self.lower_to_initializer_tree(target_ty, *initializer, locals, local_map);
+                let tree = self.lower_to_initializer_tree(
+                    target_ty,
+                    (initializer.0.clone(), initializer.1),
+                    locals,
+                    local_map,
+                );
+                self.check_aggregate_init_privacy(target_ty, initializer.1)?;
                 let init_expr = self.initializer_tree_to_expr(&tree, target_ty, parser_span);
                 // Compound literals are lvalues in C. Scalar compound literals lower
                 // to non-place expressions (e.g. ConstInt), so wrap them in
@@ -2490,6 +2498,76 @@ impl HirCtx<'_> {
             }
         }
         None
+    }
+
+    fn check_field_privacy(
+        &self,
+        base_ty: Ty,
+        field_name: &str,
+        field_span: co2_ast::Span,
+    ) -> Result<(), (co2_ast::Span, String)> {
+        let TyKind::RigidTy(RigidTy::Adt(adt, _)) = base_ty.kind() else {
+            return Ok(());
+        };
+        let Some(variant) = adt.variant(variant_idx(0)) else {
+            return Ok(());
+        };
+        let fields = variant.fields();
+        let Some(field_def) = fields.iter().find(|f| f.name == field_name) else {
+            return Ok(());
+        };
+        if !self.decl_resolver.dependency_info().is_field_accessible(
+            self.decl_resolver.current_owner(),
+            field_def.def_id(),
+        ) {
+            let adt_name = adt.trimmed_name();
+            let kind_str = if adt.kind().is_struct() {
+                "struct"
+            } else if adt.kind().is_union() {
+                "union"
+            } else {
+                "enum"
+            };
+            return Err(spanned_error(
+                field_span,
+                format!("field `{field_name}` of {kind_str} `{adt_name}` is private"),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_aggregate_init_privacy(
+        &self,
+        ty: Ty,
+        parser_span: co2_ast::Span,
+    ) -> Result<(), (co2_ast::Span, String)> {
+        let TyKind::RigidTy(RigidTy::Adt(adt, _)) = ty.kind() else {
+            return Ok(());
+        };
+        let Some(variant) = adt.variant(variant_idx(0)) else {
+            return Ok(());
+        };
+        let fields = variant.fields();
+        let owner = self.decl_resolver.current_owner();
+        if fields.iter().any(|f| {
+            !self
+                .decl_resolver
+                .dependency_info()
+                .is_field_accessible(owner, f.def_id())
+        }) {
+            let kind_str = if adt.kind().is_struct() {
+                "struct"
+            } else if adt.kind().is_union() {
+                "union"
+            } else {
+                "enum"
+            };
+            return Err(spanned_error(
+                parser_span,
+                format!("can not initialize {kind_str} with private fields using initializer list"),
+            ));
+        }
+        Ok(())
     }
 
     fn resolve_struct_field_access(&self, ty: Ty, field: &str) -> Option<ResolvedFieldAccess> {
