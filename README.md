@@ -82,6 +82,17 @@ For more details on CO2++, see [this page](./docs/vision/co2pp.md).
 The currently packaged binary is a self extracting archive of co2 + rustc + rust std + llvm + miri.
 It would be much smaller if you install the rustc separately and [build CO2 from source](./docs/installation.md).
 
+## Is every mix of Rust and C syntax accepted? Can I assume that I know CO2 if I know C and Rust?
+
+No. CO2 tries to accept every C syntax, but it doesn't try to allow all Rust syntaxes.
+CO2 doesn't want to change C fundamentally, it only wants to provide seamless interop between C and Rust crates.
+Sometimes this interop needs additional syntax, and in those cases, CO2 first looks at the Rust for inspiration,
+to make things familiar for the target audience, but even the imported syntaxes from Rust may have subtle differences.
+
+If you already know C and Rust, you are very close. Just read [the language guide](./docs/language_guide.md) (~5 min) and you are done.
+By just looking at the examples, you may get some expectations that doesn't match reality.
+The compiler will stop you, but the error messages are not as high quality as Rust, so you may need to read the docs.
+
 ### How to rewrite a C project in Rust using CO2?
 
 CO2 enables incrementally migrating projects between C and Rust, by using CO2 as a midpoint.

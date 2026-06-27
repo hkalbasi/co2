@@ -143,3 +143,31 @@ type PrivateTypeDef = *mut i32;
 pub type PublicTypeDef = *mut i32;
 typedef int *AnotherPublicTypeDef; // C style typedefs are always public
 ```
+
+### Rust Structs
+
+Rust styles typedefs give you control over the publicness of the struct itself, and its fields,
+and allows you to control builtin derives and reprs:
+```
+#[repr(C)]
+#[derive(Copy)]
+pub struct Foo {
+    pub field1: i32,
+    pub(crate) field2: *mut i32,
+    field3: u16,
+}
+
+// Is equivalent to (ignoring privacy)
+
+typedef struct {
+    i32 field1;
+    i32 *field2;
+    u16 *field3;
+} Foo;
+```
+
+C structs are always public, `Copy` and `#[repr(C)]`. Their fields are also public unless they are bitfield or anonymous,
+in that case thei are `pub(crate)`. Rust like structs are `#[repr(Rust)]` and private by default, but you can control anything about them.
+
+Available representations are `#[repr(Rust)]`, `#[repr(C)]`, `#[repr(C, packed)]`. The only available derive is `#[derive(Copy)]` for now,
+which implements both `Clone` and `Copy` for the type.
