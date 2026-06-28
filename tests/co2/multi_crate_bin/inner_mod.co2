@@ -1,4 +1,4 @@
-fn inner_mod_fn() -> i32 {
+pub fn inner_mod_fn() -> i32 {
     return 5;
 }
 

@@ -1,6 +1,6 @@
 {
   "crate_version": "0.1.0",
-  "includes_private": false,
+  "includes_private": true,
   "items": [
     {
       "path": "demo",
@@ -19,8 +19,13 @@
         "demo::c_abi_with_args_unnamed",
         "demo::ffi",
         "demo::nested",
+        "demo::no_pub_fn",
+        "demo::pub_crate_fn",
         "demo::pub_fn",
-        "demo::public_value"
+        "demo::pub_self_fn",
+        "demo::public_value",
+        "demo::test_link",
+        "demo::test_link_target"
       ]
     },
     {
@@ -440,9 +445,63 @@
       "has_body": true
     },
     {
+      "path": "demo::no_pub_fn",
+      "kind": "function",
+      "visibility": "crate",
+      "filename": "src/lib.co2",
+      "sig": {
+        "inputs": [],
+        "output": null,
+        "is_c_variadic": false
+      },
+      "header": {
+        "is_const": false,
+        "is_unsafe": false,
+        "is_async": false,
+        "abi": "Rust"
+      },
+      "has_body": true
+    },
+    {
+      "path": "demo::pub_crate_fn",
+      "kind": "function",
+      "visibility": "crate",
+      "filename": "src/lib.co2",
+      "sig": {
+        "inputs": [],
+        "output": null,
+        "is_c_variadic": false
+      },
+      "header": {
+        "is_const": false,
+        "is_unsafe": false,
+        "is_async": false,
+        "abi": "Rust"
+      },
+      "has_body": true
+    },
+    {
       "path": "demo::pub_fn",
       "kind": "function",
       "visibility": "public",
+      "filename": "src/lib.co2",
+      "sig": {
+        "inputs": [],
+        "output": null,
+        "is_c_variadic": false
+      },
+      "header": {
+        "is_const": false,
+        "is_unsafe": false,
+        "is_async": false,
+        "abi": "Rust"
+      },
+      "has_body": true
+    },
+    {
+      "path": "demo::pub_self_fn",
+      "kind": "function",
+      "visibility": "crate",
       "filename": "src/lib.co2",
       "sig": {
         "inputs": [],
@@ -468,6 +527,43 @@
         "output": {
           "primitive": "i32"
         },
+        "is_c_variadic": false
+      },
+      "header": {
+        "is_const": false,
+        "is_unsafe": false,
+        "is_async": false,
+        "abi": "Rust"
+      },
+      "has_body": true
+    },
+    {
+      "path": "demo::test_link",
+      "kind": "function",
+      "visibility": "crate",
+      "filename": "src/lib.co2",
+      "docs": "Rust doc support for links [`test_link_target`] and [`nested::deeper::deep_value`].",
+      "sig": {
+        "inputs": [],
+        "output": null,
+        "is_c_variadic": false
+      },
+      "header": {
+        "is_const": false,
+        "is_unsafe": false,
+        "is_async": false,
+        "abi": "Rust"
+      },
+      "has_body": true
+    },
+    {
+      "path": "demo::test_link_target",
+      "kind": "function",
+      "visibility": "crate",
+      "filename": "src/lib.co2",
+      "sig": {
+        "inputs": [],
+        "output": null,
         "is_c_variadic": false
       },
       "header": {

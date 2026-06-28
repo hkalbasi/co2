@@ -3,6 +3,14 @@ use rustc_public::ty::{AdtDef, FnDef, Span};
 use crate::{DefId, HirLifetime, HirTy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Public,
+    Crate,
+    Restricted,
+    Private,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InlineHint {
     Hint,
     Always,
@@ -37,6 +45,7 @@ pub enum HirModuleItem {
         sig: FunctionSignature,
         attrs: Vec<GeneratedAttr>,
         no_mangle: bool,
+        visibility: Visibility,
         span: Span,
         ident_span: Span,
     },
@@ -45,6 +54,7 @@ pub enum HirModuleItem {
         id: AdtDef,
         repr: AdtRepr,
         kind: HirAdtKind,
+        visibility: Visibility,
         span: Span,
     },
     TypeDef {
@@ -52,6 +62,7 @@ pub enum HirModuleItem {
         id: DefId,
         ty: HirTy,
         attrs: Vec<GeneratedAttr>,
+        visibility: Visibility,
         span: Span,
     },
     Static {
@@ -61,6 +72,7 @@ pub enum HirModuleItem {
         mutable: bool,
         no_mangle: bool,
         attrs: Vec<GeneratedAttr>,
+        visibility: Visibility,
         span: Span,
     },
     Const {
@@ -69,6 +81,7 @@ pub enum HirModuleItem {
         ty: HirTy,
         rhs: DefId,
         attrs: Vec<GeneratedAttr>,
+        visibility: Visibility,
         span: Span,
     },
     Impl {
@@ -83,6 +96,7 @@ pub enum HirModuleItem {
         id: DefId,
         module: HirModule,
         attrs: Vec<GeneratedAttr>,
+        visibility: Visibility,
         span: Span,
     },
     ForeignMod {
@@ -121,6 +135,18 @@ impl HirModuleItem {
         match self {
             HirModuleItem::Function { ident_span, .. } => Some(*ident_span),
             _ => self.span(),
+        }
+    }
+
+    pub fn visibility(&self) -> Visibility {
+        match self {
+            HirModuleItem::Function { visibility, .. }
+            | HirModuleItem::Adt { visibility, .. }
+            | HirModuleItem::TypeDef { visibility, .. }
+            | HirModuleItem::Static { visibility, .. }
+            | HirModuleItem::Const { visibility, .. }
+            | HirModuleItem::Module { visibility, .. } => *visibility,
+            HirModuleItem::Impl { .. } | HirModuleItem::ForeignMod { .. } => Visibility::Public,
         }
     }
 

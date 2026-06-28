@@ -13,7 +13,7 @@ use crate::{
     RustTy, Span, Spanned, SpecifierQualifier, Statement, StatementOrDeclaration,
     StorageClassSpecifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
     StructOrUnionSpecifier, TranslationUnit, TypeName, TypeQualifier, TypeResolver, TypeSpecifier,
-    UnaryOp, UpdateOp, UseItem,
+    UnaryOp, UpdateOp, UseItem, Visibility,
 };
 
 /// Pretty-print a `Spanned<CompoundStatement<LocalResolver>>` with default config.
@@ -827,7 +827,7 @@ impl<R: TypeResolver> PrettyPrint for RustFunctionSignature<R> {
             pp.node("ReturnType", &fmt_span(&self.ret_ty.1, pp.config), |pp| {
                 self.ret_ty.pretty_print(pp);
             });
-            if self.is_pub {
+            if self.visibility == Visibility::Public {
                 pp.data("pub");
             }
         });
@@ -894,7 +894,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Declaration<R>> {
                 attrs,
                 ident,
                 ty,
-                is_pub,
+                visibility,
             } => {
                 pp.node("RustTypeAlias", &sp, |pp| {
                     for attr in attrs {
@@ -906,7 +906,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Declaration<R>> {
                         format_args!("{:?}", &ident.0),
                     );
                     ty.pretty_print(pp);
-                    if *is_pub {
+                    if *visibility == Visibility::Public {
                         pp.data("pub");
                     }
                 });
@@ -915,7 +915,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Declaration<R>> {
                 attrs,
                 ident,
                 fields,
-                is_pub,
+                visibility,
             } => {
                 pp.node("RustStruct", &sp, |pp| {
                     for attr in attrs {
@@ -929,7 +929,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Declaration<R>> {
                     for field in fields {
                         field.pretty_print(pp);
                     }
-                    if *is_pub {
+                    if *visibility == Visibility::Public {
                         pp.data("pub");
                     }
                 });

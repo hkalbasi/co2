@@ -143,12 +143,17 @@ pub fn parse_translation_unit_from_tokens<R: TypeResolver>(
             return ast.0;
         }
     } else {
-        co2_ast::emit_errors_and_terminate(
+        // Emit errors but don't terminate — inline modules need to continue
+        // so that errors from all modules are reported together.
+        co2_ast::emit_errors(
             parse_errs
                 .into_iter()
                 .map(|err| err.map_token(|tok| tok.to_string()))
                 .collect(),
         );
+        if let Some(ast) = ast {
+            return ast.0;
+        }
     }
 
     print_errors_and_terminate(filename, src, Vec::new());

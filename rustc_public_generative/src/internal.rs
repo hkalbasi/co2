@@ -45,7 +45,7 @@ use rustc_trait_selection::traits::ObligationCtxt;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 
 use crate::hir_structure::{
-    AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, InlineHint, StructField,
+    AdtRepr, FunctionAbi, FunctionSignature, GeneratedAttr, InlineHint, StructField, Visibility,
 };
 use crate::hir_ty::HirTyConst;
 pub use crate::hir_ty::{HirTy, HirTyKind};
@@ -197,6 +197,7 @@ impl ItemSignatureInfo {
                         id,
                         kind,
                         span,
+                        ..
                     } => match kind {
                         crate::hir_structure::HirAdtKind::Struct { fields } => {
                             result.push(ItemSignatureInfo {
@@ -217,8 +218,7 @@ impl ItemSignatureInfo {
                         id,
                         span,
                         ty,
-                        name: _,
-                        attrs: _,
+                        ..
                     } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
@@ -231,8 +231,7 @@ impl ItemSignatureInfo {
                         span,
                         ty,
                         rhs,
-                        name: _,
-                        attrs: _,
+                        ..
                     } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
@@ -248,9 +247,7 @@ impl ItemSignatureInfo {
                         span,
                         ty,
                         mutable,
-                        no_mangle: _,
-                        name: _,
-                        attrs: _,
+                        ..
                     } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
@@ -392,6 +389,18 @@ impl DefinedCrateInfo {
                 .and_then(|parent| my_def_id_to_rustc_def_id(tcx, parent).as_local())
                 .unwrap_or(crate_def)
         };
+        let is_pub_map: std::collections::HashMap<_, _> = self
+            .items
+            .iter()
+            .map(|item| (item.def_id(), item.visibility))
+            .collect();
+        let vis_span = |my_def_id: rustc_public::DefId, span: RustcSpan| {
+            let vis = is_pub_map.get(&my_def_id).copied().unwrap_or(Visibility::Public);
+            match vis {
+                Visibility::Private => DUMMY_SP,
+                _ => span,
+            }
+        };
         let is_mod_item = |kind: DefinedItemKind| {
             matches!(
                 kind,
@@ -532,7 +541,7 @@ impl DefinedCrateInfo {
                 owner_id: OwnerId { def_id },
                 kind,
                 span: internal(tcx, span),
-                vis_span: internal(tcx, span),
+                vis_span: vis_span(my_def_id, internal(tcx, span)),
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -585,7 +594,7 @@ impl DefinedCrateInfo {
                     }),
                 ),
                 span,
-                vis_span: span,
+                vis_span: vis_span(my_def_id, span),
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -646,7 +655,7 @@ impl DefinedCrateInfo {
                     constness: hir::Constness::NotConst,
                 }),
                 span,
-                vis_span: span,
+                vis_span: vis_span(my_def_id, span),
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -781,7 +790,7 @@ impl DefinedCrateInfo {
                     leak(hir_ty_to_rustc(tcx, def_id, alias_ty, &mut item_allocator)),
                 ),
                 span,
-                vis_span: span,
+                vis_span: vis_span(my_def_id, span),
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -858,7 +867,7 @@ impl DefinedCrateInfo {
                     has_body: true,
                 },
                 span,
-                vis_span: span,
+                vis_span: vis_span(my_def_id, span),
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -928,7 +937,7 @@ impl DefinedCrateInfo {
                     body.id(),
                 ),
                 span,
-                vis_span: span,
+                vis_span: vis_span(my_def_id, span),
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -1113,7 +1122,7 @@ impl DefinedCrateInfo {
                     rustc_hir::ConstItemRhs::TypeConst(const_arg),
                 ),
                 span,
-                vis_span: span,
+                vis_span: vis_span(my_def_id, span),
                 has_delayed_lints: false,
                 eii: false,
             };
@@ -1257,6 +1266,7 @@ impl DefinedCrateInfo {
                             span: DUMMY_SP,
                             ident_span: None,
                             parent: Some(id),
+                            visibility: Visibility::Public,
                         });
                         DefinedItemKind::Const(id)
                     }
@@ -1270,6 +1280,7 @@ impl DefinedCrateInfo {
                         kind,
                         span: _,
                         repr,
+                        ..
                     } => {
                         let result = match kind {
                             crate::HirAdtKind::Struct { fields: _ } => {
@@ -1290,6 +1301,7 @@ impl DefinedCrateInfo {
                                         span: internal(tcx, field.span),
                                         ident_span: None,
                                         parent: Some(id.0),
+                                        visibility: Visibility::Public,
                                     });
                                 }
                             }
@@ -1312,6 +1324,7 @@ impl DefinedCrateInfo {
                             span: DUMMY_SP,
                             ident_span: None,
                             parent,
+                            visibility: Visibility::Public,
                         });
                         for item in impl_items {
                             match &item.kind {
@@ -1323,6 +1336,7 @@ impl DefinedCrateInfo {
                                         span: DUMMY_SP,
                                         ident_span: None,
                                         parent: Some(id),
+                                        visibility: Visibility::Public,
                                     });
                                 }
                             }
@@ -1335,6 +1349,7 @@ impl DefinedCrateInfo {
                         module,
                         attrs,
                         span,
+                        visibility,
                     } => {
                         items.push(DefinedItemInfo {
                             name,
@@ -1343,6 +1358,7 @@ impl DefinedCrateInfo {
                             span: internal(tcx, span),
                             ident_span: None,
                             parent,
+                            visibility,
                         });
                         collect_module(tcx, &module, Some(id), items, the_foreign_def);
                         continue;
@@ -1360,6 +1376,7 @@ impl DefinedCrateInfo {
                             span: DUMMY_SP,
                             ident_span: None,
                             parent,
+                            visibility: Visibility::Public,
                         });
                         for item in foreign_items {
                             match item {
@@ -1375,6 +1392,7 @@ impl DefinedCrateInfo {
                                     span: DUMMY_SP,
                                     ident_span: None,
                                     parent: Some(foreign_mod_id),
+                                    visibility: Visibility::Public,
                                 }),
                                 crate::hir_structure::ForeignModItem::ForeignType {
                                     name,
@@ -1387,6 +1405,7 @@ impl DefinedCrateInfo {
                                     span: DUMMY_SP,
                                     ident_span: None,
                                     parent: Some(foreign_mod_id),
+                                    visibility: Visibility::Public,
                                 }),
                                 crate::hir_structure::ForeignModItem::ForeignStatic {
                                     name,
@@ -1404,12 +1423,14 @@ impl DefinedCrateInfo {
                                     span: DUMMY_SP,
                                     ident_span: None,
                                     parent: Some(foreign_mod_id),
+                                    visibility: Visibility::Public,
                                 }),
                             }
                         }
                         continue;
                     }
                 };
+                let visibility = hir_item.visibility();
                 items.push(DefinedItemInfo {
                     name: hir_item.name().unwrap().to_owned(),
                     kind,
@@ -1417,6 +1438,7 @@ impl DefinedCrateInfo {
                     span: hir_item.span().map_or(DUMMY_SP, |s| internal(tcx, s)),
                     ident_span: hir_item.ident_span().map(|s| internal(tcx, s)),
                     parent,
+                    visibility,
                 });
             }
         }
@@ -1777,6 +1799,7 @@ pub struct DefinedItemInfo {
     pub span: RustcSpan,
     pub ident_span: Option<RustcSpan>,
     pub parent: Option<DefId>,
+    pub visibility: Visibility,
 }
 
 impl DefinedItemInfo {
@@ -4049,9 +4072,13 @@ fn augment_effective_visibilities_with_items(
         let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() else {
             continue;
         };
+        let item_vis = match item.visibility {
+            Visibility::Public => ty::Visibility::<LocalDefId>::Public,
+            _ => ty::Visibility::Restricted(CRATE_DEF_ID),
+        };
         vis.update_eff_vis(
             local_def_id,
-            &rustc_middle::middle::privacy::EffectiveVisibility::from_vis(ty::Visibility::Public),
+            &rustc_middle::middle::privacy::EffectiveVisibility::from_vis(item_vis),
             tcx,
         );
     }
@@ -4444,7 +4471,24 @@ fn generated_def_ident_span(tcx: TyCtxt<'_>, key: LocalDefId) -> Option<RustcSpa
     })
 }
 
-fn generated_visibility(_tcx: TyCtxt<'_>, _key: LocalDefId) -> ty::Visibility<RustcDefId> {
+fn generated_visibility(tcx: TyCtxt<'_>, key: LocalDefId) -> ty::Visibility<RustcDefId> {
+    let state = GENERATE_STATE
+        .get()
+        .cloned()
+        .expect("generate state missing");
+    let guard = state.state.try_lock().unwrap();
+    let defined_crate = match &guard.defined_crate {
+        DefinedCrateState::Stage1(info) | DefinedCrateState::Stage2(info, _, _, ()) => info,
+        _ => return ty::Visibility::Public,
+    };
+    for item in &defined_crate.items {
+        if my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() == Some(key) {
+            return match item.visibility {
+                Visibility::Public => ty::Visibility::Public,
+                _ => ty::Visibility::Restricted(RustcDefId::local(rustc_span::def_id::DefIndex::from_usize(0))),
+            };
+        }
+    }
     ty::Visibility::Public
 }
 

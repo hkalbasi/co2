@@ -3,6 +3,7 @@
 use ./snapshot-utils.nu *
 
 let test_dir = $env.CO2_TEST_DIR
+let expected_dir = $env.CO2_TEST_SOURCE_DIR
 let lib_rlib = ($test_dir | path join "libsupport_lib.rlib")
 let app = ($test_dir | path join "app")
 
@@ -29,6 +30,6 @@ if $run.exit_code != 0 {
 }
 
 let actual = ($run.stdout | str trim)
-assert-snapshot "stdout" $actual ($test_dir | path join "stdout.expected")
+assert-snapshot "stdout" $actual ($expected_dir | path join "stdout.expected")
 
 exit 0

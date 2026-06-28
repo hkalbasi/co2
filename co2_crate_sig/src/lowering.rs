@@ -12,7 +12,8 @@ use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Designator, DoTransform as _,
     Expression, FunctionDefinitionSignature, InitDeclarator, Initializer, IntegerSuffix, ModItem,
     Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, StructOrUnionSpecifier,
-    Token, TranslationUnit, TypeQualifier, TypeResolver, TypeSpecifier, co2_test_symbol_name,
+    Token, TranslationUnit, TypeQualifier, TypeResolver, TypeSpecifier, Visibility as AstVisibility,
+    co2_test_symbol_name,
 };
 use co2_parser::{
     parse_compound_statement, parse_translation_unit_from_preprocessed,
@@ -23,7 +24,7 @@ use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
     HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
     HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind, InlineHint,
-    StructField,
+    StructField, Visibility,
     rustc_public::{
         DefId,
         mir::Mutability,
@@ -1057,6 +1058,7 @@ fn lower_translation_unit_items(
                 kind: adt_kind,
                 span,
                 repr: adt_repr,
+                visibility: Visibility::Public,
             });
             add_clone_and_copy_for_def(ctx, type_def, span);
             continue;
@@ -1068,7 +1070,7 @@ fn lower_translation_unit_items(
                 attrs,
                 ident,
                 ty,
-                is_pub: _,
+                visibility: ast_vis,
             } => {
                 let name = ident.0.1;
                 let id = resolve_in_module(ctx, module_path, &name).0;
@@ -1077,6 +1079,12 @@ fn lower_translation_unit_items(
                     id,
                     ty: ctx.lower_rust_ty(ty),
                     attrs: lower_generated_attrs(&attrs),
+                    visibility: match ast_vis {
+                        AstVisibility::Public => Visibility::Public,
+                        AstVisibility::Crate => Visibility::Crate,
+                        AstVisibility::Restricted => Visibility::Restricted,
+                        AstVisibility::Private => Visibility::Private,
+                    },
                     span,
                 });
             }
@@ -1084,7 +1092,7 @@ fn lower_translation_unit_items(
                 attrs,
                 ident,
                 fields: struct_fields,
-                is_pub: _,
+                visibility: ast_vis,
             } => {
                 let name = ident.0.1;
                 let id = resolve_in_module(ctx, module_path, &name).0;
@@ -1108,6 +1116,12 @@ fn lower_translation_unit_items(
                     name,
                     id: AdtDef(id),
                     kind: HirAdtKind::Struct { fields },
+                    visibility: match ast_vis {
+                        AstVisibility::Public => Visibility::Public,
+                        AstVisibility::Crate => Visibility::Crate,
+                        AstVisibility::Restricted => Visibility::Restricted,
+                        AstVisibility::Private => Visibility::Private,
+                    },
                     span,
                     repr,
                 });
@@ -1126,7 +1140,7 @@ fn lower_translation_unit_items(
                     }
                     FunctionDefinitionSignature::Rust(sig) => sig.name.1,
                 };
-                let (name, sig, attrs, no_mangle) = match signature {
+                let (name, sig, attrs, no_mangle, visibility) = match signature {
                     FunctionDefinitionSignature::C {
                         declaration_specifiers,
                         declarator,
@@ -1147,7 +1161,7 @@ fn lower_translation_unit_items(
                                 "Main function with C ABI is not accepted in cargo projects. Use `fn main()` or `#![no_main]`.",
                             );
                         }
-                        (name, sig, lower_generated_attrs(&decl_attrs), !is_static)
+                        (name, sig, lower_generated_attrs(&decl_attrs), !is_static, Visibility::Public)
                     }
                     FunctionDefinitionSignature::Rust(sig) => {
                         let sig_attrs = lower_generated_attrs(&sig.attrs);
@@ -1165,7 +1179,13 @@ fn lower_translation_unit_items(
                             );
                         }
                         let no_mangle = has_word_attr(&attrs, "no_mangle");
-                        (name, lower_sig, attrs, no_mangle)
+                        let ast_vis = sig.visibility;
+                        (name, lower_sig, attrs, no_mangle, match ast_vis {
+                            AstVisibility::Public => Visibility::Public,
+                            AstVisibility::Crate => Visibility::Crate,
+                            AstVisibility::Restricted => Visibility::Restricted,
+                            AstVisibility::Private => Visibility::Private,
+                        })
                     }
                 };
 
@@ -1190,6 +1210,7 @@ fn lower_translation_unit_items(
                     sig,
                     attrs,
                     no_mangle: no_mangle || is_test,
+                    visibility,
                     span,
                     ident_span: ctx.co2_span_to_rustc(ident_span),
                 });
@@ -1327,12 +1348,13 @@ fn lower_translation_unit_items(
                             name,
                             id: type_def,
                             attrs: attrs.clone(),
+                            visibility: Visibility::Public,
                             span,
                             ty,
                         });
                         continue;
                     }
-
+    
                     if let CTy::Ty(ty) = &ty {
                         let id = resolve_in_module(ctx, module_path, &name).0;
                         ctx.resolver
@@ -1340,7 +1362,7 @@ fn lower_translation_unit_items(
                             .global_value_tys
                             .insert(id, ty.clone());
                     }
-
+    
                     match ty {
                         CTy::Ty(ty) => {
                             let (id, _) = resolve_in_module(ctx, module_path, &name);
@@ -1402,6 +1424,7 @@ fn lower_translation_unit_items(
                                     ty,
                                     rhs,
                                     attrs: attrs.clone(),
+                                    visibility: Visibility::Public,
                                     span,
                                 });
                             } else {
@@ -1431,6 +1454,7 @@ fn lower_translation_unit_items(
                                     mutable: false,
                                     no_mangle: !is_static,
                                     attrs: attrs.clone(),
+                                    visibility: Visibility::Public,
                                     span,
                                 });
                             }
@@ -1475,6 +1499,7 @@ fn lower_translation_unit_items(
                                     mutable: false,
                                     no_mangle: !is_static,
                                     attrs: attrs.clone(),
+                                    visibility: Visibility::Public,
                                     span,
                                 });
                             } else if is_extern {
@@ -1553,6 +1578,7 @@ fn lower_translation_unit_items(
                 items,
             },
             attrs: module_item_attrs,
+            visibility: Visibility::Public,
             span,
         });
     }
@@ -1691,6 +1717,7 @@ pub fn lower_crate_sig(
                 name: name.to_owned(),
                 id,
                 attrs: Vec::new(),
+                visibility: Visibility::Public,
                 span,
                 ty: ty.clone(),
             });
@@ -1735,6 +1762,7 @@ pub fn lower_crate_sig(
             id,
             ty,
             attrs: Vec::new(),
+            visibility: Visibility::Public,
             span,
         });
     }
@@ -1784,6 +1812,7 @@ pub fn lower_crate_sig(
                     mutable: !is_constexpr,
                     no_mangle: false,
                     attrs: Vec::new(),
+                    visibility: Visibility::Public,
                 });
                 if let Some(initializer) = declarator.initializer {
                     ctx.mir_owners.insert(
@@ -1832,6 +1861,7 @@ pub fn lower_crate_sig(
                     mutable: !is_constexpr,
                     no_mangle: false,
                     attrs: Vec::new(),
+                    visibility: Visibility::Public,
                 });
                 ctx.mir_owners.insert(
                     id,
@@ -1887,6 +1917,7 @@ pub fn lower_crate_sig(
                 id: def,
                 ty: typedef_hir_ty,
                 attrs: Vec::new(),
+                visibility: Visibility::Public,
                 span,
             });
             continue;
@@ -1906,6 +1937,7 @@ pub fn lower_crate_sig(
             kind,
             span,
             repr,
+            visibility: Visibility::Public,
         });
 
         add_clone_and_copy_for_def(&mut ctx, def, span);
@@ -1931,6 +1963,7 @@ pub fn lower_crate_sig(
                 mutable: false,
                 no_mangle: false,
                 attrs: Vec::new(),
+                visibility: Visibility::Public,
                 span,
             });
         ctx.mir_owners.insert(def_id, mir_info);
@@ -1962,6 +1995,7 @@ pub fn lower_crate_sig(
             ty: HirTy::usize_ty(span),
             rhs: registered.rhs,
             attrs: Vec::new(),
+            visibility: Visibility::Public,
             span,
         });
         ctx.mir_owners.insert(

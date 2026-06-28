@@ -1,6 +1,7 @@
 use ./snapshot-utils.nu *
 
 let test_dir = $env.CO2_TEST_DIR
+let expected_dir = $env.CO2_TEST_SOURCE_DIR
 let rs_src = ($test_dir | path join "main.rs")
 let rust_src = ($test_dir | path join "rust_inline.rs")
 let bin = ($test_dir | path join "inline_attr_bin")
@@ -20,7 +21,7 @@ let our_funcs = [never_short always_short hint_short no_attr_short]
 let actual_co2 = ($compile.stderr | lines | where {|line| $our_funcs | any {|f| ($line | str contains $f)} } | each {|line|
     $line | str replace --regex '^note: .+?main\.co2:' 'note: main.co2:' | str replace --regex 'inlined into [^ ]+' 'inlined into <caller>' | str replace --regex ' at callsite [^;]*;' ';'
 } | sort | str join "\n")
-assert-snapshot "co2 remark" $actual_co2 ($test_dir | path join "remark_snapshot.expected")
+assert-snapshot "co2 remark" $actual_co2 ($expected_dir | path join "remark_snapshot.expected")
 
 # ---------- Rust ----------
 let rust_compile = (do { co2rustc $rust_src --crate-type=bin -o $rust_bin -C opt-level=2 -C remark=inline -C llvm-args=-pass-remarks-analysis=inline -C debuginfo=2 } | complete)
@@ -35,7 +36,7 @@ if $rust_run.exit_code != 0 {
 let actual_rust = ($rust_compile.stderr | lines | where {|line| $our_funcs | any {|f| ($line | str contains $f)} } | each {|line|
     $line | str replace --regex '^note: .+?rust_inline\.rs:' 'note: rust_inline.rs:' | str replace --regex 'inlined into [^ ]+' 'inlined into <caller>' | str replace --regex ' at callsite [^;]*;' ';'
 } | sort | str join "\n")
-assert-snapshot "rust remark" $actual_rust ($test_dir | path join "rust_remark_snapshot.expected")
+assert-snapshot "rust remark" $actual_rust ($expected_dir | path join "rust_remark_snapshot.expected")
 
 print "PASS"
 exit 0

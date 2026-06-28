@@ -142,7 +142,7 @@ fn emit_mapped_errors_and_terminate(
     unreachable!("fatal diagnostics should abort");
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum DiagnosticLevel {
     Error,
     Warning,
@@ -192,7 +192,7 @@ fn emit_mapped_diagnostics(
     }
     if terminate {
         panic_with_diagnostic_abort();
-    } else {
+    } else if level == DiagnosticLevel::Warning {
         DIAGNOSTICS_EMITTED.store(false, Ordering::SeqCst);
     }
 }

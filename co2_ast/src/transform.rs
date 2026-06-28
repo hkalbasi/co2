@@ -508,7 +508,7 @@ impl<A: TypeResolver> DoTransform for RustFunctionSignature<A> {
             name: (B::transform_decl_ident(&self.name.0), self.name.1),
             params: self.params.transform(b),
             ret_ty: self.ret_ty.transform(b),
-            is_pub: self.is_pub,
+            visibility: self.visibility,
         }
     }
 }
@@ -646,18 +646,18 @@ impl<A: TypeResolver> DoTransform for Declaration<A> {
                 attrs,
                 ident,
                 ty,
-                is_pub,
+                visibility,
             } => Declaration::RustTypeAlias {
                 attrs: attrs.clone(),
                 ident: (B::transform_decl_ident(&ident.0), ident.1),
                 ty: ty.transform(b),
-                is_pub: *is_pub,
+                visibility: *visibility,
             },
             Declaration::RustStruct {
                 attrs,
                 ident,
                 fields,
-                is_pub,
+                visibility,
             } => Declaration::RustStruct {
                 attrs: attrs.clone(),
                 ident: (B::transform_decl_ident(&ident.0), ident.1),
@@ -668,7 +668,7 @@ impl<A: TypeResolver> DoTransform for Declaration<A> {
                         ty: field.ty.transform(b),
                     })
                     .collect(),
-                is_pub: *is_pub,
+                visibility: *visibility,
             },
             Declaration::PragmaPack { action } => Declaration::PragmaPack {
                 action: action.clone(),

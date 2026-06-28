@@ -261,6 +261,7 @@ fn run_nu_dir_test(
         .env("CARGO_TERM_COLOR", "never")
         .env("CO2_WORKSPACE_ROOT", root)
         .env("CO2_TEST_DIR", &temp_path)
+        .env("CO2_TEST_SOURCE_DIR", &test.path)
         .env("CO2_BIN_DIR", &compiler_bin);
 
     if update_snapshots {

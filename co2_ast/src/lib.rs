@@ -966,13 +966,13 @@ pub enum Declaration<R: TypeResolver> {
         attrs: Vec<Spanned<RustAttribute>>,
         ident: Spanned<R::DeclarationIdent>,
         ty: Spanned<RustTy<R>>,
-        is_pub: bool,
+        visibility: Visibility,
     },
     RustStruct {
         attrs: Vec<Spanned<RustAttribute>>,
         ident: Spanned<R::DeclarationIdent>,
         fields: Vec<RustStructField<R>>,
-        is_pub: bool,
+        visibility: Visibility,
     },
     PragmaPack {
         action: PackAction,
@@ -1011,7 +1011,15 @@ pub struct RustFunctionSignature<R: TypeResolver> {
     pub name: Spanned<R::DeclarationIdent>,
     pub params: Vec<RustFunctionParam<R>>,
     pub ret_ty: Spanned<RustTy<R>>,
-    pub is_pub: bool,
+    pub visibility: Visibility,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Public,
+    Crate,
+    Restricted,
+    Private,
 }
 
 #[derive(Debug, Clone)]

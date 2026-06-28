@@ -59,3 +59,8 @@ fn test_link_target() {}
 
 /// Rust doc support for links [`test_link_target`] and [`nested::deeper::deep_value`].
 fn test_link() {}
+
+pub fn pub_fn() {}
+pub(crate) fn pub_crate_fn() {}
+pub(self) fn pub_self_fn() {}
+fn no_pub_fn() {}

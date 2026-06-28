@@ -13,7 +13,7 @@ use co2_ast::{
     Statement, StatementOrDeclaration, StorageClassSpecifier, StringLiteral, StringLiteralPrefix,
     StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token,
     TranslationUnit, TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp,
-    UseItem, parse_unsigned_integer_constant,
+    UseItem, Visibility, parse_unsigned_integer_constant,
 };
 
 fn join_spans(start: Span, end: Span) -> Span {
@@ -2119,6 +2119,56 @@ where
     select! { Token::Ident(s) if s == "mut" => () }.labelled("mut")
 }
 
+fn pub_token<'src, I>() -> impl Parser<'src, I, (Visibility, Option<Span>), extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    // Parse "pub(crate)" as valid
+    let pub_crate = just(Token::Ident("pub".to_string()))
+        .then_ignore(
+            just(Token::LParen)
+                .ignore_then(just(Token::Ident("crate".to_string())))
+                .then_ignore(just(Token::RParen)),
+        )
+        .to((Visibility::Crate, None));
+
+    // Parse "pub(self)" as valid
+    let pub_self = just(Token::Ident("pub".to_string()))
+        .then_ignore(
+            just(Token::LParen)
+                .ignore_then(just(Token::Ident("self".to_string())))
+                .then_ignore(just(Token::RParen)),
+        )
+        .to((Visibility::Restricted, None));
+
+    // Parse "pub" alone (no parens) as valid
+    let pub_bare = just(Token::Ident("pub".to_string()))
+        .then(just(Token::LParen).not())
+        .to((Visibility::Public, None));
+
+    // Parse "pub(something)" as invalid - capture span of inner content
+    let pub_invalid = just(Token::Ident("pub".to_string()))
+        .then_ignore(just(Token::LParen))
+        .ignore_then(
+            any::<I, extra::Err<Rich<'src, Token, Span>>>()
+                .filter(|tok: &Token| tok != &Token::RParen)
+                .map_with(|_, meta| meta.span())
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<Span>>()
+                .map(|spans| {
+                    spans.into_iter().reduce(|a, b| join_spans(a, b)).unwrap()
+                }),
+        )
+        .then_ignore(just(Token::RParen))
+        .map(|inner_span| (Visibility::Public, Some(inner_span)));
+
+    chumsky::primitive::choice((pub_crate, pub_self, pub_bare, pub_invalid))
+        .or_not()
+        .map(|opt| opt.unwrap_or((Visibility::Private, None)))
+}
+
 fn identifier<'src, I>()
 -> impl Parser<'src, I, Spanned<String>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -2333,23 +2383,23 @@ where
 {
     let pub_token = just(Token::Ident("pub".to_string()))
         .or_not()
-        .map(|opt| opt.is_some());
+        .map(|opt| if opt.is_some() { Visibility::Public } else { Visibility::Private });
 
     pub_token
         .then(type_token())
-        .map(|(is_pub, ())| is_pub)
+        .map(|(visibility, ())| visibility)
         .then(identifier())
         .then_ignore(just(Token::Assign))
         .then(rust_ty(resolver.clone()))
         .map({
             let resolver = resolver.clone();
-            move |((is_pub, name), ty)| {
+            move |((visibility, name), ty)| {
                 let name_span = name.1;
                 Declaration::RustTypeAlias {
                     attrs: attrs.clone(),
                     ident: (resolver.register_ident(name.0), name_span),
                     ty,
-                    is_pub,
+                    visibility,
                 }
             }
         })
@@ -2392,7 +2442,7 @@ where
                     attrs: attrs.clone(),
                     ident: (resolver.register_ident(name.0), name_span),
                     fields,
-                    is_pub: true,
+                    visibility: Visibility::Public,
                 }
             }
         })
@@ -2428,20 +2478,22 @@ where
         .or_not()
         .map_with(|ret, e| ret.unwrap_or_else(|| (RustTy::Tuple(vec![]), e.span())));
 
-    let pub_token = just(Token::Ident("pub".to_string()))
-        .or_not()
-        .map(|opt| opt.is_some());
-
-    pub_token
+    pub_token()
+        .map(|(visibility, err_span)| {
+            if let Some(span) = err_span {
+                co2_ast::emit_errors(vec![Rich::custom(span, "invalid pub specifier")]);
+            }
+            visibility
+        })
         .then(fn_token())
-        .map(|(is_pub, ())| is_pub)
+        .map(|(visibility, ())| visibility)
         .then(identifier())
         .then(params)
         .then(ret)
         .then(lazy_compound_statement())
         .map({
             let resolver = resolver.clone();
-            move |((((is_pub, name), params), ret_ty), body)| {
+            move |((((visibility, name), params), ret_ty), body)| {
                 let name_span = name.1;
                 Declaration::FunctionDefinition {
                     attrs: Vec::new(),
@@ -2450,7 +2502,7 @@ where
                         name: (resolver.register_ident(name.0), name_span),
                         params,
                         ret_ty,
-                        is_pub,
+                        visibility,
                     }),
                     body,
                 }

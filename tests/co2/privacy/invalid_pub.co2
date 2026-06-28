@@ -1,0 +1,22 @@
+//@ mode: co2
+//@ compile-fail
+
+mod m1 {
+    pub fn foo() {}
+}
+
+mod m2 {
+    pub(crate) fn foo() {}
+}
+
+mod m3 {
+    pub(invalid) fn foo() {}
+      //^^^^^^^ error: invalid pub specifier
+}
+
+mod m4 {
+    pub(a b c) fn foo() {}
+      //^^^^^ error: invalid pub specifier
+}
+
+fn main() {}
