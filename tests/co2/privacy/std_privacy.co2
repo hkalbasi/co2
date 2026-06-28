@@ -18,4 +18,9 @@ fn f3() {
                  //^^ error: can not initialize struct with private fields using initializer list
 }
 
+fn f4() {
+    core::ffi::primitives::c_int a = 5;
+  //^^^^^^^^^^^^^^^^^^^^^^^^^^^^ error: private module `primitives`
+}
+
 fn main() {}

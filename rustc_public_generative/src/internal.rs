@@ -2370,6 +2370,7 @@ pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChil
                         def_id: rustc_def_to_my_def(tcx, child_def_id),
                         name: child.ident.to_string(),
                         kind: dep_child_kind,
+                        pub_vis: child.vis.is_public(),
                     })
                 })
                 .collect();
@@ -2393,6 +2394,7 @@ pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChil
                                                 def_id: rustc_def_to_my_def(tcx, sub_def_id),
                                                 name: subchild.ident.to_string(),
                                                 kind: dep_kind,
+                                                pub_vis: subchild.vis.is_public(),
                                             });
                                         }
                                     }
@@ -2411,6 +2413,7 @@ pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChil
                     def_id: impl_fn.def_id,
                     name: impl_fn.name,
                     kind: DependencyChildKind::Function,
+                    pub_vis: true,
                 });
             }
             result
@@ -2430,6 +2433,7 @@ pub fn dependency_children(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DependencyChil
                     def_id: rustc_def_to_my_def(tcx, child_id),
                     name,
                     kind: dep_child_kind,
+                    pub_vis: true,
                 })
             })
             .collect(),

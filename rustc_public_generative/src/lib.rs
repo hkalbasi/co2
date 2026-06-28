@@ -55,6 +55,7 @@ pub struct DependencyChild {
     pub def_id: DefId,
     pub name: String,
     pub kind: DependencyChildKind,
+    pub pub_vis: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
