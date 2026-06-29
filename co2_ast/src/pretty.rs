@@ -847,6 +847,7 @@ impl<R: TypeResolver> PrettyPrint for RustStructField<R> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         pp.node("Field", &fmt_span(&self.name.1, pp.config), |pp| {
             pp.leaf_data("Name", "", format_args!("{:?}", &self.name.0));
+            pp.leaf_data("Visibility", "", format_args!("{:?}", self.visibility));
             self.ty.pretty_print(pp);
         });
     }

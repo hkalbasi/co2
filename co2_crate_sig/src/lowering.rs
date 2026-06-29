@@ -12,8 +12,8 @@ use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Designator, DoTransform as _,
     Expression, FunctionDefinitionSignature, InitDeclarator, Initializer, IntegerSuffix, ModItem,
     Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, StructOrUnionSpecifier,
-    Token, TranslationUnit, TypeQualifier, TypeResolver, TypeSpecifier, Visibility as AstVisibility,
-    co2_test_symbol_name,
+    Token, TranslationUnit, TypeQualifier, TypeResolver, TypeSpecifier,
+    Visibility as AstVisibility, co2_test_symbol_name,
 };
 use co2_parser::{
     parse_compound_statement, parse_translation_unit_from_preprocessed,
@@ -1109,6 +1109,12 @@ fn lower_translation_unit_items(
                             name: field.name.0.1,
                             ty: field_ty,
                             span: field_span,
+                            visibility: match field.visibility {
+                                co2_ast::Visibility::Public => Visibility::Public,
+                                co2_ast::Visibility::Crate => Visibility::Crate,
+                                co2_ast::Visibility::Restricted => Visibility::Restricted,
+                                co2_ast::Visibility::Private => Visibility::Private,
+                            },
                         }
                     })
                     .collect();
@@ -1161,7 +1167,13 @@ fn lower_translation_unit_items(
                                 "Main function with C ABI is not accepted in cargo projects. Use `fn main()` or `#![no_main]`.",
                             );
                         }
-                        (name, sig, lower_generated_attrs(&decl_attrs), !is_static, Visibility::Public)
+                        (
+                            name,
+                            sig,
+                            lower_generated_attrs(&decl_attrs),
+                            !is_static,
+                            Visibility::Public,
+                        )
                     }
                     FunctionDefinitionSignature::Rust(sig) => {
                         let sig_attrs = lower_generated_attrs(&sig.attrs);
@@ -1180,12 +1192,18 @@ fn lower_translation_unit_items(
                         }
                         let no_mangle = has_word_attr(&attrs, "no_mangle");
                         let ast_vis = sig.visibility;
-                        (name, lower_sig, attrs, no_mangle, match ast_vis {
-                            AstVisibility::Public => Visibility::Public,
-                            AstVisibility::Crate => Visibility::Crate,
-                            AstVisibility::Restricted => Visibility::Restricted,
-                            AstVisibility::Private => Visibility::Private,
-                        })
+                        (
+                            name,
+                            lower_sig,
+                            attrs,
+                            no_mangle,
+                            match ast_vis {
+                                AstVisibility::Public => Visibility::Public,
+                                AstVisibility::Crate => Visibility::Crate,
+                                AstVisibility::Restricted => Visibility::Restricted,
+                                AstVisibility::Private => Visibility::Private,
+                            },
+                        )
                     }
                 };
 
@@ -1354,7 +1372,7 @@ fn lower_translation_unit_items(
                         });
                         continue;
                     }
-    
+
                     if let CTy::Ty(ty) = &ty {
                         let id = resolve_in_module(ctx, module_path, &name).0;
                         ctx.resolver
@@ -1362,7 +1380,7 @@ fn lower_translation_unit_items(
                             .global_value_tys
                             .insert(id, ty.clone());
                     }
-    
+
                     match ty {
                         CTy::Ty(ty) => {
                             let (id, _) = resolve_in_module(ctx, module_path, &name);

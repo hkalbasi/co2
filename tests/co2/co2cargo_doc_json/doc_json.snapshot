@@ -13,6 +13,7 @@
         "demo::MUTABLE",
         "demo::Number",
         "demo::Point",
+        "demo::RustStruct",
         "demo::c_abi_value",
         "demo::c_abi_variadic",
         "demo::c_abi_with_args",
@@ -66,6 +67,7 @@
         {
           "name": "whole",
           "kind": "struct_field",
+          "visibility": "public",
           "type": {
             "primitive": "i32"
           }
@@ -73,6 +75,7 @@
         {
           "name": "frac",
           "kind": "struct_field",
+          "visibility": "public",
           "type": {
             "primitive": "f32"
           }
@@ -88,6 +91,7 @@
         {
           "name": "x",
           "kind": "struct_field",
+          "visibility": "public",
           "type": {
             "primitive": "i32"
           }
@@ -95,6 +99,23 @@
         {
           "name": "y",
           "kind": "struct_field",
+          "visibility": "public",
+          "type": {
+            "primitive": "i32"
+          }
+        }
+      ]
+    },
+    {
+      "path": "demo::RustStruct",
+      "kind": "struct",
+      "visibility": "public",
+      "filename": "src/lib.co2",
+      "fields": [
+        {
+          "name": "pub_field",
+          "kind": "struct_field",
+          "visibility": "public",
           "type": {
             "primitive": "i32"
           }
@@ -337,6 +358,7 @@
         {
           "name": "value",
           "kind": "struct_field",
+          "visibility": "public",
           "type": {
             "primitive": "i32"
           }

@@ -67,6 +67,7 @@ def summarize_field(item_id: int) -> dict:
     return {
         "name": item["name"],
         "kind": item_kind(item),
+        "visibility": item.get("visibility"),
         "type": summarize_type(item["inner"]["struct_field"]),
     }
 

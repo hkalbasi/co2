@@ -828,7 +828,11 @@ impl co2_ast::TypeResolver for LocalResolver {
         if let Some((crate_name, _)) = path_pretty.split_once("::") {
             let dep_info = self.dependency_info();
             let roots = dep_info.roots();
-            if let Some(root_id) = roots.iter().find(|(c, _)| c.name == crate_name).map(|r| r.1) {
+            if let Some(root_id) = roots
+                .iter()
+                .find(|(c, _)| c.name == crate_name)
+                .map(|r| r.1)
+            {
                 let segments: Vec<&str> = path_pretty.split("::").collect();
                 if segments.len() > 2 {
                     let mut current = root_id;
@@ -838,10 +842,16 @@ impl co2_ast::TypeResolver for LocalResolver {
                             break;
                         };
                         if !child.pub_vis && matches!(child.kind, DependencyChildKind::Module) {
-                            let first_data = path.segments.first().unwrap().1 .data();
-                            let last_data = path.segments.last().unwrap().1 .data();
-                            let full_span = Span::from_parts(first_data.context, first_data.start..last_data.end);
-                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(full_span, format!("private module `{seg}`"))]);
+                            let first_data = path.segments.first().unwrap().1.data();
+                            let last_data = path.segments.last().unwrap().1.data();
+                            let full_span = Span::from_parts(
+                                first_data.context,
+                                first_data.start..last_data.end,
+                            );
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                                full_span,
+                                format!("private module `{seg}`"),
+                            )]);
                         }
                         current = child.def_id;
                     }

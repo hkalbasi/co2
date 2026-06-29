@@ -1031,6 +1031,7 @@ pub struct RustFunctionParam<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub struct RustStructField<R: TypeResolver> {
     pub name: Spanned<R::DeclarationIdent>,
+    pub visibility: Visibility,
     pub ty: Spanned<RustTy<R>>,
 }
 

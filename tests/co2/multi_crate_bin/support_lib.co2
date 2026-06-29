@@ -66,26 +66,26 @@ typedef struct {
 } BitFieldReprCStruct;
 
 pub struct ReprRustStruct {
-    a: i32,
-    b: *mut i32,
-    c: *const i32,
-    d: NormalReprCStruct,
-    e: BitFieldReprCStruct,
-    f: *mut BitFieldReprCStruct,
+    pub a: i32,
+    pub b: *mut i32,
+    pub c: *const i32,
+    pub d: NormalReprCStruct,
+    pub e: BitFieldReprCStruct,
+    pub f: *mut BitFieldReprCStruct,
 }
 
 pub struct RustStructHoldingVector {
     a: i32,
-    b: Vec<i32>,
-    c: Vec<RustStructHoldingVector>,
+    pub b: Vec<i32>,
+    pub c: Vec<RustStructHoldingVector>,
 }
 
 #[derive(Copy)]
 pub struct CopyReprRustStruct {
     a: i32,
-    b: Point,
-    c: *mut CopyReprRustStruct,
-    foo: *const RustStructHoldingVector,
+    pub b: Point,
+    pub c: *mut CopyReprRustStruct,
+    pub foo: *const RustStructHoldingVector,
 }
 
 constexpr usize C23Const = 2;

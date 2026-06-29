@@ -214,12 +214,7 @@ impl ItemSignatureInfo {
                             });
                         }
                     },
-                    crate::HirModuleItem::TypeDef {
-                        id,
-                        span,
-                        ty,
-                        ..
-                    } => {
+                    crate::HirModuleItem::TypeDef { id, span, ty, .. } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
                             kind: ItemSignatureKind::TypeDef(ty.clone()),
@@ -227,11 +222,7 @@ impl ItemSignatureInfo {
                         });
                     }
                     crate::HirModuleItem::Const {
-                        id,
-                        span,
-                        ty,
-                        rhs,
-                        ..
+                        id, span, ty, rhs, ..
                     } => {
                         result.push(ItemSignatureInfo {
                             id: *id,
@@ -395,7 +386,10 @@ impl DefinedCrateInfo {
             .map(|item| (item.def_id(), item.visibility))
             .collect();
         let vis_span = |my_def_id: rustc_public::DefId, span: RustcSpan| {
-            let vis = is_pub_map.get(&my_def_id).copied().unwrap_or(Visibility::Public);
+            let vis = is_pub_map
+                .get(&my_def_id)
+                .copied()
+                .unwrap_or(Visibility::Public);
             match vis {
                 Visibility::Private => DUMMY_SP,
                 _ => span,
@@ -489,9 +483,14 @@ impl DefinedCrateInfo {
                         let field_def_id = my_def_id_to_rustc_def_id(tcx, field.id).expect_local();
 
                         let hir_id = item_allocator.new_item();
+                        let vis_span = if field.visibility == Visibility::Public {
+                            internal(tcx, field.span)
+                        } else {
+                            DUMMY_SP
+                        };
                         let hir_field_def = hir::FieldDef {
                             span: internal(tcx, field.span),
-                            vis_span: internal(tcx, field.span),
+                            vis_span,
                             ident: Ident::from_str(
                                 &self
                                     .items
@@ -1301,7 +1300,7 @@ impl DefinedCrateInfo {
                                         span: internal(tcx, field.span),
                                         ident_span: None,
                                         parent: Some(id.0),
-                                        visibility: Visibility::Public,
+                                        visibility: field.visibility,
                                     });
                                 }
                             }
@@ -3543,11 +3542,7 @@ pub(crate) fn normalize_ty_for_owner_with_self(
         )
 }
 
-pub(crate) fn check_field_visibility(
-    tcx: TyCtxt<'_>,
-    owner: DefId,
-    field_def_id: DefId,
-) -> bool {
+pub(crate) fn check_field_visibility(tcx: TyCtxt<'_>, owner: DefId, field_def_id: DefId) -> bool {
     let rustc_field = my_def_id_to_rustc_def_id(tcx, field_def_id);
     let vis = tcx.visibility(rustc_field);
     let rustc_owner = my_def_id_to_rustc_def_id(tcx, owner);
@@ -4485,7 +4480,9 @@ fn generated_visibility(tcx: TyCtxt<'_>, key: LocalDefId) -> ty::Visibility<Rust
         if my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() == Some(key) {
             return match item.visibility {
                 Visibility::Public => ty::Visibility::Public,
-                _ => ty::Visibility::Restricted(RustcDefId::local(rustc_span::def_id::DefIndex::from_usize(0))),
+                _ => ty::Visibility::Restricted(RustcDefId::local(
+                    rustc_span::def_id::DefIndex::from_usize(0),
+                )),
             };
         }
     }

@@ -64,3 +64,10 @@ pub fn pub_fn() {}
 pub(crate) fn pub_crate_fn() {}
 pub(self) fn pub_self_fn() {}
 fn no_pub_fn() {}
+
+pub struct RustStruct {
+    pub pub_field: i32,
+    pub(crate) pub_crate_field: i32,
+    pub(self) pub_self_field: i32,
+    no_pub_field: i32,
+}

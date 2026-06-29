@@ -2119,7 +2119,8 @@ where
     select! { Token::Ident(s) if s == "mut" => () }.labelled("mut")
 }
 
-fn pub_token<'src, I>() -> impl Parser<'src, I, (Visibility, Option<Span>), extra::Err<Rich<'src, Token, Span>>> + Clone
+fn pub_token<'src, I>()
+-> impl Parser<'src, I, (Visibility, Option<Span>), extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
@@ -2157,9 +2158,7 @@ where
                 .repeated()
                 .at_least(1)
                 .collect::<Vec<Span>>()
-                .map(|spans| {
-                    spans.into_iter().reduce(|a, b| join_spans(a, b)).unwrap()
-                }),
+                .map(|spans| spans.into_iter().reduce(|a, b| join_spans(a, b)).unwrap()),
         )
         .then_ignore(just(Token::RParen))
         .map(|inner_span| (Visibility::Public, Some(inner_span)));
@@ -2381,9 +2380,13 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    let pub_token = just(Token::Ident("pub".to_string()))
-        .or_not()
-        .map(|opt| if opt.is_some() { Visibility::Public } else { Visibility::Private });
+    let pub_token = just(Token::Ident("pub".to_string())).or_not().map(|opt| {
+        if opt.is_some() {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        }
+    });
 
     pub_token
         .then(type_token())
@@ -2413,14 +2416,21 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    let rust_struct_field = identifier()
+    let rust_struct_field = pub_token()
+        .then(identifier())
         .then_ignore(just(Token::Colon))
         .then(rust_ty(resolver.clone()))
         .map({
             let resolver = resolver.clone();
-            move |(name, ty)| RustStructField {
-                name: (resolver.register_ident(name.0), name.1),
-                ty,
+            move |(((vis, err_span), name), ty)| {
+                if let Some(span) = err_span {
+                    co2_ast::emit_errors(vec![Rich::custom(span, "invalid pub specifier")]);
+                }
+                RustStructField {
+                    name: (resolver.register_ident(name.0), name.1),
+                    visibility: vis,
+                    ty,
+                }
             }
         });
 
@@ -2430,19 +2440,19 @@ where
         .collect::<Vec<_>>()
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
-    just(Token::Ident("pub".to_string()))
-        .ignore_then(just(Token::Struct))
-        .ignore_then(identifier())
-        .then(fields)
+    pub_token()
+        .then(just(Token::Struct).ignore_then(identifier()).then(fields))
         .map({
             let resolver = resolver.clone();
-            move |(name, fields)| {
-                let name_span = name.1;
+            move |((vis, err_span), (name, fields))| {
+                if let Some(span) = err_span {
+                    co2_ast::emit_errors(vec![Rich::custom(span, "invalid pub specifier")]);
+                }
                 Declaration::RustStruct {
                     attrs: attrs.clone(),
-                    ident: (resolver.register_ident(name.0), name_span),
+                    ident: (resolver.register_ident(name.0), name.1),
                     fields,
-                    visibility: Visibility::Public,
+                    visibility: vis,
                 }
             }
         })

@@ -5,6 +5,75 @@ C (See [incompatibilities](./docs/known_incompatibilities_with_c.md)) but with
 direct access to the Rust ecosystem. CO2 and Rust can use each other crates seamlessly,
 with no FFI boundaries or extra tooling required. 
 
+## Example
+
+```C++
+use std::vec::Vec;
+use std::f64::consts::PI;
+
+// You can include any system installed header.
+// You can manage include directories using build.rs.
+#include <stdio.h>
+
+// C-style function with C ABI
+int add(int a, int b) {
+    return a + b;
+}
+
+// Rust-style function with Rust ABI
+fn rust_multiply(a: i32, b: i32) -> i32 {
+    // The body still uses the C like syntax. E.g. using `a * b` without return is invalid.
+    return a * b;
+}
+
+fn main() {
+    // C-style function call
+    int sum = add(3, 4);
+
+    // Calling C external functions does not need `unsafe` block.
+    // In fact, there is no unsafe block at all.
+    printf("Sum is %d\n", sum);
+
+    // Rust-style function call (Rust ABI)
+    i32 product = rust_multiply(5, 6);
+    printf("Product is %d\n", product);
+
+    // Using generic Rust types
+    Vec::<i32> v = Vec::<i32>::new();
+    v.push(10);
+    v.push(20);
+
+    // Access Rust method results
+    i32 last = v.pop().unwrap();
+    printf("Last is %d\n", last);
+
+    // Use Rust constants
+    double pi = PI;
+    printf("PI is %.8f\n", pi);
+
+    v.push(20);
+    v.push(3);
+    v.push(15);
+
+    // Raw pointers get automatically casted to references.
+    // There is a borrow checker which can see through the raw pointers
+    // and warn you when things are obviously wrong, but the programmer
+    // is solely responsible for avoiding UB.
+    Vec::<i32> *v_ptr = &v;
+
+    v_ptr.push(1000); // A customized auto dereference mechanism is available.
+    Vec::<i32>::push(&v, 60);
+    v.push(16);
+
+    // C style for loop
+    i32 *v_data_ptr = v.as_ptr();
+    for (int i = 0; i < v.len(); i += 1) {
+        printf("%d ", v_data_ptr[i]);
+    }
+    printf("\n");
+}
+```
+
 ## Why another language?
 
 C has served systems programming for decades, but its lack of memory safety, minimal type system,
@@ -30,9 +99,12 @@ A CO2 rewrite is an easy and feasible task, since CO2 is backward compatible wit
 so it is not like a full rewrite, its more like changing a build system. See [co2-quickjs](https://github.com/HKalbasi/co2-quickjs/)
 as an example of a non trivial project ported to CO2.
 
-After that, your CO2 code is a crate like any other Rust crates.  You can import Rust crates without any change,
+After that, your CO2 code is a crate like any other Rust crates. You can import Rust crates without any change,
 use all of their API (even generic types and functions), split your code into multiple CO2 crates,
 and rewriting some of them or incrementally all of them to Rust for safety gains.
+
+Even if you don't need Rust interop, and you just want a better C with some features, 
+[CO2 might address your needs](./docs/c_successor.md).
 
 ## Getting started
 

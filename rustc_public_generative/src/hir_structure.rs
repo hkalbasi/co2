@@ -176,6 +176,7 @@ pub struct StructField {
     pub name: String,
     pub ty: HirTy,
     pub span: Span,
+    pub visibility: Visibility,
 }
 
 #[derive(Debug, Clone)]

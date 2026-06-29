@@ -6,7 +6,7 @@ use co2_ast::{
 };
 use rustc_public_generative::rustc_public::ty::{IntTy, UintTy};
 use rustc_public_generative::{
-    DefData, HirTy, HirTyKind, StructField,
+    DefData, HirTy, HirTyKind, StructField, Visibility,
     rustc_public::{DefId, ty::Span},
 };
 
@@ -261,6 +261,7 @@ impl LocalResolverBase {
                 name: ENUM_FIELD_NAME.to_owned(),
                 ty: field_ty,
                 span,
+                visibility: Visibility::Public,
             }]),
             logical_fields: None,
             pack_align: None,
@@ -495,6 +496,7 @@ impl LocalResolverBase {
                                 name: storage_name,
                                 ty: storage_ty.clone(),
                                 span: rust_span,
+                                visibility: Visibility::Public,
                             });
                             (index, 0usize)
                         } else {
@@ -552,6 +554,7 @@ impl LocalResolverBase {
                     name: name.clone(),
                     ty: ty.clone(),
                     span: rust_span,
+                    visibility: Visibility::Public,
                 });
                 logical_fields.push(LogicalAdtFieldInfo {
                     name,
@@ -670,6 +673,7 @@ fn ensure_bitfield_storage(
             name,
             ty: storage_ty.clone(),
             span,
+            visibility: Visibility::Public,
         });
         *open_storage = Some(OpenBitfieldStorage {
             index,

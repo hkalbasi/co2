@@ -532,6 +532,7 @@ impl<A: TypeResolver> DoTransform for RustStructField<A> {
     fn transform<B: Transformable<A>>(&self, b: &B) -> RustStructField<B> {
         RustStructField {
             name: (B::transform_decl_ident(&self.name.0), self.name.1),
+            visibility: self.visibility,
             ty: self.ty.transform(b),
         }
     }
@@ -665,6 +666,7 @@ impl<A: TypeResolver> DoTransform for Declaration<A> {
                     .iter()
                     .map(|field| RustStructField {
                         name: (B::transform_decl_ident(&field.name.0), field.name.1),
+                        visibility: field.visibility,
                         ty: field.ty.transform(b),
                     })
                     .collect(),

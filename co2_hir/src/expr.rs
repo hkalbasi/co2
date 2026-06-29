@@ -2516,10 +2516,11 @@ impl HirCtx<'_> {
         let Some(field_def) = fields.iter().find(|f| f.name == field_name) else {
             return Ok(());
         };
-        if !self.decl_resolver.dependency_info().is_field_accessible(
-            self.decl_resolver.current_owner(),
-            field_def.def_id(),
-        ) {
+        if !self
+            .decl_resolver
+            .dependency_info()
+            .is_field_accessible(self.decl_resolver.current_owner(), field_def.def_id())
+        {
             let adt_name = adt.trimmed_name();
             let kind_str = if adt.kind().is_struct() {
                 "struct"
