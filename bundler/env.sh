@@ -2,6 +2,7 @@
 # Source this script to set up the environment for co2 tools.
 # CO2_CACHE_DIR can be pre-set; otherwise it is derived from this script's location.
 
+export CO2_VERSION="@CO2_VERSION@"
 export CO2_CACHE_DIR="${CO2_CACHE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
 export LD_LIBRARY_PATH="$CO2_CACHE_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

@@ -93,7 +93,20 @@ Options:
     );
 }
 
+fn print_cc_version() -> std::process::ExitCode {
+    let co2_ver = std::env::var("CO2_VERSION").unwrap_or_else(|_| "unknown".to_owned());
+    println!("co2cc (CO2) {co2_ver}");
+    println!("{}", env!("RUSTC_VERSION"));
+    // We emit llvm version as clang to make meson happy.
+    println!("clang version: {}", env!("LLVM_VERSION"));
+    std::process::ExitCode::SUCCESS
+}
+
 pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        return print_cc_version();
+    }
+
     rustc_driver::install_ice_hook("https://github.com/HKalbasi/co2", |_| ());
 
     if let Some(flag) = args.get(1)

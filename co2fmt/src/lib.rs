@@ -31,7 +31,6 @@ enum ColorWhen {
 #[derive(Parser)]
 #[command(
     name = "funky",
-    version,
     about = "C/C++ formatter with Unicode support"
 )]
 struct Cli {
@@ -85,6 +84,11 @@ struct Cli {
 }
 
 pub fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        let version = std::env::var("CO2_VERSION").unwrap_or_else(|_| "unknown".to_owned());
+        println!("co2fmt {version}");
+        return Ok(());
+    }
     let cli = Cli::parse();
 
     if cli.check && cli.emit == EmitMode::Files {

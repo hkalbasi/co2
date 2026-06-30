@@ -18,6 +18,10 @@ pub fn main() -> std::process::ExitCode {
     main_with_args(std::env::args().collect())
 }
 
+fn co2_version() -> String {
+    std::env::var("CO2_VERSION").unwrap_or_else(|_| "unknown".to_owned())
+}
+
 pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     rustc_driver::install_ice_hook("https://github.com/HKalbasi/co2", |_| ());
     if let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR") {
@@ -27,6 +31,13 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     if let Some(crate_kind) = env::var_os("MIRI_BE_RUSTC") {
         be_rustc_mode(args, crate_kind == "target")
     } else {
+        // Show CO2 version when --version is passed in interpreter mode.
+        // Only check rustc-side args (before `--`).
+        let rustc_only = args.iter().take_while(|a| a.as_str() != "--").collect::<Vec<_>>();
+        if rustc_only.iter().any(|a| *a == "--version" || *a == "-V") {
+            println!("co2miri {}", co2_version());
+            return std::process::ExitCode::SUCCESS;
+        }
         interpreter_mode(args)
     }
 }

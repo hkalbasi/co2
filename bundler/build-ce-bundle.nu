@@ -2,8 +2,8 @@
 
 source "prepare-payload.nu"
 
-def main [] {
-    let payload_dir = (prepare-payload)
+def main [--version: string] {
+    let payload_dir = (prepare-payload --version $version)
 
     # 1. Create wrapper scripts in bin/ that source env.sh and forward to co2-multicall
     for applet in ["co2cc", "co2rustc", "co2miri", "co2fmt"] {

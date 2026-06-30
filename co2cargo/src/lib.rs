@@ -31,6 +31,12 @@ impl fmt::Display for CargoInitError {
 }
 
 pub fn main_with_args(args: &[String]) -> i32 {
+    if args.len() > 1 && (args[1] == "--version" || args[1] == "-V") {
+        let version = std::env::var("CO2_VERSION").unwrap_or_else(|_| "unknown".to_owned());
+        println!("co2cargo {version}");
+        return 0;
+    }
+
     let is_top_level_help = |a: &[String]| -> bool {
         let user_args = if a.is_empty() { &[] } else { &a[1..] };
         user_args.iter().any(|x| x == "--help" || x == "-h")

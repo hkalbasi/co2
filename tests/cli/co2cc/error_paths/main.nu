@@ -14,6 +14,18 @@ if $no_args.exit_code != 2 {
 }
 assert-snapshot "no_args" $no_args.stderr ($expected_dir | path join "no_args.stderr.snapshot")
 
+# ---- --version ----
+let version = (do { with-env { CO2_VERSION: "test" } { ^$co2cc --version } } | complete)
+if $version.exit_code != 0 {
+    print $"FAIL: co2cc --version exit code expected 0, got ($version.exit_code)"
+    exit 1
+}
+if ($version.stderr | str trim) != "" {
+    print "FAIL: co2cc --version expected empty stderr"
+    exit 1
+}
+assert-snapshot "version" $version.stdout ($expected_dir | path join "version.stdout.snapshot")
+
 # ---- -h and --help ----
 let help_h = (do { ^$co2cc -h } | complete)
 if $help_h.exit_code != 0 {

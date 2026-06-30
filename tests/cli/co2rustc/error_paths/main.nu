@@ -17,6 +17,18 @@ if ($no_args.stderr | str trim) != "" {
 }
 assert-snapshot "no_args" $no_args.stdout ($expected_dir | path join "no_args.stdout.snapshot")
 
+# ---- --version ----
+let version = (do { with-env { CO2_VERSION: "test" } { ^$co2rustc --version } } | complete)
+if $version.exit_code != 0 {
+    print $"FAIL: co2rustc --version exit code expected 0, got ($version.exit_code)"
+    exit 1
+}
+if ($version.stderr | str trim) != "" {
+    print "FAIL: co2rustc --version expected empty stderr"
+    exit 1
+}
+assert-snapshot "version" $version.stdout ($expected_dir | path join "version.stdout.snapshot")
+
 # ---- -h and --help ----
 let help_h = (do { ^$co2rustc -h } | complete)
 if $help_h.exit_code != 0 {

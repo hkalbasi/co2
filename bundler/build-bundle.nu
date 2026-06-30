@@ -2,9 +2,9 @@
 
 source "prepare-payload.nu"
 
-def main [--zstd] {
+def main [--version: string, --zstd] {
 
-    let payload_dir = (prepare-payload)
+    let payload_dir = (prepare-payload --version $version)
 
     # 1. Create tarball (gzip by default, zstd if `--zstd` flag is given)
     let compress_flag = if $zstd { "--zstd" } else { "-z" }

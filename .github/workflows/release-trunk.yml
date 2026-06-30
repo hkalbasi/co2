@@ -7,8 +7,24 @@ on:
   workflow_dispatch:
 
 jobs:
+  version:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute trunk version string
+        id: compute
+        run: |
+          SHORT=$(git rev-parse --short HEAD)
+          FIRST_LINE=$(git log -1 --format=%s)
+          echo "version=trunk - $SHORT - $FIRST_LINE" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
 
   release:
     needs: build

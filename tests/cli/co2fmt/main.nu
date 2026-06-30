@@ -14,9 +14,13 @@ if ($help.stdout | str contains "C/C++ formatter") == false {
 }
 
 # ---- version ----
-let ver = (do { ^$co2fmt --version } | complete)
+let ver = (do { with-env { CO2_VERSION: "test" } { ^$co2fmt --version } } | complete)
 if $ver.exit_code != 0 {
     print $"FAIL: --version exit code expected 0, got ($ver.exit_code)"
+    exit 1
+}
+if ($ver.stdout | str trim) != "co2fmt test" {
+    print $"FAIL: --version expected 'co2fmt test', got '($ver.stdout | str trim)'"
     exit 1
 }
 

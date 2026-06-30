@@ -17,6 +17,18 @@ if ($help.stderr | str trim) != "" {
 }
 assert-snapshot "co2cargo --help" $help.stdout ($expected_dir | path join "co2cargo--help.stdout.snapshot")
 
+# ---- co2cargo --version ----
+let version = (do { with-env { CO2_VERSION: "test" } { ^$co2cargo --version } } | complete)
+if $version.exit_code != 0 {
+    print $"FAIL: co2cargo --version exit code expected 0, got ($version.exit_code)"
+    exit 1
+}
+if ($version.stderr | str trim) != "" {
+    print "FAIL: co2cargo --version expected empty stderr"
+    exit 1
+}
+assert-snapshot "co2cargo --version" $version.stdout ($expected_dir | path join "co2cargo--version.stdout.snapshot")
+
 # ---- co2cargo run --help ----
 let run_help = (do { ^$co2cargo run --help } | complete)
 if $run_help.exit_code != 0 {

@@ -44,9 +44,9 @@ if $target_compile_fail.exit_code != 5 or ($target_compile_fail.stderr | str con
     exit 1
 }
 
-let interpreter_wrapper = (do { ^$co2miri --version -- ignored-program-arg } | complete)
-if $interpreter_wrapper.exit_code != 0 or ($interpreter_wrapper.stdout | str contains "rustc") == false {
-    print $"co2miri interpreter forwarding failed: ($interpreter_wrapper | to json -r)"
+let interpreter_wrapper = (do { with-env { CO2_VERSION: "test" } { ^$co2miri --version -- ignored-program-arg } } | complete)
+if $interpreter_wrapper.exit_code != 0 or ($interpreter_wrapper.stdout | str trim) != "co2miri test" {
+    print $"co2miri interpreter --version failed: ($interpreter_wrapper | to json -r)"
     exit 1
 }
 if ($interpreter_wrapper.stderr | str contains "multiple input filenames provided") {

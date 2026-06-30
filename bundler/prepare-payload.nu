@@ -16,7 +16,7 @@ def --env checkpoint [message: string] {
 
 # Build co2-multicall and prepare the payload directory with all libraries
 # and rust stdlib crates. Returns the path to the prepared payload directory.
-def --env prepare-payload [] {
+def --env prepare-payload [--version: string] {
     checkpoint "Starting"
 
     cargo build -p co2-multicall --release
@@ -112,7 +112,8 @@ def --env prepare-payload [] {
         cp -r $library_src $dest_src
     }
 
-    cp ($env.FILE_PWD | path join "env.sh") ($payload_dir | path join "env.sh")
+    let env_template = ($env.FILE_PWD | path join "env.sh")
+    open $env_template | str replace "@CO2_VERSION@" $version | save -f ($payload_dir | path join "env.sh")
 
     checkpoint "Finished payload dir"
 
