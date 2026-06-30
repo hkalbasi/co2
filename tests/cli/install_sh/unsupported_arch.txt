@@ -1,0 +1,6 @@
+
+info: your platform (powerpc64le-unknown-linux-gnu) is not currently supported by co2
+info: if your platform is a tier 2 with host tools Rust target, please open an issue at:
+info:   https://github.com/hkalbasi/co2/issues/new
+info:   ?title=Support+for+powerpc64le-unknown-linux-gnu
+

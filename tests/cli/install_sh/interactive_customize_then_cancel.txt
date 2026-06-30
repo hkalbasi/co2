@@ -1,0 +1,40 @@
+
+# Welcome to co2!
+
+This will download and install the co2 compiler system and its tools
+(co2rustc, co2cargo, co2cc, co2rustdoc, co2miri, co2fmt) into the
+following directory:
+
+    /tmp/co2-interactive-test
+
+Current installation options:
+
+   version: trunk
+   install directory: /tmp/co2-interactive-test
+
+1) Proceed with standard installation (default - just press enter)
+2) Customize installation
+3) Cancel installation
+>
+
+I'm going to ask you the value of each of these installation options.
+You may simply press the Enter key to leave unchanged.
+
+Available versions (tag names):
+    trunk (latest development build)
+    5.0.0
+    4.2.1
+    3.0.0
+    (or any other tag - use manual input)
+Enter version tag [trunk]: 
+Install directory? [/tmp/co2-interactive-test] 
+Current installation options:
+
+   version: trunk
+   install directory: /tmp/co2-interactive-test
+
+1) Proceed with selected options (default - just press enter)
+2) Customize installation
+3) Cancel installation
+>
+Installation cancelled.

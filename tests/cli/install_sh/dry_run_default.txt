@@ -1,0 +1,2 @@
+DRY RUN: would download from https://github.com/hkalbasi/co2/releases/download/trunk/co2-multicall.run
+DRY RUN: would install to /tmp/co2-test

@@ -1,0 +1,21 @@
+co2-install 0.1.0
+
+The installer for co2
+
+Usage: co2-install[EXE] [OPTIONS]
+
+Options:
+  -v, --verbose
+          Set log level to 'DEBUG' if 'CO2_LOG' is unset
+  -q, --quiet
+          Disable progress output, set log level to 'WARN' if 'CO2_LOG' is unset
+  -y, --yes
+          Disable confirmation prompt
+      --install-dir <INSTALL_DIR>
+          Install to a specific directory [default: auto-detect]
+      --dry-run
+          Don't download or install, just print what would be done
+  -h, --help
+          Print help
+  -V, --version
+          Print version
