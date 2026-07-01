@@ -368,6 +368,9 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
             TypeSpecifier::TypeofExpr(expr) => {
                 pp.node("TypeofExpr", &sp, |pp| expr.pretty_print(pp));
             }
+            TypeSpecifier::Alignas => {
+                pp.node("Alignas", &sp, |_pp| ());
+            }
         }
     }
 }

@@ -28,3 +28,10 @@ int array_decl[(intptr_t)some_pointer]; // Valid (although not useful) in C, com
   but all major optimizing C compilers have some assumptions similar to it. It is not known if this makes any difference
   for C codes in practice, please open an issue if you found an example impacted by this.
 * Reading uninitialized memory in C gives you indeterminate value, but in CO2 it is UB.
+
+## Incompatibilities due lack of interest / missing implementation
+
+These incompatibilities have solution, but they are not implemented. Contact me if you hit them in a real world project.
+
+* `alignas` is ignored: While Rust can't align struct fields, locals or statics, we could have a transparent type providing alignment,
+  and implement coercion between that type and the inner type.

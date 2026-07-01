@@ -414,6 +414,7 @@ pub enum TypeSpecifier<R: TypeResolver> {
     TypedefName(Spanned<R::ResolvedRustPath>),
     TypeofType(Box<TypeName<R>>),
     TypeofExpr(Box<Spanned<Expression<R>>>),
+    Alignas,
 }
 
 #[derive(Debug, Clone)]
@@ -553,6 +554,7 @@ pub enum Token {
     Sizeof,
     Typeof,
     Alignof,
+    Alignas,
     Offsetof,
     Static,
     Atomic,
@@ -794,7 +796,8 @@ impl Display for Token {
             Token::Signed => write!(f, "signed"),
             Token::Sizeof => write!(f, "sizeof"),
             Token::Typeof => write!(f, "typeof"),
-            Token::Alignof => write!(f, "_Alignof"),
+            Token::Alignof => write!(f, "alignof"),
+            Token::Alignas => write!(f, "alignas"),
             Token::Offsetof => write!(f, "offsetof"),
             Token::Static => write!(f, "static"),
             Token::Atomic => write!(f, "_Atomic"),

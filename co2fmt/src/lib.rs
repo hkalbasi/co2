@@ -29,10 +29,7 @@ enum ColorWhen {
 }
 
 #[derive(Parser)]
-#[command(
-    name = "funky",
-    about = "C/C++ formatter with Unicode support"
-)]
+#[command(name = "funky", about = "C/C++ formatter with Unicode support")]
 struct Cli {
     /// Source file(s) or director(ies) to format. Use `-` to read from stdin. If no file is given, reads from stdin.
     #[arg()]

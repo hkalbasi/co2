@@ -417,7 +417,8 @@ where
                 | Token::Double
                 | Token::Signed
                 | Token::Unsigned
-                | Token::Typeof,
+                | Token::Typeof
+                | Token::Alignas,
             ) => true,
             Some(Token::Ident(_)) => {
                 inp.rewind(checkpoint.clone());
@@ -1940,6 +1941,16 @@ where
             just(Token::Signed).to(TypeSpecifier::Signed),
             just(Token::Unsigned).to(TypeSpecifier::Unsigned),
         ])
+        .or(just(Token::Alignas)
+            .then_ignore(just(Token::LParen))
+            .ignore_then(
+                any::<I, extra::Err<Rich<'src, Token, Span>>>()
+                    .filter(|tok: &Token| tok != &Token::RParen)
+                    .repeated()
+                    .collect::<Vec<Token>>(),
+            )
+            .then_ignore(just(Token::RParen))
+            .to(TypeSpecifier::Alignas))
         .or(struct_or_union_specifier)
         .or(enum_specifier)
         .or(typeof_type_specifier)

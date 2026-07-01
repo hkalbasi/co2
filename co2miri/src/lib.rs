@@ -33,7 +33,10 @@ pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
     } else {
         // Show CO2 version when --version is passed in interpreter mode.
         // Only check rustc-side args (before `--`).
-        let rustc_only = args.iter().take_while(|a| a.as_str() != "--").collect::<Vec<_>>();
+        let rustc_only = args
+            .iter()
+            .take_while(|a| a.as_str() != "--")
+            .collect::<Vec<_>>();
         if rustc_only.iter().any(|a| *a == "--version" || *a == "-V") {
             println!("co2miri {}", co2_version());
             return std::process::ExitCode::SUCCESS;

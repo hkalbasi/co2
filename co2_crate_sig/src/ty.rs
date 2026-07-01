@@ -130,6 +130,7 @@ impl CompressedTypeSpecifier {
                     }
                     signed = Some(matches!(spec, TypeSpecifier::Signed));
                 }
+                TypeSpecifier::Alignas => {}
                 TypeSpecifier::Bool
                 | TypeSpecifier::Void
                 | TypeSpecifier::Float

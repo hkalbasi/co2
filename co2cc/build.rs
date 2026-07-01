@@ -11,8 +11,12 @@ fn main() {
         .args(["--version", "--verbose"])
         .output()
         .expect("failed to run `rustc --version --verbose`");
-    assert!(verbose.status.success(), "`rustc --version --verbose` failed");
-    let verbose = String::from_utf8(verbose.stdout).expect("rustc verbose output is not valid UTF-8");
+    assert!(
+        verbose.status.success(),
+        "`rustc --version --verbose` failed"
+    );
+    let verbose =
+        String::from_utf8(verbose.stdout).expect("rustc verbose output is not valid UTF-8");
     let llvm = verbose
         .lines()
         .find(|l| l.starts_with("LLVM version: "))

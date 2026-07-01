@@ -207,7 +207,9 @@ fn run_co2c(args: &CcArgs) {
         let preprocessed = co2_preprocessor::preprocess(&resolved, &args.cpp_args);
         let output = &preprocessed.raw_src;
         match &args.output {
-            Some(path) => fs::write(path, output.as_ref()).expect("failed to write preprocessed output"),
+            Some(path) => {
+                fs::write(path, output.as_ref()).expect("failed to write preprocessed output")
+            }
             None => print!("{output}"),
         }
         if has_stdin {
@@ -1074,17 +1076,21 @@ fn write_dep_file(
         return;
     }
 
-    let target = dep_args.target.as_deref().map(|t| {
-        if dep_args.target_quoted {
-            quote_for_make(t)
-        } else {
-            t.to_owned()
-        }
-    }).unwrap_or_else(|| {
-        obj_output
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "a.out".to_owned())
-    });
+    let target = dep_args
+        .target
+        .as_deref()
+        .map(|t| {
+            if dep_args.target_quoted {
+                quote_for_make(t)
+            } else {
+                t.to_owned()
+            }
+        })
+        .unwrap_or_else(|| {
+            obj_output
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "a.out".to_owned())
+        });
 
     let dep_path = dep_args.output.clone().unwrap_or_else(|| {
         obj_output
