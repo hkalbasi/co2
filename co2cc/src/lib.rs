@@ -18,6 +18,14 @@ enum LinkOutputKind {
     SharedLib,
 }
 
+struct DepFileArgs {
+    generate: bool,
+    phony: bool,
+    output: Option<PathBuf>,
+    target: Option<String>,
+    target_quoted: bool,
+}
+
 struct CcArgs {
     emit_obj_only: bool,
     emit_asm_only: bool,
@@ -32,6 +40,7 @@ struct CcArgs {
     cpp_args: Vec<String>,
     linker_args: Vec<String>,
     asm_flavor: Option<String>,
+    dep_args: DepFileArgs,
 }
 
 #[derive(Debug)]
@@ -91,7 +100,12 @@ Options:
   -Wl,<option>         Pass option to linker
   -Xlinker <option>    Pass option to linker
   -masm=<flavor>       Use given assembly style (att/intel) for -S output
-  -ftime-report        Print timing report"
+  -ftime-report        Print timing report
+  -MD                  Generate make dependency file
+  -MP                  Add phony targets to dependency file
+  -MF <file>           Write dependency output to <file>
+  -MT <target>         Use <target> as the rule name in dependency file
+  -MQ <target>         Like -MT but quote the target for make"
     );
 }
 
@@ -214,6 +228,7 @@ fn run_co2c(args: &CcArgs) {
             co2_driver_lib::time_report::enable_timing();
         }
         let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, &args.cpp_args));
+        write_dep_file(&preprocessed, args.output.as_deref(), &args.dep_args);
         if args.time_report {
             co2_driver_lib::time_report::mark_preprocess_done();
         }
@@ -261,6 +276,7 @@ fn run_co2c(args: &CcArgs) {
             co2_driver_lib::time_report::enable_timing();
         }
         let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, &args.cpp_args));
+        write_dep_file(&preprocessed, args.output.as_deref(), &args.dep_args);
         if args.time_report {
             co2_driver_lib::time_report::mark_preprocess_done();
         }
@@ -318,6 +334,7 @@ fn run_co2c(args: &CcArgs) {
             args.debuginfo,
             force_pic,
             args.time_report,
+            &args.dep_args,
         );
         object_paths.push(object_path);
     }
@@ -351,6 +368,13 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     let mut debuginfo = None;
     let mut cpp_args = Vec::new();
     let mut linker_args = Vec::new();
+    let mut dep_args = DepFileArgs {
+        generate: false,
+        phony: false,
+        output: None,
+        target: None,
+        target_quoted: false,
+    };
 
     let mut i = 1usize;
     while i < args.len() {
@@ -389,6 +413,34 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
                     .ok_or_else(|| ParseArgsError::MissingArgumentAfter(flag.clone()))?;
                 cpp_args.push(flag);
                 cpp_args.push(val.clone());
+            }
+            "-MD" => {
+                dep_args.generate = true;
+            }
+            "-MP" => {
+                dep_args.phony = true;
+            }
+            "-MF" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| ParseArgsError::MissingArgumentAfter("-MF".to_owned()))?;
+                dep_args.output = Some(PathBuf::from(val));
+            }
+            "-MT" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| ParseArgsError::MissingArgumentAfter("-MT".to_owned()))?;
+                dep_args.target = Some(val.clone());
+            }
+            "-MQ" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| ParseArgsError::MissingArgumentAfter("-MQ".to_owned()))?;
+                dep_args.target = Some(val.clone());
+                dep_args.target_quoted = true;
             }
             "-nostdinc" | "-undef" => {
                 cpp_args.push(arg.clone());
@@ -482,6 +534,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
         cpp_args,
         linker_args,
         asm_flavor,
+        dep_args,
     })
 }
 
@@ -699,6 +752,7 @@ fn compile_c_to_object(
     debuginfo: Option<u8>,
     pic: bool,
     time_report: bool,
+    dep_args: &DepFileArgs,
 ) {
     let exe = current_invocation_path()
         .or_else(|| std::env::current_exe().ok())
@@ -716,6 +770,24 @@ fn compile_c_to_object(
     }
     if time_report {
         cmd.arg("-ftime-report");
+    }
+    if dep_args.generate {
+        cmd.arg("-MD");
+    }
+    if dep_args.phony {
+        cmd.arg("-MP");
+    }
+    if let Some(ref dep_out) = dep_args.output {
+        cmd.arg("-MF");
+        cmd.arg(dep_out);
+    }
+    if let Some(ref target) = dep_args.target {
+        if dep_args.target_quoted {
+            cmd.arg("-MQ");
+        } else {
+            cmd.arg("-MT");
+        }
+        cmd.arg(target);
     }
     for arg in cpp_args {
         cmd.arg(arg);
@@ -979,6 +1051,73 @@ fn link_shared_objects(objects: &[PathBuf], linker_args: &[String], output: Opti
         status.success(),
         "shared library link failed with status {status}"
     );
+}
+
+fn quote_for_make(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c == '$' {
+            out.push_str("$$");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn write_dep_file(
+    preprocessed: &co2_preprocessor::PreprocessedSource,
+    obj_output: Option<&Path>,
+    dep_args: &DepFileArgs,
+) {
+    if !dep_args.generate {
+        return;
+    }
+
+    let target = dep_args.target.as_deref().map(|t| {
+        if dep_args.target_quoted {
+            quote_for_make(t)
+        } else {
+            t.to_owned()
+        }
+    }).unwrap_or_else(|| {
+        obj_output
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "a.out".to_owned())
+    });
+
+    let dep_path = dep_args.output.clone().unwrap_or_else(|| {
+        obj_output
+            .map(|p| p.with_extension("d"))
+            .unwrap_or_else(|| PathBuf::from("a.d"))
+    });
+
+    let deps: Vec<String> = preprocessed
+        .files()
+        .iter()
+        .map(|(_, file)| file.path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    // Sort for deterministic output (files() iter order is arbitrary)
+    let mut deps = deps;
+    deps.sort();
+
+    let mut content = format!("{target}:");
+    for dep in &deps {
+        content.push_str(&format!(" \\\n  {}", dep));
+    }
+    content.push('\n');
+
+    if dep_args.phony {
+        for dep in &deps {
+            content.push_str(&format!("\n{dep}:\n"));
+        }
+    }
+
+    if let Some(parent) = dep_path.parent() {
+        fs::create_dir_all(parent).expect("failed to create depfile parent directory");
+    }
+    fs::write(&dep_path, &content).expect("failed to write dependency file");
 }
 
 fn make_temp_dir() -> PathBuf {

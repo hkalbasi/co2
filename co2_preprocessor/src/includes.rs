@@ -372,6 +372,11 @@ impl Preprocessor {
                 // Push onto include stack
                 self.include_stack.push(resolved_path.clone());
 
+                // Register in source_files so it appears in files() for depfile generation.
+                // Must be called here (not just in emit_tokenized_chunk) because
+                // files with only state-only directives never reach emit_tokenized_chunk.
+                self.ensure_file(&resolved_path);
+
                 let display_path = display_include_path(&resolved_path);
 
                 // Update __FILE__ (uses set_file to avoid full MacroDef allocation)
@@ -533,6 +538,7 @@ impl Preprocessor {
                     let detected_guard = detect_include_guard(&content);
 
                     self.include_stack.push(resolved_path.clone());
+                    self.ensure_file(&resolved_path);
 
                     let display_path = display_include_path(&resolved_path);
 

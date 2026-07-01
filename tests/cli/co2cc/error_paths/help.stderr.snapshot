@@ -25,3 +25,8 @@ Options:
   -Xlinker <option>    Pass option to linker
   -masm=<flavor>       Use given assembly style (att/intel) for -S output
   -ftime-report        Print timing report
+  -MD                  Generate make dependency file
+  -MP                  Add phony targets to dependency file
+  -MF <file>           Write dependency output to <file>
+  -MT <target>         Use <target> as the rule name in dependency file
+  -MQ <target>         Like -MT but quote the target for make

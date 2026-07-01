@@ -864,7 +864,7 @@ impl Preprocessor {
     }
 
     /// Ensure a source file is registered, returning its FileId.
-    fn ensure_file(&mut self, path: &Path) -> FileId {
+    pub(super) fn ensure_file(&mut self, path: &Path) -> FileId {
         if let Some(idx) = self.file_index.get(path).copied() {
             return idx;
         }
