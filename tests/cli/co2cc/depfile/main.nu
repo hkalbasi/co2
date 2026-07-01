@@ -6,7 +6,7 @@ let co2cc = ($env.CO2_BIN_DIR | path join "co2cc")
 let src_dir = $env.CO2_TEST_SOURCE_DIR
 
 def normalize-dep []: string -> string {
-    $in | str replace -a $env.CO2_TEST_DIR "\$DIR"
+    $in | str replace -a $env.CO2_TEST_DIR "\$DIR" | str replace -a -r '/usr/lib/gcc/[^/]+/[^/]+/include/stddef\.h' '$$GCC_DIR/include/stddef.h'
 }
 
 def extract-dep-files [d_file: string] {

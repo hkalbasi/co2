@@ -1,10 +1,10 @@
 main.o: \
   $DIR/main.c \
   $DIR/other.h \
-  /usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/include/stddef.h
+  $GCC_DIR/include/stddef.h
 
 $DIR/main.c:
 
 $DIR/other.h:
 
-/usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/include/stddef.h:
+$GCC_DIR/include/stddef.h:
