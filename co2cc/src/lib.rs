@@ -456,7 +456,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
         i += 1;
     }
 
-    if inputs.is_empty() {
+    if inputs.is_empty() && linker_args.is_empty() {
         return Err(ParseArgsError::MissingInputFile);
     }
     if emit_obj_only || emit_asm_only || emit_preprocess_only {

@@ -26,6 +26,20 @@ if ($version.stderr | str trim) != "" {
 }
 assert-snapshot "version" $version.stdout ($expected_dir | path join "version.stdout.snapshot")
 
+# ---- -Wl,--version ----
+let wl_version = (do { ^$co2cc -Wl,--version } | complete)
+if $wl_version.exit_code != 0 {
+    print $"FAIL: co2cc -Wl,--version exit code expected 0, got ($wl_version.exit_code)"
+    exit 1
+}
+let combined = [$wl_version.stdout, $wl_version.stderr] | str join
+if ($combined | str contains "ld") == false {
+    print $"FAIL: co2cc -Wl,--version: linker version not found in output"
+    print $"stdout: ($wl_version.stdout)"
+    print $"stderr: ($wl_version.stderr)"
+    exit 1
+}
+
 # ---- -h and --help ----
 let help_h = (do { ^$co2cc -h } | complete)
 if $help_h.exit_code != 0 {
