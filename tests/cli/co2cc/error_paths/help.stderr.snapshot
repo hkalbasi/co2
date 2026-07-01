@@ -1,6 +1,7 @@
 Usage: co2cc [options] file...
 
 Options:
+  -E                   Preprocess only; output preprocessed source
   -c                   Compile to object file only
   -S                   Compile to assembly only
   -o <file>            Write output to <file>

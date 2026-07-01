@@ -56,8 +56,9 @@ if ($ver.stdout | str contains "rustc") == false {
     print $"FAIL: co2cc --version missing rustc version, got: ($ver.stdout)"
     exit 1
 }
-if ($ver.stdout | str contains "LLVM version:") == false {
-    print $"FAIL: co2cc --version missing LLVM version, got: ($ver.stdout)"
+# Presenting LLVM version as clang version is needed for meson.
+if ($ver.stdout | str contains "clang version:") == false {
+    print $"FAIL: co2cc --version missing clang version, got: ($ver.stdout)"
     exit 1
 }
 print "co2cc version OK"

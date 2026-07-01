@@ -21,6 +21,7 @@ enum LinkOutputKind {
 struct CcArgs {
     emit_obj_only: bool,
     emit_asm_only: bool,
+    emit_preprocess_only: bool,
     link_kind: LinkOutputKind,
     pic: bool,
     time_report: bool,
@@ -67,6 +68,7 @@ fn print_help() {
 Usage: co2cc [options] file...
 
 Options:
+  -E                   Preprocess only; output preprocessed source
   -c                   Compile to object file only
   -S                   Compile to assembly only
   -o <file>            Write output to <file>
@@ -179,6 +181,26 @@ fn run_co2c(args: &CcArgs) {
             input.to_path_buf()
         }
     };
+
+    if args.emit_preprocess_only {
+        let input = args
+            .inputs
+            .first()
+            .cloned()
+            .expect("missing C input file for preprocess-only");
+        let resolved = resolve_stdin(&input);
+
+        let preprocessed = co2_preprocessor::preprocess(&resolved, &args.cpp_args);
+        let output = &preprocessed.raw_src;
+        match &args.output {
+            Some(path) => fs::write(path, output.as_ref()).expect("failed to write preprocessed output"),
+            None => print!("{output}"),
+        }
+        if has_stdin {
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
+        return;
+    }
 
     if args.emit_asm_only {
         let input = args
@@ -318,6 +340,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
 
     let mut emit_obj_only = false;
     let mut emit_asm_only = false;
+    let mut emit_preprocess_only = false;
     let mut link_kind = LinkOutputKind::Executable;
     let mut pic = false;
     let mut time_report = false;
@@ -338,6 +361,9 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
             }
             "-S" => {
                 emit_asm_only = true;
+            }
+            "-E" => {
+                emit_preprocess_only = true;
             }
             "-shared" => {
                 link_kind = LinkOutputKind::SharedLib;
@@ -433,7 +459,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     if inputs.is_empty() {
         return Err(ParseArgsError::MissingInputFile);
     }
-    if emit_obj_only || emit_asm_only {
+    if emit_obj_only || emit_asm_only || emit_preprocess_only {
         let c_count = inputs
             .iter()
             .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("c") || p.as_os_str() == "-")
@@ -445,6 +471,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     Ok(CcArgs {
         emit_obj_only,
         emit_asm_only,
+        emit_preprocess_only,
         link_kind,
         pic,
         time_report,
