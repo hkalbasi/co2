@@ -74,6 +74,8 @@ fn main() {
 }
 ```
 
+You can run [this example online on godbolt.org](https://godbolt.org/z/o1MoWs9oa).
+
 ## Why another language?
 
 C has served systems programming for decades, but its lack of memory safety, minimal type system,
@@ -122,6 +124,10 @@ You can use CO2 in two ways:
 
 For a step-by-step walkthrough covering installation, language features, and project setup, see the [Quick Tour](./docs/quick_tour.md).
 
+## Contributing
+
+See [contributing docs](./docs/contributing/README.md).
+
 ## FAQ
 
 ### Is CO2 a memory safe language?
@@ -154,7 +160,7 @@ For more details on CO2++, see [this page](./docs/vision/co2pp.md).
 The currently packaged binary is a self extracting archive of co2 + rustc + rust std + llvm + miri.
 It would be much smaller if you install the rustc separately and [build CO2 from source](./docs/installation.md).
 
-## Is every mix of Rust and C syntax accepted? Can I assume that I know CO2 if I know C and Rust?
+### Is every mix of Rust and C syntax accepted? Can I assume that I know CO2 if I know C and Rust?
 
 No. CO2 tries to accept every C syntax, but it doesn't try to allow all Rust syntaxes.
 CO2 doesn't want to change C fundamentally, it only wants to provide seamless interop between C and Rust crates.
@@ -164,6 +170,10 @@ to make things familiar for the target audience, but even the imported syntaxes 
 If you already know C and Rust, you are very close. Just read [the language guide](./docs/language_guide.md) (~5 min) and you are done.
 By just looking at the examples, you may get some expectations that doesn't match reality.
 The compiler will stop you, but the error messages are not as high quality as Rust, so you may need to read the docs.
+
+### How much LLM is used in developing CO2?
+
+See [LLM Policy](./docs/contributing/llm_policy.md) which also explains this.
 
 ### How to rewrite a C project in Rust using CO2?
 
@@ -179,3 +189,7 @@ For converting a C project to Rust, you can:
   1. Make the public API of each crate minimal and idiomatic in Rust
 4. Rewrite each crate into Rust, one by one.
   1. Use tests to keep the behavior stable in each rewrite.
+
+## License
+
+CO2 is distributed under the terms of both the MIT license and the Apache License (Version 2.0).

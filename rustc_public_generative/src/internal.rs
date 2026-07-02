@@ -1,3 +1,15 @@
+//! The bridge between rustc and the compiler which uses rustc_public types to emit a crate.
+//!
+//! The content of this file is mostly LLM generated. This file is probably the most complex file in the project,
+//! and it has lowest quality. It frequently uses unsafe blocks, some of them are blatantly unsound.
+//! I spent much time and tokens to make it happen, and it works, but it is very fragile.
+//! I tried many times to change parts of it, at least fixing its unsafe usages. But even minor changes make test fail,
+//! in a way that you can only fix by reverting your change.
+//!
+//! If you think your LLM is very smart, try to remove this file and reimplementing it (ideally without unsafe) while passing the tests.
+//! I guess no LLM can do this. If you are a human and want to fix this file by hand, thank you! But be aware that it is not a simple task,
+//! and it probably needs a good expertise on rustc internals.
+
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;

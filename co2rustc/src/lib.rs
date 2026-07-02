@@ -188,7 +188,7 @@ fn write_test_host(
     cpp_args: &[String],
 ) -> std::io::Result<std::path::PathBuf> {
     let preprocessed = co2_preprocessor::preprocess(co2_file, cpp_args);
-    let ast = co2_parser::parse_translation_unit_from_preprocessed(
+    let ast = co2_parser::parse_translation_unit(
         &co2_file.display().to_string(),
         &preprocessed,
         StatelessResolver::new(),
@@ -294,7 +294,7 @@ fn collect_tests_from_translation_unit(
         {
             let preprocessed = co2_preprocessor::preprocess(&module_path_on_disk, cpp_args);
             let source_name = module_path_on_disk.to_string_lossy().into_owned();
-            if let Some(child) = co2_parser::parse_translation_unit_from_preprocessed(
+            if let Some(child) = co2_parser::parse_translation_unit(
                 &source_name,
                 &preprocessed,
                 StatelessResolver::new(),
@@ -395,7 +395,7 @@ fn dump_ast_tree_for_file(
 ) -> std::process::ExitCode {
     let preprocessed = co2_preprocessor::preprocess(co2_file, cpp_args);
     let filename = co2_file.display().to_string();
-    let Some(ast) = co2_parser::parse_translation_unit_from_preprocessed(
+    let Some(ast) = co2_parser::parse_translation_unit(
         &filename,
         &preprocessed,
         StatelessResolver::new(),

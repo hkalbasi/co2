@@ -9,6 +9,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://hkalbasi.github.io/co2/install.sh |
 ```
 
 It installs `co2cc`, `co2rustc` and `co2cargo` in your PATH. See [installation page](./installation.md) for other installation methods.
+You can also start without installing it by using it online in [godbolt's compiler explorer](https://godbolt.org/z/o1MoWs9oa).
 
 ## CO2 as a C compiler
 

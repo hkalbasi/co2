@@ -16,7 +16,7 @@ use co2_ast::{
     Visibility as AstVisibility, co2_test_symbol_name,
 };
 use co2_parser::{
-    parse_compound_statement, parse_translation_unit_from_preprocessed,
+    parse_compound_statement, parse_translation_unit,
     parse_translation_unit_from_tokens,
 };
 use co2_preprocessor::PreprocessedSource;
@@ -838,7 +838,7 @@ fn load_modules(
 
             let source_name = module_path.to_string_lossy().into_owned();
             let source: &'static str = Box::leak(preprocessed.raw_src.to_string().into_boxed_str());
-            let tu = parse_translation_unit_from_preprocessed(
+            let tu = parse_translation_unit(
                 &source_name,
                 &preprocessed,
                 StatelessResolver::new(),
@@ -1622,7 +1622,7 @@ pub fn lower_crate_sig(
     deps.roots();
 
     let parse_start = Instant::now();
-    let tu = co2_parser::parse_translation_unit_from_preprocessed(
+    let tu = co2_parser::parse_translation_unit(
         source_name,
         preprocessed.as_ref(),
         StatelessResolver::new(),

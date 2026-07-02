@@ -1,5 +1,6 @@
 alignas
 alignof
+agentic
 assocs
 autozng
 azhdaha
@@ -21,6 +22,7 @@ cstdint
 cstring
 CXXFLAGS
 decltype
+deepseek
 delem
 deinit
 depfile
@@ -425,6 +427,7 @@ normalise
 nosubgrouping
 OBJC
 objlike
+opencode
 OPENMP
 parblock
 parseable
