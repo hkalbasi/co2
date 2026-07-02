@@ -6,7 +6,7 @@ def main [--version: string] {
 
     let ce_bundle = "target/co2-ce.tar.zstd"
 
-    print $"Rebuilding CE bundle (version: ($version))..."
+    print $"Rebuilding CE bundle ..."
     nu ./bundler/build-ce-bundle.nu --version $version
 
     print "Testing CE bundle in bwrap container..."

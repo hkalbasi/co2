@@ -40,7 +40,7 @@ if ($ver.stdout | str contains "rustc") == false {
 }
 print "co2rustc version OK"
 
-# co2cc shows co2cc header + rustc version + LLVM version
+# co2cc shows co2cc header + rustc version + clang version (needed for meson)
 let bin = "/opt/compiler-explorer/bin/co2cc"
 let ver = (do { ^$bin --version } | complete)
 if $ver.exit_code != 0 {
@@ -55,8 +55,8 @@ if ($ver.stdout | str contains "rustc") == false {
     print $"FAIL: co2cc --version missing rustc version, got: ($ver.stdout)"
     exit 1
 }
-if ($ver.stdout | str contains "LLVM version:") == false {
-    print $"FAIL: co2cc --version missing LLVM version, got: ($ver.stdout)"
+if ($ver.stdout | str contains "clang version:") == false {
+    print $"FAIL: co2cc --version missing clang version, got: ($ver.stdout)"
     exit 1
 }
 print "co2cc version OK"
