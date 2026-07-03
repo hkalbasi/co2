@@ -13,7 +13,8 @@ def main [--version: string] {
     print "Testing bundle in bwrap container..."
 
     ^bwrap ...[
-        --ro-bind /usr /usr
+        --ro-bind /usr/lib /usr/lib
+        --ro-bind /usr/bin /usr/bin
         --ro-bind /lib /lib
         --ro-bind /etc /etc
         --ro-bind /lib64 /lib64

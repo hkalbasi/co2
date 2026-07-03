@@ -155,6 +155,16 @@ fn preprocessor_diagnostic_span(
 }
 
 fn discover_system_include_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    // Bundled musl include path (highest priority).
+    if let Ok(cache_dir) = std::env::var("CO2_CACHE_DIR") {
+        let bundled_include = PathBuf::from(cache_dir).join("include");
+        if bundled_include.is_dir() {
+            paths.push(bundled_include);
+        }
+    }
+
     let Ok(output) = std::process::Command::new("gcc")
         .args(["-E", "-Wp,-v", "-"])
         .stdin(std::process::Stdio::null())
@@ -162,15 +172,14 @@ fn discover_system_include_paths() -> Vec<PathBuf> {
         .stdout(std::process::Stdio::null())
         .output()
     else {
-        return Vec::new();
+        return paths;
     };
 
     if !output.status.success() {
-        return Vec::new();
+        return paths;
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut paths = Vec::new();
     let mut in_system_section = false;
 
     for line in stderr.lines() {

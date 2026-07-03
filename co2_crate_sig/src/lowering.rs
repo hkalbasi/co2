@@ -16,8 +16,7 @@ use co2_ast::{
     Visibility as AstVisibility, co2_test_symbol_name,
 };
 use co2_parser::{
-    parse_compound_statement, parse_translation_unit,
-    parse_translation_unit_from_tokens,
+    parse_compound_statement, parse_translation_unit, parse_translation_unit_from_tokens,
 };
 use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::{
@@ -838,13 +837,9 @@ fn load_modules(
 
             let source_name = module_path.to_string_lossy().into_owned();
             let source: &'static str = Box::leak(preprocessed.raw_src.to_string().into_boxed_str());
-            let tu = parse_translation_unit(
-                &source_name,
-                &preprocessed,
-                StatelessResolver::new(),
-            )
-            .expect("failed to parse co2 module")
-            .0;
+            let tu = parse_translation_unit(&source_name, &preprocessed, StatelessResolver::new())
+                .expect("failed to parse co2 module")
+                .0;
             let tu = deduplicate_tu_items(tu);
             let children = load_modules(
                 ctx,

@@ -4,8 +4,7 @@ mod exp;
 mod parser;
 
 pub(crate) use co2_ast::{
-    CompoundStatement, Expression, Token, TranslationUnit, TypeResolver,
-    print_errors_and_terminate,
+    CompoundStatement, Expression, Token, TranslationUnit, TypeResolver, print_errors_and_terminate,
 };
 
 pub(crate) use co2_ast::{Span, Spanned};

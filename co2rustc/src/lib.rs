@@ -395,11 +395,9 @@ fn dump_ast_tree_for_file(
 ) -> std::process::ExitCode {
     let preprocessed = co2_preprocessor::preprocess(co2_file, cpp_args);
     let filename = co2_file.display().to_string();
-    let Some(ast) = co2_parser::parse_translation_unit(
-        &filename,
-        &preprocessed,
-        StatelessResolver::new(),
-    ) else {
+    let Some(ast) =
+        co2_parser::parse_translation_unit(&filename, &preprocessed, StatelessResolver::new())
+    else {
         return std::process::ExitCode::from(5);
     };
 
