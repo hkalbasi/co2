@@ -1,5 +1,6 @@
 //@ mode: c
-//@ run-status: 0
+//@ run-status: 66
+//@ compile-flags: -DFOO=66
 
 #ifdef __GNUC__
     #error "co2cc is not gcc"
@@ -12,5 +13,5 @@
 #endif
 
 int main(void) {
-    return 0;
+    return FOO;
 }

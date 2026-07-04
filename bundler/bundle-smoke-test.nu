@@ -67,6 +67,10 @@ print "Testing C compilation..."
 
 "
 #include <stdio.h>
+#include <stdint.h>
+#include <sys/syscall.h>
+#include <sys/param.h>
+
 int main() {
     printf(\"Hello from co2cc isolated!\\n\");
     return 0;

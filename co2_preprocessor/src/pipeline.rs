@@ -218,7 +218,7 @@ impl Preprocessor {
         // Emit accumulated lexer diagnostics
         self.emit_lexer_diagnostics();
 
-        let main_file_idx = self.ensure_file(Path::new(&self.filename.clone()));
+        let main_file_idx = self.ensure_file(&self.current_path());
 
         crate::PreprocessedSource {
             raw_src: Arc::<str>::from(std::mem::take(&mut self.raw_text)),
@@ -454,8 +454,15 @@ impl Preprocessor {
 
     /// Set the filename for __FILE__ and __BASE_FILE__ macros and set as the base include directory.
     pub fn set_filename(&mut self, filename: &str) {
-        self.filename = filename.to_string();
-        self.macros.set_file(format!("\"{filename}\""));
+        // Normalize the filename to match the include_stack paths (used for span
+        // creation and byte-offset remapping). This ensures that paths with `..`
+        // components are cleaned identically to what make_absolute produces below,
+        // so the comparison in emit_tokenized_with_remap succeeds and the rewrite
+        // boundaries are correctly applied.
+        let cleaned = super::includes::make_absolute(&PathBuf::from(filename));
+        let cleaned_str = cleaned.display().to_string();
+        self.filename = cleaned_str.clone();
+        self.macros.set_file(format!("\"{cleaned_str}\""));
         // __BASE_FILE__ always expands to the main input file name,
         // unlike __FILE__ which changes during #include processing.
         self.macros.define(macro_def_from_parts(
@@ -464,15 +471,13 @@ impl Preprocessor {
             Vec::new(),
             false,
             false,
-            format!("\"{filename}\""),
+            format!("\"{cleaned_str}\""),
         ));
         // Push the file path onto the include stack for relative includes.
         // Use make_absolute (not canonicalize) to preserve symlinks, matching GCC
         // behavior: #include "..." searches relative to the directory where the
         // including file was found (through symlinks), not the symlink target.
-        let path = PathBuf::from(filename);
-        let abs = super::includes::make_absolute(&path);
-        self.include_stack.push(abs);
+        self.include_stack.push(cleaned);
     }
 
     /// Get preprocessing errors.

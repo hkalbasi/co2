@@ -144,8 +144,16 @@ def --env prepare-payload [--version: string] {
     rm -f ($include_dir | path join "alltypes.h.in")
 
     mkdir ($include_dir | path join "bits")
+    # Extract generic bits first (as fallback), then x86_64-specific bits on top
+    tar -xzf $musl_tarball -C ($include_dir | path join "bits") --strip-components=4 $"musl-($musl_version)/arch/generic/bits/"
     tar -xzf $musl_tarball -C ($include_dir | path join "bits") --strip-components=4 $"musl-($musl_version)/arch/x86_64/bits/"
-    rm -f ($include_dir | path join "bits" "alltypes.h.in") ($include_dir | path join "bits" "syscall.h.in")
+    # Strip .in suffix from template headers (alltypes.h.in is processed separately below)
+    for f in (glob ($include_dir | path join "bits" "*.in") | uniq) {
+        if not ($f | str ends-with "alltypes.h.in") {
+            mv $f ($f | str replace ".in" "")
+        }
+    }
+    rm -f ($include_dir | path join "bits" "alltypes.h.in")
 
     let arch_types_file = (mktemp)
     let generic_types_file = (mktemp)

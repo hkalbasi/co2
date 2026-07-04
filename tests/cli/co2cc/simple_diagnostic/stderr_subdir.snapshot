@@ -1,0 +1,7 @@
+Error: Unresolved name nonexistent
+   ╭─[ ../broken.c:1:25 ]
+   │
+ 1 │ int main(void) { return nonexistent; }
+   │                         ─────┬─────  
+   │                              ╰─────── Unresolved name nonexistent
+───╯

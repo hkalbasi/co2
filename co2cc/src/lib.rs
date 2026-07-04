@@ -125,6 +125,10 @@ pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
 
     rustc_driver::install_ice_hook("https://github.com/HKalbasi/co2", |_| ());
 
+    if let Ok(cwd) = std::env::current_dir() {
+        co2_ast::set_diagnostic_base_path(Some(cwd));
+    }
+
     if let Some(flag) = args.get(1)
         && (flag == "-h" || flag == "--help")
     {

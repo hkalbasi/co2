@@ -205,12 +205,27 @@ pub fn set_diagnostic_base_path(path: Option<PathBuf>) {
 }
 
 fn relativize_path(path: &str) -> String {
-    let path = std::path::Path::new(path);
+    use std::path::{Path, Component};
+    let path = Path::new(path);
     let guard = DIAGNOSTIC_BASE_PATH.lock().unwrap();
-    if let Some(base) = guard.as_ref()
-        && let Ok(relative) = path.strip_prefix(base)
-    {
-        return relative.display().to_string();
+    if let Some(base) = guard.as_ref() {
+        if let Ok(relative) = path.strip_prefix(base) {
+            return relative.display().to_string();
+        }
+        // strip_prefix failed, try computing a relative path component by component
+        let pc: Vec<_> = path.components().collect();
+        let bc: Vec<_> = base.components().collect();
+        let common = pc.iter().zip(&bc).take_while(|(a, b)| a == b).count();
+        if common > 0 {
+            let mut result = PathBuf::new();
+            for _ in common..bc.len() {
+                result.push(Component::ParentDir);
+            }
+            for c in &pc[common..] {
+                result.push(c);
+            }
+            return result.display().to_string();
+        }
     }
     path.display().to_string()
 }
