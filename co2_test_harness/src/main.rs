@@ -25,7 +25,16 @@ fn main() {
 fn run_main() -> Result<()> {
     let cli = Cli::parse();
     let root = workspace_root()?;
-    build_compilers(&root, cli.coverage)?;
+
+    let bin_dir: Option<std::path::PathBuf> = if cli.installed {
+        if cli.coverage {
+            anyhow::bail!("--coverage is not supported with --installed");
+        }
+        None
+    } else {
+        build_compilers(&root, cli.coverage)?;
+        Some(root.join("target").join("debug"))
+    };
 
     let coverage_dir = if cli.coverage {
         let dir = root.join("target").join("co2-coverage");
@@ -42,6 +51,7 @@ fn run_main() -> Result<()> {
     let start = std::time::Instant::now();
     run_tests(
         &root,
+        bin_dir.as_deref(),
         cli.filter.as_deref(),
         coverage_dir.as_deref(),
         cli.dump_mir,

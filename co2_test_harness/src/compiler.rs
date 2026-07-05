@@ -19,9 +19,30 @@ pub enum MiriRun {
     Unavailable(String),
 }
 
-pub fn run_miri_test(root: &Path, mode: Mode, test: &TestCase) -> Result<MiriRun> {
+pub fn binary_path(bin_dir: Option<&Path>, name: &str) -> PathBuf {
+    match bin_dir {
+        Some(dir) => dir.join(exe_name(name)),
+        None => PathBuf::from(exe_name(name)),
+    }
+}
+
+pub fn find_bin_dir_from_path(name: &str) -> Option<PathBuf> {
+    let exe = exe_name(name);
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).find_map(|dir| {
+            let full = dir.join(&exe);
+            if full.is_file() {
+                Some(dir.to_path_buf())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+pub fn run_miri_test(root: &Path, bin_dir: Option<&Path>, mode: Mode, test: &TestCase) -> Result<MiriRun> {
     match mode {
-        Mode::Co2 => run_co2_miri_test(root, test),
+        Mode::Co2 => run_co2_miri_test(root, bin_dir, test),
         Mode::C | Mode::Rust => {
             bail!("`run-miri` is currently supported only for `//@ mode: co2` tests")
         }
@@ -29,7 +50,7 @@ pub fn run_miri_test(root: &Path, mode: Mode, test: &TestCase) -> Result<MiriRun
     }
 }
 
-fn run_co2_miri_test(root: &Path, test: &TestCase) -> Result<MiriRun> {
+fn run_co2_miri_test(_root: &Path, bin_dir: Option<&Path>, test: &TestCase) -> Result<MiriRun> {
     if !cargo_miri_available() {
         return Ok(MiriRun::Unavailable(
             "cargo-miri not available (install miri: rustup component add miri)".to_owned(),
@@ -56,7 +77,7 @@ fn run_co2_miri_test(root: &Path, test: &TestCase) -> Result<MiriRun> {
 
     let run_args = directive_args(test, "run-args")?;
 
-    let mut cmd = Command::new(root.join("target").join("debug").join("co2cargo"));
+    let mut cmd = Command::new(binary_path(bin_dir, "co2cargo"));
     cmd.current_dir(&project).args(["miri", "run", "-q"]);
     cmd.env("CO2_UNDER_MIRI", "1");
     if !run_args.is_empty() {
@@ -68,15 +89,16 @@ fn run_co2_miri_test(root: &Path, test: &TestCase) -> Result<MiriRun> {
         cmd.env("RUSTFLAGS", compile_flags.join(" "));
     }
 
-    let path_sep = if cfg!(windows) { ";" } else { ":" };
-    let current_path = std::env::var("PATH").unwrap_or_default();
-    let compiler_bin = root.join("target").join("debug");
-    let merged_path = if current_path.is_empty() {
-        compiler_bin.to_string_lossy().into_owned()
-    } else {
-        format!("{}{}{}", compiler_bin.display(), path_sep, current_path)
-    };
-    cmd.env("PATH", merged_path);
+    if let Some(dir) = bin_dir {
+        let path_sep = if cfg!(windows) { ";" } else { ":" };
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let merged_path = if current_path.is_empty() {
+            dir.to_string_lossy().into_owned()
+        } else {
+            format!("{}{}{}", dir.display(), path_sep, current_path)
+        };
+        cmd.env("PATH", merged_path);
+    }
 
     Ok(MiriRun::Ran(
         cmd.output()
@@ -180,7 +202,8 @@ fn create_symlink_or_copy(source: &Path, target: &Path) -> Result<()> {
 }
 
 pub fn compile_test(
-    root: &Path,
+    _root: &Path,
+    bin_dir: Option<&Path>,
     mode: Mode,
     test: &TestCase,
     json_diagnostics: bool,
@@ -215,7 +238,7 @@ pub fn compile_test(
             }
             let c_src = temp_path.join(test.path.file_name().context("missing C test filename")?);
 
-            let mut cmd = Command::new(root.join("target").join("debug").join("co2cc"));
+            let mut cmd = Command::new(binary_path(bin_dir, "co2cc"));
             cmd.arg(&c_src).arg("-o").arg(&exe_path).args(compile_flags);
             cmd.arg("-I").arg(test_dir);
             if dump_mir {
@@ -244,7 +267,7 @@ pub fn compile_test(
             fs::write(&shim, "#![language(co2)]\n")
                 .context("failed to write co2 shim rust file")?;
 
-            let mut cmd = Command::new(root.join("target").join("debug").join("co2rustc"));
+            let mut cmd = Command::new(binary_path(bin_dir, "co2rustc"));
             cmd.arg(&shim)
                 .arg("--crate-type=bin")
                 .arg("--edition=2024")
@@ -277,7 +300,7 @@ pub fn compile_test(
             );
             fs::copy(&test.path, &rust_src).context("failed to copy Rust test source")?;
 
-            let mut cmd = Command::new(root.join("target").join("debug").join("co2rustc"));
+            let mut cmd = Command::new(binary_path(bin_dir, "co2rustc"));
             cmd.arg("--edition=2024")
                 .arg(&rust_src)
                 .arg("-o")

@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 use anyhow::{Context, Result, bail};
 use tempfile::Builder as TempDirBuilder;
 
-use crate::compiler::{CompileResult, MiriRun, compile_test, run_miri_test};
+use crate::compiler::{CompileResult, MiriRun, binary_path, compile_test, find_bin_dir_from_path, run_miri_test};
 use crate::debuginfo;
 use crate::error::{TestError, UiTestError, render_test_error, render_ui_error};
 use crate::test_case::{
@@ -29,6 +29,7 @@ pub struct Stats {
 
 pub fn run_tests(
     root: &Path,
+    bin_dir: Option<&Path>,
     filter: Option<&str>,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
@@ -43,6 +44,7 @@ pub fn run_tests(
         let name = test.path.strip_prefix(root).unwrap_or(&test.path).display();
         match run_test(
             root,
+            bin_dir,
             &test,
             coverage_dir,
             dump_mir,
@@ -87,6 +89,7 @@ pub fn run_tests(
 
 fn run_test(
     root: &Path,
+    bin_dir: Option<&Path>,
     test: &TestCase,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
@@ -100,6 +103,7 @@ fn run_test(
     if test.kind == TestKind::NuDir {
         run_nu_dir_test(
             root,
+            bin_dir,
             test,
             coverage_dir,
             dump_mir,
@@ -117,7 +121,7 @@ fn run_test(
     )?;
 
     if mode == Mode::Format {
-        return run_format_test(root, test, update_snapshots);
+        return run_format_test(root, bin_dir, test, update_snapshots);
     }
 
     let (compile_annotations, sources) = collect_compile_annotations(test, mode)?;
@@ -126,7 +130,7 @@ fn run_test(
         .get("compile-warning")
         .cloned()
         .unwrap_or_default();
-    let compile = compile_test(root, mode, test, true, coverage_dir, dump_mir)?;
+    let compile = compile_test(root, bin_dir, mode, test, true, coverage_dir, dump_mir)?;
     if test.directives.contains_key("compile-fail") {
         check_ui(test, mode, &compile.output, &compile_annotations, sources)?;
         return Ok(TestOutcome::Pass);
@@ -160,7 +164,7 @@ fn run_test(
         check_run(test, &compile, coverage_dir)?;
     }
     if test.directives.contains_key("run-miri") || test.directives.contains_key("miri-error") {
-        match run_miri_test(root, mode, test)? {
+        match run_miri_test(root, bin_dir, mode, test)? {
             MiriRun::Ran(output) if test.directives.contains_key("miri-error") => {
                 check_miri_error(test, &output, &compile_annotations, sources)?;
             }
@@ -214,6 +218,7 @@ fn collect_compile_annotations(
 
 fn run_nu_dir_test(
     root: &Path,
+    bin_dir: Option<&Path>,
     test: &TestCase,
     coverage_dir: Option<&Path>,
     dump_mir: bool,
@@ -244,25 +249,28 @@ fn run_nu_dir_test(
     let main_nu = temp_path.join("main.nu");
     let run_status = directive_i32(test, "run-status")?.unwrap_or(0);
 
-    let path_sep = if cfg!(windows) { ";" } else { ":" };
-    let current_path = std::env::var("PATH").unwrap_or_default();
-    let compiler_bin = root.join("target").join("debug");
-    let merged_path = if current_path.is_empty() {
-        compiler_bin.to_string_lossy().into_owned()
-    } else {
-        format!("{}{}{}", compiler_bin.display(), path_sep, current_path)
-    };
-
     let mut cmd = Command::new("nu");
     cmd.arg(&main_nu)
         .current_dir(&temp_path)
-        .env("PATH", merged_path)
         .env("NO_COLOR", "1")
         .env("CARGO_TERM_COLOR", "never")
         .env("CO2_WORKSPACE_ROOT", root)
         .env("CO2_TEST_DIR", &temp_path)
-        .env("CO2_TEST_SOURCE_DIR", &test.path)
-        .env("CO2_BIN_DIR", &compiler_bin);
+        .env("CO2_TEST_SOURCE_DIR", &test.path);
+
+    if let Some(dir) = bin_dir {
+        let path_sep = if cfg!(windows) { ";" } else { ":" };
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let merged_path = if current_path.is_empty() {
+            dir.to_string_lossy().into_owned()
+        } else {
+            format!("{}{}{}", dir.display(), path_sep, current_path)
+        };
+        cmd.env("PATH", merged_path);
+        cmd.env("CO2_BIN_DIR", dir);
+    } else if let Some(dir) = find_bin_dir_from_path("co2cc") {
+        cmd.env("CO2_BIN_DIR", dir);
+    }
 
     if update_snapshots {
         cmd.env("CO2_UPDATE_SNAPSHOTS", "1");
@@ -325,7 +333,7 @@ fn copy_dump_dirs(src_root: &Path, dst_root: &Path) {
     }
 }
 
-fn run_format_test(root: &Path, test: &TestCase, update_snapshots: bool) -> Result<TestOutcome> {
+fn run_format_test(_root: &Path, bin_dir: Option<&Path>, test: &TestCase, update_snapshots: bool) -> Result<TestOutcome> {
     let test_dir = test.path.parent().context("test path has no parent")?;
     let stem = test.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let ugly_path = test_dir.join(format!("{stem}.ugly.co2"));
@@ -337,7 +345,7 @@ fn run_format_test(root: &Path, test: &TestCase, update_snapshots: bool) -> Resu
         );
     }
 
-    let output = std::process::Command::new(root.join("target").join("debug").join("co2fmt"))
+    let output = std::process::Command::new(binary_path(bin_dir, "co2fmt"))
         .arg(&ugly_path)
         .output()
         .with_context(|| format!("failed to execute co2fmt on {}", ugly_path.display()))?;

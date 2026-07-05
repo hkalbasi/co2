@@ -20,4 +20,8 @@ pub struct Cli {
 
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Use installed toolchain binaries from PATH instead of building from source.
+    #[arg(long)]
+    pub installed: bool,
 }
