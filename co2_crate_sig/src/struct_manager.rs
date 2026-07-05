@@ -422,7 +422,17 @@ impl LocalResolverBase {
                 let width = declarator
                     .bits
                     .as_ref()
-                    .map(|bits| parse_bitfield_width(bits, *parser_span))
+                    .map(|bits| -> Result<usize, (co2_ast::Span, String)> {
+                        let value = self.eval_const_expr(bits)?;
+                        usize::try_from(value).map_err(|_| {
+                            (
+                                bits.1,
+                                format!(
+                                    "bitfield width must be a non-negative integer, got {value}"
+                                ),
+                            )
+                        })
+                    })
                     .transpose()
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                 let is_abstract = matches!(declarator.declarator.0, Declarator::Abstract);
@@ -602,15 +612,6 @@ struct OpenBitfieldStorage {
     storage_ty: HirTy,
     bits_used: usize,
     storage_bits: usize,
-}
-
-fn parse_bitfield_width(
-    bits: &Spanned<String>,
-    span: co2_ast::Span,
-) -> Result<usize, (co2_ast::Span, String)> {
-    bits.0
-        .parse::<usize>()
-        .map_err(|_| (span, format!("invalid bitfield width `{}`", bits.0)))
 }
 
 fn bitfield_storage_ty(resolver: &LocalResolverBase, ty: &HirTy) -> Option<(HirTy, bool, usize)> {

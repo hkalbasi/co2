@@ -1742,13 +1742,20 @@ fn struct_or_union_fields<'src, I, R: TypeResolver>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator<R>>, extra::Err<Rich<'src, Token, Span>>>
     + Clone
     + 'src,
+    assign_expression_rec: impl Parser<
+        'src,
+        I,
+        Spanned<Expression<R>>,
+        extra::Err<Rich<'src, Token, Span>>,
+    > + Clone
+    + 'src,
 ) -> impl Parser<'src, I, Vec<Spanned<StructOrUnionField<R>>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     let normal = left_recursion(
-        struct_declarator(declarator_rec)
+        struct_declarator(declarator_rec, assign_expression_rec)
             .separated_by(just(Token::Comma))
             .collect()
             .then_ignore(just(Token::Semicolon)),
@@ -1837,9 +1844,13 @@ where
                 .or(just(Token::Union).to(StructOrUnionKind::Union)),
             choice((
                 identifier()
-                    .then(struct_or_union_fields(rec.clone(), declarator_rec.clone()))
+                    .then(struct_or_union_fields(
+                        rec.clone(),
+                        declarator_rec.clone(),
+                        assign_expression_rec.clone(),
+                    ))
                     .map(|(ident, fields)| StructOrUnionSpecifier::Defined { ident, fields }),
-                struct_or_union_fields(rec.clone(), declarator_rec)
+                struct_or_union_fields(rec.clone(), declarator_rec, assign_expression_rec.clone())
                     .map(|fields| StructOrUnionSpecifier::Anonymous { fields }),
                 identifier().map(|ident| StructOrUnionSpecifier::Declared { ident }),
             ))
@@ -2189,19 +2200,6 @@ where
         Token::Ident(s) => s,
     }
     .labelled("Identifier")
-    .map_with(|r, e| (r, single_token_span(e.slice(), e.span())))
-}
-
-fn number<'src, I>()
--> impl Parser<'src, I, Spanned<String>, extra::Err<Rich<'src, Token, Span>>> + Clone
-where
-    I: ValueInput<'src, Token = Token, Span = Span>
-        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
-{
-    select! {
-        Token::Integer(s, _) | Token::FloatLit(s, _) => s,
-    }
-    .labelled("Number")
     .map_with(|r, e| (r, single_token_span(e.slice(), e.span())))
 }
 
@@ -2661,14 +2659,26 @@ where
 
 fn struct_declarator<'src, I, R: TypeResolver>(
     declarator_rec: impl Parser<'src, I, Spanned<Declarator<R>>, extra::Err<Rich<'src, Token, Span>>>
-    + Clone,
+    + Clone
+    + 'src,
+    assign_expression_rec: impl Parser<
+        'src,
+        I,
+        Spanned<Expression<R>>,
+        extra::Err<Rich<'src, Token, Span>>,
+    > + Clone
+    + 'src,
 ) -> impl Parser<'src, I, Spanned<StructDeclarator<R>>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
     declarator_rec
-        .then(just(Token::Colon).ignore_then(number()).or_not())
+        .then(
+            just(Token::Colon)
+                .ignore_then(assign_expression_rec)
+                .or_not(),
+        )
         .map(|(declarator, bits)| StructDeclarator { declarator, bits })
         .map_with(|r, e| (r, e.span()))
 }

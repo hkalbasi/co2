@@ -4,17 +4,52 @@ TranslationUnit
       Typedef@src/compound_literal.co2:0..7
     TypeSpecifier@src/compound_literal.co2:8..41
       Union@src/compound_literal.co2:8..41
-        Specifier@src/compound_literal.co2:14..41 Defined { ident: ("Payload", 14..21), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Int, 24..27)), 24..27)], declarators: [(StructDeclarator { declarator: (Identifier(("i", 28..29)), 28..29), bits: None }, 28..29)] }, 24..30), (StructOrUnionField { specifiers: [(TypeSpecifier((Float, 31..36)), 31..36)], declarators: [(StructDeclarator { declarator: (Identifier(("f", 37..38)), 37..38), bits: None }, 37..38)] }, 31..39)] }
+        Specifier@src/compound_literal.co2:14..41
+          Defined
+            Ident@src/compound_literal.co2:14..21 Payload
+            StructOrUnionField@src/compound_literal.co2:24..30
+              TypeSpecifier@src/compound_literal.co2:24..27
+                Int@src/compound_literal.co2:24..27
+              StructDeclarator@src/compound_literal.co2:28..29
+                Identifier@src/compound_literal.co2:28..29 "i"
+            StructOrUnionField@src/compound_literal.co2:31..39
+              TypeSpecifier@src/compound_literal.co2:31..36
+                Float@src/compound_literal.co2:31..36
+              StructDeclarator@src/compound_literal.co2:37..38
+                Identifier@src/compound_literal.co2:37..38 "f"
     InitDeclarator@src/compound_literal.co2:42..49
       Identifier@src/compound_literal.co2:42..49 "Payload"
   Declaration@src/compound_literal.co2:51..120
     TypeSpecifier@src/compound_literal.co2:51..119
       Struct@src/compound_literal.co2:51..119
-        Specifier@src/compound_literal.co2:58..119 Defined { ident: ("Holder", 58..64), fields: [(StructOrUnionField { specifiers: [(TypeQualifier((Const, 67..72)), 67..72), (TypeSpecifier((Int, 73..76)), 73..76)], declarators: [(StructDeclarator { declarator: (Identifier(("head", 77..81)), 77..81), bits: None }, 77..81)] }, 67..82), (StructOrUnionField { specifiers: [(TypeSpecifier((TypedefName((RustPath { segments: [(Ident("Payload"), 83..90)] }, 83..90)), 83..90)), 83..90)], declarators: [(StructDeclarator { declarator: (Identifier(("payload", 91..98)), 91..98), bits: None }, 91..98)] }, 83..99), (StructOrUnionField { specifiers: [(TypeSpecifier((Unsigned, 100..108)), 100..108)], declarators: [(StructDeclarator { declarator: (Identifier(("bits", 109..113)), 109..113), bits: Some(("4", 115..116)) }, 109..116)] }, 100..117)] }
+        Specifier@src/compound_literal.co2:58..119
+          Defined
+            Ident@src/compound_literal.co2:58..64 Holder
+            StructOrUnionField@src/compound_literal.co2:67..82
+              TypeQualifier@src/compound_literal.co2:67..72
+                Const@src/compound_literal.co2:67..72
+              TypeSpecifier@src/compound_literal.co2:73..76
+                Int@src/compound_literal.co2:73..76
+              StructDeclarator@src/compound_literal.co2:77..81
+                Identifier@src/compound_literal.co2:77..81 "head"
+            StructOrUnionField@src/compound_literal.co2:83..99
+              TypeSpecifier@src/compound_literal.co2:83..90
+                TypedefName@src/compound_literal.co2:83..90 RustPath { segments: [(Ident("Payload"), 83..90)] }
+              StructDeclarator@src/compound_literal.co2:91..98
+                Identifier@src/compound_literal.co2:91..98 "payload"
+            StructOrUnionField@src/compound_literal.co2:100..117
+              TypeSpecifier@src/compound_literal.co2:100..108
+                Unsigned@src/compound_literal.co2:100..108
+              StructDeclarator@src/compound_literal.co2:109..116
+                Identifier@src/compound_literal.co2:109..113 "bits"
+                Constant@src/compound_literal.co2:115..116
+                  Int 4
   Declaration@src/compound_literal.co2:121..215
     TypeSpecifier@src/compound_literal.co2:121..134
       Struct@src/compound_literal.co2:121..134
-        Specifier@src/compound_literal.co2:128..134 Declared { ident: ("Holder", 128..134) }
+        Specifier@src/compound_literal.co2:128..134
+          Declared
+            Ident@src/compound_literal.co2:128..134 Holder
     InitDeclarator@src/compound_literal.co2:135..214
       Identifier@src/compound_literal.co2:135..149 "literal_holder"
       Expr@src/compound_literal.co2:152..214
@@ -22,7 +57,9 @@ TranslationUnit
           TypeName
             TypeSpecifier@src/compound_literal.co2:153..166
               Struct@src/compound_literal.co2:153..166
-                Specifier@src/compound_literal.co2:160..166 Declared { ident: ("Holder", 160..166) }
+                Specifier@src/compound_literal.co2:160..166
+                  Declared
+                    Ident@src/compound_literal.co2:160..166 Holder
           List@src/compound_literal.co2:167..214
             InitializerItem@src/compound_literal.co2:169..178
               Field@src/compound_literal.co2:169..174 head

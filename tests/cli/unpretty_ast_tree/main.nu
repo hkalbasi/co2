@@ -49,5 +49,6 @@ for case in $cases {
 
     let actual = ($status.stdout | str trim)
     validate-spans $test_dir $actual $case.name
-    assert-snapshot $case.name $actual $case.snapshot
+    let snapshot_path = $env.CO2_TEST_SOURCE_DIR | path join $case.snapshot
+    assert-snapshot $case.name $actual $snapshot_path
 }

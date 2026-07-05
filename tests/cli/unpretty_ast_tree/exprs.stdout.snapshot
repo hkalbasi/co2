@@ -74,7 +74,9 @@ TranslationUnit
           TypeName
             TypeSpecifier@src/exprs.co2:201..214
               Struct@src/exprs.co2:201..214
-                Specifier@src/exprs.co2:208..214 Declared { ident: ("Holder", 208..214) }
+                Specifier@src/exprs.co2:208..214
+                  Declared
+                    Ident@src/exprs.co2:208..214 Holder
   Declaration@src/exprs.co2:217..255
     TypeSpecifier@src/exprs.co2:217..220
       Int@src/exprs.co2:217..220
@@ -95,7 +97,9 @@ TranslationUnit
           TypeName
             TypeSpecifier@src/exprs.co2:290..303
               Struct@src/exprs.co2:290..303
-                Specifier@src/exprs.co2:297..303 Declared { ident: ("Holder", 297..303) }
+                Specifier@src/exprs.co2:297..303
+                  Declared
+                    Ident@src/exprs.co2:297..303 Holder
   Declaration@src/exprs.co2:306..347
     TypeSpecifier@src/exprs.co2:306..309
       Int@src/exprs.co2:306..309
@@ -116,7 +120,9 @@ TranslationUnit
           TypeName
             TypeSpecifier@src/exprs.co2:386..404
               Struct@src/exprs.co2:386..404
-                Specifier@src/exprs.co2:393..404 Declared { ident: ("PackedPoint", 393..404) }
+                Specifier@src/exprs.co2:393..404
+                  Declared
+                    Ident@src/exprs.co2:393..404 PackedPoint
           Field@src/exprs.co2:406..407 y
   Declaration@src/exprs.co2:410..431
     TypeSpecifier@src/exprs.co2:410..413

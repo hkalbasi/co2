@@ -9,7 +9,9 @@ TranslationUnit
   Declaration@src/storage_and_simple.co2:24..43
     TypeSpecifier@src/storage_and_simple.co2:24..42
       Struct@src/storage_and_simple.co2:24..42
-        Specifier@src/storage_and_simple.co2:31..42 Declared { ident: ("PackedPoint", 31..42) }
+        Specifier@src/storage_and_simple.co2:31..42
+          Declared
+            Ident@src/storage_and_simple.co2:31..42 PackedPoint
   Declaration@src/storage_and_simple.co2:44..70
     StorageSpecifier@src/storage_and_simple.co2:44..50
       Extern@src/storage_and_simple.co2:44..50
@@ -120,7 +122,9 @@ TranslationUnit
   Declaration@src/storage_and_simple.co2:330..364
     TypeSpecifier@src/storage_and_simple.co2:330..348
       Struct@src/storage_and_simple.co2:330..348
-        Specifier@src/storage_and_simple.co2:337..348 Declared { ident: ("PackedPoint", 337..348) }
+        Specifier@src/storage_and_simple.co2:337..348
+          Declared
+            Ident@src/storage_and_simple.co2:337..348 PackedPoint
     InitDeclarator@src/storage_and_simple.co2:349..363
       PointerDeclarator@src/storage_and_simple.co2:349..359
         Identifier@src/storage_and_simple.co2:350..359 "point_ptr"

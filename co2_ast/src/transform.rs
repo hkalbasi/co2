@@ -278,7 +278,7 @@ impl<A: TypeResolver> DoTransform for StructDeclarator<A> {
         let StructDeclarator { declarator, bits } = self;
         StructDeclarator {
             declarator: declarator.transform(b),
-            bits: bits.clone(),
+            bits: bits.as_ref().map(|(expr, span)| (expr.transform(b), *span)),
         }
     }
 }

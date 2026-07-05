@@ -2,7 +2,21 @@ TranslationUnit
   Declaration@src/designators.co2:0..40
     TypeSpecifier@src/designators.co2:0..39
       Struct@src/designators.co2:0..39
-        Specifier@src/designators.co2:7..39 Defined { ident: ("PackedPoint", 7..18), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Int, 21..24)), 21..24)], declarators: [(StructDeclarator { declarator: (Identifier(("x", 25..26)), 25..26), bits: None }, 25..26)] }, 21..27), (StructOrUnionField { specifiers: [(TypeSpecifier((Int, 28..31)), 28..31)], declarators: [(StructDeclarator { declarator: (Identifier(("y", 32..33)), 32..33), bits: Some(("4", 35..36)) }, 32..36)] }, 28..37)] }
+        Specifier@src/designators.co2:7..39
+          Defined
+            Ident@src/designators.co2:7..18 PackedPoint
+            StructOrUnionField@src/designators.co2:21..27
+              TypeSpecifier@src/designators.co2:21..24
+                Int@src/designators.co2:21..24
+              StructDeclarator@src/designators.co2:25..26
+                Identifier@src/designators.co2:25..26 "x"
+            StructOrUnionField@src/designators.co2:28..37
+              TypeSpecifier@src/designators.co2:28..31
+                Int@src/designators.co2:28..31
+              StructDeclarator@src/designators.co2:32..36
+                Identifier@src/designators.co2:32..33 "y"
+                Constant@src/designators.co2:35..36
+                  Int 4
   Declaration@src/designators.co2:41..149
     TypeSpecifier@src/designators.co2:41..44
       Int@src/designators.co2:41..44
@@ -29,7 +43,9 @@ TranslationUnit
               TypeName
                 TypeSpecifier@src/designators.co2:98..116
                   Struct@src/designators.co2:98..116
-                    Specifier@src/designators.co2:105..116 Declared { ident: ("PackedPoint", 105..116) }
+                    Specifier@src/designators.co2:105..116
+                      Declared
+                        Ident@src/designators.co2:105..116 PackedPoint
               Field@src/designators.co2:118..119 y
         InitializerItem@src/designators.co2:122..145
           Subscript@src/designators.co2:122..125

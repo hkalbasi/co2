@@ -12,9 +12,26 @@ use crate::{
     ParameterList, RustAttribute, RustFunctionParam, RustFunctionSignature, RustStructField,
     RustTy, Span, Spanned, SpecifierQualifier, Statement, StatementOrDeclaration,
     StorageClassSpecifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
-    StructOrUnionSpecifier, TranslationUnit, TypeName, TypeQualifier, TypeResolver, TypeSpecifier,
-    UnaryOp, UpdateOp, UseItem, Visibility,
+    StructOrUnionSpecifier, TranslationUnit, TypeName, TypeQualifier, TypeSpecifier, UnaryOp,
+    UpdateOp, UseItem, Visibility,
 };
+
+pub trait TypeResolver
+where
+    Self: crate::TypeResolver,
+{
+    fn pretty_print_su_ident(pp: &mut PrettyPrinter, item: &<Self as crate::TypeResolver>::StructOrUnionIdentifier);
+}
+
+impl<T> TypeResolver for T
+where
+    T: crate::TypeResolver,
+    <T as crate::TypeResolver>::StructOrUnionIdentifier: PrettyPrint,
+{
+    fn pretty_print_su_ident(pp: &mut PrettyPrinter, item: &<T as crate::TypeResolver>::StructOrUnionIdentifier) {
+        item.pretty_print(pp);
+    }
+}
 
 /// Pretty-print a `Spanned<CompoundStatement<LocalResolver>>` with default config.
 pub fn pretty_print_compound<R: TypeResolver>(compound: &Spanned<CompoundStatement<R>>) {
@@ -350,7 +367,9 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
                 };
                 pp.node(label, &sp, |pp| {
                     let sp = fmt_span(&specifier.1, pp.config);
-                    pp.leaf_data("Specifier", &sp, format_args!("{:?}", &specifier.0));
+                    pp.node("Specifier", &sp, |pp| {
+                        R::pretty_print_su_ident(pp, &specifier.0);
+                    });
                 });
             }
             TypeSpecifier::Enum(specifier) => {
@@ -370,6 +389,33 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
             }
             TypeSpecifier::Alignas => {
                 pp.node("Alignas", &sp, |_pp| ());
+            }
+        }
+    }
+}
+
+impl PrettyPrint for StructOrUnionSpecifier<crate::StatelessResolver> {
+    fn pretty_print(&self, pp: &mut PrettyPrinter) {
+        match self {
+            StructOrUnionSpecifier::Defined { ident, fields } => {
+                pp.node("Defined", "", |pp| {
+                    pp.leaf_data("Ident", &fmt_span(&ident.1, pp.config), &ident.0);
+                    for f in fields {
+                        f.pretty_print(pp);
+                    }
+                });
+            }
+            StructOrUnionSpecifier::Declared { ident } => {
+                pp.node("Declared", "", |pp| {
+                    pp.leaf_data("Ident", &fmt_span(&ident.1, pp.config), &ident.0);
+                });
+            }
+            StructOrUnionSpecifier::Anonymous { fields } => {
+                pp.node("Anonymous", "", |pp| {
+                    for f in fields {
+                        f.pretty_print(pp);
+                    }
+                });
             }
         }
     }
@@ -1218,7 +1264,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<StructDeclarator<R>> {
         pp.node("StructDeclarator", &sp, |pp| {
             self.0.declarator.pretty_print(pp);
             if let Some(bits) = &self.0.bits {
-                pp.leaf_data("Bits", &fmt_span(&bits.1, pp.config), &bits.0);
+                bits.pretty_print(pp);
             }
         });
     }

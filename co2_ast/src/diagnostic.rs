@@ -205,7 +205,7 @@ pub fn set_diagnostic_base_path(path: Option<PathBuf>) {
 }
 
 fn relativize_path(path: &str) -> String {
-    use std::path::{Path, Component};
+    use std::path::{Component, Path};
     let path = Path::new(path);
     let guard = DIAGNOSTIC_BASE_PATH.lock().unwrap();
     if let Some(base) = guard.as_ref() {

@@ -1,5 +1,5 @@
-use chumsky::{Parser as _};
-use chumsky::input::{Input as ChumskyInput, BorrowInput, ExactSizeInput, SliceInput, ValueInput};
+use chumsky::Parser as _;
+use chumsky::input::{BorrowInput, ExactSizeInput, Input as ChumskyInput, SliceInput, ValueInput};
 
 mod exp;
 mod parser;
@@ -207,10 +207,7 @@ impl<'src> ExactSizeInput<'src> for TokenSpanInput<'src> {
 }
 
 impl<'src> ValueInput<'src> for TokenSpanInput<'src> {
-    unsafe fn next(
-        (cache, _): &mut Self::Cache,
-        cursor: &mut Self::Cursor,
-    ) -> Option<Self::Token> {
+    unsafe fn next((cache, _): &mut Self::Cache, cursor: &mut Self::Cursor) -> Option<Self::Token> {
         let (tok, _) = cache.get(*cursor)?;
         *cursor += 1;
         Some(tok.clone())

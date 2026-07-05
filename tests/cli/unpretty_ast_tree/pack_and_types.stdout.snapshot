@@ -6,13 +6,39 @@ TranslationUnit
   Declaration@src/pack_and_types.co2:40..82
     TypeSpecifier@src/pack_and_types.co2:40..81
       Struct@src/pack_and_types.co2:40..81
-        Specifier@src/pack_and_types.co2:47..81 Defined { ident: ("PackedByTwo", 47..58), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Char, 61..65)), 61..65)], declarators: [(StructDeclarator { declarator: (Identifier(("c", 66..67)), 66..67), bits: None }, 66..67)] }, 61..68), (StructOrUnionField { specifiers: [(TypeSpecifier((Int, 69..72)), 69..72)], declarators: [(StructDeclarator { declarator: (Identifier(("value", 73..78)), 73..78), bits: None }, 73..78)] }, 69..79)] }
+        Specifier@src/pack_and_types.co2:47..81
+          Defined
+            Ident@src/pack_and_types.co2:47..58 PackedByTwo
+            StructOrUnionField@src/pack_and_types.co2:61..68
+              TypeSpecifier@src/pack_and_types.co2:61..65
+                Char@src/pack_and_types.co2:61..65
+              StructDeclarator@src/pack_and_types.co2:66..67
+                Identifier@src/pack_and_types.co2:66..67 "c"
+            StructOrUnionField@src/pack_and_types.co2:69..79
+              TypeSpecifier@src/pack_and_types.co2:69..72
+                Int@src/pack_and_types.co2:69..72
+              StructDeclarator@src/pack_and_types.co2:73..78
+                Identifier@src/pack_and_types.co2:73..78 "value"
   PragmaPack@src/pack_and_types.co2:83..101
     PushSet(1)
   Declaration@src/pack_and_types.co2:102..142
     TypeSpecifier@src/pack_and_types.co2:102..141
       Struct@src/pack_and_types.co2:102..141
-        Specifier@src/pack_and_types.co2:109..141 Defined { ident: ("PackedPoint", 109..120), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Int, 123..126)), 123..126)], declarators: [(StructDeclarator { declarator: (Identifier(("x", 127..128)), 127..128), bits: None }, 127..128)] }, 123..129), (StructOrUnionField { specifiers: [(TypeSpecifier((Int, 130..133)), 130..133)], declarators: [(StructDeclarator { declarator: (Identifier(("y", 134..135)), 134..135), bits: Some(("4", 137..138)) }, 134..138)] }, 130..139)] }
+        Specifier@src/pack_and_types.co2:109..141
+          Defined
+            Ident@src/pack_and_types.co2:109..120 PackedPoint
+            StructOrUnionField@src/pack_and_types.co2:123..129
+              TypeSpecifier@src/pack_and_types.co2:123..126
+                Int@src/pack_and_types.co2:123..126
+              StructDeclarator@src/pack_and_types.co2:127..128
+                Identifier@src/pack_and_types.co2:127..128 "x"
+            StructOrUnionField@src/pack_and_types.co2:130..139
+              TypeSpecifier@src/pack_and_types.co2:130..133
+                Int@src/pack_and_types.co2:130..133
+              StructDeclarator@src/pack_and_types.co2:134..138
+                Identifier@src/pack_and_types.co2:134..135 "y"
+                Constant@src/pack_and_types.co2:137..138
+                  Int 4
   PragmaPack@src/pack_and_types.co2:143..158
     Pop
   PragmaPack@src/pack_and_types.co2:159..176
@@ -20,7 +46,19 @@ TranslationUnit
   Declaration@src/pack_and_types.co2:177..217
     TypeSpecifier@src/pack_and_types.co2:177..216
       Struct@src/pack_and_types.co2:177..216
-        Specifier@src/pack_and_types.co2:184..216 Defined { ident: ("ResetPack", 184..193), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Char, 196..200)), 196..200)], declarators: [(StructDeclarator { declarator: (Identifier(("c", 201..202)), 201..202), bits: None }, 201..202)] }, 196..203), (StructOrUnionField { specifiers: [(TypeSpecifier((Int, 204..207)), 204..207)], declarators: [(StructDeclarator { declarator: (Identifier(("value", 208..213)), 208..213), bits: None }, 208..213)] }, 204..214)] }
+        Specifier@src/pack_and_types.co2:184..216
+          Defined
+            Ident@src/pack_and_types.co2:184..193 ResetPack
+            StructOrUnionField@src/pack_and_types.co2:196..203
+              TypeSpecifier@src/pack_and_types.co2:196..200
+                Char@src/pack_and_types.co2:196..200
+              StructDeclarator@src/pack_and_types.co2:201..202
+                Identifier@src/pack_and_types.co2:201..202 "c"
+            StructOrUnionField@src/pack_and_types.co2:204..214
+              TypeSpecifier@src/pack_and_types.co2:204..207
+                Int@src/pack_and_types.co2:204..207
+              StructDeclarator@src/pack_and_types.co2:208..213
+                Identifier@src/pack_and_types.co2:208..213 "value"
   Declaration@src/pack_and_types.co2:218..241
     StorageSpecifier@src/pack_and_types.co2:218..225
       Typedef@src/pack_and_types.co2:218..225
@@ -33,17 +71,33 @@ TranslationUnit
       Typedef@src/pack_and_types.co2:242..249
     TypeSpecifier@src/pack_and_types.co2:250..283
       Union@src/pack_and_types.co2:250..283
-        Specifier@src/pack_and_types.co2:256..283 Defined { ident: ("Payload", 256..263), fields: [(StructOrUnionField { specifiers: [(TypeSpecifier((Int, 266..269)), 266..269)], declarators: [(StructDeclarator { declarator: (Identifier(("i", 270..271)), 270..271), bits: None }, 270..271)] }, 266..272), (StructOrUnionField { specifiers: [(TypeSpecifier((Float, 273..278)), 273..278)], declarators: [(StructDeclarator { declarator: (Identifier(("f", 279..280)), 279..280), bits: None }, 279..280)] }, 273..281)] }
+        Specifier@src/pack_and_types.co2:256..283
+          Defined
+            Ident@src/pack_and_types.co2:256..263 Payload
+            StructOrUnionField@src/pack_and_types.co2:266..272
+              TypeSpecifier@src/pack_and_types.co2:266..269
+                Int@src/pack_and_types.co2:266..269
+              StructDeclarator@src/pack_and_types.co2:270..271
+                Identifier@src/pack_and_types.co2:270..271 "i"
+            StructOrUnionField@src/pack_and_types.co2:273..281
+              TypeSpecifier@src/pack_and_types.co2:273..278
+                Float@src/pack_and_types.co2:273..278
+              StructDeclarator@src/pack_and_types.co2:279..280
+                Identifier@src/pack_and_types.co2:279..280 "f"
     InitDeclarator@src/pack_and_types.co2:284..291
       Identifier@src/pack_and_types.co2:284..291 "Payload"
   Declaration@src/pack_and_types.co2:293..308
     TypeSpecifier@src/pack_and_types.co2:293..307
       Struct@src/pack_and_types.co2:293..307
-        Specifier@src/pack_and_types.co2:300..307 Declared { ident: ("Forward", 300..307) }
+        Specifier@src/pack_and_types.co2:300..307
+          Declared
+            Ident@src/pack_and_types.co2:300..307 Forward
   Declaration@src/pack_and_types.co2:309..328
     TypeSpecifier@src/pack_and_types.co2:309..327
       Union@src/pack_and_types.co2:309..327
-        Specifier@src/pack_and_types.co2:315..327 Declared { ident: ("ForwardUnion", 315..327) }
+        Specifier@src/pack_and_types.co2:315..327
+          Declared
+            Ident@src/pack_and_types.co2:315..327 ForwardUnion
   Declaration@src/pack_and_types.co2:329..346
     TypeSpecifier@src/pack_and_types.co2:329..345
       Enum@src/pack_and_types.co2:329..345
@@ -55,7 +109,28 @@ TranslationUnit
   Declaration@src/pack_and_types.co2:385..454
     TypeSpecifier@src/pack_and_types.co2:385..453
       Struct@src/pack_and_types.co2:385..453
-        Specifier@src/pack_and_types.co2:392..453 Defined { ident: ("Holder", 392..398), fields: [(StructOrUnionField { specifiers: [(TypeQualifier((Const, 401..406)), 401..406), (TypeSpecifier((Int, 407..410)), 407..410)], declarators: [(StructDeclarator { declarator: (Identifier(("head", 411..415)), 411..415), bits: None }, 411..415)] }, 401..416), (StructOrUnionField { specifiers: [(TypeSpecifier((TypedefName((RustPath { segments: [(Ident("Payload"), 417..424)] }, 417..424)), 417..424)), 417..424)], declarators: [(StructDeclarator { declarator: (Identifier(("payload", 425..432)), 425..432), bits: None }, 425..432)] }, 417..433), (StructOrUnionField { specifiers: [(TypeSpecifier((Unsigned, 434..442)), 434..442)], declarators: [(StructDeclarator { declarator: (Identifier(("bits", 443..447)), 443..447), bits: Some(("4", 449..450)) }, 443..450)] }, 434..451)] }
+        Specifier@src/pack_and_types.co2:392..453
+          Defined
+            Ident@src/pack_and_types.co2:392..398 Holder
+            StructOrUnionField@src/pack_and_types.co2:401..416
+              TypeQualifier@src/pack_and_types.co2:401..406
+                Const@src/pack_and_types.co2:401..406
+              TypeSpecifier@src/pack_and_types.co2:407..410
+                Int@src/pack_and_types.co2:407..410
+              StructDeclarator@src/pack_and_types.co2:411..415
+                Identifier@src/pack_and_types.co2:411..415 "head"
+            StructOrUnionField@src/pack_and_types.co2:417..433
+              TypeSpecifier@src/pack_and_types.co2:417..424
+                TypedefName@src/pack_and_types.co2:417..424 RustPath { segments: [(Ident("Payload"), 417..424)] }
+              StructDeclarator@src/pack_and_types.co2:425..432
+                Identifier@src/pack_and_types.co2:425..432 "payload"
+            StructOrUnionField@src/pack_and_types.co2:434..451
+              TypeSpecifier@src/pack_and_types.co2:434..442
+                Unsigned@src/pack_and_types.co2:434..442
+              StructDeclarator@src/pack_and_types.co2:443..450
+                Identifier@src/pack_and_types.co2:443..447 "bits"
+                Constant@src/pack_and_types.co2:449..450
+                  Int 4
   Declaration@src/pack_and_types.co2:455..517
     TypeSpecifier@src/pack_and_types.co2:455..490
       Enum@src/pack_and_types.co2:455..490

@@ -426,7 +426,7 @@ pub struct StructOrUnionField<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub struct StructDeclarator<R: TypeResolver> {
     pub declarator: Spanned<Declarator<R>>,
-    pub bits: Option<Spanned<String>>,
+    pub bits: Option<Spanned<Expression<R>>>,
 }
 
 #[derive(Debug, Clone)]
