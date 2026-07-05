@@ -2243,6 +2243,62 @@ impl HirCtx<'_> {
                                 "unary `-` expects integer expression",
                             ));
                         }
+                        match &inner.kind {
+                            HirExprKind::ConstInt(v) => {
+                                // TODO: usize handling is wrong for cross compilation.
+                                let v = *v;
+                                let result = match inner.ty.kind() {
+                                    TyKind::RigidTy(RigidTy::Int(IntTy::I8)) => {
+                                        -(v as i8) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Int(IntTy::I16)) => {
+                                        -(v as i16) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Int(IntTy::I32)) => {
+                                        -(v as i32) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Int(IntTy::I64)) => {
+                                        -(v as i64) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Int(IntTy::I128)) => -v,
+                                    TyKind::RigidTy(RigidTy::Int(IntTy::Isize)) => {
+                                        -(v as isize) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Uint(UintTy::U8)) => {
+                                        (0u8.wrapping_sub(v as u8)) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Uint(UintTy::U16)) => {
+                                        (0u16.wrapping_sub(v as u16)) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Uint(UintTy::U32)) => {
+                                        (0u32.wrapping_sub(v as u32)) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Uint(UintTy::U64)) => {
+                                        (0u64.wrapping_sub(v as u64)) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Uint(UintTy::U128)) => {
+                                        (0u128.wrapping_sub(v as u128)) as i128
+                                    }
+                                    TyKind::RigidTy(RigidTy::Uint(UintTy::Usize)) => {
+                                        (0usize.wrapping_sub(v as usize)) as i128
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                return Ok(HirExpr {
+                                    kind: HirExprKind::ConstInt(result),
+                                    ty: inner.ty,
+                                    span,
+                                });
+                            }
+                            HirExprKind::ConstFloat(v) => {
+                                return Ok(HirExpr {
+                                    kind: HirExprKind::ConstFloat(-v),
+                                    ty: inner.ty,
+                                    span,
+                                });
+                            }
+                            _ => {}
+                        }
                         Ok(HirExpr {
                             kind: HirExprKind::Binary {
                                 op: HirBinOp::Sub,

@@ -1995,6 +1995,15 @@ int main90() {
     return 0;
 }
 
+int main91() {
+	uint64_t x = -1ULL;
+	uint64_t y = -5ULL;
+	if (x < y) {
+		return 1;
+	}
+	return 0;
+}
+
 typedef int (*main_ty)();
 
 int main() {
