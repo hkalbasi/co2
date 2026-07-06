@@ -596,6 +596,7 @@ impl<A: TypeResolver> DoTransform for RustTy<A> {
             },
             RustTy::Never => RustTy::Never,
             RustTy::Wild => RustTy::Wild,
+            RustTy::Lifetime((name, span)) => RustTy::Lifetime((name.clone(), *span)),
         }
     }
 }

@@ -303,10 +303,34 @@ impl<'a> Tokenizer<'a> {
                         continue;
                     }
 
-                    // Char literal '
+                    // Char literal ' or lifetime '
                     if b == b'\'' {
+                        let saved_pos = self.pos;
                         self.pos += 1;
-                        self.scan_char_body(out);
+                        if self.pos < self.len && is_ident_start_byte(self.bytes[self.pos]) {
+                            let ident_start = self.pos;
+                            while self.pos < self.len && is_ident_cont_byte(self.bytes[self.pos]) {
+                                self.pos += 1;
+                            }
+                            if self.pos < self.len && self.bytes[self.pos] == b'\'' {
+                                // Has closing ' - it's a char literal
+                                self.pos = saved_pos + 1;
+                                self.scan_char_body(out);
+                            } else {
+                                // No closing ' - it's a lifetime
+                                let name = unsafe {
+                                    std::str::from_utf8_unchecked(
+                                        &self.bytes[ident_start..self.pos],
+                                    )
+                                }
+                                .to_string();
+                                out.push((Token::Lifetime(name), saved_pos, self.pos));
+                                self.state = State::Start;
+                                self.buf.clear();
+                            }
+                        } else {
+                            self.scan_char_body(out);
+                        }
                         continue;
                     }
 

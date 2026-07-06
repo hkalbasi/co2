@@ -1,0 +1,10 @@
+//@ mode: co2
+
+use std::borrow::Cow;
+
+fn f1(x: Cow<'static, str>) {
+    Cow::<'static, str> y = x;
+}
+
+fn main() {
+}

@@ -350,7 +350,21 @@ impl HirCtx<'_> {
     ) -> Vec<GenericArgKind> {
         generic_args
             .iter()
-            .map(|arg| GenericArgKind::Type(self.lower_rust_ty(arg.clone())))
+            .map(|arg| match &arg.0 {
+                RustTy::Lifetime((name, _)) => {
+                    if name == "static" {
+                        GenericArgKind::Lifetime(Region {
+                            kind: RegionKind::ReStatic,
+                        })
+                    } else {
+                        co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(
+                            arg.1,
+                            format!("unknown lifetime '{name}"),
+                        )])
+                    }
+                }
+                _ => GenericArgKind::Type(self.lower_rust_ty(arg.clone())),
+            })
             .collect()
     }
 
@@ -424,6 +438,9 @@ impl HirCtx<'_> {
                     "Wild type argument `_` can only be used in function call generic arguments",
                 );
             }
+            RustTy::Lifetime(_) => {
+                panic!("lifetime should be handled by lower_generic_args")
+            }
         }
     }
 
@@ -441,9 +458,41 @@ impl HirCtx<'_> {
                 def_id,
                 generic_args,
             } => {
+                let generic_arg_kinds = self.lower_generic_args(generic_args);
+                if !generic_arg_kinds.is_empty() {
+                    let ty = CrateItem(*def_id).ty();
+                    if let TyKind::RigidTy(RigidTy::Adt(_, GenericArgs(params))) = ty.kind() {
+                        let expected_lifetimes = params
+                            .iter()
+                            .filter(|a| matches!(a, GenericArgKind::Lifetime(_)))
+                            .count();
+                        let provided_lifetimes = generic_arg_kinds
+                            .iter()
+                            .filter(|a| matches!(a, GenericArgKind::Lifetime(_)))
+                            .count();
+                        if expected_lifetimes > provided_lifetimes {
+                            co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(
+                                span,
+                                "missed lifetime parameter",
+                            )]);
+                        }
+                        if provided_lifetimes > expected_lifetimes {
+                            let extra_span = generic_args
+                                .iter()
+                                .filter(|a| matches!(&a.0, RustTy::Lifetime(_)))
+                                .nth(expected_lifetimes)
+                                .map(|a| a.1)
+                                .unwrap_or(span);
+                            co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(
+                                extra_span,
+                                "too many lifetime parameters",
+                            )]);
+                        }
+                    }
+                }
                 let ty = Ty::from_rigid_kind(RigidTy::Adt(
                     AdtDef(*def_id),
-                    GenericArgs(self.lower_generic_args(generic_args)),
+                    GenericArgs(generic_arg_kinds),
                 ));
                 self.decl_resolver.normalize_ty_defaults(ty)
             }

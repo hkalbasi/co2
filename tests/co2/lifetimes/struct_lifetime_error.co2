@@ -1,0 +1,29 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::borrow::Cow;
+
+fn f1() {
+    Cow::<str> x;
+             //^ error: missed lifetime parameter
+}
+
+fn f2() {
+    Cow::<str>::Borrowed(s"hello");
+  //^^^^^^^^^^^^^^^^^^^^ error: missed lifetime parameter
+}
+
+fn f3() {
+    Cow::<'foo, str>::Borrowed(s"hello");
+        //^^^^ error: unknown lifetime 'foo
+}
+
+fn f4() {
+    Cow::<'static, 'static, str>::Borrowed(s"hello");
+                 //^^^^^^^ error: too many lifetime parameters
+}
+
+
+fn main() {
+
+}

@@ -1706,7 +1706,19 @@ where
             })
             .map_with(|r, e| (r, e.span()));
 
-        choice((wild, path, ptr, reference, never, tuple, slice_or_array))
+        let lifetime = select! { Token::Lifetime(name) => name }
+            .map_with(|name, e| (RustTy::Lifetime((name, e.span())), e.span()));
+
+        choice((
+            wild,
+            path,
+            ptr,
+            reference,
+            never,
+            tuple,
+            slice_or_array,
+            lifetime,
+        ))
     })
 }
 

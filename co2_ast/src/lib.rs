@@ -384,6 +384,7 @@ fn rust_ty_to_pretty<R: TypeResolver>(ty: &RustTy<R>) -> String {
         }
         RustTy::Never => "!".to_owned(),
         RustTy::Wild => "_".to_owned(),
+        RustTy::Lifetime((name, _)) => format!("'{name}"),
     }
 }
 
@@ -664,6 +665,9 @@ pub enum Token {
     Ellipsis, // ...
     Hash,     // #
     HashHash, // ##
+
+    // Lifetimes
+    Lifetime(String), // 'static, 'a, etc.
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -929,6 +933,7 @@ impl Display for Token {
             Token::Ellipsis => write!(f, "..."),
             Token::Hash => write!(f, "#"),
             Token::HashHash => write!(f, "##"),
+            Token::Lifetime(name) => write!(f, "'{name}"),
         }
     }
 }
@@ -1061,6 +1066,7 @@ pub enum RustTy<R: TypeResolver> {
     },
     Never,
     Wild,
+    Lifetime(Spanned<String>),
 }
 
 #[derive(Debug, Clone)]

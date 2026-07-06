@@ -11,9 +11,9 @@ use rustc_public_generative::{
 use rustc_public_generative::{
     HirGenericArg,
     rustc_public::{
-        DefId,
+        CrateItem, DefId,
         mir::Mutability,
-        ty::{FloatTy, IntTy, UintTy},
+        ty::{FloatTy, GenericArgKind, GenericArgs, IntTy, RigidTy, TyKind, UintTy},
     },
 };
 
@@ -848,6 +848,9 @@ impl LocalResolverBase {
             co2_ast::RustTy::Wild => {
                 panic!("Wild generic argument is not supported in crate signature context")
             }
+            co2_ast::RustTy::Lifetime(_) => {
+                panic!("lifetime should be handled by hir_generic_args_of_resolved_path")
+            }
         }
     }
 
@@ -857,7 +860,19 @@ impl LocalResolverBase {
     ) -> Vec<HirGenericArg> {
         generic_args
             .iter()
-            .map(|arg| HirGenericArg::Ty(self.hir_ty_of_rust_ty(arg.clone())))
+            .map(|arg| match &arg.0 {
+                co2_ast::RustTy::Lifetime((name, _)) => {
+                    if name == "static" {
+                        HirGenericArg::Lifetime(rustc_public_generative::HirLifetime::Static)
+                    } else {
+                        self.terminate_with_spanned_error((
+                            arg.1,
+                            format!("unknown lifetime '{name}"),
+                        ))
+                    }
+                }
+                _ => HirGenericArg::Ty(self.hir_ty_of_rust_ty(arg.clone())),
+            })
             .collect()
     }
 
@@ -871,11 +886,29 @@ impl LocalResolverBase {
             crate::DefOrLocal::Def {
                 def_id,
                 generic_args,
-            } => HirTy::adt(
-                *def_id,
-                self.hir_generic_args_of_resolved_path(generic_args),
-                span,
-            ),
+            } => {
+                let hir_args = self.hir_generic_args_of_resolved_path(generic_args);
+                if !generic_args.is_empty() {
+                    let ty = CrateItem(*def_id).ty();
+                    if let TyKind::RigidTy(RigidTy::Adt(_, GenericArgs(params))) = ty.kind() {
+                        let expected_lifetimes = params
+                            .iter()
+                            .filter(|a| matches!(a, GenericArgKind::Lifetime(_)))
+                            .count();
+                        let provided_lifetimes = hir_args
+                            .iter()
+                            .filter(|a| matches!(a, HirGenericArg::Lifetime(_)))
+                            .count();
+                        if expected_lifetimes > provided_lifetimes {
+                            self.terminate_with_spanned_error((
+                                parser_span,
+                                "missed lifetime parameter".to_string(),
+                            ));
+                        }
+                    }
+                }
+                HirTy::adt(*def_id, hir_args, span)
+            }
             crate::DefOrLocal::Const(_) => panic!("invalid const in type position"),
             crate::DefOrLocal::AssocMethod { .. } => {
                 panic!("invalid associated method in type position")

@@ -1,0 +1,12 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::borrow::Cow;
+
+fn f1(x: Cow<str>) {
+       //^^^^^^^^ error: missed lifetime parameter
+}
+
+fn main() {
+
+}

@@ -1116,6 +1116,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<RustTy<R>> {
             }
             RustTy::Never => pp.leaf("Never", &sp),
             RustTy::Wild => pp.leaf("Wild", &sp),
+            RustTy::Lifetime((name, _)) => pp.leaf(&format!("'{name}"), &sp),
         }
     }
 }
