@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{self, Command};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -859,7 +859,9 @@ fn link_objects(
             .expect("failed to execute co2rustc link step");
         let _ = fs::remove_file(&rustc_link_stub);
         let _ = fs::remove_dir_all(&temp_dir);
-        assert!(status.success(), "rustc link failed with status {status}");
+        if !status.success() {
+            process::exit(1);
+        }
         return;
     }
 
@@ -882,10 +884,9 @@ fn link_objects(
     let stub_status = stub_cmd
         .status()
         .expect("failed to compile co2cc panic stub object");
-    assert!(
-        stub_status.success(),
-        "rustc panic stub compile failed with status {stub_status}"
-    );
+    if !stub_status.success() {
+        process::exit(1);
+    }
 
     let mut link_cmd = Command::new("cc");
     for object in objects {
@@ -915,10 +916,11 @@ fn link_objects(
         let _ = fs::remove_file(&cc_link_stub);
         let _ = fs::remove_file(&cc_link_stub_object);
         let _ = fs::remove_dir_all(&temp_dir);
-        panic!(
+        eprintln!(
             "executable link failed with status {}\n{}",
             link_output.status, cc_stderr
         );
+        process::exit(1);
     }
 
     let rustc_link_stub = temp_dir.join("co2c_link.rs");
@@ -942,7 +944,9 @@ fn link_objects(
     let _ = fs::remove_file(&cc_link_stub_object);
     let _ = fs::remove_file(&rustc_link_stub);
     let _ = fs::remove_dir_all(&temp_dir);
-    assert!(status.success(), "rustc link failed with status {status}");
+    if !status.success() {
+        process::exit(1);
+    }
 }
 
 const CO2C_CC_LINK_STUB: &str = r#"#![no_std]
