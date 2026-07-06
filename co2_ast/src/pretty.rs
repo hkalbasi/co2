@@ -20,7 +20,10 @@ pub trait TypeResolver
 where
     Self: crate::TypeResolver,
 {
-    fn pretty_print_su_ident(pp: &mut PrettyPrinter, item: &<Self as crate::TypeResolver>::StructOrUnionIdentifier);
+    fn pretty_print_su_ident(
+        pp: &mut PrettyPrinter,
+        item: &<Self as crate::TypeResolver>::StructOrUnionIdentifier,
+    );
 }
 
 impl<T> TypeResolver for T
@@ -28,7 +31,10 @@ where
     T: crate::TypeResolver,
     <T as crate::TypeResolver>::StructOrUnionIdentifier: PrettyPrint,
 {
-    fn pretty_print_su_ident(pp: &mut PrettyPrinter, item: &<T as crate::TypeResolver>::StructOrUnionIdentifier) {
+    fn pretty_print_su_ident(
+        pp: &mut PrettyPrinter,
+        item: &<T as crate::TypeResolver>::StructOrUnionIdentifier,
+    ) {
         item.pretty_print(pp);
     }
 }

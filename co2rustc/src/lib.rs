@@ -26,13 +26,6 @@ pub fn main() -> std::process::ExitCode {
 }
 
 pub fn main_with_args(args: Vec<String>) -> std::process::ExitCode {
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        let co2_ver = std::env::var("CO2_VERSION").unwrap_or_else(|_| "unknown".to_owned());
-        println!("co2rustc {co2_ver}");
-        println!("{}", env!("RUSTC_VERSION"));
-        return std::process::ExitCode::SUCCESS;
-    }
-
     rustc_driver::install_ice_hook("https://github.com/HKalbasi/co2", |_| ());
     let (args, dump_ast_tree) = take_unpretty_ast_tree_flag(args);
 

@@ -6,7 +6,9 @@ use std::process::{Command, Output};
 use anyhow::{Context, Result, bail};
 use tempfile::Builder as TempDirBuilder;
 
-use crate::compiler::{CompileResult, MiriRun, binary_path, compile_test, find_bin_dir_from_path, run_miri_test};
+use crate::compiler::{
+    CompileResult, MiriRun, binary_path, compile_test, find_bin_dir_from_path, run_miri_test,
+};
 use crate::debuginfo;
 use crate::error::{TestError, UiTestError, render_test_error, render_ui_error};
 use crate::test_case::{
@@ -333,7 +335,12 @@ fn copy_dump_dirs(src_root: &Path, dst_root: &Path) {
     }
 }
 
-fn run_format_test(_root: &Path, bin_dir: Option<&Path>, test: &TestCase, update_snapshots: bool) -> Result<TestOutcome> {
+fn run_format_test(
+    _root: &Path,
+    bin_dir: Option<&Path>,
+    test: &TestCase,
+    update_snapshots: bool,
+) -> Result<TestOutcome> {
     let test_dir = test.path.parent().context("test path has no parent")?;
     let stem = test.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let ugly_path = test_dir.join(format!("{stem}.ugly.co2"));

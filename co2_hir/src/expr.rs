@@ -2248,9 +2248,7 @@ impl HirCtx<'_> {
                                 // TODO: usize handling is wrong for cross compilation.
                                 let v = *v;
                                 let result = match inner.ty.kind() {
-                                    TyKind::RigidTy(RigidTy::Int(IntTy::I8)) => {
-                                        -(v as i8) as i128
-                                    }
+                                    TyKind::RigidTy(RigidTy::Int(IntTy::I8)) => -(v as i8) as i128,
                                     TyKind::RigidTy(RigidTy::Int(IntTy::I16)) => {
                                         -(v as i16) as i128
                                     }

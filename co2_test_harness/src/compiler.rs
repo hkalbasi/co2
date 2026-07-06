@@ -40,7 +40,12 @@ pub fn find_bin_dir_from_path(name: &str) -> Option<PathBuf> {
     })
 }
 
-pub fn run_miri_test(root: &Path, bin_dir: Option<&Path>, mode: Mode, test: &TestCase) -> Result<MiriRun> {
+pub fn run_miri_test(
+    root: &Path,
+    bin_dir: Option<&Path>,
+    mode: Mode,
+    test: &TestCase,
+) -> Result<MiriRun> {
     match mode {
         Mode::Co2 => run_co2_miri_test(root, bin_dir, test),
         Mode::C | Mode::Rust => {

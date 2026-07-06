@@ -32,8 +32,9 @@ if $ver.exit_code != 0 {
     print $"FAIL: co2rustc --version exit code ($ver.exit_code)"
     exit 1
 }
-if ($ver.stdout | str contains "co2rustc") == false {
-    print $"FAIL: co2rustc --version missing co2rustc header, got: ($ver.stdout)"
+# Did you address the rustversion problem?
+if ($ver.stdout | str contains "co2rustc") == true {
+    print $"FAIL: co2rustc --version had co2rustc header, got: ($ver.stdout)"
     exit 1
 }
 if ($ver.stdout | str contains "rustc") == false {
