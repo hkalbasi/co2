@@ -2128,6 +2128,7 @@ impl PrimitiveTy {
             "usize" => Some(PrimitiveTy::UintTy(UintTy::Usize)),
             "isize" => Some(PrimitiveTy::IntTy(IntTy::Isize)),
             "str" => Some(PrimitiveTy::Str),
+            "bool" => Some(PrimitiveTy::Bool),
             "f16" => Some(PrimitiveTy::FloatTy(FloatTy::F16)),
             "f32" | "_Float32" | "_Float32x" => Some(PrimitiveTy::FloatTy(FloatTy::F32)),
             "f64" | "_Float64" | "_Float64x" => Some(PrimitiveTy::FloatTy(FloatTy::F64)),

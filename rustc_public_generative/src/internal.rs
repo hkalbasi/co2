@@ -2730,7 +2730,6 @@ pub(crate) fn check_fn_predicates(
             if pred.trait_ref.has_bound_vars() {
                 continue;
             }
-            // Skip bounds that involve unresolved generic params — assume they'd hold
             if pred.trait_ref.args.iter().any(|arg| {
                 arg.walk().any(|inner| {
                     matches!(inner.kind(), ty::GenericArgKind::Type(ty) if matches!(ty.kind(), ty::TyKind::Param(_)))
@@ -2760,6 +2759,14 @@ pub(crate) fn check_fn_predicates(
                 ));
             }
         }
+    }
+    // If any generic args are still unresolved Param types, inference failed.
+    // Return an error so the unresolved type doesn't leak into MIR and cause
+    // a panic during monomorphization.
+    if rustc_args.iter().any(|arg| {
+        matches!(arg.kind(), ty::GenericArgKind::Type(ty) if matches!(ty.kind(), ty::TyKind::Param(_)))
+    }) {
+        return Err("cannot resolve generic arguments.".to_string());
     }
     Ok(())
 }

@@ -1,0 +1,40 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::option::Option;
+use std::range::Range;
+use std::vec::Vec;
+
+fn triple(x: i32) -> i32 {
+    return x * 3;
+}
+
+fn triple_ref(x: &i32) -> i32 {
+    return *x * 3;
+}
+
+fn triple_ptr(x: *mut i32) -> i32 {
+    return *x * 3;
+}
+
+fn is_even_ref(x: &i32) -> bool {
+    return *x % 2 == 0;
+}
+
+fn f1() {
+    Option::<i32> x = Option::<i32>::Some(5);
+    Option::<i32> y = x.map(triple);
+    Option::<&i32> z1 = y.as_ref();
+    Option::<i32> z2 = z1.map(triple_ptr);
+                        //^^^ error: a trait bound is not satisfied: `std::ops::FnOnce` for types [fn(*mut i32) -> i32 {triple_ptr}, (&i32,)]
+}
+
+fn f2(v: Vec<i32>) {
+    v.sort_by_key(triple_ptr);
+    //^^^^^^^^^^^ error: cannot resolve generic arguments.
+}
+
+fn main() {
+    f1();
+    f2(Vec::<i32>::new());
+}
