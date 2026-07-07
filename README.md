@@ -175,6 +175,24 @@ The compiler will stop you, but the error messages are not as high quality as Ru
 
 See [LLM Policy](./docs/contributing/llm_policy.md) which also explains this.
 
+### Isn't C/Rust interop a solved problem? Why you don't focus on the better C part?
+
+No. If C/Rust interop was a completely solved problem, you could use all Rust's standard library in C,
+so you had most of the CO2 benefits in the C itself. If you consider CO2 a better C,
+it is just because of its Rust interop, and without Rust interop CO2 is just C.
+
+By that definition, the ultimate C/Rust FFI solution certainly needs language changes on the C side,
+and CO2 tries to be that solution. Having access to the Rust standard library, Rust ecosystem and Rust tools are a great feature,
+and by enabling them, CO2 becomes a better C in that process.
+
+### Why CO2 doesn't let me defining generic structs and functions?
+
+CO2 doesn't want to change the identity of C, and adding major features like generics/templates which C doesn't have,
+is against that. The goal is to keep CO2 close to C mental model as much as possible, to keep it familiar for C programmers.
+
+If you are adding generic structs and functions, you are not thinking in C. CO2 enables you to add those generic items in Rust crates,
+and use them in your CO2 code seamlessly.
+
 ### How to rewrite a C project in Rust using CO2?
 
 CO2 enables incrementally migrating projects between C and Rust, by using CO2 as a midpoint.

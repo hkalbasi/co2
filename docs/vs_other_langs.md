@@ -93,6 +93,10 @@ See [CO2 as a C successor language](./c_successor.md).
 
 ## CO2 vs D's importC
 
+You can view the relation between CO2 and Rust like the relation between importC and D.
+The difference is that CO2 adds much more syntax to C than importC (importC also adds some syntaxes to C for importing D items)
+which enables more Rust items in C code. For example, C code compiled with importC can't use generic D items,
+but CO2 code can easily use generic Rust items.
 
 ## Network effect for programming languages
 

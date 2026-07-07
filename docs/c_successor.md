@@ -84,3 +84,27 @@ While CO2 could use Rust macro system or invent its own system, it only supports
 CO2 needed the C preprocessor for backward compatibility, and it is enough for some common use cases.
 If you need more, instead of incorporating Rust macros, CO2 enables you to write that part of your code in Rust,
 and use it in the rest of your CO2 project.
+
+## Why CO2 is a good C successor?
+
+I showed that CO2 is a viable C successor, but now I want to argue that it is even a better successor than many other candidates,
+at least in some areas:
+
+### Many C programmers don't want to learn a new syntax
+
+Learning a syntax is at least time consuming, and for a developer who worked with C and C like languages for many years,
+a new syntax introduces cognitive overhead.
+
+Almost all popular C successors invent a completely new syntax. This is done for good reason, C syntax is full of warts.
+But it might be one of the reasons C successors are not very successful in attracting C developers.
+
+CO2 dodges this problem by using C (with all of its warts) as the base, to reduce learning curve and cognitive overhead for C developers.
+
+### Building an ecosystem is hard
+
+Programming languages [have a network effect](./vs_other_langs.md#network-effect-for-programming-languages)
+and it takes a huge time to build the ecosystem around a language. While C successors usually can use C libs,
+they need their own libs for many things to have more idiomatic usage of the language.
+
+CO2 stands on shoulders of Rust in this area, and you have access to all Rust ecosystem,
+which has many different libraries [in many different areas](https://lib.rs/).
