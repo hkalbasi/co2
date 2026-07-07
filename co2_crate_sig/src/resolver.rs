@@ -81,13 +81,6 @@ fn type_query_result(kind: &DependencyChildKind) -> TypeQueryResult {
     }
 }
 
-fn module_data_class(data: &ModuleData) -> Option<TypeQueryResult> {
-    match data {
-        ModuleData::Expanded(content) => content.id.map(|(_, class)| class),
-        ModuleData::Unexpanded(_) => None,
-    }
-}
-
 impl ModuleData {
     fn as_content_mut(&mut self) -> &mut ModuleContent {
         match self {
@@ -144,12 +137,10 @@ impl ModuleData {
                     entry.insert(child_data);
                 }
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    let existing_class = module_data_class(entry.get());
-                    let new_class = module_data_class(&child_data);
-                    if matches!(
-                        (existing_class, new_class),
-                        (Some(TypeQueryResult::Expr), Some(TypeQueryResult::Type))
-                    ) {
+                    // Prefer public items over private (pub(crate)) items with the same name.
+                    // This prevents internal sub-modules (e.g. `pub(crate) mod read;`) from
+                    // shadowing public items (e.g. `pub fn read()`) in dependency crates.
+                    if child.pub_vis {
                         entry.insert(child_data);
                     }
                 }

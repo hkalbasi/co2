@@ -1,0 +1,7 @@
+[package]
+name = "proj"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossterm = { path = "crossterm", features = ["events"] }
