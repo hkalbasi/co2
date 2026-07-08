@@ -37,7 +37,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_hir::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
 use rustc_hir_analysis::autoderef::{Autoderef, AutoderefKind};
 use rustc_index::{Idx, IndexVec};
-use rustc_infer::infer::DefineOpaqueTypes;
+use rustc_infer::infer::{DefineOpaqueTypes, RegionVariableOrigin};
 use rustc_infer::traits::{ObligationCause, PredicateObligation};
 use rustc_lint::Level;
 use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
@@ -2690,8 +2690,32 @@ pub(crate) fn type_implements_trait(
     let trait_def_id = my_def_id_to_rustc_def_id(tcx, trait_def_id);
     let ty = mir_ty_to_rustc(tcx, &ty);
     let infcx = tcx.infer_ctxt().build(ty::TypingMode::non_body_analysis());
+
+    // Traits may have generic parameters beyond `Self` (e.g. `From<T>`, `Into<T>`,
+    // `Add<Rhs>`). Build a fresh inference variable for every parameter after `Self`
+    // instead of assuming the trait only has one generic argument — this lets the
+    // trait solver figure out whether *some* instantiation of the trait applies,
+    // which is what "does this type implement this trait" needs to answer to be
+    // usable as a general-purpose method-resolution predicate for any trait.
+    let generics = tcx.generics_of(trait_def_id);
+    let args: Vec<ty::GenericArg<'_>> = std::iter::once(ty::GenericArg::from(ty))
+        .chain(generics.own_params.iter().skip(1).map(|param| {
+            match param.kind {
+                ty::GenericParamDefKind::Lifetime => {
+                    ty::GenericArg::from(infcx.next_region_var(RegionVariableOrigin::Misc(DUMMY_SP)))
+                }
+                ty::GenericParamDefKind::Type { .. } => {
+                    ty::GenericArg::from(infcx.next_ty_var(DUMMY_SP))
+                }
+                ty::GenericParamDefKind::Const { .. } => {
+                    ty::GenericArg::from(infcx.next_const_var(DUMMY_SP))
+                }
+            }
+        }))
+        .collect();
+
     infcx
-        .type_implements_trait(trait_def_id, [ty], tcx.param_env(owner))
+        .type_implements_trait(trait_def_id, args, tcx.param_env(owner))
         .must_apply_modulo_regions()
 }
 
@@ -3338,13 +3362,20 @@ fn method_args_for_trait<'tcx>(
 /// `Param` types from generic params not yet inferred), use rustc's inference context to
 /// resolve them by unifying the function's input types with the provided argument types.
 ///
+/// Callers may pass `arg_tys` that either include or omit a leading receiver argument
+/// depending on how they built the argument list, while `fn_sig.inputs()` always reflects
+/// the real signature (receiver included, if any). Rather than trust a caller-supplied
+/// `skip` count — which is easy to get out of sync with how `arg_tys` was actually built
+/// and has caused alignment bugs before — the offset is derived here from the arity
+/// difference between the signature's inputs and the supplied argument types, so
+/// unification always lines up regardless of how the caller assembled `arg_tys`.
+///
 /// Returns the fully-resolved `GenericArgs` and `FnSig`.
 pub(crate) fn infer_fn_args(
     tcx: TyCtxt<'_>,
     fn_def_id: DefId,
     fn_generic_args: &GenericArgs,
     arg_tys: &[MirTy],
-    skip: usize,
 ) -> Result<(GenericArgs, FnSig), String> {
     let rustc_fn_def_id = my_def_id_to_rustc_def_id(tcx, fn_def_id);
     let param_env = tcx.param_env(rustc_fn_def_id);
@@ -3387,8 +3418,12 @@ pub(crate) fn infer_fn_args(
         .collect();
 
     // Unify remaining inputs (after skip) with argument types.
+    // `skip` is derived from the arity difference rather than supplied by the caller: if
+    // `arg_tys` has fewer entries than `inputs` (e.g. because the caller stripped a leading
+    // receiver argument), the extra leading inputs are skipped so the two lists line back up.
     // Failure to unify is ignored — the caller will catch unresolved params.
     let inputs = fn_sig.inputs();
+    let skip = inputs.len().saturating_sub(internal_arg_tys.len());
     for (i, &arg_ty) in internal_arg_tys.iter().enumerate() {
         if let Some(&input_ty) = inputs.get(i + skip) {
             let _ = infcx
@@ -3471,7 +3506,31 @@ pub(crate) fn infer_fn_args(
             })
             .count();
         if unresolved_count == param_count {
-            return Err("failed to infer generic args.".to_string());
+            return Err("failed to infer generic args".to_string());
+        }
+    }
+
+    // If `fn_def_id` is a method declared directly on a trait (as opposed to a specific
+    // impl), unifying against argument types can still produce a set of args for which no
+    // impl actually exists (e.g. inferring `T` for `From::from` from an argument whose type
+    // doesn't match any `From<T>` impl). `predicates_of` on the trait method itself doesn't
+    // carry the implicit "Self: Trait<Args>" bound, so it wouldn't otherwise be checked
+    // until codegen tries to resolve a concrete instance and ICEs. Verify that bound holds
+    // here, using the same "does this trait apply" check as method resolution, so failures
+    // are reported as a normal inference error instead.
+    if let Some(assoc_item) = tcx.opt_associated_item(rustc_fn_def_id)
+        && assoc_item.container == ty::AssocContainer::Trait
+    {
+        let trait_def_id = tcx.parent(rustc_fn_def_id);
+        let trait_arg_count = tcx.generics_of(trait_def_id).count();
+        if trait_arg_count <= final_args.len() {
+            let trait_args = &final_args[..trait_arg_count];
+            if !infcx
+                .type_implements_trait(trait_def_id, trait_args.iter().copied(), param_env)
+                .must_apply_modulo_regions()
+            {
+                return Err("failed to infer generic args".to_string());
+            }
         }
     }
 
@@ -3481,7 +3540,23 @@ pub(crate) fn infer_fn_args(
     ))
 }
 
-fn stable_generic_args(_tcx: TyCtxt<'_>, args: ty::GenericArgsRef<'_>) -> GenericArgs {
+fn stable_generic_args<'tcx>(tcx: TyCtxt<'tcx>, args: ty::GenericArgsRef<'tcx>) -> GenericArgs {
+    let args = tcx.mk_args_from_iter(args.iter().map(|arg| {
+        match arg.kind() {
+            ty::GenericArgKind::Lifetime(region)
+                if matches!(
+                    region.kind(),
+                    ty::RegionKind::ReVar(_)
+                        | ty::RegionKind::ReLateParam(_)
+                        | ty::RegionKind::ReBound(ty::BoundVarIndexKind::Canonical, _)
+                        | ty::RegionKind::ReError(_)
+                ) =>
+            {
+                ty::GenericArg::from(tcx.lifetimes.re_erased)
+            }
+            _ => arg,
+        }
+    }));
     GenericArgs(
         args.iter()
             .map(|arg| rustc_public::rustc_internal::stable(arg.kind()))

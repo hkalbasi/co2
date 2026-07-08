@@ -728,7 +728,7 @@ impl HirCtx<'_> {
         // Resolve remaining method-level generic params from argument types
         let arg_tys: Vec<Ty> = lowered_args.iter().skip(1).map(|a| a.ty).collect();
         let (new_args, _) = dependencies
-            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys, 1)
+            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys)
             .map_err(|msg| spanned_error(method_span, msg))?;
         resolved_generic_args = new_args.0;
         // Re-derive sig from func_ty which has fully-concrete generic args now.
@@ -981,7 +981,7 @@ impl HirCtx<'_> {
         let resolved_generic_args = {
             let arg_tys: Vec<Ty> = lowered_args.iter().skip(1).map(|a| a.ty).collect();
             let (new_args, _) = dependencies
-                .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys, 1)
+                .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys)
                 .map_err(|msg| spanned_error(method_span, msg))?;
             new_args.0
         };
@@ -1170,7 +1170,7 @@ impl HirCtx<'_> {
         let dependencies = self.decl_resolver.dependency_info();
         let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty).collect();
         let (new_args, new_sig) = dependencies
-            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys, 1)
+            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys)
             .map_err(|msg| spanned_error(parser_span, msg))?;
         resolved_generic_args = new_args.0;
         let sig = new_sig;
@@ -1484,7 +1484,6 @@ impl HirCtx<'_> {
                                 fn_def.0,
                                 &GenericArgs(resolved_generic_args),
                                 &arg_tys,
-                                0,
                             )
                             .map_err(|msg| spanned_error(func.1, msg))?;
                         resolved_generic_args = new_args.0;

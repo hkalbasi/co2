@@ -1,0 +1,9 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::string::String;
+
+fn main() {
+    auto s = String::from("hello");
+           //^^^^^^^^^^^^ error: failed to infer generic args
+}

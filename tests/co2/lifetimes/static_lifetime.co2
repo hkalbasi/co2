@@ -1,9 +1,11 @@
 //@ mode: co2
 
 use std::borrow::Cow;
+use std::string::String;
 
 fn f1(x: Cow<'static, str>) {
     Cow::<'static, str> y = x;
+    String z = y.into_owned();
 }
 
 fn main() {
