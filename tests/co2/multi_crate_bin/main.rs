@@ -126,6 +126,8 @@ fn main() {
     assert_ne!(p_ptr, std::ptr::null_mut());
     assert_eq!(add(4, -1), 3);
     assert_eq!(hypot(p), 17);
+    assert_eq!(support_lib::foo_user(3), 2 * support_lib2::foo(3));
+    assert_eq!(support_lib::name_len(), support_lib2::NAME.len());
 
     let u = Union1 { b: 12 };
     unsafe {

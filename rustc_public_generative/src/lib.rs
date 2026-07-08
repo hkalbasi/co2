@@ -203,6 +203,7 @@ pub enum ReceiverAdjustmentStep {
     },
 }
 
+/// TODO: This enum is garbage and should be removed.
 #[derive(Debug, Clone)]
 pub enum DependencyConstValue {
     Bool(bool),
@@ -260,8 +261,16 @@ impl<'tcx> HirStructureCtx<'tcx> {
         internal::allocate_def_id(self.tcx, parent, data)
     }
 
+    pub fn is_dependency_const(&self, def_id: DefId) -> bool {
+        internal::is_dependency_const_for_def_id(self.tcx, def_id)
+    }
+
     pub fn dependency_const_value(&self, def_id: DefId) -> Option<DependencyConstValue> {
         internal::dependency_const_value_for_def_id(self.tcx, def_id)
+    }
+
+    pub fn make_unevaluated_const(&self, def_id: DefId) -> rustc_public::ty::MirConst {
+        internal::make_unevaluated_const(self.tcx, def_id)
     }
 
     pub fn type_implements_trait(

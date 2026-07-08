@@ -2,8 +2,8 @@ use co2_hir::{HirExpr, HirExprKind, ResolvedValue};
 use rustc_public_generative::rustc_public::{
     CrateItem,
     mir::{
-        Mutability, Place as MirPlace, ProjectionElem as MirProjection, Rvalue,
-        Statement as MirStatement, StatementKind as MirStatementKind, WithRetag,
+        ConstOperand, Mutability, Operand, Place as MirPlace, ProjectionElem as MirProjection,
+        Rvalue, Statement as MirStatement, StatementKind as MirStatementKind, WithRetag,
     },
     ty::Ty,
 };
@@ -36,19 +36,40 @@ impl Builder<'_, '_> {
                 Some(base_place)
             }
             HirExprKind::Path(ResolvedValue::Static(def) | ResolvedValue::StaticConst(def)) => {
-                let value_ty = CrateItem(*def).ty();
-                let ptr_ty = Ty::new_ptr(value_ty, Mutability::Mut);
-                let tmp_ptr = self.new_temp(ptr_ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(tmp_ptr),
-                        Rvalue::ThreadLocalRef(CrateItem(*def)),
-                    ),
-                    span: expr.span,
-                });
-                let mut base_place = place(tmp_ptr);
-                base_place.projection.push(MirProjection::Deref);
-                Some(base_place)
+                if self.ctx.is_dependency_const(*def) {
+                    let value_ty = CrateItem(*def).ty();
+                    let tmp_place = self.new_temp(value_ty, Mutability::Not, expr.span);
+                    let c = self.ctx.make_unevaluated_const(*def);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(
+                            place(tmp_place),
+                            Rvalue::Use(
+                                Operand::Constant(ConstOperand {
+                                    span: expr.span,
+                                    user_ty: None,
+                                    const_: c,
+                                }),
+                                WithRetag::Yes,
+                            ),
+                        ),
+                        span: expr.span,
+                    });
+                    Some(place(tmp_place))
+                } else {
+                    let value_ty = CrateItem(*def).ty();
+                    let ptr_ty = Ty::new_ptr(value_ty, Mutability::Mut);
+                    let tmp_ptr = self.new_temp(ptr_ty, Mutability::Mut, expr.span);
+                    self.stmts.push(MirStatement {
+                        kind: MirStatementKind::Assign(
+                            place(tmp_ptr),
+                            Rvalue::ThreadLocalRef(CrateItem(*def)),
+                        ),
+                        span: expr.span,
+                    });
+                    let mut base_place = place(tmp_ptr);
+                    base_place.projection.push(MirProjection::Deref);
+                    Some(base_place)
+                }
             }
             HirExprKind::StatementExpr { statements, tail } => {
                 for stmt in statements {

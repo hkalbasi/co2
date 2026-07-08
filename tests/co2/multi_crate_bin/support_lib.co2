@@ -1,5 +1,6 @@
 mod inner_mod;
 use std::vec::Vec;
+use support_lib2::{foo, NAME};
 
 typedef struct {
     int x;
@@ -14,6 +15,14 @@ int add(int a, int b) {
 
 int hypot(Point p) {
     return p.x * p.x + p.y * p.y;
+}
+
+i32 foo_user(i32 x) {
+    return foo(x) * 2;
+}
+
+usize name_len() {
+    return NAME.len();
 }
 
 typedef union {

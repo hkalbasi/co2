@@ -41,7 +41,7 @@ use rustc_infer::infer::{DefineOpaqueTypes, RegionVariableOrigin};
 use rustc_infer::traits::{ObligationCause, PredicateObligation};
 use rustc_lint::Level;
 use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
-use rustc_middle::mir::{BorrowKind, ConstValue};
+use rustc_middle::mir::{BorrowKind, Const as MirInternalConst, ConstValue};
 use rustc_middle::queries::mir_borrowck::ProvidedValue as BorrowckProvidedValue;
 use rustc_middle::query::Providers as QueryProviders;
 use rustc_middle::ty::{
@@ -2624,6 +2624,11 @@ pub fn dependency_is_trait(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     matches!(tcx.def_kind(rustc_def_id), DefKind::Trait)
 }
 
+fn is_dependency_const_value(tcx: TyCtxt<'_>, def_id: RustcDefId) -> bool {
+    let kind = tcx.def_kind(def_id);
+    matches!(kind, DefKind::Const { is_type_const: _ }) && !def_id.is_local()
+}
+
 fn dependency_const_value(tcx: TyCtxt<'_>, def_id: RustcDefId) -> Option<DependencyConstValue> {
     let kind = tcx.def_kind(def_id);
     if !matches!(kind, DefKind::Const { is_type_const: _ }) {
@@ -2678,6 +2683,13 @@ pub(crate) fn dependency_const_value_for_def_id(
     def_id: DefId,
 ) -> Option<DependencyConstValue> {
     dependency_const_value(tcx, my_def_id_to_rustc_def_id(tcx, def_id))
+}
+
+pub(crate) fn is_dependency_const_for_def_id(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+) -> bool {
+    is_dependency_const_value(tcx, my_def_id_to_rustc_def_id(tcx, def_id))
 }
 
 pub(crate) fn type_implements_trait(
@@ -5775,6 +5787,12 @@ fn hir_ty_to_rustc(
             *ty
         }
     }
+}
+
+pub fn make_unevaluated_const(tcx: TyCtxt<'_>, def_id: rustc_public::DefId) -> rustc_public::ty::MirConst {
+    let def_id = my_def_id_to_rustc_def_id(tcx, def_id);
+    let internal_const = MirInternalConst::from_unevaluated(tcx, def_id).skip_binder();
+    rustc_public::rustc_internal::stable(internal_const)
 }
 
 fn leak<T>(value: T) -> &'static T {
