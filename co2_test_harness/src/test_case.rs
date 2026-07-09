@@ -36,6 +36,7 @@ pub struct TestCase {
 pub enum TestKind {
     File,
     NuDir,
+    Example,
 }
 
 pub enum TestOutcome {
@@ -50,6 +51,74 @@ pub fn collect_tests(root: &Path, filter: Option<&str>) -> Result<Vec<TestCase>>
         return Ok(out);
     }
     collect_tests_inner(root, &dir, filter, &mut out)?;
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+pub fn collect_examples(root: &Path, filter: Option<&str>) -> Result<Vec<TestCase>> {
+    let dir = root.join("examples");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path.file_name().and_then(|s| s.to_str()) == Some("target") {
+            continue;
+        }
+
+        let src_dir = path.join("src");
+        if !src_dir.is_dir() {
+            continue;
+        }
+
+        let source_file = if src_dir.join("main.co2").exists() {
+            src_dir.join("main.co2")
+        } else if src_dir.join("main.c").exists() {
+            src_dir.join("main.c")
+        } else if src_dir.join("main.rs").exists() {
+            src_dir.join("main.rs")
+        } else {
+            continue;
+        };
+
+        if let Some(pattern) = filter
+            && !path_matches(root, &source_file, pattern)
+        {
+            continue;
+        }
+
+        let source = fs::read_to_string(&source_file)
+            .with_context(|| format!("failed to read {}", source_file.display()))?;
+
+        let ext = source_file
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let mode = match ext {
+            "co2" => "co2",
+            "c" => "c",
+            "rs" => "rust",
+            _ => continue,
+        };
+
+        let mut directives = HashMap::new();
+        directives.insert("mode".to_string(), vec![mode.to_string()]);
+        directives.insert("run-status".to_string(), vec!["0".to_string()]);
+
+        out.push(TestCase {
+            path: source_file,
+            kind: TestKind::Example,
+            directives,
+            source,
+        });
+    }
+
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }

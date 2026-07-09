@@ -17,7 +17,7 @@ fn main() {
         }
 
         String arg = next.unwrap();
-        printf("arg[%d] (%zu bytes): %.*s\n", index, arg.len(), arg.len(), arg.as_str().as_ptr());
+        printf("arg[%d] (%zu bytes): %.*s\n", index, arg.len(), arg.len(), arg.as_ptr());
         index += 1;
     }
 

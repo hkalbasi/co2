@@ -5,6 +5,12 @@ use std::string::String;
 #include <stdio.h>
 
 fn main() {
+    if (std::env::var(s"CO2_TEST_SUITE").is_ok()) {
+        // We run examples as tests, and we don't want to make http requests there.
+        printf("co2 has XXX stars\n");
+        return;
+    }
+
     Client client = Client::builder()
         .user_agent::<&str>(s"reqwest-gh-stars-co2-example")
         .build()

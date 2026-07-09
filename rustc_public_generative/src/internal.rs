@@ -2685,10 +2685,7 @@ pub(crate) fn dependency_const_value_for_def_id(
     dependency_const_value(tcx, my_def_id_to_rustc_def_id(tcx, def_id))
 }
 
-pub(crate) fn is_dependency_const_for_def_id(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-) -> bool {
+pub(crate) fn is_dependency_const_for_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     is_dependency_const_value(tcx, my_def_id_to_rustc_def_id(tcx, def_id))
 }
 
@@ -2711,19 +2708,23 @@ pub(crate) fn type_implements_trait(
     // usable as a general-purpose method-resolution predicate for any trait.
     let generics = tcx.generics_of(trait_def_id);
     let args: Vec<ty::GenericArg<'_>> = std::iter::once(ty::GenericArg::from(ty))
-        .chain(generics.own_params.iter().skip(1).map(|param| {
-            match param.kind {
-                ty::GenericParamDefKind::Lifetime => {
-                    ty::GenericArg::from(infcx.next_region_var(RegionVariableOrigin::Misc(DUMMY_SP)))
-                }
-                ty::GenericParamDefKind::Type { .. } => {
-                    ty::GenericArg::from(infcx.next_ty_var(DUMMY_SP))
-                }
-                ty::GenericParamDefKind::Const { .. } => {
-                    ty::GenericArg::from(infcx.next_const_var(DUMMY_SP))
-                }
-            }
-        }))
+        .chain(
+            generics
+                .own_params
+                .iter()
+                .skip(1)
+                .map(|param| match param.kind {
+                    ty::GenericParamDefKind::Lifetime => ty::GenericArg::from(
+                        infcx.next_region_var(RegionVariableOrigin::Misc(DUMMY_SP)),
+                    ),
+                    ty::GenericParamDefKind::Type { .. } => {
+                        ty::GenericArg::from(infcx.next_ty_var(DUMMY_SP))
+                    }
+                    ty::GenericParamDefKind::Const { .. } => {
+                        ty::GenericArg::from(infcx.next_const_var(DUMMY_SP))
+                    }
+                }),
+        )
         .collect();
 
     infcx
@@ -3553,21 +3554,19 @@ pub(crate) fn infer_fn_args(
 }
 
 fn stable_generic_args<'tcx>(tcx: TyCtxt<'tcx>, args: ty::GenericArgsRef<'tcx>) -> GenericArgs {
-    let args = tcx.mk_args_from_iter(args.iter().map(|arg| {
-        match arg.kind() {
-            ty::GenericArgKind::Lifetime(region)
-                if matches!(
-                    region.kind(),
-                    ty::RegionKind::ReVar(_)
-                        | ty::RegionKind::ReLateParam(_)
-                        | ty::RegionKind::ReBound(ty::BoundVarIndexKind::Canonical, _)
-                        | ty::RegionKind::ReError(_)
-                ) =>
-            {
-                ty::GenericArg::from(tcx.lifetimes.re_erased)
-            }
-            _ => arg,
+    let args = tcx.mk_args_from_iter(args.iter().map(|arg| match arg.kind() {
+        ty::GenericArgKind::Lifetime(region)
+            if matches!(
+                region.kind(),
+                ty::RegionKind::ReVar(_)
+                    | ty::RegionKind::ReLateParam(_)
+                    | ty::RegionKind::ReBound(ty::BoundVarIndexKind::Canonical, _)
+                    | ty::RegionKind::ReError(_)
+            ) =>
+        {
+            ty::GenericArg::from(tcx.lifetimes.re_erased)
         }
+        _ => arg,
     }));
     GenericArgs(
         args.iter()
@@ -5789,7 +5788,10 @@ fn hir_ty_to_rustc(
     }
 }
 
-pub fn make_unevaluated_const(tcx: TyCtxt<'_>, def_id: rustc_public::DefId) -> rustc_public::ty::MirConst {
+pub fn make_unevaluated_const(
+    tcx: TyCtxt<'_>,
+    def_id: rustc_public::DefId,
+) -> rustc_public::ty::MirConst {
     let def_id = my_def_id_to_rustc_def_id(tcx, def_id);
     let internal_const = MirInternalConst::from_unevaluated(tcx, def_id).skip_binder();
     rustc_public::rustc_internal::stable(internal_const)

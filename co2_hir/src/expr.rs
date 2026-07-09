@@ -1480,11 +1480,7 @@ impl HirCtx<'_> {
 
                         let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty).collect();
                         let (new_args, new_sig) = dependencies
-                            .infer_fn_args(
-                                fn_def.0,
-                                &GenericArgs(resolved_generic_args),
-                                &arg_tys,
-                            )
+                            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys)
                             .map_err(|msg| spanned_error(func.1, msg))?;
                         resolved_generic_args = new_args.0;
                         sig = new_sig;

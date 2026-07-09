@@ -1,0 +1,3 @@
+length before pop: 4
+popped: 2
+descending: 4 3 1 

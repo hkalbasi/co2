@@ -12,8 +12,8 @@ use crate::compiler::{
 use crate::debuginfo;
 use crate::error::{TestError, UiTestError, render_test_error, render_ui_error};
 use crate::test_case::{
-    Mode, TestCase, TestKind, TestOutcome, collect_tests, directive_args, directive_i32,
-    directive_text,
+    Mode, TestCase, TestKind, TestOutcome, collect_examples, collect_tests, directive_args,
+    directive_i32, directive_text,
 };
 use crate::ui::{
     UiAnnotationLevel, UiSpanExpectation, check_compile_warnings, check_ui, format_named_output,
@@ -39,7 +39,9 @@ pub fn run_tests(
     verbose: bool,
     stats: &mut Stats,
 ) -> Result<()> {
-    let tests = collect_tests(root, filter)?;
+    let mut tests = collect_tests(root, filter)?;
+    let examples = collect_examples(root, filter)?;
+    tests.extend(examples);
     eprintln!("running {} tests", tests.len());
 
     for test in tests {
@@ -113,6 +115,10 @@ fn run_test(
             verbose,
         )?;
         return Ok(TestOutcome::Pass);
+    }
+
+    if test.kind == TestKind::Example {
+        return run_example_test(root, bin_dir, test, update_snapshots);
     }
 
     let mode = Mode::from_directive(
@@ -333,6 +339,94 @@ fn copy_dump_dirs(src_root: &Path, dst_root: &Path) {
             }
         }
     }
+}
+
+fn run_example_test(
+    _root: &Path,
+    bin_dir: Option<&Path>,
+    test: &TestCase,
+    update_snapshots: bool,
+) -> Result<TestOutcome> {
+    let example_dir = test
+        .path
+        .parent()
+        .and_then(|p| p.parent())
+        .context("example path has no parent")?;
+
+    let mut cmd = std::process::Command::new(binary_path(bin_dir, "co2cargo"));
+    cmd.current_dir(example_dir).args(["run", "-q"]);
+
+    if let Some(dir) = bin_dir {
+        let path_sep = if cfg!(windows) { ";" } else { ":" };
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let merged_path = if current_path.is_empty() {
+            dir.to_string_lossy().into_owned()
+        } else {
+            format!("{}{}{}", dir.display(), path_sep, current_path)
+        };
+        cmd.env("PATH", merged_path);
+        cmd.env("CO2_BIN_DIR", dir);
+    } else if let Some(dir) = find_bin_dir_from_path("co2cc") {
+        cmd.env("CO2_BIN_DIR", dir);
+    }
+
+    cmd.env("CO2_TEST_SUITE", "1");
+
+    let run_args = directive_args(test, "run-args")?;
+    if !run_args.is_empty() {
+        cmd.arg("--").args(run_args);
+    }
+
+    let output = cmd.output().with_context(|| {
+        format!(
+            "failed to run co2cargo example in {}",
+            example_dir.display()
+        )
+    })?;
+
+    let got_status = output.status.code().unwrap_or(-1);
+    let expected_status = directive_i32(test, "run-status")?.unwrap_or(0);
+    if got_status != expected_status {
+        return Err(TestError {
+            source: test.source.clone(),
+            span: None,
+            message: format!(
+                "example exit code mismatch: expected `{expected_status}`, got `{got_status}`\n{}",
+                format_named_output("stdout", &String::from_utf8_lossy(&output.stdout)),
+            ),
+        }
+        .into());
+    }
+
+    let snapshot_path = example_dir.join("expected_output.txt");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if update_snapshots {
+        std::fs::write(&snapshot_path, &stdout)
+            .with_context(|| format!("failed to write snapshot to {}", snapshot_path.display()))?;
+        eprintln!("  updated snapshot: {}", snapshot_path.display());
+        return Ok(TestOutcome::Pass);
+    }
+
+    if snapshot_path.exists() {
+        let expected = std::fs::read_to_string(&snapshot_path)
+            .with_context(|| format!("failed to read {}", snapshot_path.display()))?;
+        if normalize(&expected) != normalize(&stdout) {
+            return Err(TestError {
+                source: test.source.clone(),
+                span: None,
+                message: format!(
+                    "example stdout mismatch\n  expected ({}):\n{}\n  actual:\n{}",
+                    snapshot_path.display(),
+                    expected,
+                    stdout,
+                ),
+            }
+            .into());
+        }
+    }
+
+    Ok(TestOutcome::Pass)
 }
 
 fn run_format_test(

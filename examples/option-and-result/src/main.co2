@@ -15,12 +15,16 @@ fn safe_divide(a: i32, b: i32) -> Result<i32, String> {
     return Result::<i32, String>::Ok(a / b);
 }
 
+fn is_3(x: &i32) -> bool {
+    return *x == 3;
+}
+
 fn main() {
     Option::<i32> some_value = Option::<i32>::Some(10);
     Option::<i32> halved = some_value.map(halve);
     printf("halved: %d\n", halved.unwrap());
 
-    Option::<i32> nothing = Option::<i32>::None;
+    Option::<i32> nothing = some_value.filter(is_3);
     printf("fallback for empty option: %d\n", nothing.unwrap_or(-1));
 
     Result::<i32, String> ok_result = safe_divide(10, 2);

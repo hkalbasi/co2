@@ -1,0 +1,4 @@
+halved: 5
+fallback for empty option: -1
+10 / 2 = 5
+error: division by zero

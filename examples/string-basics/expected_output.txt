@@ -1,0 +1,3 @@
+Hi, CO2 speaking!
+Rust literals use the s"..." prefix.
+message length: 18 bytes

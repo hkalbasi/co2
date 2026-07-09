@@ -1,0 +1,5 @@
+Sum is 7
+Product is 30
+Last is 20
+PI is 3.14159265
+10 20 3 15 1000 60 16 

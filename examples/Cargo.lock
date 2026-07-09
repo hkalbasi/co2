@@ -55,6 +55,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cli-args-summary"
+version = "0.1.0"
+
+[[package]]
 name = "co2-features"
 version = "0.1.0"
 
@@ -276,10 +280,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "hashmap-basics"
+version = "0.1.0"
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hello-world"
+version = "0.1.0"
 
 [[package]]
 name = "http"
@@ -555,6 +567,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "linked-list-c"
+version = "0.1.0"
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -660,6 +676,10 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
+
+[[package]]
+name = "option-and-result"
+version = "0.1.0"
 
 [[package]]
 name = "percent-encoding"
@@ -965,10 +985,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "sorting-with-callback"
+version = "0.1.0"
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "string-basics"
+version = "0.1.0"
+
+[[package]]
+name = "struct-geometry"
+version = "0.1.0"
 
 [[package]]
 name = "subtle"
@@ -1040,6 +1072,10 @@ dependencies = [
  "rustix",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "timing-demo"
+version = "0.1.0"
 
 [[package]]
 name = "tinystr"
@@ -1209,6 +1245,10 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "vector-basics"
+version = "0.1.0"
 
 [[package]]
 name = "want"

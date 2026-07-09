@@ -1,0 +1,4 @@
+entries: 3
+alice scored 90
+removed bob's score of 82
+entries after removal: 2
