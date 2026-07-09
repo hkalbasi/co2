@@ -1,0 +1,29 @@
+use std::time::Instant;
+use std::time::Duration;
+use std::thread;
+
+#include <stdio.h>
+
+fn busy_work(iterations: i32) -> i64 {
+    i64 total = 0;
+    for (int i = 0; i < iterations; i += 1) {
+        total += i;
+    }
+    return total;
+}
+
+fn main() {
+    Instant start = Instant::now();
+
+    i64 result = busy_work(1000000);
+    thread::sleep(Duration::from_millis(5));
+
+    Duration elapsed = start.elapsed();
+    printf("busy_work result: %lld\n", result);
+
+    if (elapsed.as_millis() >= 5) {
+        printf("elapsed at least 5ms\n");
+    } else {
+        printf("elapsed less than 5ms\n");
+    }
+}
