@@ -1,0 +1,36 @@
+use std::option::Option;
+use std::result::Result;
+use std::string::String;
+
+#include <stdio.h>
+
+fn halve(x: i32) -> i32 {
+    return x / 2;
+}
+
+fn safe_divide(a: i32, b: i32) -> Result<i32, String> {
+    if (b == 0) {
+        return Result::<i32, String>::Err(s"division by zero".to_owned());
+    }
+    return Result::<i32, String>::Ok(a / b);
+}
+
+fn main() {
+    Option::<i32> some_value = Option::<i32>::Some(10);
+    Option::<i32> halved = some_value.map(halve);
+    printf("halved: %d\n", halved.unwrap());
+
+    Option::<i32> nothing = Option::<i32>::None;
+    printf("fallback for empty option: %d\n", nothing.unwrap_or(-1));
+
+    Result::<i32, String> ok_result = safe_divide(10, 2);
+    if (ok_result.is_ok()) {
+        printf("10 / 2 = %d\n", ok_result.unwrap());
+    }
+
+    Result::<i32, String> err_result = safe_divide(5, 0);
+    if (err_result.is_err()) {
+        String msg = err_result.unwrap_err();
+        printf("error: %.*s\n", msg.len(), msg.as_str().as_ptr());
+    }
+}
