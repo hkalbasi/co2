@@ -2,5 +2,15 @@
 members = [
     "co2-features",
     "reqwest-gh-stars",
+    "hello-world",
+    "vector-basics",
+    "string-basics",
+    "hashmap-basics",
+    "struct-geometry",
+    "option-and-result",
+    "linked-list-c",
+    "timing-demo",
+    "sorting-with-callback",
+    "cli-args-summary",
 ]
 resolver = "2"
