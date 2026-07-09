@@ -1,9 +1,10 @@
 use std::string::String;
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char, CString};
 
 #include <stdio.h>
+#include <string.h>
 
-fn c_str_to_rust_str(s: *const i8) -> *const str {
+fn c_str_to_rust_str(s: *const c_char) -> *const str {
     return CStr::from_ptr(s).to_str().unwrap();
 }
 
@@ -20,4 +21,10 @@ fn main() {
 
     usize len = greeting.len();
     printf("message length: %zu bytes\n", len);
+
+    CString greeting_c = CString::new(greeting).unwrap();
+    len = strlen(greeting_c.as_ptr());
+    printf("message length according to C: %zu bytes\n", len);
+    char *pos_of_2 = strchr(greeting_c.as_ptr(), '2');
+    printf("2 is the %dth character\n", pos_of_2 - greeting_c.as_ptr());        
 }

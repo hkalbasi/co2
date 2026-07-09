@@ -1,3 +1,5 @@
 Hi, CO2 speaking!
 Rust literals use the s"..." prefix.
 message length: 18 bytes
+message length according to C: 18 bytes
+2 is the 6th character

@@ -2,6 +2,7 @@ use std::range::Range;
 use std::vec::Vec;
 
 #include <stdio.h>
+#include <stdlib.h>
 
 fn negate(x: &i32) -> i32 {
     return -*x;
@@ -15,6 +16,21 @@ fn print_all(values: Vec<i32>) {
     printf("\n");
 }
 
+int c_sort_callback(const void * elem1, const void * elem2) 
+{
+    i32 f = *((i32*)elem1);
+    i32 s = *((i32*)elem2);
+    if (f % 2 == 0) {
+        f += 1000;
+    }
+    if (s % 2 == 0) {
+        s += 1000;
+    }
+    if (f > s) return  1;
+    if (f < s) return -1;
+    return 0;
+}
+
 fn main() {
     Range::<i32> r = { .start = 1, .end = 8 };
     Vec::<i32> values = r.into_iter().collect::<Vec<i32>>();
@@ -25,5 +41,10 @@ fn main() {
     values.sort_by_key(negate);
 
     printf("descending: ");
+    print_all(values);
+
+    qsort(values.as_ptr(), values.len(), sizeof(i32), c_sort_callback);
+
+    printf("Using libc qsort: ");
     print_all(values);
 }
