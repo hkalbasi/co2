@@ -1,0 +1,25 @@
+use std::env::Args;
+use std::option::Option;
+use std::string::String;
+
+#include <stdio.h>
+
+fn main() {
+    Args args = std::env::args();
+
+    args.next();
+
+    int index = 0;
+    while (1) {
+        Option::<String> next = args.next();
+        if (next.is_none()) {
+            break;
+        }
+
+        String arg = next.unwrap();
+        printf("arg[%d] (%zu bytes): %.*s\n", index, arg.len(), arg.len(), arg.as_str().as_ptr());
+        index += 1;
+    }
+
+    printf("total extra arguments: %d\n", index);
+}
