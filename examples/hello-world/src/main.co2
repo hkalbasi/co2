@@ -1,0 +1,21 @@
+use std::string::String;
+
+#include <stdio.h>
+
+fn greeting(name: &str) -> String {
+    String msg = String::from(name);
+    msg.push_str(s", welcome to CO2!\n");
+    return msg;
+}
+
+int square(int x) {
+    return x * x;
+}
+
+fn main() {
+    String msg = greeting(s"Hello");
+    printf("%.*s", msg.len(), msg.as_str().as_ptr());
+
+    int n = 7;
+    printf("%d squared is %d\n", n, square(n));
+}
