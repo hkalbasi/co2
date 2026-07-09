@@ -1,0 +1,27 @@
+use std::collections::HashMap;
+use std::option::Option;
+use std::string::String;
+
+#include <stdio.h>
+
+fn main() {
+    HashMap::<String, i32> scores = HashMap::<String, i32>::new();
+
+    scores.insert(s"alice".to_owned(), 90);
+    scores.insert(s"bob".to_owned(), 82);
+    scores.insert(s"carol".to_owned(), 99);
+
+    printf("entries: %zu\n", scores.len());
+
+    if (scores.contains_key(s"alice")) {
+        i32 *score = scores.get(s"alice").unwrap();
+        printf("alice scored %d\n", *score);
+    }
+
+    Option::<i32> removed = scores.remove(s"bob");
+    if (removed.is_some()) {
+        printf("removed bob's score of %d\n", removed.unwrap());
+    }
+
+    printf("entries after removal: %zu\n", scores.len());
+}
