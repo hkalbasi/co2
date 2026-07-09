@@ -1,0 +1,49 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct Node {
+    int value;
+    struct Node *next;
+} Node;
+
+Node *push_front(Node *head, int value) {
+    Node *node = (Node *)malloc(sizeof(Node));
+    node->value = value;
+    node->next = head;
+    return node;
+}
+
+void print_list(Node *head) {
+    for (Node *cur = head; cur != NULL; cur = cur->next) {
+        printf("%d -> ", cur->value);
+    }
+    printf("NULL\n");
+}
+
+int sum_list(Node *head) {
+    int total = 0;
+    for (Node *cur = head; cur != NULL; cur = cur->next) {
+        total += cur->value;
+    }
+    return total;
+}
+
+void free_list(Node *head) {
+    while (head != NULL) {
+        Node *next = head->next;
+        free(head);
+        head = next;
+    }
+}
+
+fn main() {
+    Node *head = NULL;
+    for (int i = 1; i <= 5; i += 1) {
+        head = push_front(head, i);
+    }
+
+    print_list(head);
+    printf("sum: %d\n", sum_list(head));
+
+    free_list(head);
+}
