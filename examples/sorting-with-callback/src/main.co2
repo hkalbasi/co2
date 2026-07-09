@@ -1,0 +1,29 @@
+use std::range::Range;
+use std::vec::Vec;
+
+#include <stdio.h>
+
+fn negate(x: &i32) -> i32 {
+    return -*x;
+}
+
+fn print_all(values: Vec<i32>) {
+    i32 *data = values.as_ptr();
+    for (int i = 0; i < values.len(); i += 1) {
+        printf("%d ", data[i]);
+    }
+    printf("\n");
+}
+
+fn main() {
+    Range::<i32> r = { .start = 1, .end = 8 };
+    Vec::<i32> values = r.into_iter().collect::<Vec<i32>>();
+
+    printf("ascending:  ");
+    print_all(values);
+
+    values.sort_by_key(negate);
+
+    printf("descending: ");
+    print_all(values);
+}
