@@ -7,6 +7,8 @@ use std::{
 
 use chumsky::span::Span as SpanTrait;
 
+use crate::diagnostic::get_source_text;
+
 // Type definitions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(u32);
@@ -130,6 +132,10 @@ impl Span {
                     ..self.start_or_intern_key as usize + self.length as usize,
             )
         }
+    }
+
+    pub fn source_text(self) -> Option<String> {
+        get_source_text(self)
     }
 }
 

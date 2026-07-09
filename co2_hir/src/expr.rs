@@ -689,6 +689,7 @@ impl HirCtx<'_> {
         receiver: &HirExpr,
         method_span: co2_ast::Span,
         parser_span: co2_ast::Span,
+        func_name: &str,
         generics: &[Spanned<RustTy<co2_ast::StatelessResolver>>],
         params: &[Spanned<Expression<LocalResolver>>],
         locals: &mut Arena<HirLocal>,
@@ -755,7 +756,7 @@ impl HirCtx<'_> {
             self.decl_resolver.current_owner(),
         )
         .map_err(|msg| spanned_error(method_span, msg))?;
-        self.lower_call_args(parser_span, &sig, &mut lowered_args);
+        self.lower_call_args(parser_span, &sig, &mut lowered_args, func_name);
         Ok(HirExpr {
             kind: HirExprKind::Call {
                 func: Box::new(HirExpr {
@@ -816,6 +817,7 @@ impl HirCtx<'_> {
         parser_span: co2_ast::Span,
         sig: &rustc_public_generative::rustc_public::ty::FnSig,
         args: &mut [HirExpr],
+        func_name: &str,
     ) {
         if sig.inputs().len() != args.len() && !sig.c_variadic {
             self.terminate_with_error(
@@ -856,9 +858,10 @@ impl HirCtx<'_> {
             }
             if !ty_matches_expected(expected, actual.ty) {
                 self.terminate_with_error(
-                    parser_span,
+                    self.to_chumsky_span(actual.span),
                     &format!(
-                        "call argument type mismatch at index {idx}: expected {}, got {}",
+                        "call `{}` type mismatch at arg {idx}: expected {}, got {}",
+                        func_name,
                         self.format_ty(expected),
                         self.format_ty(actual.ty)
                     ),
@@ -1444,6 +1447,7 @@ impl HirCtx<'_> {
                 span,
             }),
             Expression::Call { func, params } => {
+                let func_name = func.1.source_text().unwrap_or_default();
                 let (func_expr, sig, mut lowered_args) = if let Some(lowered) =
                     self.try_lower_method_call(&func, &params, locals, local_map)?
                 {
@@ -1505,7 +1509,7 @@ impl HirCtx<'_> {
                     (func_expr, sig, lowered_args)
                 };
 
-                self.lower_call_args(parser_span, &sig, &mut lowered_args);
+                self.lower_call_args(parser_span, &sig, &mut lowered_args, &func_name);
 
                 Ok(HirExpr {
                     kind: HirExprKind::Call {
@@ -1552,6 +1556,7 @@ impl HirCtx<'_> {
                     &receiver,
                     method.1,
                     parser_span,
+                    method_name,
                     &generics,
                     &params,
                     locals,
@@ -1611,6 +1616,7 @@ impl HirCtx<'_> {
                     &base,
                     field.1,
                     parser_span,
+                    field.0.as_str(),
                     &[],
                     &[],
                     locals,

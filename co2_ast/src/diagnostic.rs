@@ -21,6 +21,18 @@ pub trait SourceMap: Send + Sync {
     fn get_file_info(&self, id: FileId) -> Option<(String, Arc<str>)>;
 }
 
+pub(crate) fn get_source_text(span: Span) -> Option<String> {
+    let guard = SOURCE_MAP.try_lock().ok()?;
+    let sm = guard.as_ref()?;
+    let data = span.data();
+    let (_, source) = sm.get_file_info(data.context)?;
+    if data.end <= source.len() {
+        Some(source[data.start..data.end].to_string())
+    } else {
+        None
+    }
+}
+
 #[derive(Clone)]
 pub struct DiagnosticSpan {
     pub file_name: String,

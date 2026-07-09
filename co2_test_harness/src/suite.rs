@@ -391,8 +391,9 @@ fn run_example_test(
             source: test.source.clone(),
             span: None,
             message: format!(
-                "example exit code mismatch: expected `{expected_status}`, got `{got_status}`\n{}",
+                "example exit code mismatch: expected `{expected_status}`, got `{got_status}`\n{}\n{}",
                 format_named_output("stdout", &String::from_utf8_lossy(&output.stdout)),
+                format_named_output("stderr", &String::from_utf8_lossy(&output.stderr)),
             ),
         }
         .into());

@@ -172,6 +172,19 @@ impl Context {
         let span = RustcSpan::new(lo, hi, SyntaxContext::root(), None);
         rustc_public::rustc_internal::stable(span)
     }
+
+    pub fn span_data(&self, tcx: TyCtxt<'_>, span: rustc_public::ty::Span) -> (FileId, u32, u32) {
+        let span: RustcSpan = rustc_public::rustc_internal::internal(tcx, span);
+        let lo = span.lo().0;
+        let hi = span.hi().0;
+        let guard = self.0.registered_files.try_lock().unwrap();
+        for (&file_id, file) in guard.iter() {
+            if lo >= file.start.0 && hi <= file.end.0 {
+                return (file_id, lo - file.start.0, hi - file.start.0);
+            }
+        }
+        panic!("span not found in any registered file");
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -66,6 +66,7 @@ static DUMP_MIR_ENABLED: AtomicBool = AtomicBool::new(false);
 struct Co2GeneratorState {
     file_id: rustc_gen::FileId,
     file_ids: Arc<HashMap<co2_ast::FileId, rustc_gen::FileId>>,
+    reverse_file_ids: Arc<HashMap<rustc_gen::FileId, co2_ast::FileId>>,
     pending_mirs: HashMap<DefId, MirOwnerInfo>,
     wellknown_defs: WellknownDefs,
 }
@@ -143,9 +144,14 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
             files: Arc::new(source_files),
         }));
 
+        let reverse_file_ids: HashMap<rustc_gen::FileId, co2_ast::FileId> =
+            file_ids.iter().map(|(&k, &v)| (v, k)).collect();
+        let reverse_file_ids = Arc::new(reverse_file_ids);
+
         let state = Co2GeneratorState {
             file_id,
             file_ids,
+            reverse_file_ids,
             pending_mirs,
             wellknown_defs,
         };
@@ -213,9 +219,14 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 body,
             } => {
                 let span_converter = |span: co2_ast::Span| self.map_co2_span(&ctx, span);
+                let chumsky_span_converter =
+                    |span: rustc_public_generative::rustc_public::ty::Span| {
+                        self.map_rust_to_co2_span(&ctx, span)
+                    };
                 let mut hir_ctx = HirCtx::new(
                     self.wellknown_defs,
                     &span_converter,
+                    &chumsky_span_converter,
                     Some(function_name),
                     def.fn_sig().skip_binder().output(),
                     resolver.clone(),
@@ -320,6 +331,16 @@ impl Co2GeneratorState {
         ctx.span_in_file(file_id, span.data().start as u32, span.data().end as u32)
     }
 
+    fn map_rust_to_co2_span(
+        &self,
+        ctx: &HirStructureCtx<'_>,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) -> co2_ast::Span {
+        let (file_id, lo, hi) = ctx.span_data(span);
+        let co2_file_id = self.reverse_file_ids[&file_id];
+        co2_ast::Span::from_parts(co2_file_id, lo as usize..hi as usize)
+    }
+
     fn lower_explicit_static_mir(
         &mut self,
         ctx: &HirStructureCtx<'_>,
@@ -328,9 +349,13 @@ impl Co2GeneratorState {
         initializer: co2_ast::Spanned<Initializer<LocalResolver>>,
     ) -> Body {
         let span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
+        let chumsky_span_converter = |span: rustc_public_generative::rustc_public::ty::Span| {
+            self.map_rust_to_co2_span(ctx, span)
+        };
         let hir_ctx = HirCtx::new(
             self.wellknown_defs,
             &span_converter,
+            &chumsky_span_converter,
             None,
             CrateItem(def).ty(),
             resolver.clone(),
@@ -381,9 +406,13 @@ impl Co2GeneratorState {
             && len.eval_target_usize().is_err()
         {
             let len_span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
+            let len_chumsky_converter = |span: rustc_public_generative::rustc_public::ty::Span| {
+                self.map_rust_to_co2_span(ctx, span)
+            };
             let len_hir_ctx = HirCtx::new(
                 self.wellknown_defs,
                 &len_span_converter,
+                &len_chumsky_converter,
                 None,
                 Ty::usize_ty(),
                 resolver.clone(),
@@ -398,9 +427,13 @@ impl Co2GeneratorState {
             ));
         }
         let span_converter = |span: co2_ast::Span| self.map_co2_span(ctx, span);
+        let chumsky_span_converter = |span: rustc_public_generative::rustc_public::ty::Span| {
+            self.map_rust_to_co2_span(ctx, span)
+        };
         let hir_ctx = HirCtx::new(
             self.wellknown_defs,
             &span_converter,
+            &chumsky_span_converter,
             None,
             target_ty,
             resolver.clone(),

@@ -253,6 +253,10 @@ impl<'tcx> HirStructureCtx<'tcx> {
         self.inner.span_in_file(file, lo, hi)
     }
 
+    pub fn span_data(&self, span: rustc_public::ty::Span) -> (FileId, u32, u32) {
+        self.inner.span_data(self.tcx, span)
+    }
+
     pub fn root_crate_def_id(&self) -> DefId {
         internal::root_crate_def_id(self.tcx)
     }

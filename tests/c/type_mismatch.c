@@ -19,6 +19,9 @@ void returns_void(void) {
 void takes_b(struct B b) {
 }
 
+void takes_many(int a, struct B b, struct A c) {
+}
+
 void assign_mismatch(void) {
     struct A a = { 1 };
     struct B b = { 2 };
@@ -60,7 +63,13 @@ void void_initializer_mismatch(void) {
 void call_mismatch(void) {
     struct A a = { 1 };
     takes_b(a);
-//  ^^^^^^^^^^ error: call argument type mismatch at index 0: expected co2(struct B), got co2(struct A)
+//          ^ error: call `takes_b` type mismatch at arg 0: expected co2(struct B), got co2(struct A)
+}
+
+void call_mismatch2(void) {
+    struct A a = { 1 };
+    takes_many(5, 3, a);
+              //  ^ error: call `takes_many` type mismatch at arg 1: expected co2(struct B), got i32
 }
 
 int return_mismatch(void) {
