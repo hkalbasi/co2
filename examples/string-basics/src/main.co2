@@ -1,0 +1,23 @@
+use std::string::String;
+use std::ffi::CStr;
+
+#include <stdio.h>
+
+fn c_str_to_rust_str(s: *const i8) -> *const str {
+    return CStr::from_ptr(s).to_str().unwrap();
+}
+
+fn print_rust_str(s: *const str) {
+    printf("%.*s", s.len(), s.as_ptr());
+}
+
+fn main() {
+    String greeting = c_str_to_rust_str("Hi").to_owned();
+    greeting.push_str(c_str_to_rust_str(", CO2 speaking!\n"));
+    print_rust_str(greeting.as_str());
+
+    print_rust_str(s"Rust literals use the s\"...\" prefix.\n");
+
+    usize len = greeting.len();
+    printf("message length: %zu bytes\n", len);
+}
