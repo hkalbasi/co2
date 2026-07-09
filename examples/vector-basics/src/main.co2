@@ -1,0 +1,29 @@
+use std::vec::Vec;
+
+#include <stdio.h>
+
+fn negate(x: &i32) -> i32 {
+    return -*x;
+}
+
+fn main() {
+    Vec::<i32> v = Vec::<i32>::new();
+    v.push(4);
+    v.push(1);
+    v.push(3);
+    v.push(2);
+
+    printf("length before pop: %zu\n", v.len());
+
+    i32 popped = v.pop().unwrap();
+    printf("popped: %d\n", popped);
+
+    v.sort_by_key(negate);
+
+    printf("descending: ");
+    i32 *data = v.as_ptr();
+    for (int i = 0; i < v.len(); i += 1) {
+        printf("%d ", data[i]);
+    }
+    printf("\n");
+}
