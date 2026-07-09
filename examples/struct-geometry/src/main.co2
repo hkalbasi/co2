@@ -1,0 +1,30 @@
+#include <stdio.h>
+#include <math.h>
+
+#[derive(Copy)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+fn distance(a: Point, b: Point) -> f64 {
+    double dx = a.x - b.x;
+    double dy = a.y - b.y;
+    return sqrt(dx * dx + dy * dy);
+}
+
+fn midpoint(a: Point, b: Point) -> Point {
+    Point m = { .x = (a.x + b.x) / 2.0, .y = (a.y + b.y) / 2.0 };
+    return m;
+}
+
+fn main() {
+    Point origin = { .x = 0.0, .y = 0.0 };
+    Point corner = { .x = 3.0, .y = 4.0 };
+
+    double d = distance(origin, corner);
+    printf("distance: %.2f\n", d);
+
+    Point mid = midpoint(origin, corner);
+    printf("midpoint: (%.2f, %.2f)\n", mid.x, mid.y);
+}
