@@ -15,6 +15,11 @@ it is not feasible to make CO2 a subset of CO2++, without making CO2 worse. The 
 which C++ has them too but with a completely different syntax, and CO2 doesn't want to use the suboptimal C++ syntax,
 while CO2++ wants to reuse the C++ syntax since it should support it anyway.
 
+Difference between CO2 and CO2++ that are clear even now:
+- CO2 is move by default, but CO2++ would be clone by default and require explicit `std::move` for move
+- CO2 drop is explicit but CO2++ would run drop at the end of scope
+- CO2 uses turbofish syntax, while CO2++ would probably only use C++ disambigutor rules
+
 ## CO2++ can't expose some C++ items in the crate boundary
 
 Rust can't express some things in the C++, like:
@@ -36,3 +41,9 @@ In some cases, the C++ feature may make sense, but generally we shouldn't add C+
 ## Want to help making CO2++ a reality?
 
 Contact me.
+
+## Want CO2++ today?
+
+You may like my other project [Zngur](https://github.com/hkalbasi/zngur) which follows the same ideas but with a simpler approach.
+Zngur tries to provide a maximalist interop supporting all possible features,
+but without touching the compilers and by using code generation and existing C FFI mechanism.
