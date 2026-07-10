@@ -1,4 +1,5 @@
 Sum is 7
+all_c_is_valid(2) is 30
 Product is 30
 Last is 20
 PI is 3.14159265

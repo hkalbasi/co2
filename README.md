@@ -20,6 +20,37 @@ int add(int a, int b) {
     return a + b;
 }
 
+typedef int (*F)(int);
+
+int all_c_is_valid(int x)
+{
+    enum { A = 1 };
+    struct S { unsigned b:3; int a[2]; };
+    union U { struct S s; int i; };
+
+    volatile const union U u = { .s = { .b = 3, .a = {1, 2} } };
+    F f = (F)0;
+    int y = 0, a[] = {3, 4}, *p = a;
+
+again:
+    for (int i = 0; i < 2; i++)
+        y += (x > i) ? p[i] : 0;
+
+    switch (x) {
+    case 0: y += sizeof(u); break;
+    default:
+        if (f)
+            y = f(y);
+        else
+            y = ((int)u.s.b, y + *p++);
+    }
+
+    if (x--)
+        goto again;
+
+    return y;
+}
+
 // Rust-style function with Rust ABI
 fn rust_multiply(a: i32, b: i32) -> i32 {
     // The body still uses the C like syntax. E.g. using `a * b` without return is invalid.
@@ -33,6 +64,7 @@ fn main() {
     // Calling C external functions does not need `unsafe` block.
     // In fact, there is no unsafe block at all.
     printf("Sum is %d\n", sum);
+    printf("all_c_is_valid(2) is %d\n", all_c_is_valid(2));
 
     // Rust-style function call (Rust ABI)
     i32 product = rust_multiply(5, 6);
@@ -74,7 +106,7 @@ fn main() {
 }
 ```
 
-You can run [this example online on godbolt.org](https://godbolt.org/z/o1MoWs9oa).
+You can run [this example online on godbolt.org](https://godbolt.org/z/vK6KE1zzh).
 
 ## Why another language?
 
