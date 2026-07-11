@@ -129,9 +129,7 @@ pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
         co2_ast::set_diagnostic_base_path(Some(cwd));
     }
 
-    if let Some(flag) = args.get(1)
-        && (flag == "-h" || flag == "--help")
-    {
+    if args.iter().skip(1).any(|a| a == "--help") {
         print_help();
         return std::process::ExitCode::SUCCESS;
     }

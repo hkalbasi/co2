@@ -40,18 +40,7 @@ if ($combined | str contains "ld") == false {
     exit 1
 }
 
-# ---- -h and --help ----
-let help_h = (do { ^$co2cc -h } | complete)
-if $help_h.exit_code != 0 {
-    print $"FAIL: co2cc -h exit code expected 0, got ($help_h.exit_code)"
-    exit 1
-}
-if ($help_h.stdout | str trim) != "" {
-    print "FAIL: co2cc -h expected empty stdout"
-    exit 1
-}
-assert-snapshot "help_h" $help_h.stderr ($expected_dir | path join "help.stderr.snapshot")
-
+# ---- --help ----
 let help_help = (do { ^$co2cc --help } | complete)
 if $help_help.exit_code != 0 {
     print $"FAIL: co2cc --help exit code expected 0, got ($help_help.exit_code)"
@@ -62,6 +51,18 @@ if ($help_help.stdout | str trim) != "" {
     exit 1
 }
 assert-snapshot "help_help" $help_help.stderr ($expected_dir | path join "help.stderr.snapshot")
+
+# ---- help with input file ----
+let help_with_input_help = (do { ^$co2cc x.c --help } | complete)
+if $help_with_input_help.exit_code != 0 {
+    print $"FAIL: co2cc x.c --help exit code expected 0, got ($help_with_input_help.exit_code)"
+    exit 1
+}
+if ($help_with_input_help.stdout | str trim) != "" {
+    print "FAIL: co2cc x.c --help expected empty stdout"
+    exit 1
+}
+assert-snapshot "help_with_input_help" $help_with_input_help.stderr ($expected_dir | path join "help.stderr.snapshot")
 
 # ---- missing -o argument ----
 let missing_o = (do { ^$co2cc -o } | complete)
