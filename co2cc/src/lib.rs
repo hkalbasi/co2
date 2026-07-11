@@ -1054,13 +1054,14 @@ fn link_shared_objects(objects: &[PathBuf], linker_args: &[String], output: Opti
     cmd.arg("-o");
     cmd.arg(output.unwrap_or_else(|| Path::new("a.out")));
 
-    let status = cmd
-        .status()
+    let output = cmd
+        .output()
         .expect("failed to execute shared library link step");
-    assert!(
-        status.success(),
-        "shared library link failed with status {status}"
-    );
+    if !output.status.success() {
+        let cc_stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("{cc_stderr}");
+        process::exit(1);
+    }
 }
 
 fn quote_for_make(s: &str) -> String {

@@ -9,7 +9,8 @@ def diff [a: string, b: string] {
 export def assert-snapshot [name: string, actual: string, snapshot_path: string] {
     if "CO2_UPDATE_SNAPSHOTS" in $env {
         print $"updating snapshot: ($snapshot_path)"
-        $actual | save -f $snapshot_path
+        let content = if ($actual | str ends-with (char newline)) { $actual } else { $actual ++ (char newline) }
+        $content | save -f $snapshot_path
         return
     }
     let snapshot = (open $snapshot_path | str trim)

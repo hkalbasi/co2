@@ -2787,10 +2787,18 @@ pub(crate) fn check_fn_predicates(
             }) {
                 continue;
             }
-            if !infcx
-                .type_implements_trait(pred.trait_ref.def_id, pred.trait_ref.args.iter(), param_env)
-                .must_apply_modulo_regions()
-            {
+            // Evaluate the obligation through an ObligationCtxt so that
+            // associated-type projections (e.g. `<Self as Iterator>::Item`)
+            // are normalized and the bound can be properly proven rather than
+            // failing on the raw projection.
+            let ocx = ObligationCtxt::new(&infcx);
+            ocx.register_obligation(PredicateObligation {
+                cause: ObligationCause::dummy(),
+                param_env,
+                recursion_depth: 0,
+                predicate: instantiated_clause.as_predicate(),
+            });
+            if !ocx.try_evaluate_obligations().is_empty() {
                 let trait_ref = pred.trait_ref;
                 let trait_name = tcx.def_path_str(trait_ref.def_id);
                 let args: Vec<String> = trait_ref

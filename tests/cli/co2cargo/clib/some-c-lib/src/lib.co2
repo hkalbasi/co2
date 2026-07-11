@@ -1,0 +1,19 @@
+mod tests {
+    #include <assert.h>
+
+    #[test]
+    fn it_works() {
+        assert(is_palindrome_inner(s"racecar"));
+        assert(!is_palindrome_inner(s"hello"));
+    }
+}
+
+use std::ffi::CStr;
+
+fn is_palindrome_inner(s: &str) -> bool {
+    return s.chars().eq(s.chars().rev());
+}
+
+_Bool is_palindrome(char *input) {
+    return is_palindrome_inner(CStr::from_ptr(input).to_str().unwrap());
+}

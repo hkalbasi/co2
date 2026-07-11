@@ -1,0 +1,3 @@
+/usr/bin/ld: [TEMP]/test_shared.o: in function `public_api':
+test_shared.de22959f1a48b8dd-cgu.0:(.text.public_api+0x3): undefined reference to `foo'
+collect2: error: ld returned 1 exit status
