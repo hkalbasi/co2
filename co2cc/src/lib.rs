@@ -29,6 +29,7 @@ struct DepFileArgs {
 struct CcArgs {
     emit_obj_only: bool,
     emit_asm_only: bool,
+    emit_llvm: bool,
     emit_preprocess_only: bool,
     link_kind: LinkOutputKind,
     pic: bool,
@@ -80,6 +81,7 @@ Options:
   -E                   Preprocess only; output preprocessed source
   -c                   Compile to object file only
   -S                   Compile to assembly only
+  -emit-llvm           Emit LLVM (with -S: IR text .ll, with -c: bitcode .bc)
   -o <file>            Write output to <file>
   -shared              Build a shared library
   -I <dir>             Add directory to include search path
@@ -150,6 +152,11 @@ pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+
+    if cc_args.emit_llvm && !cc_args.emit_asm_only && !cc_args.emit_obj_only {
+        eprintln!("co2cc: error: -emit-llvm cannot be used when linking");
+        return std::process::ExitCode::from(1);
+    }
 
     for input in &cc_args.inputs {
         if input != Path::new("-") && !input.exists() {
@@ -243,6 +250,7 @@ fn run_co2c(args: &CcArgs) {
             args.debuginfo,
             force_pic,
             args.asm_flavor.as_deref(),
+            args.emit_llvm,
         );
         compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
         if args.time_report {
@@ -290,6 +298,7 @@ fn run_co2c(args: &CcArgs) {
             args.opt_level.as_deref(),
             args.debuginfo,
             force_pic,
+            args.emit_llvm,
         );
         compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
         if args.time_report {
@@ -361,6 +370,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
 
     let mut emit_obj_only = false;
     let mut emit_asm_only = false;
+    let mut emit_llvm = false;
     let mut emit_preprocess_only = false;
     let mut link_kind = LinkOutputKind::Executable;
     let mut pic = false;
@@ -389,6 +399,9 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
             }
             "-S" => {
                 emit_asm_only = true;
+            }
+            "-emit-llvm" => {
+                emit_llvm = true;
             }
             "-E" => {
                 emit_preprocess_only = true;
@@ -527,6 +540,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     Ok(CcArgs {
         emit_obj_only,
         emit_asm_only,
+        emit_llvm,
         emit_preprocess_only,
         link_kind,
         pic,
@@ -548,6 +562,7 @@ fn build_rustc_object_args(
     opt_level: Option<&str>,
     debuginfo: Option<u8>,
     pic: bool,
+    emit_llvm: bool,
 ) -> Vec<String> {
     let stem = input
         .file_stem()
@@ -555,13 +570,19 @@ fn build_rustc_object_args(
         .unwrap_or("co2c_out")
         .replace('-', "_");
 
+    let emit = if emit_llvm {
+        "--emit=llvm-bc".to_owned()
+    } else {
+        "--emit=obj".to_owned()
+    };
+
     let mut rustc_args = vec![
         "rustc".to_owned(),
         "--crate-name".to_owned(),
         stem,
         "--crate-type=bin".to_owned(),
         "--edition=2024".to_owned(),
-        "--emit=obj".to_owned(),
+        emit,
     ];
 
     if let Some(out) = output {
@@ -597,6 +618,7 @@ fn build_rustc_asm_args(
     debuginfo: Option<u8>,
     pic: bool,
     asm_flavor: Option<&str>,
+    emit_llvm: bool,
 ) -> Vec<String> {
     let stem = input
         .file_stem()
@@ -604,13 +626,19 @@ fn build_rustc_asm_args(
         .unwrap_or("co2c_out")
         .replace('-', "_");
 
+    let emit = if emit_llvm {
+        "--emit=llvm-ir".to_owned()
+    } else {
+        "--emit=asm".to_owned()
+    };
+
     let mut rustc_args = vec![
         "rustc".to_owned(),
         "--crate-name".to_owned(),
         stem,
         "--crate-type=bin".to_owned(),
         "--edition=2024".to_owned(),
-        "--emit=asm".to_owned(),
+        emit,
     ];
 
     if let Some(out) = output {
