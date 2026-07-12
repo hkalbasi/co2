@@ -77,6 +77,27 @@ pub fn safe_range(span: Span, src_len: usize) -> std::ops::Range<usize> {
     start..end
 }
 
+/// Widen a byte range so both ends land on UTF-8 character boundaries of `src`.
+///
+/// `ariadne` slices the source at the raw byte offsets when rendering, and panics
+/// if an offset falls inside a multibyte character. Diagnostic spans can legitimately
+/// point inside a multibyte character (e.g. an invalid identifier), so snap the range
+/// outward to the nearest surrounding boundaries purely for rendering.
+fn snap_to_char_boundaries(src: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    let mut start = range.start.min(src.len());
+    let mut end = range.end.min(src.len());
+    while start > 0 && !src.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end < src.len() && !src.is_char_boundary(end) {
+        end += 1;
+    }
+    if end < start {
+        end = start;
+    }
+    start..end
+}
+
 pub fn reset_diagnostic_state() {
     install_diagnostic_panic_hook();
     DIAGNOSTICS_EMITTED.store(false, Ordering::SeqCst);
@@ -250,14 +271,15 @@ fn emit_human_diagnostic(
 ) {
     if let Some(mapped) = get_diagnostic_info(*e.span()) {
         let display_name = relativize_path(&mapped.file_name);
+        let render_range = snap_to_char_boundaries(&mapped.source, mapped.start..mapped.end);
         Report::build(
             level.report_kind(),
-            (display_name.clone(), mapped.start..mapped.end),
+            (display_name.clone(), render_range.clone()),
         )
         .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
         .with_message(e.to_string())
         .with_label(
-            Label::new((display_name.clone(), mapped.start..mapped.end))
+            Label::new((display_name.clone(), render_range))
                 .with_message(e.reason().to_string())
                 .with_color(level.label_color()),
         )
@@ -267,7 +289,7 @@ fn emit_human_diagnostic(
         return;
     }
 
-    let range = safe_range(*e.span(), src.len());
+    let range = snap_to_char_boundaries(src, safe_range(*e.span(), src.len()));
     let display_name = relativize_path(filename);
     Report::build(level.report_kind(), (display_name.clone(), range.clone()))
         .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
@@ -278,7 +300,10 @@ fn emit_human_diagnostic(
                 .with_color(level.label_color()),
         )
         .with_labels(e.contexts().map(|(label, span)| {
-            Label::new((display_name.clone(), safe_range(*span, src.len())))
+            Label::new((
+                display_name.clone(),
+                snap_to_char_boundaries(src, safe_range(*span, src.len())),
+            ))
                 .with_message(format!("while parsing this {label}"))
                 .with_color(Color::Yellow)
         }))
@@ -299,11 +324,12 @@ fn emit_json_diagnostic(
         let (ls, cs) = byte_to_line_col(&mapped.source, mapped.start);
         let (le, ce) = byte_to_line_col(&mapped.source, mapped.end);
         let mut rendered = Vec::new();
-        Report::build(level.report_kind(), (display_name.clone(), range.clone()))
+        let render_range = snap_to_char_boundaries(&mapped.source, range.clone());
+        Report::build(level.report_kind(), (display_name.clone(), render_range.clone()))
             .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
             .with_message(e.to_string())
             .with_label(
-                Label::new((display_name.clone(), range.clone()))
+                Label::new((display_name.clone(), render_range))
                     .with_message(e.reason().to_string())
                     .with_color(level.label_color()),
             )
@@ -359,16 +385,20 @@ fn emit_json_diagnostic(
         )
     }));
     let mut rendered = Vec::new();
-    Report::build(level.report_kind(), (display_name.clone(), range.clone()))
+    let render_range = snap_to_char_boundaries(src, range.clone());
+    Report::build(level.report_kind(), (display_name.clone(), render_range.clone()))
         .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
         .with_message(e.to_string())
         .with_label(
-            Label::new((display_name.clone(), range.clone()))
+            Label::new((display_name.clone(), render_range))
                 .with_message(e.reason().to_string())
                 .with_color(level.label_color()),
         )
         .with_labels(e.contexts().map(|(label, span)| {
-            Label::new((display_name.clone(), safe_range(*span, src.len())))
+            Label::new((
+                display_name.clone(),
+                snap_to_char_boundaries(src, safe_range(*span, src.len())),
+            ))
                 .with_message(format!("while parsing this {label}"))
                 .with_color(Color::Yellow)
         }))

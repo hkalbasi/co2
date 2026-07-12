@@ -820,7 +820,7 @@ impl Preprocessor {
         let map_diag = |range: Range<usize>| -> Range<usize> {
             let start = map_pos_to_source(source_boundaries, source_text, raw, range.start);
             let end = map_pos_to_source(source_boundaries, source_text, raw, range.end);
-            start..end.max(start + 1)
+            start..end
         };
         for w in warnings {
             let r = map_diag(w.range);

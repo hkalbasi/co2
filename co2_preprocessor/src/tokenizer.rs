@@ -7,7 +7,10 @@ use std::ops::Range;
 
 use co2_ast::{FloatSuffix, IntegerSuffix, StringLiteral, StringLiteralPrefix, Token};
 
-use super::utils::{is_ident_cont_byte, is_ident_start_byte};
+use super::utils::{
+    char_allowed, decode_utf8_char, ident_char_len, invalid_ident_char_message,
+    is_ident_cont_byte, is_ident_start_byte, parse_ucn,
+};
 
 /// A warning produced during tokenization (e.g. hex escape overflow).
 #[derive(Debug, Clone)]
@@ -74,6 +77,42 @@ impl<'a> Tokenizer<'a> {
 
     fn matches(&self, s: &[u8]) -> bool {
         self.remaining().starts_with(s)
+    }
+
+    /// Consume a single C23 identifier character at `self.pos`, appending its bytes to
+    /// `self.buf` and advancing `self.pos`. Handles ASCII letters/digits/`_`/`$`, UTF-8
+    /// encoded XID characters, and universal character names (`\uXXXX` / `\UXXXXXXXX`,
+    /// decoded to their UTF-8 form). Returns `false` if the byte at `self.pos` does not
+    /// begin a valid identifier character (e.g. a digit at the start, or a non-XID char).
+    fn consume_ident_char(&mut self, start: bool) -> bool {
+        let b = match self.bytes.get(self.pos) {
+            Some(&b) => b,
+            None => return false,
+        };
+
+        // Universal character name, e.g. \u03C0 (π) or \U0001F600: decode to its UTF-8 form.
+        if b == b'\\' {
+            return match parse_ucn(self.bytes, self.pos) {
+                Some((ch, len)) if char_allowed(ch, start) => {
+                    let mut enc = [0u8; 4];
+                    let s = ch.encode_utf8(&mut enc);
+                    self.buf.extend_from_slice(s.as_bytes());
+                    self.pos += len;
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        // ASCII letters/digits, `_`, `$`, or a UTF-8 multibyte XID character.
+        match ident_char_len(self.bytes, self.pos, start) {
+            Some(len) => {
+                self.buf.extend_from_slice(&self.bytes[self.pos..self.pos + len]);
+                self.pos += len;
+                true
+            }
+            None => false,
+        }
     }
 
     fn warn(&mut self, start: usize, end: usize, msg: String) {
@@ -177,8 +216,14 @@ impl<'a> Tokenizer<'a> {
 
                     self.token_start = self.pos;
 
-                    // Backslash — might be line splice
+                    // Backslash — might be a universal character name starting an
+                    // identifier (e.g. `\u03C0`), otherwise a line splice.
                     if b == b'\\' {
+                        self.buf.clear();
+                        if self.consume_ident_char(true) {
+                            self.state = State::Ident;
+                            continue;
+                        }
                         self.state = State::BackslashNewline;
                         self.pos += 1;
                         continue;
@@ -335,10 +380,8 @@ impl<'a> Tokenizer<'a> {
                     }
 
                     // Identifiers and keywords
-                    if is_ident_start_byte(b) {
-                        self.buf.clear();
-                        self.buf.push(b);
-                        self.pos += 1;
+                    self.buf.clear();
+                    if self.consume_ident_char(true) {
                         self.state = State::Ident;
                         continue;
                     }
@@ -374,7 +417,19 @@ impl<'a> Tokenizer<'a> {
                         continue;
                     }
 
-                    // Unknown byte
+                    // Non-ASCII byte that does not begin a valid identifier character:
+                    // classify the whole UTF-8 character (invalid identifier, disallowed
+                    // combining/format/space character, ...) and consume it in one step so
+                    // a single diagnostic is produced per offending character.
+                    if b >= 0x80 {
+                        if let Some((ch, len)) = decode_utf8_char(self.bytes, self.pos) {
+                            self.err(self.pos, self.pos + len, invalid_ident_char_message(ch));
+                            self.pos += len;
+                            continue;
+                        }
+                    }
+
+                    // Unknown ASCII byte
                     self.err(
                         self.pos,
                         self.pos + 1,
@@ -412,9 +467,7 @@ impl<'a> Tokenizer<'a> {
                             continue;
                         }
                     }
-                    if is_ident_cont_byte(b) {
-                        self.buf.push(b);
-                        self.pos += 1;
+                    if self.consume_ident_char(false) {
                         continue;
                     }
                     let ident = std::str::from_utf8(&self.buf).unwrap_or("");

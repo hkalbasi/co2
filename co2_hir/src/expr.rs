@@ -1292,21 +1292,50 @@ impl HirCtx<'_> {
                     def_id,
                     generic_args,
                 } => {
-                    if self.function_name.is_none() && self.decl_resolver.is_constexpr_def(def_id) {
-                        let value = self
-                            .decl_resolver
-                            .local_const_int_value(def_id, parser_span)
-                            .map_err(|_| {
-                                spanned_error(
-                                    parser_span,
-                                    format!("missing scalar constant value for def {def_id:?}"),
-                                )
-                            })?;
-                        return Ok(HirExpr {
-                            kind: HirExprKind::ConstInt(value),
-                            ty: Ty::signed_ty(IntTy::I32),
-                            span,
-                        });
+                    if self.decl_resolver.is_constexpr_def(def_id) {
+                        // TODO: This is hack on top of hack for not having proper consts.
+                        if let Ok(value) =
+                            self.decl_resolver.local_const_int_value(def_id, parser_span)
+                        {
+                            // In a constant-evaluation context (e.g. a static/global
+                            // initializer) we must produce a plain constant value.
+                            if self.function_name.is_none() {
+                                return Ok(HirExpr {
+                                    kind: HirExprKind::ConstInt(value),
+                                    ty: Ty::signed_ty(IntTy::I32),
+                                    span,
+                                });
+                            }
+                            // Inside a function body a `constexpr` global has no runtime
+                            // storage (it is lowered to a `const` item). Reading it as a
+                            // `Path` would alias a shared placeholder allocation, so we
+                            // inline its value. To keep it a *place* (so `&x`, `is_place`,
+                            // etc. all behave correctly), materialize the value behind a
+                            // deref-of-address: `*&value`.
+                            check_generic_arg_count(def_id, generic_args.len(), 0, parser_span)?;
+                            let ty = self.resolve_value_with_generic_args(def_id, &generic_args).ty();
+                            let const_expr = HirExpr {
+                                kind: HirExprKind::ConstInt(value),
+                                ty,
+                                span,
+                            };
+                            let addr = HirExpr {
+                                kind: HirExprKind::AddrOf(Box::new(const_expr)),
+                                ty: Ty::new_ptr(ty, Mutability::Not),
+                                span,
+                            };
+                            return Ok(HirExpr {
+                                kind: HirExprKind::Deref(Box::new(addr)),
+                                ty,
+                                span,
+                            });
+                        }
+                        if self.function_name.is_none() {
+                            return Err(spanned_error(
+                                parser_span,
+                                format!("missing scalar constant value for def {def_id:?}"),
+                            ));
+                        }
                     }
                     check_generic_arg_count(def_id, generic_args.len(), 0, parser_span)?;
                     let resolved = self.resolve_value_with_generic_args(def_id, &generic_args);
@@ -3372,6 +3401,16 @@ pub(crate) fn is_place_expr(expr: &HirExpr) -> bool {
 fn is_assignable_expr(expr: &HirExpr) -> bool {
     match &expr.kind {
         HirExprKind::LocalConst(_) | HirExprKind::Path(ResolvedValue::StaticConst(_)) => false,
+        // A dereference through a const pointer is not assignable. This also covers
+        // `constexpr` globals, which are lowered to `*&value` with a const pointer.
+        HirExprKind::Deref(inner)
+            if matches!(
+                inner.ty.kind(),
+                TyKind::RigidTy(RigidTy::RawPtr(_, Mutability::Not))
+            ) =>
+        {
+            false
+        }
         _ => is_place_expr(expr) || matches!(expr.kind, HirExprKind::Bitfield { .. }),
     }
 }

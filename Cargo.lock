@@ -459,6 +459,7 @@ name = "co2_preprocessor"
 version = "0.1.0"
 dependencies = [
  "co2_ast",
+ "unicode-ident",
 ]
 
 [[package]]
