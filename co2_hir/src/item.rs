@@ -108,6 +108,7 @@ pub fn lower_static_body_for_ty(
         (initializer, parser_span),
         &mut locals,
         &mut local_map,
+        false,
     );
     let init_expr = hir_ctx.initializer_tree_to_expr(&tree, target_ty, parser_span);
     HirBody {
@@ -147,8 +148,13 @@ pub(crate) fn infer_array_len_from_initializer_in_scope(
         elem_ty,
         TyConst::try_from_target_usize(567_567).unwrap(),
     ));
-    let tree =
-        hir_ctx.lower_to_initializer_tree(fake_ty, (initializer, parser_span), locals, local_map);
+    let tree = hir_ctx.lower_to_initializer_tree(
+        fake_ty,
+        (initializer, parser_span),
+        locals,
+        local_map,
+        true,
+    );
     let InitializerTree::Middle { children } = tree else {
         hir_ctx.terminate_with_error(parser_span, "invalid initializer for unsized array");
     };
@@ -167,6 +173,7 @@ pub fn eval_usize_initializer(
         (initializer, parser_span),
         &mut locals,
         &mut local_map,
+        false,
     );
     let expr = hir_ctx.initializer_tree_to_expr(&tree, target_ty, parser_span);
     let Some(value) = eval_const_int(&expr) else {

@@ -41,6 +41,7 @@ impl InitializerCursor {
         span: rustc_public_generative::rustc_public::ty::Span,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
+        grow_for_infer: bool,
     ) -> Result<Self, (co2_ast::Span, String)> {
         let mut current_ty = base_ty;
         let mut cursor = InitializerCursor {
@@ -57,6 +58,16 @@ impl InitializerCursor {
                             format!("array designator used on non-array type: {current_ty:?}"),
                         )
                     })?;
+                    if !grow_for_infer
+                        && let Some(len) = array_len_from_layout(current_ty)
+                        && len > 0
+                        && idx >= len
+                    {
+                        co2_ast::emit_warnings(vec![co2_ast::Rich::custom(
+                            *span,
+                            format!("initializer designator index {idx} exceeds array bounds"),
+                        )]);
+                    }
                     cursor.stack.push((idx, elem_ty));
                     current_ty = elem_ty;
                 }
@@ -118,6 +129,8 @@ impl InitializerCursor {
         ctx: &HirCtx<'_>,
         result: &mut InitializerTree,
         value: InitializerTree,
+        _span: co2_ast::Span,
+        grow: bool,
     ) {
         if self.stack.is_empty() {
             return;
@@ -126,6 +139,14 @@ impl InitializerCursor {
         let mut prev_ty = self.base_ty;
         for (index, ty) in &self.stack {
             let children = current.children(ctx, prev_ty);
+            if is_array_ty(prev_ty) && !grow && *index >= children.len() {
+                // Out-of-bounds array element/designator. The overflow warning
+                // is already emitted where the designator is resolved; here we
+                // simply drop the element instead of growing the aggregate past
+                // its declared type (which would produce broken MIR).  Structs
+                // and unions keep every field slot, so they are never dropped.
+                return;
+            }
             while children.len() <= *index {
                 children.push(InitializerTree::Zeroed);
             }
@@ -305,6 +326,15 @@ fn array_len_from_layout(ty: Ty) -> Option<usize> {
     Some(total / elem_sz)
 }
 
+/// An array whose declared length is zero (a top-level `T x[]` after inference,
+/// a flexible array member, or the inference probe type) must be *grown* as
+/// initializers are placed. A concrete (sized) array instead drops out-of-bounds
+/// elements so that we neither produce a malformed aggregate nor silently
+/// extend its type (which would break codegen for out-of-bounds designators).
+fn array_should_grow(ctx: &HirCtx<'_>, ty: Ty) -> bool {
+    is_array_ty(ty) && children_count_of_ty(ctx, ty) == 0
+}
+
 impl HirCtx<'_> {
     pub(crate) fn lower_to_initializer_tree(
         &self,
@@ -312,12 +342,14 @@ impl HirCtx<'_> {
         (initializer, span): Spanned<Initializer<LocalResolver>>,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
+        grow_for_infer: bool,
     ) -> InitializerTree {
         match self.try_lower_to_initializer_tree(
             expected_ty,
             (initializer, span),
             locals,
             local_map,
+            grow_for_infer,
         ) {
             Ok(r) => r,
             Err(err) => self.terminate_with_spanned_error(err),
@@ -330,6 +362,7 @@ impl HirCtx<'_> {
         initializer: Spanned<Initializer<LocalResolver>>,
         locals: &mut Arena<HirLocal>,
         local_map: &mut HashMap<usize, LocalId>,
+        grow_for_infer: bool,
     ) -> Result<InitializerTree, (co2_ast::Span, String)> {
         let span = self.to_rust_span(initializer.1);
         match initializer.0 {
@@ -338,12 +371,29 @@ impl HirCtx<'_> {
                 if is_array_ty(expected_ty)
                     && matches!(expr.0, Expression::Constant(co2_ast::Constant::String(_)))
                 {
-                    let list = self.initializer_list_from_string(expected_ty, expr.clone());
+                    let mut list = self.initializer_list_from_string(expected_ty, expr.clone());
+                    // A string literal longer than the char array it initializes
+                    // is truncated (C semantics). A single trailing NUL that does
+                    // not fit (`"ab"` into `char[2]`) is ordinary truncation and
+                    // stays silent, but dropping a real character is reported as
+                    // one "excess elements" warning per string.
+                    if let Some(len) = array_len_from_layout(expected_ty) {
+                        if list.len() > len + 1 {
+                            co2_ast::emit_warnings(vec![co2_ast::Rich::custom(
+                                initializer.1,
+                                "excess elements in array initializer",
+                            )]);
+                            list.truncate(len);
+                        } else if list.len() == len + 1 {
+                            list.truncate(len);
+                        }
+                    }
                     return Ok(self.lower_to_initializer_tree(
                         expected_ty,
                         (Initializer::List(list), initializer.1),
                         locals,
                         local_map,
+                        grow_for_infer,
                     ));
                 }
                 let expr = self.lower_expr(expr, locals, local_map)?;
@@ -391,6 +441,7 @@ impl HirCtx<'_> {
                             (Initializer::List(nested.clone()), *nested_span),
                             locals,
                             local_map,
+                            grow_for_infer,
                         );
                     }
                 }
@@ -409,6 +460,7 @@ impl HirCtx<'_> {
                         first.0.initializer,
                         locals,
                         local_map,
+                        grow_for_infer,
                     ));
                 }
 
@@ -418,6 +470,7 @@ impl HirCtx<'_> {
                         children_count_of_ty(self, expected_ty)
                     ],
                 };
+                let grow = array_should_grow(self, expected_ty);
                 let mut cursor = if self.adt_logical_field_tys(expected_ty).is_some()
                     || is_array_ty(expected_ty)
                 {
@@ -478,6 +531,7 @@ impl HirCtx<'_> {
                                     self.to_rust_span(item_span),
                                     locals,
                                     local_map,
+                                    grow_for_infer,
                                 )?
                             };
                             let start_idx =
@@ -508,11 +562,22 @@ impl HirCtx<'_> {
                                 self.to_rust_span(item_span),
                                 locals,
                                 local_map,
+                                grow_for_infer,
                             )?;
                         }
                     }
                     if cursor.stack.is_empty() && repeated_range.is_none() {
-                        // Overflowing item, emit warning
+                        // Only a *sized* array has a fixed number of slots; trailing
+                        // initializers there are a genuine "excess elements" diagnostic.
+                        // Structs/unions with a trailing flexible array member (and
+                        // unsized arrays, which grow to fit) silently drop the extra
+                        // elements, matching the original behavior.
+                        if !grow_for_infer && is_array_ty(expected_ty) && !grow {
+                            co2_ast::emit_warnings(vec![co2_ast::Rich::custom(
+                                item_span,
+                                "excess elements in array initializer",
+                            )]);
+                        }
                         continue;
                     }
                     let mut range_value_cursor = cursor.clone();
@@ -541,6 +606,7 @@ impl HirCtx<'_> {
                                         (Initializer::Expr(expr), item_span),
                                         locals,
                                         local_map,
+                                        grow_for_infer,
                                     );
                                 }
                                 if !value_cursor.go_through(self) {
@@ -580,17 +646,30 @@ impl HirCtx<'_> {
                             item.initializer,
                             locals,
                             local_map,
+                            grow_for_infer,
                         )
                     };
                     if let Some((start_idx, end_idx, elem_ty)) = repeated_range {
                         for idx in start_idx..=end_idx {
                             let mut range_cursor = cursor.clone();
                             range_cursor.stack.push((idx, elem_ty));
-                            range_cursor.insert_to_tree(self, &mut result, node.clone());
+                            range_cursor.insert_to_tree(
+                                self,
+                                &mut result,
+                                node.clone(),
+                                item_span,
+                                grow,
+                            );
                         }
                         cursor.stack.push((end_idx, elem_ty));
                     } else {
-                        cursor.insert_to_tree(self, &mut result, node);
+                        cursor.insert_to_tree(
+                            self,
+                            &mut result,
+                            node,
+                            item_span,
+                            grow,
+                        );
                     }
                     cursor.go_next(self, span)?;
                 }
@@ -614,7 +693,7 @@ impl HirCtx<'_> {
                 RigidTy::Int(IntTy::I8) | RigidTy::Uint(UintTy::U8)
             ))
         );
-        let items = if is_byte_string {
+        if is_byte_string {
             s.bytes
                 .iter()
                 .copied()
@@ -637,7 +716,7 @@ impl HirCtx<'_> {
                         span,
                     )
                 })
-                .collect::<Vec<_>>()
+                .collect()
         } else {
             String::from_utf8_lossy(&s.bytes)
                 .chars()
@@ -660,9 +739,7 @@ impl HirCtx<'_> {
                         span,
                     )
                 })
-                .collect::<Vec<_>>()
-        };
-        let _ = expected_ty;
-        items
+                .collect()
+        }
     }
 }

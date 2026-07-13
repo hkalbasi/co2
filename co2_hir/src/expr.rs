@@ -2021,6 +2021,7 @@ impl HirCtx<'_> {
                     (initializer.0.clone(), initializer.1),
                     locals,
                     local_map,
+                    false,
                 );
                 self.check_aggregate_init_privacy(target_ty, initializer.1)?;
                 let init_expr = self.initializer_tree_to_expr(&tree, target_ty, parser_span);

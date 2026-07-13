@@ -667,6 +667,7 @@ impl HirCtx<'_> {
                                 initializer,
                                 locals,
                                 local_map,
+                                false,
                             );
                             let tree_expr =
                                 self.initializer_tree_to_expr(&tree, real_ty, parser_span);
@@ -751,6 +752,7 @@ impl HirCtx<'_> {
                                     init.clone(),
                                     locals,
                                     local_map,
+                                    false,
                                 );
                                 let init_span = init.1;
                                 self.check_aggregate_init_privacy(ty, init_span)?;
