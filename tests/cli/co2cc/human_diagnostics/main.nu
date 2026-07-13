@@ -43,7 +43,7 @@ if ($unresolved.stderr | str contains "\"$message_type\"") {
     print $"expected human unresolved-name diagnostics, got JSON: ($unresolved.stderr)"
     exit 1
 }
-if ($unresolved.stderr | str contains "Unresolved name missing") == false or ($unresolved.stderr | str contains "unresolved.c") == false {
+if ($unresolved.stderr | str contains "unresolved name missing") == false or ($unresolved.stderr | str contains "unresolved.c") == false {
     print $"co2cc human unresolved-name diagnostic is missing expected text: ($unresolved.stderr)"
     exit 1
 }

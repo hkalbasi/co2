@@ -39,7 +39,7 @@ let target_compile_fail = (
         }
     } | complete
 )
-if $target_compile_fail.exit_code != 5 or ($target_compile_fail.stderr | str contains "Unresolved name missing") == false {
+if $target_compile_fail.exit_code != 5 or ($target_compile_fail.stderr | str contains "unresolved name missing") == false {
     print $"co2miri target diagnostic-abort path failed: ($target_compile_fail | to json -r)"
     exit 1
 }

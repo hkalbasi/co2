@@ -282,6 +282,22 @@ impl LocalResolver {
         self.current_owner
     }
 
+    pub fn rust_span_to_co2_span(
+        &self,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) -> co2_ast::Span {
+        let (file, lo, hi) = self.base.borrow().hir_ctx.span_data(span);
+        let co2_file = self
+            .base
+            .borrow()
+            .file_ids
+            .iter()
+            .find(|&(_, &f)| f == file)
+            .map(|(&co2, _)| co2)
+            .unwrap_or(co2_ast::FileId::INVALID);
+        co2_ast::Span::from_parts(co2_file, lo as usize..hi as usize)
+    }
+
     fn localize(&mut self) {
         let struct_tags = self.struct_tags.borrow().clone();
         self.struct_tags = Rc::new(RefCell::new(struct_tags));
@@ -804,7 +820,7 @@ impl co2_ast::TypeResolver for LocalResolver {
             })
         else {
             let span = path.segments.first().unwrap().1;
-            return Err((format!("Unresolved name {path}"), span));
+            return Err((format!("unresolved name {path}"), span));
         };
         if !generic_args.is_empty() {
             let span = path.segments.last().unwrap().1;

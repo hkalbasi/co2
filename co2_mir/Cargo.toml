@@ -10,5 +10,6 @@ workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+co2_ast = { path = "../co2_ast" }
 co2_hir = { path = "../co2_hir" }
 rustc_public_generative = { path = "../rustc_public_generative" }

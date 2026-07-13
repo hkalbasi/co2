@@ -3,19 +3,19 @@
 
 mod m1 {
     use missing::foo;
-      //^^^^^^^ error: Unresolved item
+      //^^^^^^^ error: unresolved item
     use std::missing::thing;
-           //^^^^^^^ error: Unresolved item
+           //^^^^^^^ error: unresolved item
 }
 
 mod m2 {
     fn main() {
         return missing;
-            // ^^^^^^^ error: Unresolved name missing
+            // ^^^^^^^ error: unresolved name missing
     }
 }
 
 fn main() {
     return missing;
-        // ^^^^^^^ error: Unresolved name missing
+        // ^^^^^^^ error: unresolved name missing
 }

@@ -1,7 +1,7 @@
-Error: Unresolved name nonexistent
+Error: unresolved name nonexistent
    ╭─[ broken.c:1:25 ]
    │
  1 │ int main(void) { return nonexistent; }
    │                         ─────┬─────  
-   │                              ╰─────── Unresolved name nonexistent
+   │                              ╰─────── unresolved name nonexistent
 ───╯

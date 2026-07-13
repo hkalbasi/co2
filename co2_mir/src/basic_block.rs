@@ -170,10 +170,18 @@ impl Builder<'_, '_> {
 
     fn patch_pending_gotos(&mut self) {
         for (bb, label) in std::mem::take(&mut self.pending_gotos) {
-            let target = *self
-                .label_blocks
-                .get(&label)
-                .unwrap_or_else(|| panic!("unresolved label id `{label:?}`"));
+            let Some(target) = self.label_blocks.get(&label).copied() else {
+                let rust_span = self.blocks[bb].terminator.span;
+                let co2_span = self
+                    .decl_resolver
+                    .as_ref()
+                    .map(|resolver| resolver.rust_span_to_co2_span(rust_span))
+                    .unwrap_or_else(|| co2_ast::Span::from_parts(co2_ast::FileId::INVALID, 0..0));
+                co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(
+                    co2_span,
+                    "unresolved label".to_owned(),
+                )]);
+            };
             self.patch_goto_target(bb, target);
         }
         for bb in std::mem::take(&mut self.pending_indirect_gotos) {

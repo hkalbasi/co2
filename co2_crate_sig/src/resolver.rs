@@ -563,7 +563,7 @@ impl Resolver {
                     if let Some((_, span)) =
                         self.first_unresolved_use_segment(&info, module_path, use_item)
                     {
-                        errors.push(co2_ast::Rich::custom(*span, "Unresolved item".to_owned()));
+                        errors.push(co2_ast::Rich::custom(*span, "unresolved item".to_owned()));
                     }
                     continue;
                 };
@@ -607,7 +607,7 @@ impl Resolver {
                 if let Some((_, span)) =
                     self.first_unresolved_use_segment(&info, module_path, use_item)
                 {
-                    errors.push(co2_ast::Rich::custom(*span, "Unresolved item".to_owned()));
+                    errors.push(co2_ast::Rich::custom(*span, "unresolved item".to_owned()));
                 }
                 continue;
             };

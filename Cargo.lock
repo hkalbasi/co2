@@ -438,6 +438,7 @@ dependencies = [
 name = "co2_mir"
 version = "0.1.0"
 dependencies = [
+ "co2_ast",
  "co2_hir",
  "rustc_public_generative",
 ]

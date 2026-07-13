@@ -10,7 +10,7 @@ typedef struct {
     } _addr_bnd;
 
     unknown_type _pkey;
-  //^^^^^^^^^^^^ error: Unresolved name unknown_type
+  //^^^^^^^^^^^^ error: unresolved name unknown_type
   } _bounds;
 } _sigfault;
 
