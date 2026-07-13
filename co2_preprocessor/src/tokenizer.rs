@@ -8,8 +8,8 @@ use std::ops::Range;
 use co2_ast::{FloatSuffix, IntegerSuffix, StringLiteral, StringLiteralPrefix, Token};
 
 use super::utils::{
-    char_allowed, decode_utf8_char, ident_char_len, invalid_ident_char_message,
-    is_ident_cont_byte, is_ident_start_byte, parse_ucn,
+    char_allowed, decode_utf8_char, ident_char_len, invalid_ident_char_message, is_ident_cont_byte,
+    is_ident_start_byte, parse_ucn,
 };
 
 /// A warning produced during tokenization (e.g. hex escape overflow).
@@ -107,7 +107,8 @@ impl<'a> Tokenizer<'a> {
         // ASCII letters/digits, `_`, `$`, or a UTF-8 multibyte XID character.
         match ident_char_len(self.bytes, self.pos, start) {
             Some(len) => {
-                self.buf.extend_from_slice(&self.bytes[self.pos..self.pos + len]);
+                self.buf
+                    .extend_from_slice(&self.bytes[self.pos..self.pos + len]);
                 self.pos += len;
                 true
             }

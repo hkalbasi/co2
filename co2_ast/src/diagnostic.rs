@@ -304,8 +304,8 @@ fn emit_human_diagnostic(
                 display_name.clone(),
                 snap_to_char_boundaries(src, safe_range(*span, src.len())),
             ))
-                .with_message(format!("while parsing this {label}"))
-                .with_color(Color::Yellow)
+            .with_message(format!("while parsing this {label}"))
+            .with_color(Color::Yellow)
         }))
         .finish()
         .eprint(sources([(display_name, src.to_owned())]))
@@ -325,20 +325,23 @@ fn emit_json_diagnostic(
         let (le, ce) = byte_to_line_col(&mapped.source, mapped.end);
         let mut rendered = Vec::new();
         let render_range = snap_to_char_boundaries(&mapped.source, range.clone());
-        Report::build(level.report_kind(), (display_name.clone(), render_range.clone()))
-            .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-            .with_message(e.to_string())
-            .with_label(
-                Label::new((display_name.clone(), render_range))
-                    .with_message(e.reason().to_string())
-                    .with_color(level.label_color()),
-            )
-            .finish()
-            .write(
-                sources([(display_name.clone(), mapped.source.to_string())]),
-                &mut rendered,
-            )
-            .unwrap();
+        Report::build(
+            level.report_kind(),
+            (display_name.clone(), render_range.clone()),
+        )
+        .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+        .with_message(e.to_string())
+        .with_label(
+            Label::new((display_name.clone(), render_range))
+                .with_message(e.reason().to_string())
+                .with_color(level.label_color()),
+        )
+        .finish()
+        .write(
+            sources([(display_name.clone(), mapped.source.to_string())]),
+            &mut rendered,
+        )
+        .unwrap();
         let label = e.reason().to_string();
         let diagnostic = json!({
             "$message_type": "diagnostic",
@@ -386,28 +389,31 @@ fn emit_json_diagnostic(
     }));
     let mut rendered = Vec::new();
     let render_range = snap_to_char_boundaries(src, range.clone());
-    Report::build(level.report_kind(), (display_name.clone(), render_range.clone()))
-        .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-        .with_message(e.to_string())
-        .with_label(
-            Label::new((display_name.clone(), render_range))
-                .with_message(e.reason().to_string())
-                .with_color(level.label_color()),
-        )
-        .with_labels(e.contexts().map(|(label, span)| {
-            Label::new((
-                display_name.clone(),
-                snap_to_char_boundaries(src, safe_range(*span, src.len())),
-            ))
-                .with_message(format!("while parsing this {label}"))
-                .with_color(Color::Yellow)
-        }))
-        .finish()
-        .write(
-            sources([(display_name.clone(), src.to_owned())]),
-            &mut rendered,
-        )
-        .unwrap();
+    Report::build(
+        level.report_kind(),
+        (display_name.clone(), render_range.clone()),
+    )
+    .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+    .with_message(e.to_string())
+    .with_label(
+        Label::new((display_name.clone(), render_range))
+            .with_message(e.reason().to_string())
+            .with_color(level.label_color()),
+    )
+    .with_labels(e.contexts().map(|(label, span)| {
+        Label::new((
+            display_name.clone(),
+            snap_to_char_boundaries(src, safe_range(*span, src.len())),
+        ))
+        .with_message(format!("while parsing this {label}"))
+        .with_color(Color::Yellow)
+    }))
+    .finish()
+    .write(
+        sources([(display_name.clone(), src.to_owned())]),
+        &mut rendered,
+    )
+    .unwrap();
 
     let diagnostic = json!({
         "$message_type": "diagnostic",

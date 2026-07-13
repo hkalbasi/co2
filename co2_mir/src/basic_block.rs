@@ -170,17 +170,12 @@ impl Builder<'_, '_> {
 
     fn patch_pending_gotos(&mut self) {
         for (bb, label) in std::mem::take(&mut self.pending_gotos) {
-            let Some(target) = self.label_blocks.get(&label).copied() else {
-                let rust_span = self.blocks[bb].terminator.span;
-                let co2_span = self
-                    .decl_resolver
-                    .as_ref()
-                    .map(|resolver| resolver.rust_span_to_co2_span(rust_span))
-                    .unwrap_or_else(|| co2_ast::Span::from_parts(co2_ast::FileId::INVALID, 0..0));
-                co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(
-                    co2_span,
-                    "unresolved label".to_owned(),
-                )]);
+            let target = match self.label_blocks.get(&label).copied() {
+                Some(target) => target,
+                None => {
+                    let rust_span = self.blocks[bb].terminator.span;
+                    self.terminate_with_error(rust_span, "unresolved label")
+                }
             };
             self.patch_goto_target(bb, target);
         }
@@ -256,19 +251,28 @@ impl Builder<'_, '_> {
         let mut branches = self
             .label_discriminants
             .iter()
-            .map(|(label, discr)| {
-                let target = *self
-                    .label_blocks
-                    .get(label)
-                    .unwrap_or_else(|| panic!("unresolved label id `{label:?}`"));
-                (*discr, target)
+            .filter_map(|(label, discr)| {
+                let target = match self.label_blocks.get(label).copied() {
+                    Some(target) => target,
+                    None => {
+                        let rust_span = self.blocks[block_idx].terminator.span;
+                        self.terminate_with_error(rust_span, "unresolved label")
+                    }
+                };
+                Some((*discr, target))
             })
             .collect::<Vec<_>>();
         branches.sort_by_key(|(discr, _)| *discr);
-        let otherwise = branches.first().map_or_else(
-            || panic!("indirect goto requires at least one named label"),
-            |(_, target)| *target,
-        );
+        let otherwise = match branches.first() {
+            Some((_, target)) => *target,
+            None => {
+                let rust_span = self.blocks[block_idx].terminator.span;
+                self.terminate_with_error(
+                    rust_span,
+                    "indirect goto in function with no address-of-label expressions",
+                )
+            }
+        };
         match &mut self.blocks[block_idx].terminator.kind {
             TerminatorKind::SwitchInt { targets, .. } => {
                 *targets = SwitchTargets::new(branches, otherwise);

@@ -103,23 +103,72 @@ pub fn build_mir_for_body(
         block_scopes: Vec::new(),
     };
 
-    for stmt in &body.stmts {
-        builder.lower_stmt(stmt);
+    let generation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for stmt in &body.stmts {
+            builder.lower_stmt(stmt);
+        }
+
+        builder.terminate_fallthrough();
+        builder.locals.extend(builder.extra_locals);
+
+        MirBodyResult {
+            body: Body::new(
+                builder.blocks,
+                builder.locals,
+                body.params.len(),
+                builder.var_debug_info,
+                None,
+                span,
+            ),
+            block_scopes: builder.block_scopes,
+        }
+    }));
+
+    match generation {
+        Ok(result) => result,
+        Err(payload) => {
+            if co2_ast::is_diagnostic_abort(payload.as_ref()) {
+                // Mirrored from HIR's `terminate_with_error`: the error was
+                // already reported, so substitute a valid dummy body instead
+                // of propagating the panic out of the parallel query (which
+                // would surface as a rustc ICE).
+                dummy_mir_body(body, ctx, file_id, span)
+            } else {
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
+}
 
-    builder.terminate_fallthrough();
-    builder.locals.extend(builder.extra_locals);
-
-    MirBodyResult {
-        body: Body::new(
-            builder.blocks,
-            builder.locals,
-            body.params.len(),
-            builder.var_debug_info,
-            None,
+/// A valid, minimal body used when MIR generation terminated with an error.
+/// The emitted diagnostic causes the driver to abort the compilation, so this
+/// body only needs to pass MIR validation.
+fn dummy_mir_body(
+    body: &HirBody,
+    ctx: &rustc_gen::HirStructureCtx,
+    _file_id: rustc_gen::FileId,
+    span: RustSpan,
+) -> MirBodyResult {
+    let locals: Vec<MirLocalDecl> = body
+        .locals
+        .iter()
+        .map(|(_, local)| MirLocalDecl {
+            ty: ctx.normalize_ty_defaults(local.ty),
+            span: local.span,
+            mutability: Mutability::Mut,
+        })
+        .collect();
+    let mut blocks = Vec::new();
+    blocks.push(rustc_gen::rustc_public::mir::BasicBlock {
+        statements: Vec::new(),
+        terminator: rustc_gen::rustc_public::mir::Terminator {
+            kind: rustc_gen::rustc_public::mir::TerminatorKind::Return,
             span,
-        ),
-        block_scopes: builder.block_scopes,
+        },
+    });
+    MirBodyResult {
+        body: Body::new(blocks, locals, body.params.len(), Vec::new(), None, span),
+        block_scopes: vec![0],
     }
 }
 
@@ -147,6 +196,18 @@ pub(crate) struct Builder<'ctx, 'tcx> {
 }
 
 impl Builder<'_, '_> {
+    /// Report a compilation error and terminate MIR generation for this body,
+    /// mirroring `HirCtx::terminate_with_error`. `build_mir_for_body` catches
+    /// the resulting `DiagnosticAbort` and substitutes a dummy body.
+    pub(crate) fn terminate_with_error(&self, rust_span: RustSpan, msg: &str) -> ! {
+        let co2_span = self
+            .decl_resolver
+            .as_ref()
+            .map(|resolver| resolver.rust_span_to_co2_span(rust_span))
+            .unwrap_or_else(|| co2_ast::Span::from_parts(co2_ast::FileId::INVALID, 0..0));
+        co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(co2_span, msg.to_owned())]);
+    }
+
     pub(crate) fn current_scope(&self) -> u32 {
         *self.scope_stack.last().unwrap_or(&0)
     }

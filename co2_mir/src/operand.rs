@@ -744,10 +744,13 @@ impl Builder<'_, '_> {
                 self.place_operand_for_ty(place(local_index), self.locals[local_index].ty)
             }
             HirExprKind::LabelAddress(label) => {
-                let discr = *self
-                    .label_discriminants
-                    .get(label)
-                    .unwrap_or_else(|| panic!("missing label discriminant for `{label:?}`"));
+                let discr = match self.label_discriminants.get(label) {
+                    Some(discr) => *discr,
+                    None => self.terminate_with_error(
+                        expr.span,
+                        "label is not a valid target of a computed goto",
+                    ),
+                };
                 self.lower_expr_to_operand(&HirExpr {
                     kind: HirExprKind::ConstInt(discr as i128),
                     ty: expr.ty,

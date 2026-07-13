@@ -1187,10 +1187,7 @@ impl HirCtx<'_> {
                 }
             }
             Expression::Call { .. } => Err(spanned_error(*span, "cannot call non-const function")),
-            _ => Err(spanned_error(
-                *span,
-                "unsupported constant expression",
-            )),
+            _ => Err(spanned_error(*span, "unsupported constant expression")),
         }
     }
 

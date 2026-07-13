@@ -1993,7 +1993,11 @@ pub fn lower_crate_sig(
     array_len_consts.sort_by_key(|registered| registered.id);
     for registered in array_len_consts {
         let span = ctx.co2_span_to_rustc(registered.span);
-        let value = match ctx.resolver.borrow_mut().eval_array_len_expr(&registered.expr) {
+        let value = match ctx
+            .resolver
+            .borrow_mut()
+            .eval_array_len_expr(&registered.expr)
+        {
             Ok(value) => value,
             Err(err) => {
                 co2_ast::emit_errors(vec![co2_ast::Rich::custom(err.0, err.1)]);
