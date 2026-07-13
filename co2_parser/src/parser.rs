@@ -5,9 +5,9 @@ use chumsky::{
 use co2_ast::TypeResolver;
 use co2_ast::{
     BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier, Declarator, Designator,
-    EnumSpecifier, Enumerator, Expression, FileId, ForInit, FunctionDefinitionSignature,
+    EnumSpecifier, Enumerator, Expression, FileId, FloatSuffix, ForInit, FunctionDefinitionSignature,
     FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
-    LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
+    IntegerSuffix, LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
     RustAttribute, RustAttributeStyle, RustFunctionParam, RustFunctionSignature, RustPath,
     RustPathSegment, RustStructField, RustTy, Span, Spanned, SpecifierQualifier, StatelessResolver,
     Statement, StatementOrDeclaration, StorageClassSpecifier, StringLiteral, StringLiteralPrefix,
@@ -15,6 +15,12 @@ use co2_ast::{
     TranslationUnit, TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp,
     UseItem, Visibility, parse_unsigned_integer_constant,
 };
+
+enum LiteralToken {
+    Int(String, IntegerSuffix),
+    Float(String, FloatSuffix),
+    Char(Vec<u8>),
+}
 
 fn join_spans(start: Span, end: Span) -> Span {
     let start_data = start.data();
@@ -962,13 +968,54 @@ where
             .collect::<Vec<_>>()
             .map(|parts| Expression::Constant(Constant::String(merge_string_literals(parts)))),
             select! {
-                Token::Integer(i, suffix) => Expression::Constant(Constant::Int(parse_integer_constant(&i), suffix)),
-                Token::FloatLit(i, suffix) => Expression::Constant(Constant::Float(parse_float_constant(&i), suffix)),
-                Token::CharLit(s) => {
-                    let ch = s.first().copied().expect("empty char literal");
-                    Expression::Constant(Constant::Char(u32::from(ch)))
-                },
-            },
+                Token::Integer(i, suffix) => LiteralToken::Int(i, suffix),
+                Token::FloatLit(i, suffix) => LiteralToken::Float(i, suffix),
+                Token::CharLit(s) => LiteralToken::Char(s),
+            }
+            .map_with(|lit, e| {
+                let span = e.span();
+                match lit {
+                    LiteralToken::Int(i, suffix) => match parse_unsigned_integer_constant(&i) {
+                        Some(v) => Expression::Constant(Constant::Int(v as i128, suffix)),
+                        None => {
+                            let msg = if i.starts_with("0x") || i.starts_with("0X") {
+                                "Invalid hexadecimal int literal"
+                            } else {
+                                "Invalid integer literal"
+                            };
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
+                            Expression::Constant(Constant::Int(0, suffix))
+                        }
+                    },
+                    LiteralToken::Float(i, suffix) => {
+                        let value = i
+                            .parse::<f64>()
+                            .ok()
+                            .or_else(|| parse_hex_float_constant(&i));
+                        match value {
+                            Some(v) => Expression::Constant(Constant::Float(v, suffix)),
+                            None => {
+                                co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                                    span,
+                                    "Invalid float literal",
+                                )]);
+                                Expression::Constant(Constant::Float(0.0, suffix))
+                            }
+                        }
+                    }
+                    LiteralToken::Char(s) => {
+                        if s.is_empty() {
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                                span,
+                                "Invalid character constant",
+                            )]);
+                            Expression::Constant(Constant::Char(0))
+                        } else {
+                            Expression::Constant(Constant::Char(u32::from(s[0])))
+                        }
+                    }
+                }
+            }),
         ))
         .map_with(|r, e| (r, e.span()));
 
@@ -1451,18 +1498,6 @@ where
             })
             .map_with(|r, e| (r.0, e.span()))
     })
-}
-
-fn parse_integer_constant(text: &str) -> i128 {
-    parse_unsigned_integer_constant(text)
-        .map_or_else(|| panic!("invalid integer literal `{text}`"), |v| v as i128)
-}
-
-fn parse_float_constant(text: &str) -> f64 {
-    text.parse::<f64>()
-        .ok()
-        .or_else(|| parse_hex_float_constant(text))
-        .unwrap_or_else(|| panic!("invalid float literal `{text}`"))
 }
 
 fn parse_hex_float_constant(text: &str) -> Option<f64> {
