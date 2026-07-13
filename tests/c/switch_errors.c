@@ -28,7 +28,7 @@ void case_float_label(void) {
     int x = 1;
     switch(x) {
         case 1.0:;
-//           ^^^ error: switch case expression must be integer-like, got f64
+//           ^^^ error: cannot use floats in const expressions
     }
 }
 

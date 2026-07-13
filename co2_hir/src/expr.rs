@@ -1294,8 +1294,9 @@ impl HirCtx<'_> {
                 } => {
                     if self.decl_resolver.is_constexpr_def(def_id) {
                         // TODO: This is hack on top of hack for not having proper consts.
-                        if let Ok(value) =
-                            self.decl_resolver.local_const_int_value(def_id, parser_span)
+                        if let Ok(value) = self
+                            .decl_resolver
+                            .local_const_int_value(def_id, parser_span)
                         {
                             // In a constant-evaluation context (e.g. a static/global
                             // initializer) we must produce a plain constant value.
@@ -1313,7 +1314,9 @@ impl HirCtx<'_> {
                             // etc. all behave correctly), materialize the value behind a
                             // deref-of-address: `*&value`.
                             check_generic_arg_count(def_id, generic_args.len(), 0, parser_span)?;
-                            let ty = self.resolve_value_with_generic_args(def_id, &generic_args).ty();
+                            let ty = self
+                                .resolve_value_with_generic_args(def_id, &generic_args)
+                                .ty();
                             let const_expr = HirExpr {
                                 kind: HirExprKind::ConstInt(value),
                                 ty,

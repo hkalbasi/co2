@@ -950,6 +950,10 @@ impl LocalResolverBase {
         match expr {
             Expression::Constant(Constant::Int(v, _)) => Ok(*v),
             Expression::Constant(Constant::Char(ch)) => Ok(i128::from(*ch as u8 as i8)),
+            Expression::Constant(Constant::Float(_, _)) => Err(spanned_error(
+                *span,
+                "cannot use floats in const expressions",
+            )),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Const(def_id) => {
                     if self.has_local_const_value(*def_id) {
@@ -1122,10 +1126,8 @@ impl LocalResolverBase {
                     ))
                 }
             }
-            _ => Err(spanned_error(
-                *span,
-                "unsupported constant expression in array size",
-            )),
+            Expression::Call { .. } => Err(spanned_error(*span, "cannot call non-const function")),
+            _ => Err(spanned_error(*span, "unsupported constant expression")),
         }
     }
 

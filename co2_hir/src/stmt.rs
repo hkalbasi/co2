@@ -105,6 +105,9 @@ impl HirCtx<'_> {
                 };
                 let case_label = self.fresh_label();
                 let case_expr_span = expr.1;
+                if let Err(err) = self.eval_const_expr_in_scope(&expr, locals, local_map) {
+                    self.terminate_with_spanned_error(err);
+                }
                 let case_expr = self
                     .lower_expr(expr, locals, local_map)
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
