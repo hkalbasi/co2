@@ -1040,8 +1040,12 @@ fn lower_translation_unit_items(
                 .skip_emit = true;
             drop(base);
             let adt_kind = match kind {
-                StructOrUnionKind::Struct => HirAdtKind::Struct { fields },
-                StructOrUnionKind::Union => HirAdtKind::Union { fields },
+                // GNU extension: a union with zero fields is treated as an empty
+                // struct (rustc ICEs computing the layout of an empty union).
+                StructOrUnionKind::Union if !fields.is_empty() => HirAdtKind::Union { fields },
+                StructOrUnionKind::Struct | StructOrUnionKind::Union => {
+                    HirAdtKind::Struct { fields }
+                }
             };
             let adt_repr = match pack {
                 Some(n) => AdtRepr::CPacked(n),
@@ -1941,8 +1945,10 @@ pub fn lower_crate_sig(
             continue;
         };
         let kind = match kind {
-            StructOrUnionKind::Struct => HirAdtKind::Struct { fields },
-            StructOrUnionKind::Union => HirAdtKind::Union { fields },
+            // GNU extension: a union with zero fields is treated as an empty
+            // struct (rustc ICEs computing the layout of an empty union).
+            StructOrUnionKind::Union if !fields.is_empty() => HirAdtKind::Union { fields },
+            StructOrUnionKind::Struct | StructOrUnionKind::Union => HirAdtKind::Struct { fields },
         };
         let repr = match pack_align {
             Some(n) => AdtRepr::CPacked(n),
