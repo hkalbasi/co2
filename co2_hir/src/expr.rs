@@ -3088,7 +3088,7 @@ impl HirCtx<'_> {
         self.lower_binop_from_lowered(lhs, rhs, op, span, parser_span, true)
     }
 
-    fn zeroed_expr(&self, ty: Ty, span: RustSpan) -> HirExpr {
+    pub(crate) fn zeroed_expr(&self, ty: Ty, span: RustSpan) -> HirExpr {
         HirExpr {
             kind: HirExprKind::Zeroed,
             ty,

@@ -5,18 +5,18 @@ int non_const_fn(void) {
     return 5;
 }
 
-int f1() {
+int fn_static() {
     static int a = non_const_fn();
                  //^^^^^^^^^^^^^^ error: cannot call non-const function
     return a;
 }
 
-int f2() {
+int fn_designator() {
     int a[] = { [non_const_fn()] = 5 };
                //^^^^^^^^^^^^^^ error: cannot call non-const function
 }
 
-int f3() {
+int fn_case() {
     switch (2) {
         case 3:
         case non_const_fn():
@@ -25,7 +25,42 @@ int f3() {
     }
 }
 
-int f4() {
+int fn_array_size() {
     int a[non_const_fn()];
         //^^^^^^^^^^^^^^ error: cannot call non-const function
+}
+
+int div_zero_static() {
+    static int a = 1 / 0;
+                 //^^^^^ error: division by zero happened in const eval
+    return a;
+}
+
+int div_zero_designator() {
+    int a[] = { [1 / 0] = 5 };
+               //^^^^^ error: division by zero happened in const eval
+}
+
+int div_zero_case() {
+    switch (2) {
+        case 3:
+        case 1 / 0:
+           //^^^^^ error: division by zero happened in const eval
+            return 5;
+    }
+}
+
+int div_zero_array_size() {
+    int a[1 / 0];
+        //^^^^^ error: division by zero happened in const eval
+}
+
+int rem_zero_array_size() {
+    int a[5 % 0];
+        //^^^^^ error: division by zero happened in const eval
+}
+
+int shift_array_size() {
+    int a[1 << 200];
+        //^^^^^^^^ error: shift out of bounds in const eval
 }

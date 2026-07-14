@@ -80,7 +80,7 @@ pub fn lower_static_body(
 }
 
 pub fn lower_static_body_for_ty(
-    (mut initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
+    (initializer, parser_span): Spanned<co2_ast::Initializer<LocalResolver>>,
     target_ty: Ty,
     hir_ctx: &HirCtx<'_>,
 ) -> HirBody {
@@ -93,24 +93,30 @@ pub fn lower_static_body_for_ty(
         span: body_span,
         read_only: false,
     });
-    if let co2_ast::Initializer::Expr(expr) = &initializer
-        && let Err(err) = hir_ctx.eval_const_expr_in_scope(expr, &mut locals, &mut local_map)
-        && err.1 == "cannot call non-const function"
-    {
-        co2_ast::emit_errors(vec![co2_ast::Rich::custom(err.0, err.1)]);
-        initializer = co2_ast::Initializer::Expr((
-            co2_ast::Expression::Constant(co2_ast::Constant::Int(0, co2_ast::IntegerSuffix::None)),
-            parser_span,
-        ));
-    }
-    let tree = hir_ctx.lower_to_initializer_tree(
-        target_ty,
-        (initializer, parser_span),
-        &mut locals,
-        &mut local_map,
-        false,
-    );
-    let init_expr = hir_ctx.initializer_tree_to_expr(&tree, target_ty, parser_span);
+    let init_expr = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let co2_ast::Initializer::Expr(expr) = &initializer
+            && let Err(err) = hir_ctx.eval_const_expr_in_scope(expr, &mut locals, &mut local_map)
+        {
+            hir_ctx.terminate_with_spanned_error(err);
+        }
+        let tree = hir_ctx.lower_to_initializer_tree(
+            target_ty,
+            (initializer, parser_span),
+            &mut locals,
+            &mut local_map,
+            false,
+        );
+        hir_ctx.initializer_tree_to_expr(&tree, target_ty, parser_span)
+    })) {
+        Ok(init_expr) => init_expr,
+        Err(payload) => {
+            if co2_ast::is_diagnostic_abort(payload.as_ref()) {
+                hir_ctx.zeroed_expr(target_ty, body_span)
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    };
     HirBody {
         locals,
         labels: hir_ctx.take_labels(),

@@ -1060,7 +1060,9 @@ impl HirCtx<'_> {
                 let inner = self.eval_const_expr_in_scope(inner, locals, local_map)?;
                 match op {
                     co2_ast::UnaryOp::Plus => Ok(inner),
-                    co2_ast::UnaryOp::Minus => Ok(-inner),
+                    co2_ast::UnaryOp::Minus => inner
+                        .checked_neg()
+                        .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
                     co2_ast::UnaryOp::Not => Ok(i128::from(inner == 0)),
                     co2_ast::UnaryOp::Com => Ok(!inner),
                     _ => Err(spanned_error(*span, "unsupported unary op in array size")),
@@ -1070,11 +1072,33 @@ impl HirCtx<'_> {
                 let lhs = self.eval_const_expr_in_scope(lhs, locals, local_map)?;
                 let rhs = self.eval_const_expr_in_scope(rhs, locals, local_map)?;
                 match op {
-                    co2_ast::BinOp::Add => Ok(lhs + rhs),
-                    co2_ast::BinOp::Sub => Ok(lhs - rhs),
-                    co2_ast::BinOp::Mul => Ok(lhs * rhs),
-                    co2_ast::BinOp::Div => Ok(lhs / rhs),
-                    co2_ast::BinOp::Rem => Ok(lhs % rhs),
+                    co2_ast::BinOp::Add => lhs
+                        .checked_add(rhs)
+                        .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
+                    co2_ast::BinOp::Sub => lhs
+                        .checked_sub(rhs)
+                        .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
+                    co2_ast::BinOp::Mul => lhs
+                        .checked_mul(rhs)
+                        .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
+                    co2_ast::BinOp::Div => {
+                        if rhs == 0 {
+                            Err(spanned_error(*span, "division by zero happened in const eval"))
+                        } else {
+                            lhs.checked_div(rhs).ok_or_else(|| {
+                                spanned_error(*span, "integer overflow in const eval")
+                            })
+                        }
+                    }
+                    co2_ast::BinOp::Rem => {
+                        if rhs == 0 {
+                            Err(spanned_error(*span, "division by zero happened in const eval"))
+                        } else {
+                            lhs.checked_rem(rhs).ok_or_else(|| {
+                                spanned_error(*span, "integer overflow in const eval")
+                            })
+                        }
+                    }
                     co2_ast::BinOp::BitOr => Ok(lhs | rhs),
                     co2_ast::BinOp::BitXor => Ok(lhs ^ rhs),
                     co2_ast::BinOp::BitAnd => Ok(lhs & rhs),
@@ -1084,8 +1108,12 @@ impl HirCtx<'_> {
                     co2_ast::BinOp::Ne => Ok(i128::from(lhs != rhs)),
                     co2_ast::BinOp::Ge => Ok(i128::from(lhs >= rhs)),
                     co2_ast::BinOp::Gt => Ok(i128::from(lhs > rhs)),
-                    co2_ast::BinOp::Shl => Ok(lhs << rhs),
-                    co2_ast::BinOp::Shr => Ok(lhs >> rhs),
+                    co2_ast::BinOp::Shl => lhs
+                        .checked_shl(rhs as u32)
+                        .ok_or_else(|| spanned_error(*span, "shift out of bounds in const eval")),
+                    co2_ast::BinOp::Shr => lhs
+                        .checked_shr(rhs as u32)
+                        .ok_or_else(|| spanned_error(*span, "shift out of bounds in const eval")),
                     co2_ast::BinOp::And => Ok(i128::from((lhs != 0) && (rhs != 0))),
                     co2_ast::BinOp::Or => Ok(i128::from((lhs != 0) || (rhs != 0))),
                     co2_ast::BinOp::Comma | co2_ast::BinOp::Assign => {

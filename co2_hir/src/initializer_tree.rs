@@ -271,9 +271,9 @@ pub(crate) fn eval_const_int(expr: &HirExpr) -> Option<i128> {
             let lhs = eval_const_int(lhs)?;
             let rhs = eval_const_int(rhs)?;
             match op {
-                crate::expr::HirBinOp::Add => Some(lhs + rhs),
-                crate::expr::HirBinOp::Sub => Some(lhs - rhs),
-                crate::expr::HirBinOp::Mul => Some(lhs * rhs),
+                crate::expr::HirBinOp::Add => lhs.checked_add(rhs),
+                crate::expr::HirBinOp::Sub => lhs.checked_sub(rhs),
+                crate::expr::HirBinOp::Mul => lhs.checked_mul(rhs),
                 crate::expr::HirBinOp::Div => lhs.checked_div(rhs),
                 crate::expr::HirBinOp::Rem => lhs.checked_rem(rhs),
                 crate::expr::HirBinOp::BitOr => Some(lhs | rhs),
@@ -285,8 +285,8 @@ pub(crate) fn eval_const_int(expr: &HirExpr) -> Option<i128> {
                 crate::expr::HirBinOp::Ne => Some(i128::from(lhs != rhs)),
                 crate::expr::HirBinOp::Ge => Some(i128::from(lhs >= rhs)),
                 crate::expr::HirBinOp::Gt => Some(i128::from(lhs > rhs)),
-                crate::expr::HirBinOp::Shl => Some(lhs << rhs),
-                crate::expr::HirBinOp::Shr => Some(lhs >> rhs),
+                crate::expr::HirBinOp::Shl => lhs.checked_shl(rhs as u32),
+                crate::expr::HirBinOp::Shr => lhs.checked_shr(rhs as u32),
             }
         }
         HirExprKind::Comma { rhs, .. } => eval_const_int(rhs),

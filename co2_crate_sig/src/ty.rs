@@ -1015,7 +1015,9 @@ impl LocalResolverBase {
                 let inner = self.eval_const_expr(inner)?;
                 match op {
                     UnaryOp::Plus => Ok(inner),
-                    UnaryOp::Minus => Ok(-inner),
+                    UnaryOp::Minus => inner
+                        .checked_neg()
+                        .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
                     UnaryOp::Not => Ok(i128::from(inner == 0)),
                     UnaryOp::Com => Ok(!inner),
                     _ => Err(spanned_error(*span, "unsupported unary op in array size")),
@@ -1025,11 +1027,33 @@ impl LocalResolverBase {
                 let lhs = self.eval_const_expr(lhs)?;
                 let rhs = self.eval_const_expr(rhs)?;
                 match op {
-                    BinOp::Add => Ok(lhs + rhs),
-                    BinOp::Sub => Ok(lhs - rhs),
-                    BinOp::Mul => Ok(lhs * rhs),
-                    BinOp::Div => Ok(lhs / rhs),
-                    BinOp::Rem => Ok(lhs % rhs),
+                    BinOp::Add => lhs
+                        .checked_add(rhs)
+                        .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
+                    BinOp::Sub => lhs
+                        .checked_sub(rhs)
+                        .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
+                    BinOp::Mul => lhs
+                        .checked_mul(rhs)
+                        .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
+                    BinOp::Div => {
+                        if rhs == 0 {
+                            Err(spanned_error(*span, "division by zero happened in const eval"))
+                        } else {
+                            lhs.checked_div(rhs).ok_or_else(|| {
+                                spanned_error(*span, "integer overflow in const eval")
+                            })
+                        }
+                    }
+                    BinOp::Rem => {
+                        if rhs == 0 {
+                            Err(spanned_error(*span, "division by zero happened in const eval"))
+                        } else {
+                            lhs.checked_rem(rhs).ok_or_else(|| {
+                                spanned_error(*span, "integer overflow in const eval")
+                            })
+                        }
+                    }
                     BinOp::BitOr => Ok(lhs | rhs),
                     BinOp::BitXor => Ok(lhs ^ rhs),
                     BinOp::BitAnd => Ok(lhs & rhs),
@@ -1039,8 +1063,12 @@ impl LocalResolverBase {
                     BinOp::Ne => Ok(i128::from(lhs != rhs)),
                     BinOp::Ge => Ok(i128::from(lhs >= rhs)),
                     BinOp::Gt => Ok(i128::from(lhs > rhs)),
-                    BinOp::Shl => Ok(lhs << rhs),
-                    BinOp::Shr => Ok(lhs >> rhs),
+                    BinOp::Shl => lhs
+                        .checked_shl(rhs as u32)
+                        .ok_or_else(|| spanned_error(*span, "shift out of bounds in const eval")),
+                    BinOp::Shr => lhs
+                        .checked_shr(rhs as u32)
+                        .ok_or_else(|| spanned_error(*span, "shift out of bounds in const eval")),
                     BinOp::And => Ok(i128::from((lhs != 0) && (rhs != 0))),
                     BinOp::Or => Ok(i128::from((lhs != 0) || (rhs != 0))),
                     BinOp::Comma | BinOp::Assign => {
