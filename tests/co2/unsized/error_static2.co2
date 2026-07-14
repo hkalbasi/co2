@@ -1,0 +1,14 @@
+//@ mode: co2
+//@ compile-fail
+
+typedef struct Foo foo_t;
+
+pub struct Foo {
+  field1: i32,
+  field2: foo_t,
+}
+
+  Foo foo;
+//^^^^^^^^ error: the size for values of type `__co2_c_adt_Foo_0__foreign` cannot be known at compilation time
+
+fn main() {}

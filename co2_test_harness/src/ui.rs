@@ -491,7 +491,8 @@ fn unexpected_diagnostic_issue(diagnostic: &UiDiagnostic) -> UiTestIssue {
 }
 
 fn is_summary_diagnostic(diagnostic: &UiDiagnostic) -> bool {
-    diagnostic.message.starts_with("aborting due to ")
+    diagnostic.level == "failure-note"
+        || diagnostic.message.starts_with("aborting due to ")
         || diagnostic.message.ends_with(" warning emitted")
         || diagnostic.message.ends_with(" warnings emitted")
 }

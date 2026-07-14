@@ -352,6 +352,22 @@ pub(crate) fn is_array_ty(ty: Ty) -> bool {
     matches!(ty.kind(), TyKind::RigidTy(RigidTy::Array(_, _)))
 }
 
+pub fn is_unsized_ty(ty: &Ty) -> bool {
+    match ty.kind() {
+        TyKind::RigidTy(
+            RigidTy::Str | RigidTy::Foreign(_) | RigidTy::Slice(_) | RigidTy::Dynamic(_, _),
+        ) => true,
+        TyKind::RigidTy(RigidTy::Adt(_, _)) => {
+            if let Some(fields) = adt_field_tys(*ty) {
+                fields.last().is_some_and(|last| is_unsized_ty(&last))
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn is_condition_ty(ty: Ty) -> bool {
     if enum_payload_ty(ty).is_some() {
         return true;

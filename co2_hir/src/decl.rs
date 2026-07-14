@@ -24,8 +24,8 @@ use crate::expr::HirExpr;
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
 use crate::ty::{
-    adt_field_tys, array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt,
-    ty_matches_expected,
+    adt_field_tys, array_elem_ty, enum_payload_ty, is_array_ty, is_unsized_ty,
+    resolve_field_path_in_adt, ty_matches_expected,
 };
 use crate::{
     expr::coerce_expr_to_type,
@@ -689,6 +689,13 @@ impl HirCtx<'_> {
                             continue;
                         }
                     };
+
+                    if is_unsized_ty(&ty) {
+                        self.terminate_with_error(
+                            parser_span,
+                            "local doesn't have a size known at compile-time",
+                        );
+                    }
 
                     let span = self.to_rust_span(parser_span);
                     let local = locals.alloc(HirLocal {
@@ -1412,6 +1419,7 @@ impl HirCtx<'_> {
                 let c_variadic = param_list.effective_ellipsis();
                 if !param_list.empty_params() {
                     for param in param_list.parameters {
+                        let param_ty_span = param.0.first().map_or(span, |s| s.1);
                         let param_base = self.base_ty_of_decl(param.0, span);
                         let param_base_const = has_const_qualifier_in_decl_specs(&param_base.1);
                         let (param_decl_ty, _) =
@@ -1429,6 +1437,12 @@ impl HirCtx<'_> {
                             self.peel_typedef_array_elem(param_ty, self.to_rust_span(span))
                         {
                             param_ty = Ty::new_ptr(elem, Mutability::Mut);
+                        }
+                        if is_unsized_ty(&param_ty) {
+                            self.terminate_with_error(
+                                param_ty_span,
+                                "parameter doesn't have a size known at compile-time",
+                            );
                         }
                         inputs.push(param_ty);
                     }

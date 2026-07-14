@@ -65,7 +65,7 @@ impl HirBody {
 pub fn lower_function_body(
     tokens: Spanned<CompoundStatement<LocalResolver>>,
     def: FnDef,
-    param_names: &[(usize, String)],
+    param_names: &[(usize, String, RustSpan)],
     hir_ctx: &mut HirCtx<'_>,
 ) -> HirBody {
     hir_ctx.lower_function_body(tokens, def, param_names)
@@ -200,7 +200,7 @@ impl HirCtx<'_> {
         &mut self,
         parsed: Spanned<CompoundStatement<LocalResolver>>,
         def: FnDef,
-        param_names: &[(usize, String)],
+        param_names: &[(usize, String, RustSpan)],
     ) -> HirBody {
         self.reset_labels();
         self.lower_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names)
@@ -210,7 +210,7 @@ impl HirCtx<'_> {
         &mut self,
         (compound, parser_span): Spanned<CompoundStatement<LocalResolver>>,
         sig: &FnSig,
-        param_names: &[(usize, String)],
+        param_names: &[(usize, String, RustSpan)],
     ) -> HirBody {
         let body_span = self.to_rust_span(parser_span);
         let mut locals = Arena::new();
@@ -226,10 +226,11 @@ impl HirCtx<'_> {
 
         for (idx, ty) in sig.inputs().iter().enumerate() {
             let name = &param_names[idx];
+            let param_span = name.2;
             let id = locals.alloc(HirLocal {
                 name: name.1.clone(),
                 ty: *ty,
-                span: body_span,
+                span: param_span,
                 read_only: false,
             });
             params.push(id);

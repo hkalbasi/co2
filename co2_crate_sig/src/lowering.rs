@@ -1212,7 +1212,12 @@ fn lower_translation_unit_items(
                     .inputs
                     .iter()
                     .enumerate()
-                    .map(|(idx, input)| input.name.clone().unwrap_or_else(|| format!("arg{idx}")))
+                    .map(|(idx, input)| {
+                        (
+                            input.name.clone().unwrap_or_else(|| format!("arg{idx}")),
+                            input.ty.span,
+                        )
+                    })
                     .collect::<Vec<_>>();
                 let id = resolve_in_module(ctx, module_path, &name).0;
                 let function_name = name.clone();
@@ -1230,9 +1235,9 @@ fn lower_translation_unit_items(
                 resolver = resolver.start_new_scope().with_owner(id.0);
                 let param_names = body_param_names
                     .into_iter()
-                    .map(|name| {
+                    .map(|(name, span)| {
                         let id = resolver.add_local(name.clone());
-                        (id, name)
+                        (id, name, span)
                     })
                     .collect();
                 let parse_body_start = Instant::now();

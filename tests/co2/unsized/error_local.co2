@@ -1,0 +1,27 @@
+//@ mode: co2
+//@ compile-fail
+
+int f1() {
+    str *bar, foo;
+            //^^^ error: local doesn't have a size known at compile-time
+}
+
+int f2() {
+    struct Foreign foo;
+                 //^^^ error: local doesn't have a size known at compile-time
+}
+
+pub struct Unsized {
+    f1: i32,
+    f2: str,
+}
+
+int f3() {
+    Unsized foo;
+          //^^^ error: local doesn't have a size known at compile-time
+}
+
+fn main() {
+    f1();
+    f2();
+}

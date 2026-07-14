@@ -726,7 +726,11 @@ impl DefinedCrateInfo {
                                 vec![make_self_param(&mut item_allocator)]
                             };
                         params.extend(sig.inputs.iter().map(|input| {
-                            make_named_param(&mut item_allocator, input.name.as_deref())
+                            make_named_param(
+                                &mut item_allocator,
+                                input.name.as_deref(),
+                                internal(tcx, input.ty.span),
+                            )
                         }));
                         if sig.c_variadic {
                             params.push(make_c_variadic_param(&mut item_allocator));
@@ -866,7 +870,13 @@ impl DefinedCrateInfo {
             let mut params = function
                 .inputs
                 .iter()
-                .map(|input| make_named_param(&mut item_allocator, input.name.as_deref()))
+                .map(|input| {
+                    make_named_param(
+                        &mut item_allocator,
+                        input.name.as_deref(),
+                        internal(tcx, input.ty.span),
+                    )
+                })
                 .collect::<Vec<_>>();
 
             if function.c_variadic {
@@ -4652,6 +4662,11 @@ fn generated_mir_built<S: CrateGeneratorState>(
         return (original.mir_built)(tcx, def_id);
     }
 
+    if let Some(guar) = tcx.dcx().has_errors() {
+        let body = build_error_mir_body(tcx, def_id, guar);
+        return unsafe { std::mem::transmute(leak(Steal::new(body))) };
+    }
+
     let key = rustc_def_to_my_def(tcx, def_id.to_def_id());
 
     let (mir, block_scopes) = {
@@ -4749,6 +4764,7 @@ fn input_ident(input: &crate::FunctionInput) -> Ident {
 fn make_named_param(
     item_allocator: &mut HirItemAllocator,
     name: Option<&str>,
+    ty_span: RustcSpan,
 ) -> hir::Param<'static> {
     let pat_hir_id = item_allocator.new_item();
     let ident = Ident::from_str(name.unwrap_or("_"));
@@ -4760,7 +4776,7 @@ fn make_named_param(
             ident,
             None,
         ),
-        span: DUMMY_SP,
+        span: ty_span,
         default_binding_modes: false,
     };
     let param_hir_id = item_allocator.new_item();
@@ -4773,8 +4789,8 @@ fn make_named_param(
     hir::Param {
         hir_id: param_hir_id,
         pat,
-        ty_span: DUMMY_SP,
-        span: DUMMY_SP,
+        ty_span,
+        span: ty_span,
     }
 }
 
@@ -4803,6 +4819,71 @@ fn make_self_param(item_allocator: &mut HirItemAllocator) -> hir::Param<'static>
         pat,
         ty_span: DUMMY_SP,
         span: DUMMY_SP,
+    }
+}
+
+/// Build a trivial, unreachable MIR body for a generated def when rustc has
+/// already emitted errors. Once rustc reports an error, item types may be
+/// poisoned to `ty::Error`, which co2's MIR builders cannot lower (they would
+/// hit `unreachable!()` in the stable-MIR bridge). Since compilation is already
+/// failing, we mirror rustc's own `construct_error` and return an error body so
+/// the real diagnostic is what the user sees instead of an ICE.
+fn build_error_mir_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: LocalDefId,
+    guar: rustc_span::ErrorGuaranteed,
+) -> rustc_middle::mir::Body<'static> {
+    let span = tcx.def_span(owner);
+    let source_info = rustc_middle::mir::SourceInfo {
+        span,
+        scope: rustc_middle::mir::OUTERMOST_SOURCE_SCOPE,
+    };
+    let ret_ty = rustc_middle::ty::Ty::new_error(tcx, guar);
+
+    let local_decls: IndexVec<rustc_middle::mir::Local, rustc_middle::mir::LocalDecl<'tcx>> =
+        IndexVec::from_iter([rustc_middle::mir::LocalDecl::with_source_info(
+            ret_ty,
+            source_info,
+        )]);
+
+    let mut source_scopes = IndexVec::new();
+    source_scopes.push(rustc_middle::mir::SourceScopeData {
+        span,
+        parent_scope: None,
+        inlined: None,
+        inlined_parent_scope: None,
+        local_data: rustc_middle::mir::ClearCrossCrate::Set(
+            rustc_middle::mir::SourceScopeLocalData {
+                lint_root: HirId::make_owner(owner),
+            },
+        ),
+    });
+
+    let mut basic_blocks = IndexVec::new();
+    basic_blocks.push(rustc_middle::mir::BasicBlockData::new_stmts(
+        Vec::new(),
+        Some(rustc_middle::mir::Terminator {
+            source_info,
+            kind: rustc_middle::mir::TerminatorKind::Unreachable,
+        }),
+        false,
+    ));
+
+    let body = rustc_middle::mir::Body::new(
+        rustc_middle::mir::MirSource::item(owner.to_def_id()),
+        basic_blocks,
+        source_scopes,
+        local_decls,
+        IndexVec::new(),
+        0,
+        vec![],
+        span,
+        None,
+        Some(guar),
+    );
+
+    unsafe {
+        std::mem::transmute::<rustc_middle::mir::Body<'tcx>, rustc_middle::mir::Body<'static>>(body)
     }
 }
 
