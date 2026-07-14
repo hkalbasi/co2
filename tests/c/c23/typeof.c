@@ -163,5 +163,8 @@ int main(void) {
 
     assert(offsetof(typeof(*ptr2), b) == offsetof(struct foo, b));
 
+    typeof(struct Foo { int x; }) typeof_foo = { .x = 5 };
+    assert(typeof_foo.x == 5);
+
     return 0;
 }

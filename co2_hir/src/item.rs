@@ -96,6 +96,8 @@ pub fn lower_static_body_for_ty(
     let init_expr = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if let co2_ast::Initializer::Expr(expr) = &initializer
             && let Err(err) = hir_ctx.eval_const_expr_in_scope(expr, &mut locals, &mut local_map)
+            // TODO: This is a dirty hack, should be fixed when we have proper const eval
+            && !err.1.starts_with("unsupported")
         {
             hir_ctx.terminate_with_spanned_error(err);
         }

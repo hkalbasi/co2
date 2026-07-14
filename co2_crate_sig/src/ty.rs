@@ -1179,7 +1179,7 @@ impl LocalResolverBase {
             .find(|e| e.def_id == def_id)
             .map(|e| &e.mir_info)
             .ok_or_else(|| {
-                spanned_error(span, format!("could not find enum constant {def_id:?}"))
+                spanned_error(span, format!("unsupported const value {def_id:?}"))
             })?;
 
         let value = match &mir_info {
