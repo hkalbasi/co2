@@ -2831,8 +2831,14 @@ pub(crate) fn check_fn_predicates(
     // If any generic args are still unresolved Param types, inference failed.
     // Return an error so the unresolved type doesn't leak into MIR and cause
     // a panic during monomorphization.
+    // Skip the synthetic `__co2_unresolved` param which is used as a placeholder
+    // for trait-level type params that couldn't be resolved during method probing.
     if rustc_args.iter().any(|arg| {
-        matches!(arg.kind(), ty::GenericArgKind::Type(ty) if matches!(ty.kind(), ty::TyKind::Param(_)))
+        matches!(
+            arg.kind(),
+            ty::GenericArgKind::Type(ty)
+                if matches!(ty.kind(), ty::TyKind::Param(param) if param.name.as_str() != "__co2_unresolved")
+        )
     }) {
         return Err("cannot resolve generic arguments.".to_string());
     }
@@ -3438,7 +3444,13 @@ pub(crate) fn infer_fn_args(
             }
             GenericArgKind::Type(ty) => {
                 let rustc_ty = mir_ty_to_rustc(tcx, ty);
-                if matches!(rustc_ty.kind(), ty::TyKind::Param(_)) {
+                // `Param` args and `Infer` args both denote an as-yet-unresolved generic
+                // argument. `Infer` args arrive as inference vars minted by a *different*
+                // inference context (e.g. `resolve_method`); feeding them into this fresh
+                // infcx makes rustc probe var indices that don't exist in our unification
+                // table and ICE (index out of bounds, len 1 vs 3, on e.g. `Vec::extend`).
+                // Replace both with a fresh var owned by *this* infcx.
+                if matches!(rustc_ty.kind(), ty::TyKind::Param(_) | ty::TyKind::Infer(_)) {
                     let var = infcx.next_ty_var(DUMMY_SP);
                     infer_for_param[idx] = Some(var);
                     ty::GenericArg::from(var)
@@ -3596,6 +3608,18 @@ fn stable_generic_args<'tcx>(tcx: TyCtxt<'tcx>, args: ty::GenericArgsRef<'tcx>) 
             ) =>
         {
             ty::GenericArg::from(tcx.lifetimes.re_erased)
+        }
+        ty::GenericArgKind::Type(ty)
+            if matches!(
+                ty.kind(),
+                ty::TyKind::Infer(_) | ty::TyKind::Error(_) | ty::TyKind::Placeholder(_)
+            ) =>
+        {
+            ty::GenericArg::from(ty::Ty::new_param(
+                tcx,
+                0,
+                rustc_span::Symbol::intern("__co2_unresolved"),
+            ))
         }
         _ => arg,
     }));

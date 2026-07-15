@@ -12,8 +12,8 @@ use rustc_public_generative::rustc_public::{
     abi::FieldsShape,
     mir::Mutability,
     ty::{
-        FloatTy, GenericArgKind, GenericArgs, IntTy, Region, RegionKind, RigidTy, Span as RustSpan,
-        Ty, TyConst, TyKind, UintTy,
+        FloatTy, GenericArgKind, GenericArgs, IntTy, ParamTy, Region, RegionKind, RigidTy,
+        Span as RustSpan, Ty, TyConst, TyKind, UintTy,
     },
 };
 
@@ -38,9 +38,13 @@ fn invalid_span() -> Span {
 
 fn first_unresolved_generic_arg_index(args: &[GenericArgKind]) -> usize {
     args.iter()
-        .position(
-            |arg| matches!(arg, GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_))),
-        )
+        .position(|arg| {
+            matches!(
+                arg,
+                GenericArgKind::Type(ty)
+                    if matches!(ty.kind(), TyKind::Param(ParamTy { name, .. }) if name != "__co2_unresolved")
+            )
+        })
         .unwrap_or(args.len())
 }
 

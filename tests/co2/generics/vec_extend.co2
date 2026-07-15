@@ -1,0 +1,27 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::vec::Vec;
+
+#include <assert.h>
+
+int foo() {
+    Vec::<i32> v = Vec::<i32>::new();
+    v.push(1);
+    v.push(2);
+    v.extend::<Vec<i32>>(v.clone());
+    return v.len();
+}
+
+fn main() {
+    Vec::<i32> v = Vec::<i32>::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.extend(v.clone());
+    v.extend(v.clone());
+    v.extend::<Vec<i32>>(v.clone());
+    assert(v.len() == 24);
+
+    assert(foo() == 4);
+}

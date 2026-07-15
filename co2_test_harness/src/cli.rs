@@ -24,4 +24,9 @@ pub struct Cli {
     /// Use installed toolchain binaries from PATH instead of building from source.
     #[arg(long)]
     pub installed: bool,
+
+    /// Use optimization for building the compiler. Generally slower in a clean setup,
+    /// and provides less debug utility, so off by default. 
+    #[arg(long)]
+    pub optimized: bool,
 }

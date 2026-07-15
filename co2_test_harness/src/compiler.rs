@@ -118,10 +118,18 @@ fn cargo_miri_available() -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-pub fn build_compilers(root: &Path, coverage: bool) -> Result<()> {
+pub fn build_compilers(root: &Path, coverage: bool, optimized: bool) -> Result<PathBuf> {
+    if coverage && optimized {
+        panic!("coverage && optimized not supported");
+    }
     let mut cmd = Command::new("cargo");
-    cmd.current_dir(root)
-        .args(["build", "--locked", "-p", "co2-multicall"]);
+    cmd.current_dir(root).args({
+        let mut args = vec!["build", "--locked", "-p", "co2-multicall"];
+        if optimized {
+            args.push("--release");
+        }
+        args
+    });
 
     if coverage {
         cmd.env("RUSTFLAGS", "-C instrument-coverage");
@@ -133,8 +141,11 @@ pub fn build_compilers(root: &Path, coverage: bool) -> Result<()> {
     if !status.success() {
         bail!("building co2-multicall failed with status {status}");
     }
-    ensure_compiler_links(&root.join("target").join("debug"))?;
-    Ok(())
+    let target_dir = root
+        .join("target")
+        .join(if optimized { "release" } else { "debug" });
+    ensure_compiler_links(&target_dir)?;
+    Ok(target_dir)
 }
 
 fn ensure_compiler_links(bin_dir: &Path) -> Result<()> {

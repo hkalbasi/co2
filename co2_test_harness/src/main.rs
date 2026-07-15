@@ -32,8 +32,7 @@ fn run_main() -> Result<()> {
         }
         None
     } else {
-        build_compilers(&root, cli.coverage)?;
-        Some(root.join("target").join("debug"))
+        Some(build_compilers(&root, cli.coverage, cli.optimized)?)
     };
 
     let coverage_dir = if cli.coverage {
