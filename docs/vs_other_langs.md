@@ -6,7 +6,7 @@ Carbon is Google's experimental successor to C++, designed for large-scale migra
 There is a huge intersection between Carbon and CO2 goals, the major difference is that Carbon is focused
 on C++ but CO2 targets C.
 
-We can [imagine a CO2++ language](./vision/lingua_franca.md) which is backward compatible with C++,
+We can [imagine a CO2++ language](./vision/co2pp.md) which is backward compatible with C++,
 and has similar goals to CO2 but with C++ instead of C as the base language.
 Comparing CO2++ with Carbon is more apple to apple.
 
@@ -51,7 +51,7 @@ Benefits of C2Rust over CO2:
 
 There are other family of tools for interoperability between C/C++ and Rust.
 These tools are binding generators: They generate some code in both language to bridge things.
-Some of these tools are C++ only, which we compare against the [imaginary CO2++](./vision/lingua_franca.md)
+Some of these tools are C++ only, which we compare against the [imaginary CO2++](./vision/co2pp.md)
 language instead of CO2 itself.
 
 Benefits of CO2 over bindgen and cbindgen:
@@ -83,9 +83,21 @@ Benefits of CO2++ over Zngur, CXX, Crubit, ...:
   * Lack of wrapper overhead. These C++ binding generators specially generate some invisible code (unlike C ones)
     which may have non trivial performance impact. Frequent cross language calls are discouraged in those tools due this reason.
   * Better optimizations. There is a cross language LTO, but is hard to setup and limited.
+* Linking multiple Rust static libs [will lead to symbol conflicts](https://github.com/rust-lang/rust/issues/44283#issuecomment-328181342)
+  which requires careful build system integration when using multiple Rust chunks in a C++ codebase.
+  CO2++ handles this by using rlibs even for C++ code, addressing this problem completely.
+  This issue might get solved by Rust itself, please make a PR and remove/update this bullet if that happened.
+
 Benefits of Zngur, CXX, Crubit, ... over CO2++:
 * You have more options on C++ compiler and build systems.
-* CO2++ has a higher upfront adoption cost.
+* CO2++ has a higher upfront adoption cost. To get most from CO2++ you need to use cargo,
+  and changing the build system might be difficult in a huge C++ project.
+
+As author of both Zngur and CO2, I think both classes has their place and no one replaces the other.
+There is a spectrum of users of C++/Rust interop, based on how tight they want to integrate two languages and how much compiler dependence is acceptable.
+No single tool can cover the whole spectrum. CO2++ is for the end of the spectrum when user wants super tight integration,
+and can accept that (part of) their C/C++ code is going to be not compilable with a traditional C/C++ compiler.
+On the other hand, Zngur is for users who want very low (even zero) compiler and build system modification.
 
 ## CO2 vs Zig, Hare, C3, Odin, ...
 
