@@ -846,6 +846,9 @@ fn should_try_direct_cc_link(linker_args: &[String]) -> bool {
         .any(|arg| Path::new(arg).extension().and_then(|ext| ext.to_str()) == Some("a"))
 }
 
+// TODO: We do some horrible things here, to not link rust std when std is not actually used.
+// We should instead work with upstream to reduce binary size when std is not actually used,
+// or drop this feature entirely and force a `#![yes_std]` when people want std in co2cc programs.
 fn link_objects(
     objects: &[PathBuf],
     linker_args: &[String],
@@ -861,34 +864,65 @@ fn link_objects(
 
     if !should_try_direct_cc_link(linker_args) {
         let temp_dir = make_temp_dir();
-        let rustc_link_stub = temp_dir.join("co2c_link.rs");
-        fs::write(&rustc_link_stub, CO2C_LINK_STUB).expect("failed to write rustc linker stub");
-        let rustc_link_args = build_link_rustc_args(
-            &rustc_link_stub,
-            objects,
-            linker_args,
-            output,
-            opt_level,
-            debuginfo,
-        );
         let exe = std::env::var_os("CO2_RUN_SCRIPT")
             .map(PathBuf::from)
             .or_else(current_invocation_path)
             .or_else(|| std::env::current_exe().ok())
             .expect("failed to locate co2cc executable");
-        let mut rustc_link_cmd = Command::new(&exe);
-        rustc_link_cmd.args(&rustc_link_args);
-        rustc_link_cmd.env("CO2_APPLET_OVERRIDE", "co2rustc");
 
-        let status = rustc_link_cmd
-            .status()
-            .expect("failed to execute co2rustc link step");
-        let _ = fs::remove_file(&rustc_link_stub);
-        let _ = fs::remove_dir_all(&temp_dir);
-        if !status.success() {
-            process::exit(1);
+        let link_with_stub = |stub: &str| -> Option<std::process::Output> {
+            let stub_path = temp_dir.join("co2c_link.rs");
+            let _ = fs::write(&stub_path, stub);
+            let rustc_link_args = build_link_rustc_args(
+                &stub_path,
+                objects,
+                linker_args,
+                output,
+                opt_level,
+                debuginfo,
+            );
+            let mut cmd = Command::new(&exe);
+            cmd.args(&rustc_link_args);
+            cmd.env("CO2_APPLET_OVERRIDE", "co2rustc");
+            let output = cmd.output().ok()?;
+            let _ = fs::remove_file(&stub_path);
+            Some(output)
+        };
+
+        let forward_output = |output: &std::process::Output| {
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(&output.stdout);
+            let _ = std::io::stderr().write_all(&output.stderr);
+        };
+
+        // Try linking with the no_std stub first (produces smaller binaries).
+        if let Some(ref output) = link_with_stub(CO2C_LINK_STUB) {
+            if output.status.success() {
+                forward_output(output);
+                let _ = fs::remove_dir_all(&temp_dir);
+                return;
+            }
+            // If no_std link failed due to std::/alloc:: unresolved symbols, retry with std stub.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("undefined symbol: std::")
+                || stderr.contains("undefined symbol: <std::")
+                || stderr.contains("reference to `std::")
+                || stderr.contains("undefined symbol: alloc::")
+                || stderr.contains("_Unwind_Resume")
+            {
+                if let Some(ref retry_output) = link_with_stub(CO2C_LINK_STD_STUB) {
+                    if retry_output.status.success() {
+                        forward_output(retry_output);
+                        let _ = fs::remove_dir_all(&temp_dir);
+                        return;
+                    }
+                }
+            }
+            // Forward the original error and exit
+            forward_output(output);
         }
-        return;
+        let _ = fs::remove_dir_all(&temp_dir);
+        process::exit(1);
     }
 
     let temp_dir = make_temp_dir();
@@ -938,6 +972,10 @@ fn link_objects(
     let cc_stderr = String::from_utf8_lossy(&link_output.stderr);
     if !cc_stderr.contains("undefined reference to `core::")
         && !cc_stderr.contains("undefined symbol: core::")
+        && !cc_stderr.contains("undefined symbol: std::")
+        && !cc_stderr.contains("undefined symbol: <std::")
+        && !cc_stderr.contains("reference to `std::")
+        && !cc_stderr.contains("undefined symbol: alloc::")
     {
         let _ = fs::remove_file(&cc_link_stub);
         let _ = fs::remove_file(&cc_link_stub_object);
@@ -949,8 +987,18 @@ fn link_objects(
         process::exit(1);
     }
 
+    let needs_full_std = cc_stderr.contains("undefined symbol: std::")
+        || cc_stderr.contains("undefined symbol: <std::")
+        || cc_stderr.contains("reference to `std::");
+
+    let link_stub_src = if needs_full_std {
+        CO2C_LINK_STD_STUB
+    } else {
+        CO2C_LINK_STUB
+    };
+
     let rustc_link_stub = temp_dir.join("co2c_link.rs");
-    fs::write(&rustc_link_stub, CO2C_LINK_STUB).expect("failed to write rustc linker stub");
+    fs::write(&rustc_link_stub, link_stub_src).expect("failed to write rustc linker stub");
     let rustc_link_args = build_link_rustc_args(
         &rustc_link_stub,
         objects,
@@ -1064,6 +1112,9 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_eh_personality() {}
+"#;
+
+const CO2C_LINK_STD_STUB: &str = r#"#![no_main]
 "#;
 
 fn link_shared_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Path>) {
