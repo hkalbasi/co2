@@ -1038,7 +1038,10 @@ impl LocalResolverBase {
                         .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
                     BinOp::Div => {
                         if rhs == 0 {
-                            Err(spanned_error(*span, "division by zero happened in const eval"))
+                            Err(spanned_error(
+                                *span,
+                                "division by zero happened in const eval",
+                            ))
                         } else {
                             lhs.checked_div(rhs).ok_or_else(|| {
                                 spanned_error(*span, "integer overflow in const eval")
@@ -1047,7 +1050,10 @@ impl LocalResolverBase {
                     }
                     BinOp::Rem => {
                         if rhs == 0 {
-                            Err(spanned_error(*span, "division by zero happened in const eval"))
+                            Err(spanned_error(
+                                *span,
+                                "division by zero happened in const eval",
+                            ))
                         } else {
                             lhs.checked_rem(rhs).ok_or_else(|| {
                                 spanned_error(*span, "integer overflow in const eval")
@@ -1178,9 +1184,7 @@ impl LocalResolverBase {
             .iter()
             .find(|e| e.def_id == def_id)
             .map(|e| &e.mir_info)
-            .ok_or_else(|| {
-                spanned_error(span, format!("unsupported const value {def_id:?}"))
-            })?;
+            .ok_or_else(|| spanned_error(span, format!("unsupported const value {def_id:?}")))?;
 
         let value = match &mir_info {
             crate::MirOwnerInfo::EnumConstZeroed => 0,

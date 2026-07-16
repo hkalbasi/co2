@@ -26,7 +26,7 @@ pub struct Cli {
     pub installed: bool,
 
     /// Use optimization for building the compiler. Generally slower in a clean setup,
-    /// and provides less debug utility, so off by default. 
+    /// and provides less debug utility, so off by default.
     #[arg(long)]
     pub optimized: bool,
 }

@@ -16,7 +16,6 @@ use rustc_public_generative::rustc_public::{
 
 pub struct MirBodyResult {
     pub body: Body,
-    pub block_scopes: Vec<u32>,
 }
 
 pub fn build_mir_for_body(
@@ -100,7 +99,6 @@ pub fn build_mir_for_body(
         local_vdi_map,
         scope_stack: vec![0],
         next_scope: 1,
-        block_scopes: Vec::new(),
     };
 
     let generation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -120,7 +118,6 @@ pub fn build_mir_for_body(
                 None,
                 span,
             ),
-            block_scopes: builder.block_scopes,
         }
     }));
 
@@ -163,12 +160,11 @@ fn dummy_mir_body(
         statements: Vec::new(),
         terminator: rustc_gen::rustc_public::mir::Terminator {
             kind: rustc_gen::rustc_public::mir::TerminatorKind::Return,
-            span,
+            source_info: SourceInfo { span, scope: 0 },
         },
     });
     MirBodyResult {
         body: Body::new(blocks, locals, body.params.len(), Vec::new(), None, span),
-        block_scopes: vec![0],
     }
 }
 
@@ -192,7 +188,6 @@ pub(crate) struct Builder<'ctx, 'tcx> {
     pub(crate) local_vdi_map: HashMap<usize, usize>,
     pub(crate) scope_stack: Vec<u32>,
     pub(crate) next_scope: u32,
-    pub(crate) block_scopes: Vec<u32>,
 }
 
 impl Builder<'_, '_> {

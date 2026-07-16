@@ -5,15 +5,16 @@ use chumsky::{
 use co2_ast::TypeResolver;
 use co2_ast::{
     BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier, Declarator, Designator,
-    EnumSpecifier, Enumerator, Expression, FileId, FloatSuffix, ForInit, FunctionDefinitionSignature,
-    FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
-    IntegerSuffix, LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
-    RustAttribute, RustAttributeStyle, RustFunctionParam, RustFunctionSignature, RustPath,
-    RustPathSegment, RustStructField, RustTy, Span, Spanned, SpecifierQualifier, StatelessResolver,
-    Statement, StatementOrDeclaration, StorageClassSpecifier, StringLiteral, StringLiteralPrefix,
-    StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token,
-    TranslationUnit, TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp,
-    UseItem, Visibility, parse_unsigned_integer_constant,
+    EnumSpecifier, Enumerator, Expression, FileId, FloatSuffix, ForInit,
+    FunctionDefinitionSignature, FunctionSpecifier, GenericAssociation, InitDeclarator,
+    Initializer, InitializerItem, IntegerSuffix, LazyCompoundStatement, LazyRustConstExpr,
+    LazySubscription, ModItem, ParameterList, RustAttribute, RustAttributeStyle, RustFunctionParam,
+    RustFunctionSignature, RustPath, RustPathSegment, RustStructField, RustTy, Span, Spanned,
+    SpecifierQualifier, StatelessResolver, Statement, StatementOrDeclaration,
+    StorageClassSpecifier, StringLiteral, StringLiteralPrefix, StructDeclarator,
+    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token, TranslationUnit,
+    TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UnaryOp, UpdateOp, UseItem,
+    Visibility, parse_unsigned_integer_constant,
 };
 
 enum LiteralToken {
@@ -883,7 +884,10 @@ where
             just(Token::BuiltinInf)
                 .then_ignore(just(Token::LParen))
                 .then_ignore(just(Token::RParen))
-                .to(Expression::Constant(Constant::Float(f64::INFINITY, co2_ast::FloatSuffix::None))),
+                .to(Expression::Constant(Constant::Float(
+                    f64::INFINITY,
+                    co2_ast::FloatSuffix::None,
+                ))),
             just(Token::BuiltinNan)
                 .then_ignore(just(Token::LParen))
                 .then_ignore(
@@ -896,7 +900,10 @@ where
                     .or_not(),
                 )
                 .then_ignore(just(Token::RParen))
-                .to(Expression::Constant(Constant::Float(f64::NAN, co2_ast::FloatSuffix::None))),
+                .to(Expression::Constant(Constant::Float(
+                    f64::NAN,
+                    co2_ast::FloatSuffix::None,
+                ))),
             just(Token::And)
                 .ignore_then(identifier())
                 .map(Expression::LabelAddress),
@@ -923,41 +930,52 @@ where
                         let trait_segments = trait_path.0.segments;
                         let method_segment = (RustPathSegment::Ident(method.0), method.1);
                         let qual_span = join_spans(type_path.1, trait_path.1);
-                        let qual_segment = (RustPathSegment::<StatelessResolver>::Qualified {
-                            type_segments,
-                            trait_segments,
-                        }, qual_span);
+                        let qual_segment = (
+                            RustPathSegment::<StatelessResolver>::Qualified {
+                                type_segments,
+                                trait_segments,
+                            },
+                            qual_span,
+                        );
                         let span = qual_span;
-                        (RustPath { segments: vec![qual_segment, method_segment] }, span)
+                        (
+                            RustPath {
+                                segments: vec![qual_segment, method_segment],
+                            },
+                            span,
+                        )
                     });
                 let map_resolver = resolver.clone();
-                let ufcs_or_normal = ufcs_path.try_map(move |path, _| {
-                    let path_span = rust_path_span(&path.0, path.1);
-                    match map_resolver.classify_path(&path.0) {
-                    Ok((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
-                        Ok(Expression::Identifier((resolved, path_span)))
-                    }
-                    Ok((TypeQueryResult::Type, _)) => {
-                        Err(Rich::custom(path_span, "expected expression, found type name"))
-                    }
-                    Err((msg, span)) => Err(Rich::custom(span, msg)),
-                    }
-                })
-                .or(rust_path_expr_simple().try_map({
-                    let resolver = resolver.clone();
-                    move |path, _| {
+                let ufcs_or_normal = ufcs_path
+                    .try_map(move |path, _| {
                         let path_span = rust_path_span(&path.0, path.1);
-                        match resolver.classify_path(&path.0) {
-                        Ok((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
-                            Ok(Expression::Identifier((resolved, path_span)))
+                        match map_resolver.classify_path(&path.0) {
+                            Ok((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
+                                Ok(Expression::Identifier((resolved, path_span)))
+                            }
+                            Ok((TypeQueryResult::Type, _)) => Err(Rich::custom(
+                                path_span,
+                                "expected expression, found type name",
+                            )),
+                            Err((msg, span)) => Err(Rich::custom(span, msg)),
                         }
-                        Ok((TypeQueryResult::Type, _)) => {
-                            Err(Rich::custom(path_span, "expected expression, found type name"))
+                    })
+                    .or(rust_path_expr_simple().try_map({
+                        let resolver = resolver.clone();
+                        move |path, _| {
+                            let path_span = rust_path_span(&path.0, path.1);
+                            match resolver.classify_path(&path.0) {
+                                Ok((TypeQueryResult::Unsure | TypeQueryResult::Expr, resolved)) => {
+                                    Ok(Expression::Identifier((resolved, path_span)))
+                                }
+                                Ok((TypeQueryResult::Type, _)) => Err(Rich::custom(
+                                    path_span,
+                                    "expected expression, found type name",
+                                )),
+                                Err((msg, span)) => Err(Rich::custom(span, msg)),
+                            }
                         }
-                        Err((msg, span)) => Err(Rich::custom(span, msg)),
-                        }
-                    }
-                }));
+                    }));
                 ufcs_or_normal
             },
             select! {

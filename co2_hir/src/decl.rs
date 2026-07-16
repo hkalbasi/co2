@@ -1090,7 +1090,10 @@ impl HirCtx<'_> {
                         .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
                     co2_ast::BinOp::Div => {
                         if rhs == 0 {
-                            Err(spanned_error(*span, "division by zero happened in const eval"))
+                            Err(spanned_error(
+                                *span,
+                                "division by zero happened in const eval",
+                            ))
                         } else {
                             lhs.checked_div(rhs).ok_or_else(|| {
                                 spanned_error(*span, "integer overflow in const eval")
@@ -1099,7 +1102,10 @@ impl HirCtx<'_> {
                     }
                     co2_ast::BinOp::Rem => {
                         if rhs == 0 {
-                            Err(spanned_error(*span, "division by zero happened in const eval"))
+                            Err(spanned_error(
+                                *span,
+                                "division by zero happened in const eval",
+                            ))
                         } else {
                             lhs.checked_rem(rhs).ok_or_else(|| {
                                 spanned_error(*span, "integer overflow in const eval")

@@ -6,8 +6,8 @@ use rustc_public_generative::{
         mir::{
             AggregateKind, BorrowKind, CastKind, ConstOperand, MutBorrowKind, Mutability,
             Operand as MirOperand, PointerCoercion, ProjectionElem as MirProjection, RawPtrKind,
-            Rvalue, Safety, Statement as MirStatement, StatementKind as MirStatementKind,
-            SwitchTargets, TerminatorKind, WithRetag,
+            Rvalue, Safety, SourceInfo, Statement as MirStatement,
+            StatementKind as MirStatementKind, SwitchTargets, TerminatorKind, WithRetag,
         },
         ty::{
             FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
@@ -149,7 +149,10 @@ impl Builder<'_, '_> {
             .push(MirProjection::Field(0, payload_ty));
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(enum_op, WithRetag::Yes)),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         self.place_operand_for_ty(payload_place, payload_ty)
     }
@@ -175,7 +178,10 @@ impl Builder<'_, '_> {
                     vec![payload_op],
                 ),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         MirOperand::Copy(place(tmp))
     }
@@ -452,7 +458,10 @@ impl Builder<'_, '_> {
                 place(ptr_maybe_local),
                 Rvalue::AddressOf(RawPtrKind::Mut, place(dst_local)),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let ptr_value_ty = Ty::new_ptr(value_ty, Mutability::Mut);
         let ptr_value_local = self.new_temp(ptr_value_ty, Mutability::Mut, span);
@@ -465,7 +474,10 @@ impl Builder<'_, '_> {
                     ptr_value_ty,
                 ),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let value_place = rustc_public_generative::rustc_public::mir::Place {
             local: ptr_value_local,
@@ -473,7 +485,10 @@ impl Builder<'_, '_> {
         };
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(value_place, Rvalue::Use(value_op, WithRetag::Yes)),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         MirOperand::Copy(place(dst_local))
     }
@@ -489,7 +504,10 @@ impl Builder<'_, '_> {
             let tmp = self.new_temp(op_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(op, WithRetag::Yes)),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             place(tmp)
         };
@@ -500,7 +518,10 @@ impl Builder<'_, '_> {
                 place(ptr_maybe_local),
                 Rvalue::AddressOf(RawPtrKind::Mut, src_place),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let ptr_value_ty = Ty::new_ptr(value_ty, Mutability::Mut);
         let ptr_value_local = self.new_temp(ptr_value_ty, Mutability::Mut, span);
@@ -513,7 +534,10 @@ impl Builder<'_, '_> {
                     ptr_value_ty,
                 ),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let out_local = self.new_temp(value_ty, Mutability::Mut, span);
         let value_place = rustc_public_generative::rustc_public::mir::Place {
@@ -525,7 +549,10 @@ impl Builder<'_, '_> {
                 place(out_local),
                 Rvalue::Use(MirOperand::Copy(value_place), WithRetag::Yes),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         MirOperand::Copy(place(out_local))
     }
@@ -541,7 +568,10 @@ impl Builder<'_, '_> {
                             place(tmp),
                             Rvalue::Use(value, WithRetag::Yes),
                         ),
-                        span: inner.span,
+                        source_info: SourceInfo {
+                            span: inner.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     place(tmp)
                 });
@@ -568,7 +598,10 @@ impl Builder<'_, '_> {
                             base_place,
                         ),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 let ptr_local = self.new_temp(expr.ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
@@ -580,7 +613,10 @@ impl Builder<'_, '_> {
                             expr.ty,
                         ),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 MirOperand::Copy(place(ptr_local))
             }
@@ -601,7 +637,10 @@ impl Builder<'_, '_> {
                         place(src_ref_local),
                         Rvalue::Ref(reg, BorrowKind::Shared, place(src_local)),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
 
                 let clone_local = self.new_temp(src_ty, Mutability::Mut, expr.span);
@@ -656,7 +695,10 @@ impl Builder<'_, '_> {
                                 args,
                             ),
                         ),
-                        span: expr.span,
+                        source_info: SourceInfo {
+                            span: expr.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     MirOperand::Move(place(tmp))
                 };
@@ -698,7 +740,10 @@ impl Builder<'_, '_> {
                         place(src_ref_local),
                         Rvalue::Ref(reg, BorrowKind::Shared, src),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
 
                 let clone_local = self.new_temp(src_ty, Mutability::Mut, expr.span);
@@ -846,7 +891,10 @@ impl Builder<'_, '_> {
                         place(lhs_cast),
                         Rvalue::Cast(CastKind::PtrToPtr, lhs_op, const_ptr_ty),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 let rhs_cast = self.new_temp(const_ptr_ty, Mutability::Mut, expr.span);
                 self.stmts.push(MirStatement {
@@ -854,7 +902,10 @@ impl Builder<'_, '_> {
                         place(rhs_cast),
                         Rvalue::Cast(CastKind::PtrToPtr, rhs_op, const_ptr_ty),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 let generic_args = match offset_from.ty().kind() {
                     TyKind::RigidTy(RigidTy::FnDef(_, existing)) if !existing.0.is_empty() => {
@@ -924,7 +975,10 @@ impl Builder<'_, '_> {
                             place(bool_local),
                             Rvalue::BinaryOp(self.lower_bin_op(*op), lhs, rhs),
                         ),
-                        span: expr.span,
+                        source_info: SourceInfo {
+                            span: expr.span,
+                            scope: self.current_scope(),
+                        },
                     });
 
                     let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
@@ -937,7 +991,10 @@ impl Builder<'_, '_> {
                                 expr.ty,
                             ),
                         ),
-                        span: expr.span,
+                        source_info: SourceInfo {
+                            span: expr.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     return MirOperand::Copy(place(tmp));
                 }
@@ -949,7 +1006,10 @@ impl Builder<'_, '_> {
                         place(tmp),
                         Rvalue::BinaryOp(self.lower_bin_op(*op), lhs, rhs),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 MirOperand::Copy(place(tmp))
             }
@@ -988,7 +1048,10 @@ impl Builder<'_, '_> {
                             inner_op,
                         ),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 let mut result = MirOperand::Copy(place(tmp));
 
@@ -1013,7 +1076,10 @@ impl Builder<'_, '_> {
                                 operands,
                             ),
                         ),
-                        span: expr.span,
+                        source_info: SourceInfo {
+                            span: expr.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     MirOperand::Copy(place(tmp))
                 }
@@ -1028,7 +1094,10 @@ impl Builder<'_, '_> {
                             place(tmp),
                             Rvalue::Aggregate(AggregateKind::Array(elem), operands),
                         ),
-                        span: expr.span,
+                        source_info: SourceInfo {
+                            span: expr.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     MirOperand::Copy(place(tmp))
                 }
@@ -1056,7 +1125,10 @@ impl Builder<'_, '_> {
                             vec![operand],
                         ),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 MirOperand::Copy(place(tmp))
             }
@@ -1103,7 +1175,10 @@ impl Builder<'_, '_> {
                                 fn_ptr_ty,
                             ),
                         ),
-                        span: expr.span,
+                        source_info: SourceInfo {
+                            span: expr.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     MirOperand::Copy(place(tmp))
                 }
@@ -1150,7 +1225,10 @@ impl Builder<'_, '_> {
                         lhs_place.clone(),
                         Rvalue::Use(rhs_value, WithRetag::Yes),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 MirOperand::Copy(lhs_place)
             }
@@ -1215,7 +1293,10 @@ impl Builder<'_, '_> {
                         place(old_lhs),
                         Rvalue::Use(MirOperand::Copy(lhs_place.clone()), WithRetag::Yes),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 let new_val = self.new_temp(*binop_ty, Mutability::Mut, expr.span);
                 let lhs_casted = self.lower_cast(
@@ -1229,7 +1310,10 @@ impl Builder<'_, '_> {
                         place(new_val),
                         Rvalue::BinaryOp(self.lower_bin_op(*op), lhs_casted, rhs_value),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 let new_val_casted = self.lower_cast(
                     MirOperand::Copy(place(new_val)),
@@ -1242,7 +1326,10 @@ impl Builder<'_, '_> {
                         lhs_place.clone(),
                         Rvalue::Use(new_val_casted, WithRetag::Yes),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 match return_semantic {
                     ReturnSemantic::AfterAssign => MirOperand::Copy(lhs_place),
@@ -1263,7 +1350,10 @@ impl Builder<'_, '_> {
                         place(old_lhs),
                         Rvalue::Use(MirOperand::Copy(lhs_place.clone()), WithRetag::Yes),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, mutability)) = lhs.ty.kind() else {
                     panic!(
@@ -1284,7 +1374,10 @@ impl Builder<'_, '_> {
                         lhs_place.clone(),
                         Rvalue::Use(new_ptr, WithRetag::Yes),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 match return_semantic {
                     ReturnSemantic::AfterAssign => MirOperand::Copy(lhs_place),
@@ -1308,7 +1401,10 @@ impl Builder<'_, '_> {
                             place(tmp_target),
                             Rvalue::Use(value, WithRetag::Yes),
                         ),
-                        span: inner.span,
+                        source_info: SourceInfo {
+                            span: inner.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     place(tmp_target)
                 };
@@ -1325,7 +1421,10 @@ impl Builder<'_, '_> {
                             target_place,
                         ),
                     ),
-                    span: expr.span,
+                    source_info: SourceInfo {
+                        span: expr.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 MirOperand::Copy(place(tmp))
             }
@@ -1404,7 +1503,10 @@ impl Builder<'_, '_> {
                     place(tmp),
                     Rvalue::Cast(CastKind::Transmute, inner_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return self.place_operand_for_ty(place(tmp), dst_ty);
         }
@@ -1424,12 +1526,18 @@ impl Builder<'_, '_> {
             tmp1_deref.projection.push(MirProjection::Deref);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(tmp1_place, Rvalue::Use(inner_op, WithRetag::Yes)),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             let tmp2 = self.new_temp(dst_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(place(tmp2), Rvalue::Ref(region, kind, tmp1_deref)),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return self.place_operand_for_ty(place(tmp2), dst_ty);
         }
@@ -1465,7 +1573,10 @@ impl Builder<'_, '_> {
                         zero,
                     ),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(bool_local));
         }
@@ -1476,7 +1587,10 @@ impl Builder<'_, '_> {
                     place(tmp),
                     Rvalue::Cast(CastKind::IntToInt, inner_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(tmp));
         }
@@ -1487,7 +1601,10 @@ impl Builder<'_, '_> {
                     place(tmp),
                     Rvalue::Cast(CastKind::IntToInt, inner_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(tmp));
         }
@@ -1498,7 +1615,10 @@ impl Builder<'_, '_> {
                     place(tmp),
                     Rvalue::Cast(CastKind::FloatToInt, inner_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(tmp));
         }
@@ -1509,7 +1629,10 @@ impl Builder<'_, '_> {
                     place(tmp),
                     Rvalue::Cast(CastKind::IntToFloat, inner_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(tmp));
         }
@@ -1520,7 +1643,10 @@ impl Builder<'_, '_> {
                     place(tmp),
                     Rvalue::Cast(CastKind::FloatToFloat, inner_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(tmp));
         }
@@ -1543,7 +1669,10 @@ impl Builder<'_, '_> {
                             src_fn_ptr_ty,
                         ),
                     ),
-                    span,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
                 });
                 let dst_local = self.new_temp(dst_ty, Mutability::Mut, span);
                 let generic_args = vec![
@@ -1570,7 +1699,10 @@ impl Builder<'_, '_> {
                         dst_ty,
                     ),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(tmp));
         }
@@ -1590,7 +1722,10 @@ impl Builder<'_, '_> {
                         src_fn_ptr_ty,
                     ),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             let dst_fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
             let generic_args = vec![
@@ -1621,7 +1756,10 @@ impl Builder<'_, '_> {
                         fn_ptr_ty,
                     ),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return self.write_value_into_maybe_uninit_storage(
                 dst_ty,
@@ -1637,7 +1775,10 @@ impl Builder<'_, '_> {
                     place(tmp),
                     Rvalue::Cast(CastKind::FnPtrToPtr, inner_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(tmp));
         }
@@ -1654,7 +1795,10 @@ impl Builder<'_, '_> {
                     place(tmp),
                     Rvalue::Cast(CastKind::PtrToPtr, inner_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(tmp));
         }
@@ -1677,7 +1821,10 @@ impl Builder<'_, '_> {
                     place(raw_ptr_local),
                     Rvalue::Cast(CastKind::FnPtrToPtr, inner_op, raw_ptr_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             let usize_ty = Ty::usize_ty();
             let usize_tmp = self.new_temp(usize_ty, Mutability::Mut, span);
@@ -1690,7 +1837,10 @@ impl Builder<'_, '_> {
                         usize_ty,
                     ),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             if dst_ty == usize_ty {
                 return MirOperand::Copy(place(usize_tmp));
@@ -1705,7 +1855,10 @@ impl Builder<'_, '_> {
                         dst_ty,
                     ),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(dst_tmp));
         }
@@ -1717,7 +1870,10 @@ impl Builder<'_, '_> {
                     place(usize_tmp),
                     Rvalue::Cast(CastKind::PointerExposeAddress, inner_op, usize_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             if dst_ty == usize_ty {
                 return MirOperand::Copy(place(usize_tmp));
@@ -1732,7 +1888,10 @@ impl Builder<'_, '_> {
                         dst_ty,
                     ),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(dst_tmp));
         }
@@ -1748,7 +1907,10 @@ impl Builder<'_, '_> {
                     place(dst_tmp),
                     Rvalue::Cast(CastKind::IntToInt, usize_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(dst_tmp));
         }
@@ -1763,7 +1925,10 @@ impl Builder<'_, '_> {
                         place(usize_tmp),
                         Rvalue::Cast(CastKind::IntToInt, inner_op, usize_ty),
                     ),
-                    span,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
                 });
                 MirOperand::Copy(place(usize_tmp))
             };
@@ -1773,7 +1938,10 @@ impl Builder<'_, '_> {
                     place(dst_tmp),
                     Rvalue::Cast(CastKind::PointerWithExposedProvenance, usize_op, dst_ty),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(dst_tmp));
         }
@@ -1792,7 +1960,10 @@ impl Builder<'_, '_> {
                         place(usize_tmp),
                         Rvalue::Cast(cast_kind, inner_op, usize_ty),
                     ),
-                    span,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
                 });
                 MirOperand::Copy(place(usize_tmp))
             };
@@ -1915,7 +2086,10 @@ impl Builder<'_, '_> {
                 place(result_local),
                 Rvalue::Use(zero_init, WithRetag::Yes),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
 
         debug_assert!(matches!(lhs.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
@@ -1929,7 +2103,10 @@ impl Builder<'_, '_> {
                         discr: lhs_op,
                         targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
                     },
-                    span,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
                 },
             });
 
@@ -1948,7 +2125,10 @@ impl Builder<'_, '_> {
                 place(result_local),
                 Rvalue::Use(lhs_short_operand, WithRetag::Yes),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let lhs_short_exit =
             self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -1965,7 +2145,10 @@ impl Builder<'_, '_> {
                         discr: rhs_op,
                         targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
                     },
-                    span,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
                 },
             });
 
@@ -1980,7 +2163,10 @@ impl Builder<'_, '_> {
                 place(result_local),
                 Rvalue::Use(rhs_false_operand, WithRetag::Yes),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let rhs_false_exit =
             self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
@@ -1996,7 +2182,10 @@ impl Builder<'_, '_> {
                 place(result_local),
                 Rvalue::Use(rhs_true_operand, WithRetag::Yes),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let rhs_true_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
@@ -2030,7 +2219,10 @@ impl Builder<'_, '_> {
                 place(result_local),
                 Rvalue::Use(zero_init, WithRetag::Yes),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         debug_assert!(matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
         let inner_op = self.lower_expr_to_operand(inner);
@@ -2043,7 +2235,10 @@ impl Builder<'_, '_> {
                         discr: inner_op,
                         targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
                     },
-                    span,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
                 },
             });
 
@@ -2055,7 +2250,10 @@ impl Builder<'_, '_> {
         });
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(one, WithRetag::Yes)),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let true_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
@@ -2067,7 +2265,10 @@ impl Builder<'_, '_> {
         });
         self.stmts.push(MirStatement {
             kind: MirStatementKind::Assign(place(result_local), Rvalue::Use(zero, WithRetag::Yes)),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
         let false_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
@@ -2099,7 +2300,10 @@ impl Builder<'_, '_> {
                         discr: cond_op,
                         targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
                     },
-                    span,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
                 },
             });
 
@@ -2110,7 +2314,10 @@ impl Builder<'_, '_> {
                 place(result_local),
                 Rvalue::Use(then_op, WithRetag::Yes),
             ),
-            span: then_expr.span,
+            source_info: SourceInfo {
+                span: then_expr.span,
+                scope: self.current_scope(),
+            },
         });
         let then_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
@@ -2121,7 +2328,10 @@ impl Builder<'_, '_> {
                 place(result_local),
                 Rvalue::Use(else_op, WithRetag::Yes),
             ),
-            span: else_expr.span,
+            source_info: SourceInfo {
+                span: else_expr.span,
+                scope: self.current_scope(),
+            },
         });
         let else_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
 
@@ -2215,7 +2425,10 @@ impl Builder<'_, '_> {
                 let value = self.lower_expr_to_operand(arg);
                 self.stmts.push(MirStatement {
                     kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value, WithRetag::Yes)),
-                    span: arg.span,
+                    source_info: SourceInfo {
+                        span: arg.span,
+                        scope: self.current_scope(),
+                    },
                 });
                 place(tmp)
             };
@@ -2230,7 +2443,10 @@ impl Builder<'_, '_> {
                     place(ref_local),
                     Rvalue::Ref(reg, BorrowKind::Shared, borrowed_place),
                 ),
-                span: arg.span,
+                source_info: SourceInfo {
+                    span: arg.span,
+                    scope: self.current_scope(),
+                },
             });
 
             let transmute_copy_fn = self.wellknown_defs.transmute_copy;

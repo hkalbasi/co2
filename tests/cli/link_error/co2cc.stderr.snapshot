@@ -3,7 +3,7 @@ error: linking with `cc` failed: exit status: 1
   = note:  "cc" "-m64" "[TEMP]/[RUSTC_TEMP]/symbols.o" "<1 object files omitted>" "-Wl,--as-needed" "-Wl,-Bstatic" "<sysroot>/lib/rustlib/x86_64-unknown-linux-gnu/lib/{libcore-*,libcompiler_builtins-*}.rlib" "-L" "[TEMP]/[RUSTC_TEMP]/raw-dylibs" "-Wl,-Bdynamic" "-B<sysroot>/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld" "-fuse-ld=lld" "-Wl,--eh-frame-hdr" "-Wl,-z,noexecstack" "-L" "<sysroot>/lib/rustlib/x86_64-unknown-linux-gnu/lib" "-o" "test_out" "-Wl,--gc-sections" "-pie" "-Wl,-z,relro,-z,now" "-nodefaultlibs" "[TEMP]/test.o" "-lc"
   = note: some arguments are omitted. use `--verbose` to show all linker arguments
   = note: rust-lld: error: undefined symbol: foo
-          >>> referenced by test.dca50a459cfe560c-cgu.0
+          >>> referenced by test.a64d7882eeb6bf09-cgu.0
           >>>               [TEMP]/test.o:(main)
           collect2: error: ld returned 1 exit status
           

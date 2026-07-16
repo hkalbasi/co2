@@ -663,13 +663,7 @@ impl HirCtx<'_> {
                         }
                         cursor.stack.push((end_idx, elem_ty));
                     } else {
-                        cursor.insert_to_tree(
-                            self,
-                            &mut result,
-                            node,
-                            item_span,
-                            grow,
-                        );
+                        cursor.insert_to_tree(self, &mut result, node, item_span, grow);
                     }
                     cursor.go_next(self, span)?;
                 }

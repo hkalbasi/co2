@@ -1,8 +1,8 @@
 use co2_hir::{HirDecl, HirExpr, HirExprKind, HirStmt, LabelId};
 use rustc_public_generative::rustc_public::{
     mir::{
-        Rvalue, Statement as MirStatement, StatementKind as MirStatementKind, SwitchTargets,
-        Terminator as MirTerminator, TerminatorKind, UnwindAction, WithRetag,
+        Rvalue, SourceInfo, Statement as MirStatement, StatementKind as MirStatementKind,
+        SwitchTargets, Terminator as MirTerminator, TerminatorKind, UnwindAction, WithRetag,
     },
     ty::{RigidTy, Span as RustSpan, Ty, TyKind},
 };
@@ -23,7 +23,10 @@ impl Builder<'_, '_> {
                             place(local_index),
                             Rvalue::Use(value, WithRetag::Yes),
                         ),
-                        span: init.span,
+                        source_info: SourceInfo {
+                            span: init.span,
+                            scope: self.current_scope(),
+                        },
                     });
                 }
                 if let Some(&vdi_idx) = self.local_vdi_map.get(&local_index) {
@@ -80,7 +83,10 @@ impl Builder<'_, '_> {
                                 place(0),
                                 Rvalue::Use(value, WithRetag::Yes),
                             ),
-                            span: expr.span,
+                            source_info: SourceInfo {
+                                span: expr.span,
+                                scope: self.current_scope(),
+                            },
                         });
                     }
                 }
@@ -116,7 +122,6 @@ impl Builder<'_, '_> {
         let cond_op = self.lower_expr_to_operand(cond);
         let entry_span = span;
         let entry_idx = self.blocks.len();
-        self.block_scopes.push(self.current_scope());
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
                 statements: std::mem::take(&mut self.stmts),
@@ -125,7 +130,10 @@ impl Builder<'_, '_> {
                         discr: cond_op,
                         targets: SwitchTargets::new(vec![(0, usize::MAX)], usize::MAX),
                     },
-                    span: entry_span,
+                    source_info: SourceInfo {
+                        span: entry_span,
+                        scope: self.current_scope(),
+                    },
                 },
             });
 
@@ -173,7 +181,7 @@ impl Builder<'_, '_> {
             let target = match self.label_blocks.get(&label).copied() {
                 Some(target) => target,
                 None => {
-                    let rust_span = self.blocks[bb].terminator.span;
+                    let rust_span = self.blocks[bb].terminator.source_info.span;
                     self.terminate_with_error(rust_span, "unresolved label")
                 }
             };
@@ -192,7 +200,6 @@ impl Builder<'_, '_> {
         span: rustc_public_generative::rustc_public::ty::Span,
     ) {
         let next = self.blocks.len() + 1;
-        self.block_scopes.push(self.current_scope());
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
                 statements: std::mem::take(&mut self.stmts),
@@ -204,7 +211,10 @@ impl Builder<'_, '_> {
                         target: Some(next),
                         unwind: UnwindAction::Continue,
                     },
-                    span,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
                 },
             });
     }
@@ -215,11 +225,16 @@ impl Builder<'_, '_> {
         span: rustc_public_generative::rustc_public::ty::Span,
     ) -> usize {
         let idx = self.blocks.len();
-        self.block_scopes.push(self.current_scope());
         self.blocks
             .push(rustc_public_generative::rustc_public::mir::BasicBlock {
                 statements: std::mem::take(&mut self.stmts),
-                terminator: MirTerminator { kind, span },
+                terminator: MirTerminator {
+                    kind,
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
+                },
             });
         idx
     }
@@ -255,7 +270,7 @@ impl Builder<'_, '_> {
                 let target = match self.label_blocks.get(label).copied() {
                     Some(target) => target,
                     None => {
-                        let rust_span = self.blocks[block_idx].terminator.span;
+                        let rust_span = self.blocks[block_idx].terminator.source_info.span;
                         self.terminate_with_error(rust_span, "unresolved label")
                     }
                 };
@@ -266,7 +281,7 @@ impl Builder<'_, '_> {
         let otherwise = match branches.first() {
             Some((_, target)) => *target,
             None => {
-                let rust_span = self.blocks[block_idx].terminator.span;
+                let rust_span = self.blocks[block_idx].terminator.source_info.span;
                 self.terminate_with_error(
                     rust_span,
                     "indirect goto in function with no address-of-label expressions",

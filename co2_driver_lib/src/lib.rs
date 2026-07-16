@@ -26,8 +26,8 @@ use rustc_public_generative::rustc_public::ty::IntTy;
 use rustc_public_generative::rustc_public::{
     CrateDefType, CrateItem, DefId,
     mir::{
-        BasicBlock, Body, ConstOperand, LocalDecl, Mutability, Operand, Rvalue, Statement,
-        StatementKind, Terminator, TerminatorKind, WithRetag,
+        BasicBlock, Body, ConstOperand, LocalDecl, Mutability, Operand, Rvalue, SourceInfo,
+        Statement, StatementKind, Terminator, TerminatorKind, WithRetag,
     },
     ty::{
         AdtDef, FnDef, GenericArgKind, GenericArgs, MirConst, Region, RegionKind, RigidTy, Ty,
@@ -159,57 +159,54 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
         (state, result)
     }
 
-    fn emit_mir(&mut self, ctx: rustc_gen::HirStructureCtx, def: DefId) -> (Body, Vec<u32>) {
+    fn emit_mir(&mut self, ctx: rustc_gen::HirStructureCtx, def: DefId) -> Body {
         let pending_mir = self.pending_mirs.remove(&def).unwrap();
 
-        let wrap = |body: Body| (body, Vec::new());
-
         match pending_mir {
-            MirOwnerInfo::CloneMethod(adt) => wrap(build_clone_method_body(
-                adt,
-                ctx.span_in_file(self.file_id, 0, 0),
-            )),
-            MirOwnerInfo::Const => wrap(build_zeroed_static_initializer_body(
+            MirOwnerInfo::CloneMethod(adt) => {
+                build_clone_method_body(adt, ctx.span_in_file(self.file_id, 0, 0))
+            }
+            MirOwnerInfo::Const => build_zeroed_static_initializer_body(
                 &self.wellknown_defs,
                 CrateItem(def).ty(),
                 ctx.span_in_file(self.file_id, 0, 0),
-            )),
+            ),
             MirOwnerInfo::EnumConstPrevPlus(prev, span) => {
-                wrap(self.build_enum_prev_plus_body(prev, span, &ctx))
+                self.build_enum_prev_plus_body(prev, span, &ctx)
             }
             MirOwnerInfo::EnumConstExplicit {
                 initializer,
                 resolver,
             } => {
                 let span = initializer.1;
-                wrap(self.lower_explicit_static_mir(
+                self.lower_explicit_static_mir(
                     &ctx,
                     def,
                     resolver,
                     (Initializer::Expr(initializer), span),
-                ))
+                )
             }
             MirOwnerInfo::Static {
                 resolver,
                 initializer,
-            } => wrap(self.lower_explicit_static_mir(&ctx, def, resolver, initializer)),
+            } => self.lower_explicit_static_mir(&ctx, def, resolver, initializer),
             MirOwnerInfo::StaticWithArrayLen {
                 resolver,
                 initializer,
                 array_len,
-            } => wrap(self.lower_explicit_static_mir_with_array_len(
+            } => self.lower_explicit_static_mir_with_array_len(
                 &ctx,
                 def,
                 resolver,
                 initializer,
                 array_len,
-            )),
+            ),
             MirOwnerInfo::StaticZeroed | MirOwnerInfo::EnumConstZeroed => {
-                wrap(build_zeroed_static_initializer_body(
+                build_zeroed_static_initializer_body(
                     &self.wellknown_defs,
                     CrateItem(def).ty(),
                     ctx.span_in_file(self.file_id, 0, 0),
-                ))
+                )
             }
             MirOwnerInfo::Fn {
                 def,
@@ -265,7 +262,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                                 );
                                 dump_mir_body(&mir_result.body, &name);
                             }
-                            return (mir_result.body, mir_result.block_scopes);
+                            return mir_result.body;
                         }
                         std::panic::resume_unwind(payload);
                     }
@@ -289,7 +286,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     );
                     dump_mir_body(&mir_result.body, &name);
                 }
-                (mir_result.body, mir_result.block_scopes)
+                mir_result.body
             }
             MirOwnerInfo::FnBodyError { def, body_span } => {
                 let hir = build_error_fn_body(
@@ -315,7 +312,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     );
                     dump_mir_body(&mir_result.body, &name);
                 }
-                (mir_result.body, mir_result.block_scopes)
+                mir_result.body
             }
         }
     }
@@ -615,14 +612,14 @@ fn build_zeroed_static_initializer_body(
                 target: Some(1),
                 unwind: rustc_public_generative::rustc_public::mir::UnwindAction::Continue,
             },
-            span,
+            source_info: SourceInfo { span, scope: 0 },
         },
     };
     let return_block = BasicBlock {
         statements: vec![],
         terminator: Terminator {
             kind: TerminatorKind::Return,
-            span,
+            source_info: SourceInfo { span, scope: 0 },
         },
     };
     Body::new(
@@ -736,14 +733,14 @@ fn build_clone_method_body(
             return_place.clone(),
             Rvalue::Use(Operand::Copy(deref_place), WithRetag::Yes),
         ),
-        span,
+        source_info: SourceInfo { span, scope: 0 },
     }];
 
     let return_block = BasicBlock {
         statements,
         terminator: Terminator {
             kind: TerminatorKind::Return,
-            span,
+            source_info: SourceInfo { span, scope: 0 },
         },
     };
     Body::new(vec![return_block], locals, 1, vec![], None, span)

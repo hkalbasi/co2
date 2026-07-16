@@ -33,5 +33,5 @@ func:
 	.size	func, .Lfunc_end2-func
 	.cfi_endproc
 
-	.ident	"rustc version 1.98.0-dev"
+	.ident	"rustc version 1.99.0-dev"
 	.section	".note.GNU-stack","",@progbits

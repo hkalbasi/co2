@@ -2,7 +2,7 @@ use co2_hir::HirBinOp;
 use rustc_public_generative::rustc_public::{
     mir::{
         BinOp as MirBinOp, CastKind, ConstOperand, Mutability, Operand as MirOperand,
-        Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind, Rvalue,
+        Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind, Rvalue, SourceInfo,
         Statement as MirStatement, StatementKind as MirStatementKind, WithRetag,
     },
     ty::{IntTy, MirConst, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
@@ -109,7 +109,10 @@ impl Builder<'_, '_> {
                         WithRetag::Yes,
                     ),
                 ),
-                span,
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
             });
             return MirOperand::Copy(place(str_ref_local));
         }
@@ -129,7 +132,10 @@ impl Builder<'_, '_> {
                     WithRetag::Yes,
                 ),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
 
         // Deref the &str reference to produce a `str` DST place, then take its raw
@@ -147,7 +153,10 @@ impl Builder<'_, '_> {
                 place(ptr_str_local),
                 Rvalue::AddressOf(RawPtrKind::Const, deref_place),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
 
         // Cast *const str (fat) → *const u8 (thin, data component only).
@@ -163,7 +172,10 @@ impl Builder<'_, '_> {
                     ptr_u8_ty,
                 ),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
 
         let ptr_local = self.new_temp(ptr_ty, Mutability::Mut, span);
@@ -176,7 +188,10 @@ impl Builder<'_, '_> {
                     ptr_ty,
                 ),
             ),
-            span,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
         });
 
         MirOperand::Copy(place(ptr_local))

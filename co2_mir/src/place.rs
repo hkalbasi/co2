@@ -3,7 +3,8 @@ use rustc_public_generative::rustc_public::{
     CrateItem,
     mir::{
         ConstOperand, Mutability, Operand, Place as MirPlace, ProjectionElem as MirProjection,
-        Rvalue, Statement as MirStatement, StatementKind as MirStatementKind, WithRetag,
+        Rvalue, SourceInfo, Statement as MirStatement, StatementKind as MirStatementKind,
+        WithRetag,
     },
     ty::Ty,
 };
@@ -52,7 +53,10 @@ impl Builder<'_, '_> {
                                 WithRetag::Yes,
                             ),
                         ),
-                        span: expr.span,
+                        source_info: SourceInfo {
+                            span: expr.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     Some(place(tmp_place))
                 } else {
@@ -64,7 +68,10 @@ impl Builder<'_, '_> {
                             place(tmp_ptr),
                             Rvalue::ThreadLocalRef(CrateItem(*def)),
                         ),
-                        span: expr.span,
+                        source_info: SourceInfo {
+                            span: expr.span,
+                            scope: self.current_scope(),
+                        },
                     });
                     let mut base_place = place(tmp_ptr);
                     base_place.projection.push(MirProjection::Deref);
@@ -89,7 +96,10 @@ impl Builder<'_, '_> {
             let value = self.lower_expr_to_operand(inner);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value, WithRetag::Yes)),
-                span: inner.span,
+                source_info: SourceInfo {
+                    span: inner.span,
+                    scope: self.current_scope(),
+                },
             });
             place(tmp)
         }
