@@ -31,3 +31,4 @@ Options:
   -MF <file>           Write dependency output to <file>
   -MT <target>         Use <target> as the rule name in dependency file
   -MQ <target>         Like -MT but quote the target for make
+  -dumpmachine         Print the target machine triple and exit

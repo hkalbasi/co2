@@ -23,4 +23,11 @@ fn main() {
         .map(|l| l.trim_start_matches("LLVM version: "))
         .unwrap_or("unknown");
     println!("cargo:rustc-env=LLVM_VERSION={}", llvm);
+
+    let host = verbose
+        .lines()
+        .find(|l| l.starts_with("host: "))
+        .map(|l| l.trim_start_matches("host: "))
+        .unwrap_or("unknown");
+    println!("cargo:rustc-env=HOST_TRIPLE={}", host);
 }

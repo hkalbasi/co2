@@ -107,7 +107,8 @@ Options:
   -MP                  Add phony targets to dependency file
   -MF <file>           Write dependency output to <file>
   -MT <target>         Use <target> as the rule name in dependency file
-  -MQ <target>         Like -MT but quote the target for make"
+  -MQ <target>         Like -MT but quote the target for make
+  -dumpmachine         Print the target machine triple and exit"
     );
 }
 
@@ -120,7 +121,16 @@ fn print_cc_version() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
+fn print_dumpmachine() -> std::process::ExitCode {
+    println!("{}", env!("HOST_TRIPLE"));
+    std::process::ExitCode::SUCCESS
+}
+
 pub fn main_with_args(args: &[String]) -> std::process::ExitCode {
+    if args.iter().skip(1).any(|a| a == "-dumpmachine") {
+        return print_dumpmachine();
+    }
+
     if args.iter().any(|a| a == "--version" || a == "-V") {
         return print_cc_version();
     }
