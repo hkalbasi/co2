@@ -1580,6 +1580,32 @@ impl Builder<'_, '_> {
             });
             return MirOperand::Copy(place(bool_local));
         }
+        if dst_is_bool && src_is_float {
+            let TyKind::RigidTy(RigidTy::Float(float_ty)) = src_ty.kind() else {
+                unreachable!("src_is_float implies float type");
+            };
+            let zero = MirOperand::Constant(ConstOperand {
+                span,
+                user_ty: None,
+                const_: MirConst::try_from_float(0.0, float_ty).expect("failed to build float zero"),
+            });
+            let bool_local = self.new_temp(Ty::bool_ty(), Mutability::Mut, span);
+            self.stmts.push(MirStatement {
+                kind: MirStatementKind::Assign(
+                    place(bool_local),
+                    Rvalue::BinaryOp(
+                        rustc_public_generative::rustc_public::mir::BinOp::Ne,
+                        inner_op,
+                        zero,
+                    ),
+                ),
+                source_info: SourceInfo {
+                    span,
+                    scope: self.current_scope(),
+                },
+            });
+            return MirOperand::Copy(place(bool_local));
+        }
         if src_is_int && dst_is_int {
             let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {

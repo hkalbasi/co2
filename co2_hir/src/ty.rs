@@ -378,6 +378,7 @@ pub(crate) fn is_condition_ty(ty: Ty) -> bool {
             RigidTy::Bool
                 | RigidTy::Int(_)
                 | RigidTy::Uint(_)
+                | RigidTy::Float(_)
                 | RigidTy::RawPtr(_, _)
                 | RigidTy::FnPtr(_)
                 | RigidTy::FnDef(_, _)

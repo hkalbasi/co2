@@ -2207,11 +2207,9 @@ impl<S: CrateGeneratorState> InterfaceCallbacks<S> {
             let sigs = ItemSignatureInfo::from_hir_structure(&hir_structure);
             {
                 let mut guard = gate.state.try_lock().unwrap();
-                guard.defined_crate.advance_to_stage2(
-                    sigs.clone(),
-                    state,
-                    context.clone(),
-                );
+                guard
+                    .defined_crate
+                    .advance_to_stage2(sigs.clone(), state, context.clone());
             }
             if should_patch_cached_resolutions(tcx) {
                 augment_cached_generated_resolutions(tcx);
