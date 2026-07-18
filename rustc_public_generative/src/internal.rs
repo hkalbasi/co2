@@ -2144,7 +2144,10 @@ impl<S: CrateGeneratorState> InterfaceCallbacks<S> {
             });
         }
 
-        for (idx, feature) in ["c_variadic", "extern_types"].into_iter().enumerate() {
+        for (idx, feature) in ["c_variadic", "extern_types", "linkage"]
+            .into_iter()
+            .enumerate()
+        {
             krate.attrs.push(Attribute {
                 kind: rustc_ast::AttrKind::Normal(Box::new(rustc_ast::NormalAttr {
                     item: rustc_ast::AttrItem {
@@ -4522,6 +4525,9 @@ fn generated_attr(attr: &GeneratedAttr) -> Option<hir::Attribute> {
             hir::attrs::AttributeKind::Inline(inline_attr, DUMMY_SP)
         }
         GeneratedAttr::Word { .. } => return None,
+        GeneratedAttr::Weak => {
+            hir::attrs::AttributeKind::Linkage(hir::attrs::Linkage::WeakAny, DUMMY_SP)
+        }
     };
     Some(hir::Attribute::Parsed(kind))
 }

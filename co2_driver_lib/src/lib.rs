@@ -208,6 +208,26 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     ctx.span_in_file(self.file_id, 0, 0),
                 )
             }
+            MirOwnerInfo::ForwardingFn {
+                def,
+                target,
+                param_names,
+                resolver,
+            } => {
+                let span = ctx.span_in_file(self.file_id, 0, 0);
+                let hir = co2_hir::build_forwarding_fn_body(def, target, &param_names, span);
+                let mir_start = Instant::now();
+                let mir_result = co2_mir::build_mir_for_body(
+                    &hir,
+                    &ctx,
+                    def.0,
+                    self.file_id,
+                    self.wellknown_defs,
+                    Some(resolver),
+                );
+                time_report::accumulate_mir_lowering(mir_start.elapsed());
+                return mir_result.body;
+            }
             MirOwnerInfo::Fn {
                 def,
                 function_name,

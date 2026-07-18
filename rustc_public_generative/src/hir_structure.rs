@@ -19,9 +19,17 @@ pub enum InlineHint {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeneratedAttr {
-    Word { path: Vec<String> },
-    DocComment { comment: String, inner: bool },
+    Word {
+        path: Vec<String>,
+    },
+    DocComment {
+        comment: String,
+        inner: bool,
+    },
     InlineHint(InlineHint),
+    /// Emit `#[linkage = "weak"]` so the symbol has weak linkage and may be
+    /// overridden by a strong definition at link time.
+    Weak,
 }
 
 #[derive(Debug, Clone)]

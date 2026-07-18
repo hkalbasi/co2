@@ -921,6 +921,23 @@ impl Preprocessor {
                             tokens[i] = (Token::TransparentUnionAttr, start, end);
                             let _ = tokens.drain(i + 1..body_end);
                             i += 1;
+                        } else if Self::attribute_is_weak_or_alias(&tokens[i + 1..body_end]) {
+                            // Convert `__attribute__((weak))` and
+                            // `__attribute__((weak, alias("x")))` (and friends)
+                            // into separate Rust-style attributes
+                            // `#[weak] #[alias("x")]`, one `#[...]` group per
+                            // comma-separated attribute inside the inner parens.
+                            let inner = Self::attribute_inner_content(&tokens[i + 1..body_end]);
+                            let groups = Self::split_attr_groups(inner);
+                            let mut replacement: Vec<(Token, usize, usize)> = Vec::new();
+                            for group in &groups {
+                                replacement.push((Token::Hash, start, end));
+                                replacement.push((Token::LBracket, start, end));
+                                replacement.extend(group.iter().cloned());
+                                replacement.push((Token::RBracket, start, end));
+                            }
+                            tokens.splice(i..body_end, replacement);
+                            i += 1;
                         } else {
                             let _ = tokens.drain(i..body_end);
                             // i stays the same — next token shifted to position i
@@ -970,6 +987,105 @@ impl Preprocessor {
             i += 1;
         }
         None // unbalanced
+    }
+
+    /// Returns true if the `__attribute__` body (the tokens between the outer
+    /// parentheses, inclusive) consists solely of `weak` and/or
+    /// `alias("name")` GNU attributes — the ones co2 supports as codegen
+    /// attributes. Other attributes remain stripped.
+    fn attribute_is_weak_or_alias(body: &[(Token, usize, usize)]) -> bool {
+        // `body` is `( ... )`. Strip all surrounding balanced parentheses
+        // (e.g. `__attribute__((weak))` nests two pairs).
+        let mut inner = body;
+        loop {
+            match inner {
+                [(_, _, _), rest @ .., (Token::RParen, _, _)]
+                    if rest.first().map(|t| &t.0) == Some(&Token::LParen) =>
+                {
+                    inner = &rest[1..rest.len() - 1];
+                }
+                _ => break,
+            }
+        }
+        if inner.is_empty() {
+            return false;
+        }
+        let mut i = 0;
+        while i < inner.len() {
+            match &inner[i].0 {
+                Token::Ident(name) if name == "weak" || name == "__weak__" => {
+                    i += 1;
+                }
+                Token::Ident(name) if name == "alias" || name == "__alias__" => {
+                    // Expect `alias ( "name" )`.
+                    if let [
+                        _,
+                        (Token::LParen, _, _),
+                        (Token::StringLit(_), _, _),
+                        (Token::RParen, _, _),
+                    ] = &inner[i..]
+                    {
+                        i += 4;
+                    } else {
+                        return false;
+                    }
+                }
+                Token::Comma => {
+                    i += 1;
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Returns the token content of an `__attribute__` body with all
+    /// surrounding balanced parentheses removed, so it can be wrapped in
+    /// `#[ ... ]`.
+    fn attribute_inner_content(body: &[(Token, usize, usize)]) -> &[(Token, usize, usize)] {
+        let mut inner = body;
+        loop {
+            match inner {
+                [(_, _, _), rest @ .., (Token::RParen, _, _)]
+                    if rest.first().map(|t| &t.0) == Some(&Token::LParen) =>
+                {
+                    inner = &rest[1..rest.len() - 1];
+                }
+                _ => break,
+            }
+        }
+        inner
+    }
+
+    /// Splits attribute-list tokens (already with outer parens removed) into
+    /// separate groups on top-level commas, e.g.
+    /// `weak, alias("x")` -> `[weak]`, `[alias("x")]`.
+    fn split_attr_groups(tokens: &[(Token, usize, usize)]) -> Vec<Vec<(Token, usize, usize)>> {
+        let mut groups: Vec<Vec<(Token, usize, usize)>> = Vec::new();
+        let mut current: Vec<(Token, usize, usize)> = Vec::new();
+        let mut depth: i32 = 0;
+        for tok in tokens {
+            match tok.0 {
+                Token::LParen | Token::LBracket | Token::LBrace => {
+                    depth += 1;
+                    current.push(tok.clone());
+                }
+                Token::RParen | Token::RBracket | Token::RBrace => {
+                    depth -= 1;
+                    current.push(tok.clone());
+                }
+                Token::Comma if depth == 0 => {
+                    if !current.is_empty() {
+                        groups.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(tok.clone()),
+            }
+        }
+        if !current.is_empty() {
+            groups.push(current);
+        }
+        groups
     }
 }
 

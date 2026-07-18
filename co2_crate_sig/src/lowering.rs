@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::attr::{Co2Attr, co2_attrs_to_generated};
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Designator, DoTransform as _,
     Expression, FunctionDefinitionSignature, InitDeclarator, Initializer, IntegerSuffix, ModItem,
@@ -19,16 +20,16 @@ use co2_parser::{
     parse_compound_statement, parse_translation_unit, parse_translation_unit_from_tokens,
 };
 use co2_preprocessor::PreprocessedSource;
+use rustc_public_generative::rustc_public::{
+    DefId,
+    mir::Mutability,
+    ty::{AdtDef, FnDef, IntTy, RigidTy, Span, Ty, UintTy},
+};
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
     HirAdtKind, HirGenericArg, HirImplItem, HirImplItemKind, HirLifetime, HirModule, HirModuleItem,
     HirSelfKind, HirStructure, HirStructureCtx, HirTy, HirTyConst, HirTyKind, InlineHint,
     StructField, Visibility,
-    rustc_public::{
-        DefId,
-        mir::Mutability,
-        ty::{AdtDef, FnDef, IntTy, RigidTy, Ty, UintTy},
-    },
 };
 
 use crate::{
@@ -65,14 +66,20 @@ fn has_const_qualifier_in_decl_specs(
     })
 }
 
-fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> Vec<GeneratedAttr> {
+/// Step 1 of attribute lowering: raw C/rust-style attributes
+/// (`co2_ast::RustAttribute`) into co2-internal [`Co2Attr`]s. This may carry
+/// attributes with no rustc equivalent (e.g. `Alias`).
+fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> Vec<Co2Attr> {
     attrs
         .iter()
         .filter_map(|(attr, _)| {
             let path = attr
                 .path
                 .iter()
-                .map(|seg| seg.0.clone())
+                .map(|seg| {
+                    let s = seg.0.trim_matches('_');
+                    s.to_string()
+                })
                 .collect::<Vec<_>>();
             if path == ["doc"] {
                 let doc_text = match attr.args.as_slice() {
@@ -83,7 +90,7 @@ fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> 
                     ] => Some(lit.bytes.clone()),
                     _ => None,
                 }?;
-                Some(GeneratedAttr::DocComment {
+                Some(Co2Attr::DocComment {
                     comment: String::from_utf8_lossy(&doc_text).into_owned(),
                     inner: attr.is_inner(),
                 })
@@ -102,9 +109,26 @@ fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> 
                     [(co2_ast::Token::Ident(s), _)] if s == "never" => Some(InlineHint::Never),
                     _ => None,
                 };
-                hint.map(GeneratedAttr::InlineHint)
+                hint.map(Co2Attr::InlineHint)
+            } else if path == ["alias"] {
+                // `alias("target")` — extract the string literal argument. This
+                // is a co2-only attribute (no rustc equivalent) and is therefore
+                // kept in `Co2Attr`, not in `rustc_public_generative::GeneratedAttr`.
+                let name = match attr.args.as_slice() {
+                    [
+                        (co2_ast::Token::LParen, _),
+                        (co2_ast::Token::StringLit(lit), _),
+                        (co2_ast::Token::RParen, _),
+                    ] => String::from_utf8_lossy(&lit.bytes).into_owned(),
+                    _ => return None,
+                };
+                Some(Co2Attr::Alias(name))
             } else if attr.args.is_empty() {
-                Some(GeneratedAttr::Word { path })
+                if path == ["weak"] {
+                    Some(Co2Attr::Weak)
+                } else {
+                    Some(Co2Attr::Word { path })
+                }
             } else {
                 None
             }
@@ -112,18 +136,20 @@ fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> 
         .collect()
 }
 
+/// Step 2 for module/file-level attributes: lower co2 attrs into the
+/// rustc-emittable subset (`GeneratedAttr`), dropping co2-only attributes such
+/// as `Alias`. Inner doc comments become outer ones.
 fn lower_module_file_attrs_for_decl_item(
     attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>],
 ) -> Vec<GeneratedAttr> {
-    lower_generated_attrs(attrs)
+    co2_attrs_to_generated(&lower_generated_attrs(attrs))
         .into_iter()
         .map(|attr| match attr {
             GeneratedAttr::DocComment { comment, .. } => GeneratedAttr::DocComment {
                 comment,
                 inner: false,
             },
-            GeneratedAttr::Word { path } => GeneratedAttr::Word { path },
-            GeneratedAttr::InlineHint(hint) => GeneratedAttr::InlineHint(hint),
+            other => other,
         })
         .collect()
 }
@@ -140,9 +166,10 @@ fn has_derive_attr(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>], trait_nam
 }
 
 fn is_known_fn_word_attr(name: &str) -> bool {
+    let name = name.trim_matches('_');
     matches!(
         name,
-        "test" | "ignore" | "should_panic" | "no_mangle" | "inline"
+        "test" | "ignore" | "should_panic" | "no_mangle" | "inline" | "weak"
     )
 }
 
@@ -320,10 +347,10 @@ fn validate_module_attrs_recursive(
     errors
 }
 
-fn has_word_attr(attrs: &[GeneratedAttr], word: &str) -> bool {
+fn has_word_attr(attrs: &[Co2Attr], word: &str) -> bool {
     attrs
         .iter()
-        .any(|attr| matches!(attr, GeneratedAttr::Word { path } if path.as_slice() == [word]))
+        .any(|attr| matches!(attr, Co2Attr::Word { path } if path.as_slice() == [word]))
 }
 
 fn constexpr_decl_span(
@@ -1077,7 +1104,7 @@ fn lower_translation_unit_items(
                     name,
                     id,
                     ty: ctx.lower_rust_ty(ty),
-                    attrs: lower_generated_attrs(&attrs),
+                    attrs: co2_attrs_to_generated(&lower_generated_attrs(&attrs)),
                     visibility: match ast_vis {
                         AstVisibility::Public => Visibility::Public,
                         AstVisibility::Crate => Visibility::Crate,
@@ -1230,7 +1257,7 @@ fn lower_translation_unit_items(
                     name: item_name,
                     id,
                     sig,
-                    attrs,
+                    attrs: co2_attrs_to_generated(&attrs),
                     no_mangle: no_mangle || is_test,
                     visibility,
                     span,
@@ -1286,6 +1313,7 @@ fn lower_translation_unit_items(
                 declarators,
             } => {
                 let attrs = lower_generated_attrs(&attrs);
+                let gen_attrs = co2_attrs_to_generated(&attrs);
                 let original_specs = declaration_specifiers.clone();
                 let mut is_typedef = false;
                 let mut is_extern = false;
@@ -1369,7 +1397,7 @@ fn lower_translation_unit_items(
                         hir_items.push(HirModuleItem::TypeDef {
                             name,
                             id: type_def,
-                            attrs: attrs.clone(),
+                            attrs: gen_attrs.clone(),
                             visibility: Visibility::Public,
                             span,
                             ty,
@@ -1445,7 +1473,7 @@ fn lower_translation_unit_items(
                                     id,
                                     ty,
                                     rhs,
-                                    attrs: attrs.clone(),
+                                    attrs: gen_attrs.clone(),
                                     visibility: Visibility::Public,
                                     span,
                                 });
@@ -1475,7 +1503,7 @@ fn lower_translation_unit_items(
                                     ty,
                                     mutable: false,
                                     no_mangle: !is_static,
-                                    attrs: attrs.clone(),
+                                    attrs: gen_attrs.clone(),
                                     visibility: Visibility::Public,
                                     span,
                                 });
@@ -1520,7 +1548,7 @@ fn lower_translation_unit_items(
                                     ty,
                                     mutable: false,
                                     no_mangle: !is_static,
-                                    attrs: attrs.clone(),
+                                    attrs: gen_attrs.clone(),
                                     visibility: Visibility::Public,
                                     span,
                                 });
@@ -1553,12 +1581,59 @@ fn lower_translation_unit_items(
                             }
                             let def_id = resolve_in_module(ctx, module_path, &name).0;
                             let span = ctx.co2_span_to_rustc(init.1);
-                            foreign_items.push(ForeignModItem::ForeignFunction {
-                                name,
-                                id: FnDef(def_id),
-                                sig,
-                                span,
-                            });
+                            // GNU `__attribute__((weak, alias("target")))`:
+                            // emit a real (weak) function that forwards to
+                            // `target` instead of an external declaration.
+                            // The alias is a co2-only attribute (`Co2Attr::Alias`),
+                            // kept out of `rustc_public_generative::GeneratedAttr`.
+                            if let Some(Co2Attr::Alias(target_name)) =
+                                attrs.iter().find(|a| matches!(a, Co2Attr::Alias(_)))
+                            {
+                                let target_def_id =
+                                    resolve_in_module(ctx, module_path, target_name).0;
+                                // The declaration was resolved under the foreign
+                                // mod; allocate a fresh crate-root definition so
+                                // the forwarder is codegen'd as a real (weak)
+                                // definition rather than an `extern` declaration.
+                                let fwd_def_id = ctx.allocate_def_id(
+                                    ctx.root_crate_def_id(),
+                                    &DefData::ValueNs(name.clone()),
+                                );
+                                let mut fwd_attrs = gen_attrs.clone();
+                                fwd_attrs.push(GeneratedAttr::Weak);
+                                let param_names: Vec<(usize, String, Span)> = sig
+                                    .inputs
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(idx, p)| (idx, p.name.clone().unwrap_or_default(), span))
+                                    .collect();
+                                hir_items.push(HirModuleItem::Function {
+                                    name,
+                                    id: FnDef(fwd_def_id),
+                                    sig,
+                                    attrs: fwd_attrs,
+                                    no_mangle: true,
+                                    visibility: Visibility::Public,
+                                    span,
+                                    ident_span: span,
+                                });
+                                ctx.mir_owners.insert(
+                                    fwd_def_id,
+                                    MirOwnerInfo::ForwardingFn {
+                                        def: FnDef(fwd_def_id),
+                                        target: FnDef(target_def_id),
+                                        param_names,
+                                        resolver: resolver.clone(),
+                                    },
+                                );
+                            } else {
+                                foreign_items.push(ForeignModItem::ForeignFunction {
+                                    name,
+                                    id: FnDef(def_id),
+                                    sig,
+                                    span,
+                                });
+                            }
                         }
                     }
                 }
@@ -1589,14 +1664,14 @@ fn lower_translation_unit_items(
             on_body_parsed,
         );
         let span = ctx.co2_span_to_rustc(module.decl_span);
-        let mut module_item_attrs = lower_generated_attrs(&module.attrs);
+        let mut module_item_attrs = co2_attrs_to_generated(&lower_generated_attrs(&module.attrs));
         module_item_attrs.extend(lower_module_file_attrs_for_decl_item(&module.tu.attrs));
         hir_items.push(HirModuleItem::Module {
             name: module.name.clone(),
             id: module.def_id,
             module: HirModule {
                 span,
-                attrs: lower_generated_attrs(&module.tu.attrs),
+                attrs: lower_module_file_attrs_for_decl_item(&module.tu.attrs),
                 items,
             },
             attrs: module_item_attrs,

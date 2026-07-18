@@ -2922,28 +2922,31 @@ where
             .filter(|decl| declarator_has_name(&decl.0))
             .filter(|decl| decl.0.is_function())
             .filter(|decl| function_decl_direct_inner_is_not_function(&decl.0))
+            .then(rust_attrs().or_not())
             .then_ignore(look_ahead(Token::LBrace))
             .then(lazy_compound_statement()),
         declaration_specifier(declarator.clone(), expr.clone(), resolver.clone()),
     )
-    .map(
-        |(declaration_specifiers, (declarator, body))| Declaration::FunctionDefinition {
-            attrs: Vec::new(),
+    .map(|(declaration_specifiers, ((declarator, attrs), body))| {
+        Declaration::FunctionDefinition {
+            attrs: attrs.unwrap_or_default(),
             signature: FunctionDefinitionSignature::C {
                 declaration_specifiers,
                 declarator,
             },
             body,
-        },
-    );
+        }
+    });
 
     let simple = left_recursion(
-        init_declarator_list(resolver.clone(), stmt_rec).then_ignore(just(Token::Semicolon)),
+        init_declarator_list(resolver.clone(), stmt_rec)
+            .then(rust_attrs().or_not())
+            .then_ignore(just(Token::Semicolon)),
         declaration_specifier(declarator, expr, resolver.clone()),
     )
     .map(
-        |(declaration_specifiers, declarators)| Declaration::Declaration {
-            attrs: Vec::new(),
+        |(declaration_specifiers, (declarators, attrs))| Declaration::Declaration {
+            attrs: attrs.unwrap_or_default(),
             declaration_specifiers,
             declarators,
         },

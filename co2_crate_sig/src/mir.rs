@@ -36,4 +36,13 @@ pub enum MirOwnerInfo {
         def: FnDef,
         body_span: co2_ast::Span,
     },
+    /// A weak-alias forwarder: a function that simply forwards all of its
+    /// arguments to `target` and returns the result. Used to implement the GNU
+    /// `__attribute__((alias("target")))` extension for functions.
+    ForwardingFn {
+        def: FnDef,
+        target: FnDef,
+        param_names: Vec<(usize, String, Span)>,
+        resolver: LocalResolver,
+    },
 }

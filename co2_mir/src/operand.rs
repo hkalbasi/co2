@@ -1587,7 +1587,8 @@ impl Builder<'_, '_> {
             let zero = MirOperand::Constant(ConstOperand {
                 span,
                 user_ty: None,
-                const_: MirConst::try_from_float(0.0, float_ty).expect("failed to build float zero"),
+                const_: MirConst::try_from_float(0.0, float_ty)
+                    .expect("failed to build float zero"),
             });
             let bool_local = self.new_temp(Ty::bool_ty(), Mutability::Mut, span);
             self.stmts.push(MirStatement {

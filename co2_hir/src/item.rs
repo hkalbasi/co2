@@ -13,7 +13,8 @@ use rustc_public_generative::rustc_public::{
 };
 
 use crate::initializer_tree::{InitializerTree, eval_const_int};
-use crate::{HirStmt, resolver::HirCtx};
+use crate::resolver::{HirCtx, ResolvedValue};
+use crate::{HirExpr, HirExprKind, HirStmt};
 
 #[derive(Clone, Debug)]
 pub struct HirLocal {
@@ -208,7 +209,74 @@ impl HirCtx<'_> {
         self.reset_labels();
         self.lower_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names)
     }
+}
 
+/// Builds the body of a weak-alias forwarder: `return target(args...)`.
+/// The forwarder simply forwards every one of its parameters to `target`
+/// and returns whatever `target` returns, matching the GNU
+/// `__attribute__((alias("target")))` semantics for functions.
+pub fn build_forwarding_fn_body(
+    def: FnDef,
+    target: FnDef,
+    param_names: &[(usize, String, RustSpan)],
+    span: RustSpan,
+) -> HirBody {
+    let sig = def.fn_sig().skip_binder();
+    let ret_ty = sig.output();
+
+    let mut locals = Arena::new();
+
+    locals.alloc(HirLocal {
+        name: "_ret".to_owned(),
+        ty: ret_ty,
+        span,
+        read_only: false,
+    });
+
+    let mut params = Vec::new();
+    let mut arg_exprs = Vec::new();
+    for (idx, (_, name, param_span)) in param_names.iter().enumerate() {
+        let ty = sig.inputs()[idx];
+        let id = locals.alloc(HirLocal {
+            name: name.clone(),
+            ty,
+            span: *param_span,
+            read_only: false,
+        });
+        params.push(id);
+        arg_exprs.push(HirExpr {
+            kind: HirExprKind::Local(id),
+            ty,
+            span,
+        });
+    }
+
+    let resolved = ResolvedValue::Fn(target, Vec::new());
+    let func_ty = resolved.ty();
+    let call = HirExpr {
+        kind: HirExprKind::Call {
+            func: Box::new(HirExpr {
+                kind: HirExprKind::Path(resolved),
+                ty: func_ty,
+                span,
+            }),
+            args: arg_exprs,
+        },
+        ty: ret_ty,
+        span,
+    };
+
+    HirBody {
+        locals,
+        labels: Arena::new(),
+        params,
+        c_variadic_local: None,
+        stmts: vec![HirStmt::Return(Some(call), span)],
+        span,
+    }
+}
+
+impl HirCtx<'_> {
     fn lower_compound_statement(
         &mut self,
         (compound, parser_span): Spanned<CompoundStatement<LocalResolver>>,
