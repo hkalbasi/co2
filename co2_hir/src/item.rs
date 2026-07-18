@@ -96,8 +96,11 @@ pub fn lower_static_body_for_ty(
     let init_expr = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if let co2_ast::Initializer::Expr(expr) = &initializer
             && let Err(err) = hir_ctx.eval_const_expr_in_scope(expr, &mut locals, &mut local_map)
-            // TODO: This is a dirty hack, should be fixed when we have proper const eval
+            // TODO: This is a dirty hack, should be fixed when we have proper const eval.
+            // Integer const-eval legitimately can't represent float scalar initializers;
+            // those are handled by the normal initializer-tree lowering below.
             && !err.1.starts_with("unsupported")
+            && !err.1.starts_with("cannot use floats in const expressions")
         {
             hir_ctx.terminate_with_spanned_error(err);
         }

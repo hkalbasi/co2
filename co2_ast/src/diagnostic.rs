@@ -211,7 +211,11 @@ fn emit_mapped_diagnostics(
     level: DiagnosticLevel,
     terminate: bool,
 ) {
-    DIAGNOSTICS_EMITTED.store(true, Ordering::SeqCst);
+    // Only errors count as emitted diagnostics. Warnings must not set (or
+    // clear) this flag.
+    if level == DiagnosticLevel::Error {
+        DIAGNOSTICS_EMITTED.store(true, Ordering::SeqCst);
+    }
     if FORCE_JSON_DIAGNOSTICS.load(Ordering::SeqCst)
         || std::env::var_os("CO2_FORCE_JSON_DIAGNOSTICS").is_some()
     {
@@ -225,8 +229,6 @@ fn emit_mapped_diagnostics(
     }
     if terminate {
         panic_with_diagnostic_abort();
-    } else if level == DiagnosticLevel::Warning {
-        DIAGNOSTICS_EMITTED.store(false, Ordering::SeqCst);
     }
 }
 

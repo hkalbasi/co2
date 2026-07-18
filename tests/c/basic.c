@@ -1519,6 +1519,8 @@ int main55() {
     return 0;
 }
 
+static const double one_half = 1.5; 
+
 int main56() {
     float x = 1.5f;
     if (-x > -1.4f) {
@@ -1532,7 +1534,7 @@ int main56() {
         return 3;
     }
     y = 1.5f;
-    if (y != 1.5) {
+    if (y != one_half) {
         return 4;
     }
     return 0;
