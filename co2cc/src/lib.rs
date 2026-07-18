@@ -200,6 +200,15 @@ fn run_co2c(args: &CcArgs) {
     let mut has_stdin = false;
     let force_pic = args.pic || matches!(args.link_kind, LinkOutputKind::SharedLib);
 
+    // rustc and the linker create temporary files next to the output path, which
+    // fails for special files like /dev/null. Redirect the output to a temp file
+    // in that case; compilation still runs and its result is simply discarded.
+    let output = if args.output.as_deref() == Some(Path::new("/dev/null")) {
+        Some(temp_dir.join("co2c_dev_null_output"))
+    } else {
+        args.output.clone()
+    };
+
     let mut resolve_stdin = |input: &Path| -> PathBuf {
         if input == Path::new("-") {
             has_stdin = true;
@@ -255,7 +264,7 @@ fn run_co2c(args: &CcArgs) {
         }
         let rustc_args = build_rustc_asm_args(
             &resolved,
-            args.output.as_deref(),
+            output.as_deref(),
             args.opt_level.as_deref(),
             args.debuginfo,
             force_pic,
@@ -304,7 +313,7 @@ fn run_co2c(args: &CcArgs) {
         }
         let rustc_args = build_rustc_object_args(
             &resolved,
-            args.output.as_deref(),
+            output.as_deref(),
             args.opt_level.as_deref(),
             args.debuginfo,
             force_pic,
@@ -365,7 +374,7 @@ fn run_co2c(args: &CcArgs) {
     link_objects(
         &object_paths,
         &args.linker_args,
-        args.output.as_deref(),
+        output.as_deref(),
         args.opt_level.as_deref(),
         args.debuginfo,
         args.link_kind,
