@@ -5,7 +5,7 @@
 
 void shl_with_space() {
     int x = 1 < < 5;
-      //^ error: found end of input expected Type specifier, Type qualifier, Storage specifier, or Function specifier
+      //^ error: found end of input expected Type specifier, Type qualifier, Storage specifier, Function specifier, or something else
 }
 
 void shr_with_space() {

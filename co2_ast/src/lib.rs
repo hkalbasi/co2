@@ -1304,6 +1304,7 @@ pub enum DeclarationSpecifier<R: TypeResolver> {
     TypeQualifier(Spanned<TypeQualifier>),
     StorageSpecifier(Spanned<StorageClassSpecifier>),
     FunctionSpecifier(Spanned<FunctionSpecifier>),
+    GNUAttribute(Vec<Spanned<RustAttribute>>),
 }
 
 impl<R: TypeResolver> DeclarationSpecifier<R> {
@@ -1312,6 +1313,7 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
             DeclarationSpecifier::TypeSpecifier(_)
             | DeclarationSpecifier::TypeQualifier(_)
             | DeclarationSpecifier::FunctionSpecifier(_) => false,
+            DeclarationSpecifier::GNUAttribute(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Typedef)
             }
@@ -1323,6 +1325,7 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
             DeclarationSpecifier::TypeSpecifier(_)
             | DeclarationSpecifier::TypeQualifier(_)
             | DeclarationSpecifier::FunctionSpecifier(_) => false,
+            DeclarationSpecifier::GNUAttribute(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Extern)
             }
@@ -1334,6 +1337,7 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
             DeclarationSpecifier::TypeSpecifier(_)
             | DeclarationSpecifier::TypeQualifier(_)
             | DeclarationSpecifier::FunctionSpecifier(_) => false,
+            DeclarationSpecifier::GNUAttribute(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Static)
             }
@@ -1345,6 +1349,7 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
             DeclarationSpecifier::TypeSpecifier(_)
             | DeclarationSpecifier::TypeQualifier(_)
             | DeclarationSpecifier::FunctionSpecifier(_) => false,
+            DeclarationSpecifier::GNUAttribute(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Constexpr)
             }

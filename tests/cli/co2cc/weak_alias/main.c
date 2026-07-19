@@ -6,6 +6,7 @@
 int crypt_r(int x);
 int weak_only(void);
 int strong_sym(void);
+extern __attribute__((__weak__)) const int weak_static[];
 
 int main(void) {
     if (crypt_r(5) != 10) {
@@ -16,6 +17,9 @@ int main(void) {
     }
     if (strong_sym() != 10) {
         return 3;
+    }
+    if (weak_static[0] != 7 || weak_static[1] != 8 || weak_static[2] != 9) {
+        return 4;
     }
     return 0;
 }

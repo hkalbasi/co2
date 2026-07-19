@@ -71,7 +71,8 @@ impl CompressedTypeSpecifier {
                 DeclarationSpecifier::TypeSpecifier(s) => Some(s.0),
                 DeclarationSpecifier::TypeQualifier(_)
                 | DeclarationSpecifier::StorageSpecifier(_)
-                | DeclarationSpecifier::FunctionSpecifier(_) => None,
+                | DeclarationSpecifier::FunctionSpecifier(_)
+                | DeclarationSpecifier::GNUAttribute(_) => None,
             })
             .collect::<Vec<_>>();
         if specifiers.is_empty() {

@@ -343,6 +343,13 @@ impl<R: TypeResolver> PrettyPrint for Spanned<DeclarationSpecifier<R>> {
             DeclarationSpecifier::FunctionSpecifier(fs) => {
                 pp.node("FunctionSpecifier", &sp, |pp| fs.pretty_print(pp));
             }
+            DeclarationSpecifier::GNUAttribute(attrs) => {
+                pp.node("GNUAttribute", &sp, |pp| {
+                    for attr in attrs {
+                        attr.pretty_print(pp);
+                    }
+                });
+            }
         }
     }
 }

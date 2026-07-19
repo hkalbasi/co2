@@ -2178,6 +2178,9 @@ where
         type_qualifier().map(DeclarationSpecifier::TypeQualifier),
         storage_class_specifier().map(DeclarationSpecifier::StorageSpecifier),
         function_specifier().map(DeclarationSpecifier::FunctionSpecifier),
+        rust_attrs()
+            .filter(|attrs| !attrs.is_empty())
+            .map(DeclarationSpecifier::GNUAttribute),
     ))
     .map_with(|r, e| (r, e.span()))
 }
@@ -2945,10 +2948,21 @@ where
         declaration_specifier(declarator, expr, resolver.clone()),
     )
     .map(
-        |(declaration_specifiers, (declarators, attrs))| Declaration::Declaration {
-            attrs: attrs.unwrap_or_default(),
-            declaration_specifiers,
-            declarators,
+        |(declaration_specifiers, (declarators, trailing_attrs))| {
+            let mut leading_attrs: Vec<Spanned<RustAttribute>> = declaration_specifiers
+                .iter()
+                .filter_map(|spec| match &spec.0 {
+                    DeclarationSpecifier::GNUAttribute(attrs) => Some(attrs.clone()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            leading_attrs.extend(trailing_attrs.unwrap_or_default());
+            Declaration::Declaration {
+                attrs: leading_attrs,
+                declaration_specifiers,
+                declarators,
+            }
         },
     );
 
