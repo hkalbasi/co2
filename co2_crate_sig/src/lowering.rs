@@ -634,7 +634,7 @@ fn deduplicate_tu_items(
                         matches!(
                             &spec.0,
                             co2_ast::DeclarationSpecifier::TypeSpecifier(ts)
-                                if matches!(&ts.0, co2_ast::TypeSpecifier::TypedefName(..))
+                                if matches!(&ts.0, co2_ast::TypeSpecifier::TypedefName(..) | co2_ast::TypeSpecifier::TypeofExpr(..) | co2_ast::TypeSpecifier::TypeofType(..))
                         )
                     });
                 for decl in declarators {
