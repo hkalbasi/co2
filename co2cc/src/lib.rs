@@ -303,6 +303,22 @@ fn run_co2c(args: &CcArgs) {
             .expect("missing C input file for object emission");
         let resolved = resolve_stdin(&input);
 
+        if matches!(
+            resolved.extension().and_then(|e| e.to_str()),
+            Some("s" | "S")
+        ) {
+            compile_asm_to_object(
+                &resolved,
+                output.as_deref().unwrap_or(&temp_dir.join("out.o")),
+                force_pic,
+                args.time_report,
+            );
+            if has_stdin {
+                let _ = fs::remove_dir_all(&temp_dir);
+            }
+            return;
+        }
+
         if args.time_report {
             co2_driver_lib::time_report::enable_timing();
         }
@@ -346,8 +362,22 @@ fn run_co2c(args: &CcArgs) {
     let mut object_paths = Vec::with_capacity(args.inputs.len());
     for input in &args.inputs {
         let resolved = resolve_stdin(input);
-        if resolved.extension().and_then(|e| e.to_str()) == Some("o") {
+        let ext = resolved.extension().and_then(|e| e.to_str());
+        if ext == Some("o") {
             object_paths.push(resolved);
+            continue;
+        }
+        if matches!(ext, Some("s" | "S")) {
+            let object_path = temp_dir.join(
+                resolved
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("co2c_object")
+                    .replace('-', "_")
+                    + ".o",
+            );
+            compile_asm_to_object(&resolved, &object_path, force_pic, args.time_report);
+            object_paths.push(object_path);
             continue;
         }
         let object_path = temp_dir.join(
@@ -536,7 +566,7 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
             _ => {
                 let path = PathBuf::from(arg);
                 match path.extension().and_then(|ext| ext.to_str()) {
-                    Some("c" | "o") => inputs.push(path),
+                    Some("c" | "o" | "s" | "S") => inputs.push(path),
                     _ => linker_args.push(arg.clone()),
                 }
             }
@@ -550,7 +580,12 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     if emit_obj_only || emit_asm_only || emit_preprocess_only {
         let c_count = inputs
             .iter()
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("c") || p.as_os_str() == "-")
+            .filter(|p| {
+                matches!(
+                    p.extension().and_then(|e| e.to_str()),
+                    Some("c" | "s" | "S")
+                ) || p.as_os_str() == "-"
+            })
             .count();
         if c_count != 1 {
             return Err(ParseArgsError::InvalidObjectEmissionInputs);
@@ -793,6 +828,28 @@ fn shared_rust_flags() -> Vec<String> {
     }
 
     flags
+}
+
+fn compile_asm_to_object(input: &Path, output: &Path, pic: bool, time_report: bool) {
+    let assembler = std::env::var("CO2_AS").unwrap_or_else(|_| "gcc".to_owned());
+    let mut cmd = Command::new(&assembler);
+    cmd.arg("-c").arg(input).arg("-o").arg(output);
+    if pic {
+        cmd.arg("-fPIC");
+    }
+    if time_report {
+        cmd.arg("-ftime-report");
+    }
+
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("failed to execute assembler {assembler}: {e}"));
+    if !status.success() {
+        panic!(
+            "co2cc assembly of {} failed with status {status}",
+            input.display()
+        );
+    }
 }
 
 fn compile_c_to_object(
