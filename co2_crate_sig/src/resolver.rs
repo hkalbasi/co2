@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use co2_ast::{
-    Declaration, Declarator, StatelessResolver, TranslationUnit, TypeQueryResult,
+    Declaration, DeclarationSpecifier, Declarator, RustPathSegment, SpecifierQualifier,
+    StatelessResolver, TranslationUnit, TypeQueryResult, TypeSpecifier,
     co2_test_symbol_name,
 };
 
@@ -221,12 +222,15 @@ impl ModuleData {
                 );
             }
         }
+        let mut function_type_aliases: HashSet<String> = HashSet::new();
+        let mut function_def_names: HashSet<String> = HashSet::new();
         for (item, _) in &ast.items {
             match item {
                 Declaration::FunctionDefinition { signature, .. } => {
                     let Some(decl) = signature.ident() else {
                         continue;
                     };
+                    function_def_names.insert(decl.clone());
                     let def_name = if test
                         && matches!(
                             signature,
@@ -269,11 +273,32 @@ impl ModuleData {
                         for decl in declarators {
                             let decl = &decl.0.declarator.0;
                             if decl.is_function() {
+                                if matches!(decl, Declarator::FunctionDeclarator { .. })
+                                    && let Some(name) = extract_decl_name(decl)
+                                {
+                                    function_type_aliases.insert(name);
+                                }
                                 continue;
                             }
                             let Some(name) = extract_decl_name(decl) else {
                                 continue;
                             };
+                            // Check for chained function type aliases (e.g. `typedef F G;` where F is a function type)
+                            if !is_extern
+                                && declaration_specifiers.iter().any(|spec| {
+                                    matches!(
+                                        &spec.0,
+                                        DeclarationSpecifier::TypeSpecifier((
+                                            TypeSpecifier::TypedefName(path),
+                                            _,
+                                        )) if path.0.segments.first().is_some_and(|(seg, _)| {
+                                            matches!(seg, RustPathSegment::Ident(s) if function_type_aliases.contains(s))
+                                        })
+                                    )
+                                })
+                            {
+                                function_type_aliases.insert(name.clone());
+                            }
                             if this.items.contains_key(&name) {
                                 continue;
                             }
@@ -288,6 +313,37 @@ impl ModuleData {
                             );
                         }
                     } else {
+                        let is_function_type_usage = !is_extern
+                            && declaration_specifiers.iter().any(|spec| {
+                                matches!(
+                                    &spec.0,
+                                    DeclarationSpecifier::TypeSpecifier((
+                                        TypeSpecifier::TypedefName(name),
+                                        _,
+                                    )) if name.0.segments.first().is_some_and(|(seg, _)| {
+                                        matches!(seg, RustPathSegment::Ident(s) if function_type_aliases.contains(s))
+                                    })
+                                ) || matches!(
+                                    &spec.0,
+                                    DeclarationSpecifier::TypeSpecifier((
+                                        TypeSpecifier::TypeofType(type_name),
+                                        _,
+                                    )) if type_name.specifier_qualifier_list.len() == 1
+                                        && type_name.abstract_declarator.is_none()
+                                        && matches!(
+                                            type_name.specifier_qualifier_list.first(),
+                                            Some((
+                                                SpecifierQualifier::TypeSpecifier((
+                                                    TypeSpecifier::TypedefName(path),
+                                                    _,
+                                                )),
+                                                _,
+                                            )) if path.0.segments.first().is_some_and(|(seg, _)| {
+                                                matches!(seg, RustPathSegment::Ident(s) if function_def_names.contains(s))
+                                            })
+                                        )
+                                )
+                            });
                         for decl in declarators {
                             let decl = &decl.0.declarator.0;
                             let Some(name) = extract_decl_name(decl) else {
@@ -296,11 +352,12 @@ impl ModuleData {
                             if this.items.contains_key(&name) {
                                 continue;
                             }
-                            let parent = if decl.is_function() || is_extern {
-                                foreign_mod
-                            } else {
-                                parent
-                            };
+                            let parent =
+                                if decl.is_function() || is_extern || is_function_type_usage {
+                                    foreign_mod
+                                } else {
+                                    parent
+                                };
                             let def_id =
                                 ctx.allocate_def_id(parent, &DefData::ValueNs(name.clone()));
                             this.items.insert(

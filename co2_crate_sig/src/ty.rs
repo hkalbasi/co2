@@ -1951,7 +1951,11 @@ impl LocalResolverBase {
                 _ => self.hir_ty_of_resolved_path(&path, path_span),
             },
             CompressedTypeSpecifier::TypeofType(type_name) => {
-                return CTy::Ty(self.lower_type_name_for_const(type_name, parser_span));
+                let hir_ty = self.lower_type_name_for_const(type_name, parser_span);
+                if let HirTyKind::FnPtr(sig) = &hir_ty.kind {
+                    return CTy::Function((**sig).clone());
+                }
+                return CTy::Ty(hir_ty);
             }
             CompressedTypeSpecifier::TypeofExpr(expr) => {
                 return CTy::Ty(self.type_of_expr_for_sizeof(&expr));

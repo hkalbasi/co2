@@ -1251,8 +1251,16 @@ fn lower_translation_unit_items(
                     })
                     .collect::<Vec<_>>();
                 let id = resolve_in_module(ctx, module_path, &name).0;
+                let fn_sig = sig.clone();
                 let function_name = name.clone();
                 let id = FnDef(id);
+                ctx.resolver.borrow_mut().global_value_tys.insert(
+                    id.0,
+                    HirTy {
+                        kind: HirTyKind::FnPtr(Box::new(fn_sig)),
+                        span: ctx.co2_span_to_rustc(ident_span),
+                    },
+                );
                 hir_items.push(HirModuleItem::Function {
                     name: item_name,
                     id,

@@ -159,9 +159,7 @@ impl<A: TypeResolver> DoTransform for DeclarationSpecifier<A> {
             DeclarationSpecifier::FunctionSpecifier(e) => {
                 DeclarationSpecifier::FunctionSpecifier(*e)
             }
-            DeclarationSpecifier::GNUAttribute(e) => {
-                DeclarationSpecifier::GNUAttribute(e.clone())
-            }
+            DeclarationSpecifier::GNUAttribute(e) => DeclarationSpecifier::GNUAttribute(e.clone()),
         }
     }
 }
