@@ -39,6 +39,9 @@ int s2 = 4;
 int s2;
 extern int s2;
 
+extern t1 s3;
+t1 s3;
+
 typedef int func_ty();
 int f4();
 func_ty f4;
@@ -76,6 +79,9 @@ int main() {
     }
     if (s2 != 4) {
         return 2;
+    }
+    if (s3 != 0) {
+        return 3;
     }
     if (f4() != 4) {
         return 4;
