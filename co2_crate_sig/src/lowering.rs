@@ -2320,7 +2320,10 @@ fn consumed_initializer_slots(
     resolver: &LocalResolver,
 ) -> Result<usize, (co2_ast::Span, String)> {
     match initializer {
-        co2_ast::Initializer::Expr(_) => Ok(1),
+        co2_ast::Initializer::Expr((expr, _)) => match expr {
+            co2_ast::Expression::Constant(Constant::String(s)) => Ok(s.nul_terminated_len()),
+            _ => Ok(1),
+        },
         co2_ast::Initializer::List(_) => flattened_scalar_slots(target_ty, resolver),
     }
 }

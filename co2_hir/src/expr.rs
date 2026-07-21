@@ -1273,8 +1273,27 @@ impl HirCtx<'_> {
             }
             CTy::UnsizedArray(elem) => {
                 let count = match &initializer.0 {
-                    Initializer::List(items) => items.len(),
-                    Initializer::Expr(_) => 1,
+                    Initializer::List(items) => {
+                        let mut len = 0usize;
+                        for (item, _) in items {
+                            match &item.initializer.0 {
+                                Initializer::Expr((expr, _)) => match expr {
+                                    Expression::Constant(Constant::String(s)) => {
+                                        len += s.nul_terminated_len();
+                                    }
+                                    _ => len += 1,
+                                },
+                                Initializer::List(_) => {
+                                    len += 1;
+                                }
+                            }
+                        }
+                        len
+                    }
+                    Initializer::Expr((expr, _)) => match expr {
+                        Expression::Constant(Constant::String(s)) => s.nul_terminated_len(),
+                        _ => 1,
+                    },
                 };
                 let ty_const = TyConst::try_from_target_usize(count as u64)
                     .map_err(|_| spanned_error(parser_span, "compound literal array too large"))?;

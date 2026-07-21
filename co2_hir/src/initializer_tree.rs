@@ -445,6 +445,26 @@ impl HirCtx<'_> {
                         );
                     }
                 }
+                // C allows `char arr[] = { "string" }` as equivalent to
+                // `char arr[] = "string"` — a single string literal inside
+                // an initializer list still initializes the whole array.
+                if is_array_ty(expected_ty)
+                    && let [(
+                        InitializerItem {
+                            designators: None,
+                            initializer: (Initializer::Expr(expr @ (Expression::Constant(co2_ast::Constant::String(_)), _)), _),
+                        },
+                        _,
+                    )] = items.as_slice()
+                {
+                    return self.try_lower_to_initializer_tree(
+                        expected_ty,
+                        (Initializer::Expr(expr.clone()), initializer.1),
+                        locals,
+                        local_map,
+                        grow_for_infer,
+                    );
+                }
                 if self.adt_logical_field_tys(expected_ty).is_none() && !is_array_ty(expected_ty) {
                     let first = items.into_iter().next().ok_or_else(|| {
                         spanned_error(initializer.1, "empty initializer list for scalar type")
@@ -573,6 +593,10 @@ impl HirCtx<'_> {
                         // unsized arrays, which grow to fit) silently drop the extra
                         // elements, matching the original behavior.
                         if !grow_for_infer && is_array_ty(expected_ty) && !grow {
+                            eprintln!(
+                                "DEBUG: excess elements warning at {:?}: stack empty, ty={:?}, grow_for_infer={}, grow={}",
+                                item_span, expected_ty, grow_for_infer, grow
+                            );
                             co2_ast::emit_warnings(vec![co2_ast::Rich::custom(
                                 item_span,
                                 "excess elements in array initializer",
