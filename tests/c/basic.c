@@ -107,6 +107,9 @@ int main6()
     p[0] = 9;
     if (*p - 9)
         return 1;
+    0[p] = 5;
+    if (*p - 5)
+        return 1;
     return 0;
 }
 
@@ -127,7 +130,7 @@ int main7()
     *(p + 2) = 5;
     p[3] = 7;
 
-    if (arr[2] - 5)
+    if ((1 + 1)[arr] - 5)
         return 1;
     if (*(arr + 3) - 7)
         return 1;

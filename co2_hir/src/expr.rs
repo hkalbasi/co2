@@ -1722,32 +1722,27 @@ impl HirCtx<'_> {
                 }
             }
             Expression::Subscript(base, index) => {
-                let mut base = self.lower_expr(*base, locals, local_map)?;
-                self.array_to_pointer_decay_if_array(&mut base);
-                let index = self.lower_expr(*index, locals, local_map)?;
-                if !is_numeric_ty(index.ty) {
-                    return Err(spanned_error(
-                        parser_span,
-                        format!("subscript index must be integer, got {:?}", index.ty),
-                    ));
-                }
-                let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base.ty.kind() else {
-                    return Err(spanned_error(
-                        parser_span,
-                        format!("subscript base must be pointer type, got {:?}", base.ty),
-                    ));
-                };
-                let ptr_ty = base.ty;
-                let ptr_offset = HirExpr {
-                    kind: HirExprKind::PtrOffset {
-                        base: Box::new(base),
-                        index: Box::new(index),
-                    },
-                    ty: ptr_ty,
+                // E1[E2] is equivalent to (*((E1)+(E2))). Reuse the `+` lowering.
+                let mut lhs = self.lower_expr(*base, locals, local_map)?;
+                self.array_to_pointer_decay_if_array(&mut lhs);
+                let mut rhs = self.lower_expr(*index, locals, local_map)?;
+                self.array_to_pointer_decay_if_array(&mut rhs);
+                let add = self.lower_binop_from_lowered(
+                    lhs,
+                    rhs,
+                    ParsedBinOp::Add,
                     span,
+                    parser_span,
+                    false,
+                )?;
+                let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = add.ty.kind() else {
+                    return Err(spanned_error(
+                        parser_span,
+                        format!("subscript requires one pointer and one integer operand"),
+                    ));
                 };
                 Ok(HirExpr {
-                    kind: HirExprKind::Deref(Box::new(ptr_offset)),
+                    kind: HirExprKind::Deref(Box::new(add)),
                     ty: pointee,
                     span,
                 })
