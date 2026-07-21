@@ -1733,7 +1733,7 @@ impl Builder<'_, '_> {
             });
             return MirOperand::Copy(place(tmp));
         }
-        if let Some(fn_ptr_ty) = dst_mu_fn_ptr.filter(|_| src_is_fn_def) {
+        if src_is_fn_def && let Some(fn_ptr_ty) = dst_mu_fn_ptr {
             let src_sig = src_ty
                 .kind()
                 .fn_sig()
@@ -1772,7 +1772,7 @@ impl Builder<'_, '_> {
                 span,
             );
         }
-        if let Some(fn_ptr_ty) = dst_mu_fn_ptr.filter(|_| src_is_fn_def) {
+        if src_is_fn_def && let Some(fn_ptr_ty) = dst_mu_fn_ptr {
             let fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
             self.stmts.push(MirStatement {
                 kind: MirStatementKind::Assign(

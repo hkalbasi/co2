@@ -410,6 +410,21 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
     if dst == src {
         return false;
     }
+
+    // Function pointers with no args and only variadics (fn(...) -> _) accept any
+    // function pointer implicitly, and any function pointer can be implicitly cast from
+    // fn(...) -> _.
+    if let Some(dst_sig) = is_maybe_uninit_fn_ptr_ty(dst) {
+        if dst_sig.value.c_variadic && dst_sig.value.inputs().is_empty() {
+            return true;
+        }
+    }
+    if let Some(src_sig) = is_maybe_uninit_fn_ptr_ty(src) {
+        if src_sig.value.c_variadic && src_sig.value.inputs().is_empty() {
+            return true;
+        }
+    }
+
     let src_is_mu_fn_ptr = is_maybe_uninit_fn_ptr_ty(src).is_some();
     let dst_is_mu_fn_ptr = is_maybe_uninit_fn_ptr_ty(dst).is_some();
     matches!(
@@ -430,22 +445,43 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
     ) || fn_pointer_void_pointer_cast_allowed(dst, src)
         || pointer_implicit_cast_allowed(dst, src)
         || (dst_is_mu_fn_ptr
-            && matches!(
-                src.kind(),
+            && match src.kind() {
                 TyKind::RigidTy(
-                    RigidTy::Int(_)
-                        | RigidTy::Uint(_)
-                        | RigidTy::FnDef(_, _)
-                        | RigidTy::FnPtr(_)
-                        | RigidTy::RawPtr(..)
-                )
-            ))
+                    RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..),
+                ) => true,
+                TyKind::RigidTy(RigidTy::FnDef(..) | RigidTy::FnPtr(_)) => {
+                    fn_ptr_implicit_cast_allowed(dst, src)
+                }
+                _ => false,
+            })
         || (src_is_mu_fn_ptr
             && matches!(
                 dst.kind(),
                 TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..))
             ))
         || (is_numeric_ty(dst) && is_numeric_ty(src))
+}
+
+/// Check if implicit cast is allowed between function pointer types. Returns true only
+/// when the function signatures are structurally compatible.
+fn fn_ptr_implicit_cast_allowed(dst: Ty, src: Ty) -> bool {
+    let Some(dst_sig) = is_maybe_uninit_fn_ptr_ty(dst) else {
+        return false;
+    };
+    let Some(src_sig) = callable_sig(src) else {
+        return false;
+    };
+    let dst_sig = dst_sig.value;
+    let src_sig = src_sig.value;
+    dst_sig.c_variadic == src_sig.c_variadic
+        && dst_sig.safety == src_sig.safety
+        && dst_sig.abi == src_sig.abi
+        && dst_sig.inputs_and_output.len() == src_sig.inputs_and_output.len()
+        && dst_sig
+            .inputs_and_output
+            .iter()
+            .zip(src_sig.inputs_and_output.iter())
+            .all(|(et, at)| ty_matches_expected(*et, *at))
 }
 
 fn fn_pointer_void_pointer_cast_allowed(dst: Ty, src: Ty) -> bool {
