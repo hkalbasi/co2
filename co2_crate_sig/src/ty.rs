@@ -126,10 +126,11 @@ impl CompressedTypeSpecifier {
                 TypeSpecifier::Short => short += 1,
                 TypeSpecifier::Long => long += 1,
                 TypeSpecifier::Signed | TypeSpecifier::Unsigned => {
-                    if base.is_some() {
+                    let new_signed = matches!(spec, TypeSpecifier::Signed);
+                    if signed.is_some_and(|value| value != new_signed) {
                         return Err(spanned_error(span, "duplicate sign specifier found"));
                     }
-                    signed = Some(matches!(spec, TypeSpecifier::Signed));
+                    signed = Some(new_signed);
                 }
                 TypeSpecifier::Alignas => {}
                 TypeSpecifier::Bool

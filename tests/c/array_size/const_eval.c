@@ -97,7 +97,7 @@ int the_ar[] = {
     [sizeof(ar26)] = 27,
     [12 * 3 + 6 / 2] = 28,
     [(12 + 3) * 2] = 29,
-    [(int)(unsigned char)300] = 30,
+    [(int)(char unsigned)300] = 30,
     [sizeof(ar3) / sizeof(int) + 1] = 31,
     [100 - Var5] = 32,
 };
