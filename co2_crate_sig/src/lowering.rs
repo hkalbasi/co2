@@ -1594,11 +1594,15 @@ fn lower_translation_unit_items(
                             // `target` instead of an external declaration.
                             // The alias is a co2-only attribute (`Co2Attr::Alias`),
                             // kept out of `rustc_public_generative::GeneratedAttr`.
-                            if let Some(Co2Attr::Alias(target_name)) =
-                                attrs.iter().find(|a| matches!(a, Co2Attr::Alias(_)))
+                            let alias_target = attrs.iter().find_map(|a| match a {
+                                Co2Attr::Alias(name) => Some(name.clone()),
+                                _ => None,
+                            });
+                            if let Some(target_name) = alias_target
+                                && !sig.c_variadic
                             {
                                 let target_def_id =
-                                    resolve_in_module(ctx, module_path, target_name).0;
+                                    resolve_in_module(ctx, module_path, &target_name).0;
                                 // The declaration was resolved under the foreign
                                 // mod; allocate a fresh crate-root definition so
                                 // the forwarder is codegen'd as a real (weak)

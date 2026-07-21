@@ -215,7 +215,13 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 resolver,
             } => {
                 let span = ctx.span_in_file(self.file_id, 0, 0);
-                let hir = co2_hir::build_forwarding_fn_body(def, target, &param_names, span);
+                let hir = co2_hir::build_forwarding_fn_body(
+                    def,
+                    target,
+                    &param_names,
+                    span,
+                    &self.wellknown_defs,
+                );
                 let mir_start = Instant::now();
                 let mir_result = co2_mir::build_mir_for_body(
                     &hir,

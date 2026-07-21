@@ -1958,7 +1958,11 @@ impl LocalResolverBase {
                 return CTy::Ty(hir_ty);
             }
             CompressedTypeSpecifier::TypeofExpr(expr) => {
-                return CTy::Ty(self.type_of_expr_for_sizeof(&expr));
+                let hir_ty = self.type_of_expr_for_sizeof(&expr);
+                if let HirTyKind::FnPtr(sig) = &hir_ty.kind {
+                    return CTy::Function((**sig).clone());
+                }
+                return CTy::Ty(hir_ty);
             }
             CompressedTypeSpecifier::Auto => {
                 CrateSigCtx::<'_>::terminate_with_error(

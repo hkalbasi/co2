@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use co2_ast::{CompoundStatement, Spanned};
-use co2_crate_sig::LocalResolver;
+use co2_crate_sig::{LocalResolver, WellknownDefs};
 use la_arena::{Arena, Idx};
 use rustc_public_generative::rustc_public::ty::TyConst;
 use rustc_public_generative::rustc_public::{
@@ -220,11 +220,13 @@ pub fn build_forwarding_fn_body(
     target: FnDef,
     param_names: &[(usize, String, RustSpan)],
     span: RustSpan,
+    wellknown_defs: &WellknownDefs,
 ) -> HirBody {
     let sig = def.fn_sig().skip_binder();
     let ret_ty = sig.output();
 
     let mut locals = Arena::new();
+    let mut c_variadic_local = None;
 
     locals.alloc(HirLocal {
         name: "_ret".to_owned(),
@@ -232,6 +234,21 @@ pub fn build_forwarding_fn_body(
         span,
         read_only: false,
     });
+
+    if sig.c_variadic {
+        let id = locals.alloc(HirLocal {
+            name: "__co2_c_vararg".to_owned(),
+            ty: Ty::from_rigid_kind(RigidTy::Adt(
+                wellknown_defs.valist,
+                GenericArgs(vec![GenericArgKind::Lifetime(Region {
+                    kind: RegionKind::ReErased,
+                })]),
+            )),
+            span,
+            read_only: false,
+        });
+        c_variadic_local = Some(id);
+    }
 
     let mut params = Vec::new();
     let mut arg_exprs = Vec::new();
@@ -270,7 +287,7 @@ pub fn build_forwarding_fn_body(
         locals,
         labels: Arena::new(),
         params,
-        c_variadic_local: None,
+        c_variadic_local,
         stmts: vec![HirStmt::Return(Some(call), span)],
         span,
     }
