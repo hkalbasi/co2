@@ -446,9 +446,7 @@ pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
         || pointer_implicit_cast_allowed(dst, src)
         || (dst_is_mu_fn_ptr
             && match src.kind() {
-                TyKind::RigidTy(
-                    RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..),
-                ) => true,
+                TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..)) => true,
                 TyKind::RigidTy(RigidTy::FnDef(..) | RigidTy::FnPtr(_)) => {
                     fn_ptr_implicit_cast_allowed(dst, src)
                 }

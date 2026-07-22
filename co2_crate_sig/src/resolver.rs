@@ -3,8 +3,7 @@ use std::fmt;
 
 use co2_ast::{
     Declaration, DeclarationSpecifier, Declarator, RustPathSegment, SpecifierQualifier,
-    StatelessResolver, TranslationUnit, TypeQueryResult, TypeSpecifier,
-    co2_test_symbol_name,
+    StatelessResolver, TranslationUnit, TypeQueryResult, TypeSpecifier, co2_test_symbol_name,
 };
 
 #[derive(Debug, Clone)]

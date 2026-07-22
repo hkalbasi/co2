@@ -1,6 +1,9 @@
 //@ mode: co2
 //@ compile-fail
 
+#![invalid]
+ //^^^^^^^ error: unknown attribute `invalid`
+
 #[derive(Copy)]
 //^^^^^^ error: `derive` is not applicable to modules
 mod foo {
@@ -24,6 +27,9 @@ fn foo3() {}
 #[derive(Unknown)]
        //^^^^^^^ error: unknown derive macro `Unknown`
 pub struct Foo {}
+
+#![no_main]
+ //^^^^^^^ error: inner attribute should appear at top of the file
 
 #[repr(Unknown)]
      //^^^^^^^ error: unrecognized representation hint `Unknown`

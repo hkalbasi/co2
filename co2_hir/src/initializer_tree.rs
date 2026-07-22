@@ -449,13 +449,24 @@ impl HirCtx<'_> {
                 // `char arr[] = "string"` — a single string literal inside
                 // an initializer list still initializes the whole array.
                 if is_array_ty(expected_ty)
-                    && let [(
-                        InitializerItem {
-                            designators: None,
-                            initializer: (Initializer::Expr(expr @ (Expression::Constant(co2_ast::Constant::String(_)), _)), _),
-                        },
-                        _,
-                    )] = items.as_slice()
+                    && let [
+                        (
+                            InitializerItem {
+                                designators: None,
+                                initializer:
+                                    (
+                                        Initializer::Expr(
+                                            expr @ (
+                                                Expression::Constant(co2_ast::Constant::String(_)),
+                                                _,
+                                            ),
+                                        ),
+                                        _,
+                                    ),
+                            },
+                            _,
+                        ),
+                    ] = items.as_slice()
                 {
                     return self.try_lower_to_initializer_tree(
                         expected_ty,

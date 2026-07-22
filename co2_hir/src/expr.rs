@@ -3513,9 +3513,7 @@ pub(crate) fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Option<HirE
     if ty_matches_expected(expected_ty, expr.ty) {
         return Some(expr);
     }
-    if is_array_ty(expr.ty)
-        && matches!(expected_ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(..)))
-    {
+    if is_array_ty(expr.ty) && matches!(expected_ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(..))) {
         let elem = array_elem_ty(expr.ty).expect("Expr is not array");
         let span = expr.span;
         let mutability = if matches!(

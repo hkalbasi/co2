@@ -1,0 +1,8 @@
+//@ mode: co2
+//@ run-status: 5
+
+#![no_main]
+
+int main() {
+    return 2 + 3;
+}

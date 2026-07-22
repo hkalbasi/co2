@@ -212,6 +212,23 @@ where
         .try_map(|(tokens, span), _| parse_rust_attr(tokens, span).map(|attr| (attr, span)))
 }
 
+fn rust_inner_attr<'src, I>()
+-> impl Parser<'src, I, Spanned<RustAttribute>, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>
+        + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
+{
+    just(Token::Hash)
+        .ignore_then(just(Token::Bang))
+        .ignore_then(attr_content())
+        .try_map(|(tokens, span), _| {
+            parse_rust_attr(tokens, span).map(|mut attr| {
+                attr.style = RustAttributeStyle::Inner;
+                (attr, span)
+            })
+        })
+}
+
 fn doc_attr<'src, I>()
 -> impl Parser<'src, I, Spanned<RustAttribute>, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -250,7 +267,9 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>
         + SliceInput<'src, Slice = &'src [Spanned<Token>]>,
 {
-    choice((rust_attr(), doc_attr())).repeated().collect()
+    choice((rust_attr(), rust_inner_attr(), doc_attr()))
+        .repeated()
+        .collect()
 }
 
 fn rust_path_span<R: TypeResolver>(path: &RustPath<R>, fallback: Span) -> Span {
@@ -3305,7 +3324,6 @@ where
         let mut current_resolver = resolver.clone();
         let mut items = Vec::new();
         let mut tu_attrs = Vec::new();
-
         loop {
             let checkpoint = inp.save();
             if inp.next().is_none() {

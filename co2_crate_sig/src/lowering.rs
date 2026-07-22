@@ -291,11 +291,55 @@ fn collect_attr_errors_from_tu(
     errors
 }
 
+fn is_known_tu_word_attr(name: &str) -> bool {
+    matches!(name, "no_main")
+}
+
+fn first_item_start(tu: &co2_ast::TranslationUnit<co2_ast::StatelessResolver>) -> Option<usize> {
+    tu.rust_use_items
+        .iter()
+        .map(|(_, s)| s.data().start)
+        .chain(tu.rust_mod_items.iter().map(|(_, s)| s.data().start))
+        .chain(tu.items.iter().map(|(_, s)| s.data().start))
+        .min()
+}
+
+fn validate_attrs_for_tu(
+    tu: &co2_ast::TranslationUnit<co2_ast::StatelessResolver>,
+) -> Vec<co2_ast::Rich<'static, String, co2_ast::Span>> {
+    let mut errors = Vec::new();
+    let first_item = first_item_start(tu);
+    for (attr, attr_span) in &tu.attrs {
+        let path: Vec<&str> = attr.path.iter().map(|seg| seg.0.as_str()).collect();
+        match path.as_slice() {
+            ["doc"] => {}
+            [name] if attr.args.is_empty() && !is_known_tu_word_attr(name) => {
+                errors.push(co2_ast::Rich::custom(
+                    attr.path[0].1,
+                    format!("unknown attribute `{name}`"),
+                ));
+            }
+            _ => {}
+        }
+        // TODO: This is horrible. But I don't have time to put on diagnostics so take it.
+        if let Some(first) = first_item
+            && attr_span.data().start >= first
+        {
+            errors.push(co2_ast::Rich::custom(
+                attr.path[0].1,
+                "inner attribute should appear at top of the file",
+            ));
+        }
+    }
+    errors
+}
+
 fn validate_all_attrs(
     tu: &co2_ast::TranslationUnit<co2_ast::StatelessResolver>,
     modules: &[LoadedModule],
 ) {
-    let mut errors = collect_attr_errors_from_tu(tu);
+    let mut errors = validate_attrs_for_tu(tu);
+    errors.extend(collect_attr_errors_from_tu(tu));
     for module in modules {
         errors.extend(validate_module_attrs_recursive(module));
     }
@@ -561,14 +605,10 @@ fn deduplicate_tu_items(
                     StaticUninit | ExternVarDecl | ExternVarDeclOrFuncDecl | StaticUninitOrFuncDecl,
                 ) => Some(StaticInitialized),
                 (StaticUninit, StaticUninit | ExternVarDecl) => Some(StaticUninit),
-                (
-                    ExternVarDeclOrFuncDecl,
-                    ExternVarDeclOrFuncDecl,
-                ) => Some(ExternVarDeclOrFuncDecl),
-                (
-                    StaticUninitOrFuncDecl,
-                    StaticUninitOrFuncDecl | ExternVarDeclOrFuncDecl,
-                ) => Some(StaticUninitOrFuncDecl),
+                (ExternVarDeclOrFuncDecl, ExternVarDeclOrFuncDecl) => Some(ExternVarDeclOrFuncDecl),
+                (StaticUninitOrFuncDecl, StaticUninitOrFuncDecl | ExternVarDeclOrFuncDecl) => {
+                    Some(StaticUninitOrFuncDecl)
+                }
                 _ => None,
             }
         }
@@ -1732,6 +1772,11 @@ pub fn lower_crate_sig(
         cb(parse_start.elapsed());
     }
 
+    let no_main = no_main
+        || tu
+            .attrs
+            .iter()
+            .any(|attr| attr.0.is_word("no_main") && attr.0.is_inner());
     let tu = deduplicate_tu_items(tu);
     let mut loaded_paths = HashSet::new();
     let loaded_modules = load_modules(
