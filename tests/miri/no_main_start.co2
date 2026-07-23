@@ -1,0 +1,14 @@
+//@ mode: co2
+//@ run-miri
+//@ run-status: 5
+
+#![no_main]
+
+int main() {
+    return 5;
+}
+
+#[no_mangle]
+fn miri_start(argc: isize, argv: *const *const u8) -> isize {
+    return main();
+}

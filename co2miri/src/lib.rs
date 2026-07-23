@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use co2_driver_lib::{CompileMode, compile_co2_file, compile_co2_file_for_miri};
 use co2rustc::{DetectResult, detect_co2};
-use miri::{MIRI_DEFAULT_ARGS, MiriConfig, MiriEntryFnType, eval_entry};
+use miri::{MIRI_DEFAULT_ARGS, MiriConfig, entry_fn, eval_entry};
 use rustc_driver::Compilation;
 use rustc_middle::ty::TyCtxt;
 
@@ -146,12 +146,7 @@ fn interpret_with_miri(tcx: TyCtxt<'_>, mut config: MiriConfig) -> Compilation {
             .fatal("miri cannot run: the program failed to compile");
     }
 
-    let (entry_def_id, entry_type) = if let Some((id, ty)) = tcx.entry_fn(()) {
-        (id, MiriEntryFnType::Rustc(ty))
-    } else {
-        tcx.dcx()
-            .fatal("miri can only run programs that have a main function");
-    };
+    let (entry_def_id, entry_type) = entry_fn(tcx);
 
     // Pass the filestem as argv[0] to the interpreted program.
     config
