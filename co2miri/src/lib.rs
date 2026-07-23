@@ -8,7 +8,7 @@ extern crate rustc_session;
 use std::env;
 use std::path::PathBuf;
 
-use co2_driver_lib::{CompileMode, compile_co2_file, compile_co2_file_for_miri};
+use co2_driver_lib::{CompileMode, compile_co2_file, compile_co2_file_for_miri, force_extern_crates};
 use co2rustc::{DetectResult, detect_co2};
 use miri::{MIRI_DEFAULT_ARGS, MiriConfig, entry_fn, eval_entry};
 use rustc_driver::Compilation;
@@ -114,7 +114,8 @@ fn interpreter_mode(args: Vec<String>) -> std::process::ExitCode {
     };
 
     // Splice MIRI_DEFAULT_ARGS and run co2 pipeline + miri interpretation.
-    let miri_args = splice_miri_default_args(rustc_args);
+    let mut miri_args = splice_miri_default_args(rustc_args);
+    force_extern_crates(&mut miri_args);
 
     if let Err(payload) = std::panic::catch_unwind(|| {
         compile_co2_file_for_miri(
@@ -144,6 +145,10 @@ fn interpret_with_miri(tcx: TyCtxt<'_>, mut config: MiriConfig) -> Compilation {
     if tcx.sess.dcx().has_errors_or_delayed_bugs().is_some() {
         tcx.dcx()
             .fatal("miri cannot run: the program failed to compile");
+    }
+
+    if co2_ast::diagnostics_were_emitted() {
+        std::process::exit(5);
     }
 
     let (entry_def_id, entry_type) = entry_fn(tcx);
