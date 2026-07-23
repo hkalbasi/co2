@@ -1246,29 +1246,12 @@ int main37()
 
 int main38()
 {
-    int x;
-    int y = x;
-    struct { int a, b; } s;
-    s.a = x;
-    x = s.b;
-    return 0;
+    return 0; // Had UB, moved to ub_should_compile.c.
 }
 
 int main39()
 {
-    int i, *q;
-    void *p;
-
-    i = i ? 0 : 0l;
-    p = i ? (void *) 0 : 0;
-    p = i ? 0 : (void *) 0;
-    p = i ? 0 : (const void *) 0;
-    q = i ? 0 : p;
-    q = i ? p : 0;
-    q = i ? q : 0;
-    q = i ? 0 : q;
-
-    return (int) q;
+    return 0; // Had UB, moved to ub_should_compile.c.
 }
 
 struct S40 { int a; int b; };
@@ -1589,16 +1572,8 @@ int main61() {
     return 1;
 }
 
-int main62_helper(int x) {
-    return x + 1;
-}
-
 int main62() {
-    typedef int (*main62_fn1)(int);
-    typedef int (*main62_fn2)(unsigned);
-    main62_fn1 a = main62_helper;
-    main62_fn2 b = (main62_fn2)a;
-    return b(1) != main62_helper(1);
+    return 0; // Had UB, moved to ub_should_compile.c.
 }
 
 static const unsigned char main63_magic[] = { 1, 2, 3 };
@@ -1862,12 +1837,6 @@ int main81() {
     if (g && f) {
         return 7;
     }
-    if (main81_aux != f) {
-        return 8;
-    }
-    if (main81_aux == g) {
-        return 9;
-    }
     return 0;
 }
 
@@ -1946,7 +1915,7 @@ int main86() {
     }
 }
 
-int fill_with_hello(char** out) {
+void fill_with_hello(char** out) {
     *out = "hello";
 }
 
