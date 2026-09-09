@@ -1,4 +1,5 @@
 //@ mode: c
+//@ requires-header: stdckdint.h stdbit.h
 //@ run-status: 0
 //@ run-stdout: FILE: libc.out
 //@ compile-warning: this arithmetic operation will overflow

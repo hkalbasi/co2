@@ -1,5 +1,6 @@
 use rustc_data_structures::fx::FxHashMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -102,6 +103,12 @@ fn run_test(
 ) -> Result<TestOutcome> {
     if let Some(reason) = directive_text(test, "skip") {
         return Ok(TestOutcome::Skip(reason));
+    }
+
+    if let Some(missing) = missing_system_header(test) {
+        return Ok(TestOutcome::Skip(format!(
+            "missing system header <{missing}>"
+        )));
     }
 
     if test.kind == TestKind::NuDir {
@@ -868,4 +875,48 @@ fn output_expectation(test: &TestCase, key: &str) -> Result<Option<String>> {
     }
 
     Ok(Some(unescape_text(&expected)))
+}
+
+fn missing_system_header(test: &TestCase) -> Option<String> {
+    let raws = test.directives.get("requires-header")?;
+    for raw in raws {
+        for name in raw
+            .split([',', ' ', '\t'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let header = name.trim_matches(|c| c == '<' || c == '>' || c == '"' || c == '\'');
+            if !system_header_available(header) {
+                return Some(header.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn system_header_available(header: &str) -> bool {
+    let mut probed = false;
+    for cc in ["cc", "gcc", "clang"] {
+        let mut child = match Command::new(cc)
+            .args(["-E", "-x", "c", "-", "-o", "/dev/null"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => continue,
+        };
+        probed = true;
+        let wrote = child
+            .stdin
+            .take()
+            .map(|mut stdin| write!(stdin, "#include <{header}>\n").is_ok())
+            .unwrap_or(false);
+        if wrote && child.wait().is_ok_and(|status| status.success()) {
+            return true;
+        }
+    }
+    // No C compiler to probe with: don't skip, let the real compile decide.
+    !probed
 }
