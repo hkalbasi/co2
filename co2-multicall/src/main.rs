@@ -1,9 +1,13 @@
 #![feature(rustc_private)]
 
+extern crate rustc_driver;
+
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+rustc_driver::override_c_allocator_in_binary!();
 
 fn main() -> std::process::ExitCode {
     let mut args = std::env::args();

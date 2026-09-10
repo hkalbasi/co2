@@ -17,3 +17,6 @@ co2cc = { path = "../co2cc" }
 co2cargo = { path = "../co2cargo" }
 co2miri = { path = "../co2miri" }
 co2fmt = { path = "../co2fmt" }
+
+[package.metadata.rust-analyzer]
+rustc_private = true
