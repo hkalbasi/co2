@@ -385,9 +385,40 @@ pub struct DefinedCrateInfo {
     pub items: Vec<DefinedItemInfo>,
     pub attrs: Vec<GeneratedAttr>,
     pub no_main: bool,
+    /// Maps each item's local `DefId` to its index in `items`, so per-query
+    /// providers avoid linear scans (and a translation per element).
+    /// Built once in `from_hir_structure`; immutable afterwards.
+    item_index: FxHashMap<LocalDefId, u32>,
 }
 
 impl DefinedCrateInfo {
+    fn find_item_by_rustc(
+        &self,
+        tcx: TyCtxt<'_>,
+        key: RustcDefId,
+    ) -> Option<&DefinedItemInfo> {
+        if let Some(local) = key.as_local()
+            && let Some(&idx) = self.item_index.get(&local)
+        {
+            return self.items.get(idx as usize);
+        }
+        let key = rustc_def_to_my_def(tcx, key);
+        self.items.iter().find(|item| item.def_id() == key)
+    }
+
+    /// Look up an item by stable `DefId` (one translation + index probe).
+    fn find_item_by_stable(
+        &self,
+        tcx: TyCtxt<'_>,
+        key: DefId,
+    ) -> Option<&DefinedItemInfo> {
+        if let Some(local) = my_def_id_to_rustc_def_id(tcx, key).as_local()
+            && let Some(&idx) = self.item_index.get(&local)
+        {
+            return self.items.get(idx as usize);
+        }
+        self.items.iter().find(|item| item.def_id() == key)
+    }
     fn owners(
         &self,
         tcx: TyCtxt<'_>,
@@ -445,12 +476,7 @@ impl DefinedCrateInfo {
             }
             _ => None,
         }) {
-            let name = &self
-                .items
-                .iter()
-                .find(|item| item.def_id() == my_def_id)
-                .unwrap()
-                .name;
+            let name = &self.find_item_by_stable(tcx, my_def_id).unwrap().name;
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
 
@@ -491,12 +517,7 @@ impl DefinedCrateInfo {
                 _ => None,
             })
         {
-            let name = &self
-                .items
-                .iter()
-                .find(|item| item.def_id() == my_def_id)
-                .unwrap()
-                .name;
+            let name = &self.find_item_by_stable(tcx, my_def_id).unwrap().name;
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
 
             let mut item_allocator = HirItemAllocator::new(def_id);
@@ -517,12 +538,7 @@ impl DefinedCrateInfo {
                             span: internal(tcx, field.span),
                             vis_span,
                             ident: Ident::from_str(
-                                &self
-                                    .items
-                                    .iter()
-                                    .find(|item| item.def_id() == field.id)
-                                    .unwrap()
-                                    .name,
+                                &self.find_item_by_stable(tcx, field.id).unwrap().name,
                             ),
                             hir_id,
                             def_id: field_def_id,
@@ -1490,11 +1506,24 @@ impl DefinedCrateInfo {
             &mut the_foreign_def,
         );
 
+        // Index items by local DefId once, up front. Every per-query provider
+        // below used to scan `items` (translating each element) on every call.
+        // `or_insert` keeps the first entry on duplicates, matching the old
+        // `.iter().find()` first-match behavior.
+        let mut item_index = FxHashMap::default();
+        item_index.reserve(items.len());
+        for (idx, item) in items.iter().enumerate() {
+            if let Some(local) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() {
+                item_index.entry(local).or_insert(idx as u32);
+            }
+        }
+
         (
             Self {
                 items,
                 attrs: hir_structure.root.attrs.clone(),
                 no_main: hir_structure.no_main,
+                item_index,
             },
             the_foreign_def.expect("missing foreign mod"),
         )
@@ -1678,10 +1707,9 @@ impl DefinedCrateState {
         match self {
             DefinedCrateState::Stage0 => false,
             DefinedCrateState::Stage1(defined_crate_info)
-            | DefinedCrateState::Stage2(defined_crate_info, _) => defined_crate_info
-                .items
-                .iter()
-                .any(|item| my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() == Some(*key)),
+            | DefinedCrateState::Stage2(defined_crate_info, _) => {
+                defined_crate_info.find_item_by_rustc(tcx, key.to_def_id()).is_some()
+            }
         }
     }
 
@@ -1719,11 +1747,7 @@ impl DefinedCrateState {
         let DefinedCrateState::Stage2(items, _) = self else {
             return None;
         };
-        if !self.contains_key(tcx, &key) {
-            return None;
-        }
-        let key = rustc_def_to_my_def(tcx, key.to_def_id());
-        let kind = items.items.iter().find(|item| item.def_id() == key)?.kind;
+        let kind = items.find_item_by_rustc(tcx, key.to_def_id())?.kind;
         Some(match kind {
             DefinedItemKind::ForeignMod(_) => DefKind::ForeignMod,
             DefinedItemKind::Module(_) => DefKind::Mod,
@@ -1751,26 +1775,14 @@ impl DefinedCrateState {
         let DefinedCrateState::Stage2(items, _) = self else {
             return None;
         };
-        if !self.contains_key(tcx, &key) {
-            return None;
-        }
-        let key = rustc_def_to_my_def(tcx, key.to_def_id());
-        Some(items.items.iter().find(|item| item.def_id() == key)?.span)
+        Some(items.find_item_by_rustc(tcx, key.to_def_id())?.span)
     }
 
     fn def_ident_span(&self, tcx: TyCtxt<'_>, key: LocalDefId) -> Option<RustcSpan> {
         let DefinedCrateState::Stage2(items, _) = self else {
             return None;
         };
-        if !self.contains_key(tcx, &key) {
-            return None;
-        }
-        let key = rustc_def_to_my_def(tcx, key.to_def_id());
-        items
-            .items
-            .iter()
-            .find(|item| item.def_id() == key)?
-            .ident_span
+        items.find_item_by_rustc(tcx, key.to_def_id())?.ident_span
     }
 
     fn advance_to_stage1(&mut self, defined_crate: DefinedCrateInfo) {
@@ -4531,8 +4543,7 @@ fn generated_hir_attr_map(tcx: TyCtxt<'_>, key: OwnerId) -> &hir::AttributeMap<'
             }
             return hir::AttributeMap::EMPTY;
         }
-        let key = rustc_def_to_my_def(tcx, key);
-        let Some(info) = items.items.iter().find(|item| item.def_id() == key) else {
+        let Some(info) = items.find_item_by_rustc(tcx, key) else {
             return hir::AttributeMap::EMPTY;
         };
         let attrs = generated_item_attrs(info);
@@ -4702,17 +4713,16 @@ fn generated_visibility(tcx: TyCtxt<'_>, key: LocalDefId) -> ty::Visibility<ModI
         DefinedCrateState::Stage1(info) | DefinedCrateState::Stage2(info, _) => info,
         _ => return ty::Visibility::Public,
     };
-    for item in &defined_crate.items {
-        if my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() == Some(key) {
-            return match item.visibility {
-                Visibility::Public => ty::Visibility::Public,
-                _ => ty::Visibility::Restricted(ModId::new_unchecked(RustcDefId::local(
-                    rustc_span::def_id::DefIndex::from_usize(0),
-                ))),
-            };
-        }
+    let item = match defined_crate.find_item_by_rustc(tcx, key.to_def_id()) {
+        Some(item) => item,
+        None => return ty::Visibility::Public,
+    };
+    match item.visibility {
+        Visibility::Public => ty::Visibility::Public,
+        _ => ty::Visibility::Restricted(ModId::new_unchecked(RustcDefId::local(
+            rustc_span::def_id::DefIndex::from_usize(0),
+        ))),
     }
-    ty::Visibility::Public
 }
 
 fn generated_reachable_set(
