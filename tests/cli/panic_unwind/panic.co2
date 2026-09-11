@@ -1,0 +1,24 @@
+use std::panic::catch_unwind;
+use std::vec::Vec;
+
+int write(int fd, char *buf, int len);
+
+fn do_panic() {
+    write(1, "panicking\n", 10);
+    Vec::<i32> v = Vec::<i32>::new();
+    v.pop().unwrap();
+}
+
+#ifdef CO2CC
+int main() {
+#else
+fn main() {
+#endif
+    // co2 has no closures, so catch_unwind takes a named function.
+    // `::<_, ()>` lets inference fill in the function type.
+    catch_unwind::<_, ()>(do_panic);
+    write(1, "survived\n", 9);
+#ifdef CO2CC
+    return 0;
+#endif
+}

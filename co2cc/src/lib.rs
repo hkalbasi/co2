@@ -698,6 +698,11 @@ fn build_rustc_object_args(
         rustc_args.push("relocation-model=pic".to_owned());
     }
 
+    // co2cc binaries always link panic=abort (see build_link_rustc_args),
+    // so compile objects that way too instead of the unwinding default.
+    rustc_args.push("-C".to_owned());
+    rustc_args.push("panic=abort".to_owned());
+
     rustc_args.extend(shared_rust_flags());
 
     rustc_args
@@ -757,6 +762,10 @@ fn build_rustc_asm_args(
         rustc_args.push("-C".to_owned());
         rustc_args.push(format!("llvm-args=-x86-asm-syntax={flavor}"));
     }
+
+    // Keep asm/LLVM emission consistent with panic=abort objects.
+    rustc_args.push("-C".to_owned());
+    rustc_args.push("panic=abort".to_owned());
 
     rustc_args.extend(shared_rust_flags());
 
