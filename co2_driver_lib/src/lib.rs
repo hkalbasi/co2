@@ -271,7 +271,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
 
                 let hir_start = Instant::now();
                 let hir = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    co2_hir::lower_function_body(body.clone(), def, &param_names, &mut hir_ctx)
+                    co2_hir::lower_function_body(body, def, &param_names, &mut hir_ctx)
                 })) {
                     Ok(hir) => {
                         time_report::accumulate_hir_lowering(hir_start.elapsed());

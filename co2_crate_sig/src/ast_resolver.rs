@@ -655,7 +655,7 @@ impl LocalResolver {
             name,
             span: subscription.1,
             resolver: self.clone(),
-            expr: expr.clone(),
+            expr,
         };
         base.array_len_const_exprs
             .insert(id, registered.expr.clone());

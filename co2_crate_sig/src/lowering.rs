@@ -1137,7 +1137,8 @@ fn lower_translation_unit_items(
 ) -> Vec<HirModuleItem> {
     _ = foreign_mod;
     let mut hir_items = Vec::new();
-    for (item, parser_span) in tu.items.clone() {
+    for (item, parser_span) in &tu.items {
+        let parser_span = *parser_span;
         let span = ctx.co2_span_to_rustc(parser_span);
         let mut resolver =
             LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
@@ -1146,7 +1147,7 @@ fn lower_translation_unit_items(
             attrs: _,
             declaration_specifiers,
             declarators,
-        } = &item
+        } = item
             && let [
                 (DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Typedef, _)), _),
                 (
@@ -2197,7 +2198,7 @@ pub fn lower_crate_sig(
         );
     }
 
-    let structs = ctx.resolver.borrow_mut().emit_structs().collect::<Vec<_>>();
+    let structs = ctx.resolver.borrow_mut().emit_structs();
     for StructData {
         def_id: def,
         name,
@@ -2268,7 +2269,7 @@ pub fn lower_crate_sig(
         items: foreign_items,
     });
 
-    let enums = ctx.resolver.borrow_mut().emit_enums().collect::<Vec<_>>();
+    let enums = ctx.resolver.borrow_mut().emit_enums();
     for PendingEnum {
         name,
         def_id,
