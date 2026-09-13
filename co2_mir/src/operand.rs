@@ -2149,18 +2149,27 @@ impl Builder<'_, '_> {
     }
 
     fn lower_logical_not_expr(&mut self, inner: &HirExpr, span: RustSpan, ty: Ty) -> MirOperand {
-        let result_local = self.new_temp(ty, Mutability::Mut, span);
-        self.lower_condition(
-            inner,
-            span,
-            |b| {
-                b.assign_const(result_local, 0, ty, span);
+        debug_assert!(matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::Bool)));
+        let inner_op = self.lower_expr_to_operand(inner);
+        let bool_ty = Ty::bool_ty();
+        let bool_tmp = self.new_temp(bool_ty, Mutability::Not, span);
+        self.stmts.push(MirStatement {
+            kind: MirStatementKind::Assign(
+                place(bool_tmp),
+                Rvalue::UnaryOp(
+                    rustc_public_generative::rustc_public::mir::UnOp::Not,
+                    inner_op,
+                ),
+            ),
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
             },
-            |b| {
-                b.assign_const(result_local, 1, ty, span);
-            },
-        );
-        MirOperand::Copy(place(result_local))
+        });
+        if bool_ty == ty {
+            return MirOperand::Copy(place(bool_tmp));
+        }
+        self.lower_cast(MirOperand::Copy(place(bool_tmp)), bool_ty, ty, span)
     }
 
     fn assign_const(&mut self, local: usize, value: i128, ty: Ty, span: RustSpan) {
