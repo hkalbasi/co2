@@ -2758,6 +2758,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
     fn parse_for(&mut self) -> PR<Statement<R>> {
         self.expect(&Token::For, "for")?;
         self.expect(&Token::LParen, "(")?;
+        let outer = self.resolver.clone();
         let (init, loop_resolver) = {
             let cp = self.checkpoint();
             match self.parse_declaration() {
@@ -2789,7 +2790,6 @@ impl<'a, R: TypeResolver> P<'a, R> {
             Some(crate::exp::parse_expression(self)?)
         };
         self.expect(&Token::RParen, ")")?;
-        let outer = self.resolver.clone();
         self.resolver = loop_resolver;
         let body = self.parse_statement();
         self.resolver = outer;
