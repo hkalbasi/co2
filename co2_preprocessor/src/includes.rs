@@ -404,6 +404,16 @@ impl Preprocessor {
                         .insert(resolved_path.clone(), guard);
                 }
 
+                // co2 does not support GCC's `__builtin_va_arg_pack`
+                // varargs forwarding (used by glibc's `__extern_always_inline`
+                // wrappers in bits/error.h, bits/stdio2.h, ...). Undefine it so
+                // those headers fall back to plain declarations, same as clang
+                // which also lacks it.
+                if include_path == "sys/cdefs.h" {
+                    self.macros.undefine("__va_arg_pack");
+                    self.macros.undefine("__va_arg_pack_len");
+                }
+
                 // For math.h, redefine isinf and isnan after preprocessing to override
                 // any definitions from the system header that use unsupported builtins
                 // like __builtin_isinf_sign and __builtin_isnan
