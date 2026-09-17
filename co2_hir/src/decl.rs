@@ -1255,13 +1255,9 @@ impl HirCtx<'_> {
             } => {
                 let ty =
                     self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
-                Ok(i128::from(self.offsetof_ty(
-                    ty,
-                    designator,
-                    *span,
-                    locals,
-                    local_map,
-                )?))
+                Ok(i128::from(
+                    self.offsetof_ty(ty, designator, *span, locals, local_map)?,
+                ))
             }
             Expression::Sizeof(expr) => Ok(i128::from(self.sizeof_expr(expr, locals, local_map)?)),
             Expression::AlignofType(type_name) => {

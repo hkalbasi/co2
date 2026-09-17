@@ -152,8 +152,9 @@ impl<'a, R: TypeResolver> P<'a, R> {
 
     /// Consume any identifier.
     pub fn any_ident(&mut self) -> PR<(String, Span)> {
-        self.take_ident(None)
-            .ok_or_else(|| self.fail_here(format!("expected identifier, found {}", self.describe())))
+        self.take_ident(None).ok_or_else(|| {
+            self.fail_here(format!("expected identifier, found {}", self.describe()))
+        })
     }
 
     // Capture tokens inside a balanced `open ... close` pair, assuming the
@@ -705,9 +706,7 @@ fn parse_opt_lifetime<'a, R: TypeResolver>(p: &mut P<'a, R>) -> Option<(String, 
     }
 }
 
-fn parse_array_len<'a, R: TypeResolver>(
-    p: &mut P<'a, R>,
-) -> Option<(LazyRustConstExpr, Span)> {
+fn parse_array_len<'a, R: TypeResolver>(p: &mut P<'a, R>) -> Option<(LazyRustConstExpr, Span)> {
     let semi_span = p.eat(&Token::Semicolon)?;
     let tokens = p.capture_until(&Token::RBracket);
     // Span covers from `;` (old `map_with` on the `;...` match).
@@ -1030,9 +1029,9 @@ impl<'a, R: TypeResolver> P<'a, R> {
                         self.parse_typedef_name()
                     }
                     _ => Err(self.fail_here(format!(
-                "expected type specifier, found {}",
-                self.describe()
-            ))),
+                        "expected type specifier, found {}",
+                        self.describe()
+                    ))),
                 };
             }
         };
@@ -2091,7 +2090,9 @@ impl<'a, R: TypeResolver> P<'a, R> {
 
     // ── use / mod ──
 
-    fn parse_braced_use_tree(&mut self) -> PR<Vec<(Vec<Spanned<String>>, Option<Spanned<String>>)>> {
+    fn parse_braced_use_tree(
+        &mut self,
+    ) -> PR<Vec<(Vec<Spanned<String>>, Option<Spanned<String>>)>> {
         self.pos += 1; // `{`
         let mut out = Vec::new();
         if !self.at(&Token::RBrace) {

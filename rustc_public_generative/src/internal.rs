@@ -392,11 +392,7 @@ pub struct DefinedCrateInfo {
 }
 
 impl DefinedCrateInfo {
-    fn find_item_by_rustc(
-        &self,
-        tcx: TyCtxt<'_>,
-        key: RustcDefId,
-    ) -> Option<&DefinedItemInfo> {
+    fn find_item_by_rustc(&self, tcx: TyCtxt<'_>, key: RustcDefId) -> Option<&DefinedItemInfo> {
         if let Some(local) = key.as_local()
             && let Some(&idx) = self.item_index.get(&local)
         {
@@ -407,11 +403,7 @@ impl DefinedCrateInfo {
     }
 
     /// Look up an item by stable `DefId` (one translation + index probe).
-    fn find_item_by_stable(
-        &self,
-        tcx: TyCtxt<'_>,
-        key: DefId,
-    ) -> Option<&DefinedItemInfo> {
+    fn find_item_by_stable(&self, tcx: TyCtxt<'_>, key: DefId) -> Option<&DefinedItemInfo> {
         if let Some(local) = my_def_id_to_rustc_def_id(tcx, key).as_local()
             && let Some(&idx) = self.item_index.get(&local)
         {
@@ -1707,9 +1699,9 @@ impl DefinedCrateState {
         match self {
             DefinedCrateState::Stage0 => false,
             DefinedCrateState::Stage1(defined_crate_info)
-            | DefinedCrateState::Stage2(defined_crate_info, _) => {
-                defined_crate_info.find_item_by_rustc(tcx, key.to_def_id()).is_some()
-            }
+            | DefinedCrateState::Stage2(defined_crate_info, _) => defined_crate_info
+                .find_item_by_rustc(tcx, key.to_def_id())
+                .is_some(),
         }
     }
 
