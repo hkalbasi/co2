@@ -2079,8 +2079,38 @@ impl HirCtx<'_> {
                 })
             }
             Expression::Cast { type_name, expr } => {
-                let mut inner = self.lower_expr(*expr, locals, local_map)?;
-                self.array_to_pointer_decay_if_array(&mut inner);
+                // Old-C null-pointer trick `cast(&((T *)0)->path...)`: rewrite
+                // as `cast(offsetof(T, path))` with a warning.
+                let inner = if let Some(trick) = co2_ast::match_null_trick(&expr)
+                    && let Ok(base_ty) = self.lower_type_name_in_scope(
+                        trick.pointee.clone(),
+                        parser_span,
+                        locals,
+                        local_map,
+                    )
+                    && let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base_ty.kind()
+                {
+                    let (off, _) = self.offsetof_designator_offset(
+                        pointee,
+                        &trick.designator,
+                        parser_span,
+                        locals,
+                        local_map,
+                    )?;
+                    co2_ast::emit_warnings(vec![co2_ast::Rich::custom(
+                        parser_span,
+                        "dereferencing null is UB, use offsetof macro",
+                    )]);
+                    HirExpr {
+                        kind: HirExprKind::ConstInt(i128::from(off)),
+                        ty: Ty::usize_ty(),
+                        span,
+                    }
+                } else {
+                    let mut inner = self.lower_expr(*expr, locals, local_map)?;
+                    self.array_to_pointer_decay_if_array(&mut inner);
+                    inner
+                };
                 let target_ty =
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
                 if ty_matches_expected(target_ty, inner.ty) {
@@ -2258,51 +2288,13 @@ impl HirCtx<'_> {
             } => {
                 let ty =
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
-                if designator.is_empty() {
-                    self.terminate_with_error(parser_span, "offsetof: expected member designator");
-                }
-                let mut offset_bytes: u64 = 0;
-                let mut cur_ty = ty;
-                for m in designator {
-                    match m {
-                        co2_ast::OffsetofMember::Field(name) => {
-                            let (off, next) = self.offsetof_field_offset(
-                                cur_ty,
-                                &name.0,
-                                parser_span,
-                                name.1,
-                            )?;
-                            offset_bytes += off;
-                            cur_ty = next;
-                        }
-                        co2_ast::OffsetofMember::Index(idx_expr) => {
-                            let idx = self
-                                .eval_const_expr_in_scope(&idx_expr, locals, local_map)
-                                .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                            let idx_span = idx_expr.1;
-                            let idx = u64::try_from(idx).unwrap_or_else(|_| {
-                                self.terminate_with_error(
-                                    idx_span,
-                                    &format!("offsetof: negative array index {idx}"),
-                                )
-                            });
-                            let elem = array_elem_ty(cur_ty).unwrap_or_else(|| {
-                                self.terminate_with_error(
-                                    idx_span,
-                                    "offsetof: index applied to non-array type",
-                                )
-                            });
-                            let elem_size = elem.layout().unwrap_or_else(|e| {
-                                self.terminate_with_error(
-                                    parser_span,
-                                    &format!("offsetof: failed to compute layout: {e}"),
-                                )
-                            });
-                            offset_bytes += idx * elem_size.shape().size.bytes() as u64;
-                            cur_ty = elem;
-                        }
-                    }
-                }
+                let (offset_bytes, _) = self.offsetof_designator_offset(
+                    ty,
+                    &designator,
+                    parser_span,
+                    locals,
+                    local_map,
+                )?;
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(i128::from(offset_bytes)),
                     ty: Ty::usize_ty(),
@@ -2911,6 +2903,58 @@ impl HirCtx<'_> {
             }
         }
         None
+    }
+
+    fn offsetof_designator_offset(
+        &self,
+        ty: Ty,
+        designator: &[co2_ast::OffsetofMember<LocalResolver>],
+        parser_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<(u64, Ty), (co2_ast::Span, String)> {
+        if designator.is_empty() {
+            self.terminate_with_error(parser_span, "offsetof: expected member designator");
+        }
+        let mut offset_bytes: u64 = 0;
+        let mut cur_ty = ty;
+        for m in designator {
+            match m {
+                co2_ast::OffsetofMember::Field(name) => {
+                    let (off, next) =
+                        self.offsetof_field_offset(cur_ty, &name.0, parser_span, name.1)?;
+                    offset_bytes += off;
+                    cur_ty = next;
+                }
+                co2_ast::OffsetofMember::Index(idx_expr) => {
+                    let idx = self
+                        .eval_const_expr_in_scope(idx_expr, locals, local_map)
+                        .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                    let idx_span = idx_expr.1;
+                    let idx = u64::try_from(idx).unwrap_or_else(|_| {
+                        self.terminate_with_error(
+                            idx_span,
+                            &format!("offsetof: negative array index {idx}"),
+                        )
+                    });
+                    let elem = array_elem_ty(cur_ty).unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            idx_span,
+                            "offsetof: index applied to non-array type",
+                        )
+                    });
+                    let elem_size = elem.layout().unwrap_or_else(|e| {
+                        self.terminate_with_error(
+                            parser_span,
+                            &format!("offsetof: failed to compute layout: {e}"),
+                        )
+                    });
+                    offset_bytes += idx * elem_size.shape().size.bytes() as u64;
+                    cur_ty = elem;
+                }
+            }
+        }
+        Ok((offset_bytes, cur_ty))
     }
 
     fn offsetof_field_offset(

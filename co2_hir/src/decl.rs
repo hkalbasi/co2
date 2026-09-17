@@ -1214,6 +1214,30 @@ impl HirCtx<'_> {
                 }
             }
             Expression::Cast { type_name, expr } => {
+                // Old-C null-pointer trick, same rewrite as runtime lowering.
+                if let Some(trick) = co2_ast::match_null_trick(&expr)
+                    && let Ok(base_ty) = self.lower_type_name_in_scope(
+                        trick.pointee.clone(),
+                        *span,
+                        locals,
+                        local_map,
+                    )
+                    && let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base_ty.kind()
+                    && let Ok(off) =
+                        self.offsetof_ty(pointee, &trick.designator, *span, locals, local_map)
+                {
+                    co2_ast::emit_warnings(vec![co2_ast::Rich::custom(
+                        *span,
+                        "dereferencing null is UB, use offsetof macro",
+                    )]);
+                    let target_ty = self.lower_type_name_in_scope(
+                        *type_name.clone(),
+                        *span,
+                        locals,
+                        local_map,
+                    )?;
+                    return cast_const_int_to_ty(i128::from(off), target_ty);
+                }
                 let value = self.eval_const_expr_in_scope(expr, locals, local_map)?;
                 let target_ty =
                     self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;

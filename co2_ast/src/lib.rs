@@ -96,6 +96,55 @@ pub enum OffsetofMember<R: TypeResolver> {
     Index(Box<Spanned<Expression<R>>>),
 }
 
+/// The old-C null-pointer trick `&((T *)0)->path...`: the cast pointee type
+/// plus the member path (first segment always a field), cloned from the AST.
+pub struct NullTrick<R: TypeResolver> {
+    pub pointee: TypeName<R>,
+    pub designator: Vec<OffsetofMember<R>>,
+}
+
+/// Matches `&(null-pointer-cast)->field(.field | [index])*` — the pre-`offsetof`
+/// idiom for computing a member offset. Returns `None` for anything else
+/// (in particular a `->` past the first one is a real dereference, not an offset).
+pub fn match_null_trick<R: TypeResolver>(operand: &Spanned<Expression<R>>) -> Option<NullTrick<R>> {
+    let Expression::UnaryOp(UnaryOp::AddrOf, inner) = &operand.0 else {
+        return None;
+    };
+    let mut rev: Vec<OffsetofMember<R>> = Vec::new();
+    let mut node = &inner.0;
+    loop {
+        match node {
+            Expression::Field(base, name) => {
+                rev.push(OffsetofMember::Field(name.clone()));
+                node = &base.0;
+            }
+            Expression::Subscript(base, idx) => {
+                rev.push(OffsetofMember::Index(idx.clone()));
+                node = &base.0;
+            }
+            Expression::Arrow(base, name) => {
+                let Expression::Cast { type_name, expr } = &base.0 else {
+                    return None;
+                };
+                let mut core = &expr.0;
+                while let Expression::Cast { expr, .. } = core {
+                    core = &expr.0;
+                }
+                if !matches!(core, Expression::Constant(Constant::Int(0, _))) {
+                    return None;
+                }
+                rev.push(OffsetofMember::Field(name.clone()));
+                rev.reverse();
+                return Some(NullTrick {
+                    pointee: (**type_name).clone(),
+                    designator: rev,
+                });
+            }
+            _ => return None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Expression<R: TypeResolver> {
     Empty,
