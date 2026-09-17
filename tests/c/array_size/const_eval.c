@@ -15,6 +15,7 @@ enum Foo {
   Var3 = sizeof(ar5),
   Var4 = sizeof("hello"),
   Var5,
+  Var6 = __alignof__(int),
 };
 
 int ar6[Var1] = {};
@@ -78,12 +79,13 @@ int the_ar[] = {
     [Var1 * Var2] = 8,
     [Var1 * sizeof(ar3)] = 9,
     [Var3] = 10,
+    [Var6 + 3] = 123,
     [1 ? 20 : 30] = 11,
     [5 && 3] = 12,
     [0 || 7] = 13,
     [5 << 2] = 14,
     [20 >> 1] = 15,
-    [5 | 2] = 16,
+    [(5 | 2) + 1] = 16,
     [5 ^ 3] = 17,
     [!0] = 18,
     [+10] = 19,
@@ -195,7 +197,7 @@ int main() {
       the_ar[12 * 3 + 6 / 2] == 28 && the_ar[(12 + 3) * 2] == 29 &&
       the_ar[(int)(unsigned char)300] == 30 &&
       the_ar[sizeof(ar3) / sizeof(int) + 1] == 31 && the_ar[100 - Var5] == 32 &&
-      the_ar[5 | 2] == 16 && the_ar[- -10] == 20 &&
+      the_ar[Var6 + 3] == 16 && the_ar[(5 | 2) + 1] == 16 && the_ar[- -10] == 20 &&
       the_ar[sizeof("hello") - 1] == 24 && the_ar[5 == 5] == 22 &&
       the_ar[5 << 2] == 14) {
     return 33;

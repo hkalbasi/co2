@@ -308,7 +308,7 @@ impl<'a> Tokenizer<'a> {
             | "__typeof_unqual__" => {
                 Token::Typeof
             }
-            "alignof" | "_Alignof" => Token::Alignof,
+            "alignof" | "_Alignof" | "__alignof" | "__alignof__" => Token::Alignof,
             "alignas" | "_Alignas" => Token::Alignas,
             "__builtin_offsetof" => Token::Offsetof,
             "static" => Token::Static,
