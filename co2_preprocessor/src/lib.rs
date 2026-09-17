@@ -379,7 +379,17 @@ fn resolve_force_include(input: &Path, include: &str) -> PathBuf {
     if path.is_absolute() {
         return path;
     }
-    absolute_path(&input.parent().unwrap_or_else(|| Path::new(".")).join(path))
+    let candidate = absolute_path(&input.parent().unwrap_or_else(|| Path::new(".")).join(&path));
+    // stdin is spilled to $TMPDIR/stdin.c; fall back to CWD like gcc.
+    if !candidate.is_file()
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        let fallback = cwd.join(&path);
+        if fallback.is_file() {
+            return fallback;
+        }
+    }
+    candidate
 }
 
 fn absolute_path(path: &Path) -> PathBuf {

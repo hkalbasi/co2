@@ -202,6 +202,23 @@ fn run_co2c(args: &CcArgs) {
     let mut has_stdin = false;
     let force_pic = args.pic || matches!(args.link_kind, LinkOutputKind::SharedLib);
 
+    // `cc -E -` resolves quoted includes relative to CWD, but stdin is
+    // spilled to $TMPDIR/stdin.c so its dir would mis-resolve. Prepend
+    // CWD as -iquote so stdin behaves like gcc.
+    let mut stdin_cpp_args = Vec::new();
+    if args.inputs.iter().any(|p| p == Path::new("-"))
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        stdin_cpp_args.push("-iquote".to_owned());
+        stdin_cpp_args.push(cwd.to_string_lossy().into_owned());
+        stdin_cpp_args.extend(args.cpp_args.iter().cloned());
+    }
+    let cpp_args: &[String] = if stdin_cpp_args.is_empty() {
+        &args.cpp_args
+    } else {
+        &stdin_cpp_args
+    };
+
     // rustc and the linker create temporary files next to the output path, which
     // fails for special files like /dev/null. Redirect the output to a temp file
     // in that case; compilation still runs and its result is simply discarded.
@@ -234,7 +251,7 @@ fn run_co2c(args: &CcArgs) {
             .expect("missing C input file for preprocess-only");
         let resolved = resolve_stdin(&input);
 
-        let preprocessed = co2_preprocessor::preprocess(&resolved, &args.cpp_args);
+        let preprocessed = co2_preprocessor::preprocess(&resolved, cpp_args);
         let output = &preprocessed.raw_src;
         match &args.output {
             Some(path) => {
@@ -259,12 +276,12 @@ fn run_co2c(args: &CcArgs) {
         if args.time_report {
             co2_driver_lib::time_report::enable_timing();
         }
-        let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, &args.cpp_args));
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, cpp_args));
         write_dep_file(
             &preprocessed,
             args.output.as_deref(),
             &args.dep_args,
-            &args.cpp_args,
+            cpp_args,
         );
         if args.time_report {
             co2_driver_lib::time_report::mark_preprocess_done();
@@ -331,12 +348,12 @@ fn run_co2c(args: &CcArgs) {
         if args.time_report {
             co2_driver_lib::time_report::enable_timing();
         }
-        let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, &args.cpp_args));
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, cpp_args));
         write_dep_file(
             &preprocessed,
             args.output.as_deref(),
             &args.dep_args,
-            &args.cpp_args,
+            cpp_args,
         );
         if args.time_report {
             co2_driver_lib::time_report::mark_preprocess_done();
@@ -407,7 +424,7 @@ fn run_co2c(args: &CcArgs) {
         compile_c_to_object(
             &resolved,
             &object_path,
-            &args.cpp_args,
+            cpp_args,
             args.opt_level.as_deref(),
             args.debuginfo,
             force_pic,
