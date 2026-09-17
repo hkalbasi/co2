@@ -482,6 +482,13 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Statement<R>> {
                     statement.pretty_print(pp);
                 });
             }
+            Statement::CaseRange { lo, hi, statement } => {
+                pp.node("CaseRange", &sp, |pp| {
+                    lo.pretty_print(pp);
+                    hi.pretty_print(pp);
+                    statement.pretty_print(pp);
+                });
+            }
             Statement::Default {
                 keyword_span: _,
                 statement,

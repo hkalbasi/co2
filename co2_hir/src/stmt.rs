@@ -152,6 +152,100 @@ impl HirCtx<'_> {
                 out.push(HirStmt::Label(case_label, span));
                 self.lower_stmt(statement.0, statement.1, out, locals, local_map);
             }
+            Statement::CaseRange { lo, hi, statement } => {
+                let Some((discr_local, discr_ty)) = self.current_switch_discr() else {
+                    self.terminate_with_error(lo.1, "case label outside of switch body");
+                };
+                let case_label = self.fresh_label();
+                let lo_span = lo.1;
+                let hi_span = hi.1;
+                if let Err(err) = self.eval_const_expr_in_scope(&lo, locals, local_map) {
+                    self.terminate_with_spanned_error(err);
+                }
+                if let Err(err) = self.eval_const_expr_in_scope(&hi, locals, local_map) {
+                    self.terminate_with_spanned_error(err);
+                }
+                let lo_expr = self
+                    .lower_expr(lo, locals, local_map)
+                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                if !is_integer_ty(lo_expr.ty) {
+                    self.terminate_with_error(
+                        lo_span,
+                        &format!(
+                            "switch case expression must be integer-like, got {}",
+                            self.format_ty(lo_expr.ty)
+                        ),
+                    );
+                }
+                let lo_ty = lo_expr.ty;
+                let Some(lo_expr) = coerce_expr_to_type(lo_expr, discr_ty) else {
+                    self.terminate_with_error(
+                        lo_span,
+                        &format!(
+                            "switch case expression type mismatch: expected {}, got {}",
+                            self.format_ty(discr_ty),
+                            self.format_ty(lo_ty)
+                        ),
+                    );
+                };
+                let hi_expr = self
+                    .lower_expr(hi, locals, local_map)
+                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                if !is_integer_ty(hi_expr.ty) {
+                    self.terminate_with_error(
+                        hi_span,
+                        &format!(
+                            "switch case expression must be integer-like, got {}",
+                            self.format_ty(hi_expr.ty)
+                        ),
+                    );
+                }
+                let hi_ty = hi_expr.ty;
+                let Some(hi_expr) = coerce_expr_to_type(hi_expr, discr_ty) else {
+                    self.terminate_with_error(
+                        hi_span,
+                        &format!(
+                            "switch case expression type mismatch: expected {}, got {}",
+                            self.format_ty(discr_ty),
+                            self.format_ty(hi_ty)
+                        ),
+                    );
+                };
+                let ge = self
+                    .lower_binop_from_lowered(
+                        HirExpr {
+                            kind: HirExprKind::Local(discr_local),
+                            ty: discr_ty,
+                            span,
+                        },
+                        lo_expr,
+                        ParsedBinOp::Ge,
+                        span,
+                        parser_span,
+                        false,
+                    )
+                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                let le = self
+                    .lower_binop_from_lowered(
+                        HirExpr {
+                            kind: HirExprKind::Local(discr_local),
+                            ty: discr_ty,
+                            span,
+                        },
+                        hi_expr,
+                        ParsedBinOp::Le,
+                        span,
+                        parser_span,
+                        false,
+                    )
+                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                let cond = self
+                    .lower_binop_from_lowered(ge, le, ParsedBinOp::And, span, parser_span, false)
+                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                self.register_case(cond, case_label);
+                out.push(HirStmt::Label(case_label, span));
+                self.lower_stmt(statement.0, statement.1, out, locals, local_map);
+            }
             Statement::Default {
                 keyword_span,
                 statement,

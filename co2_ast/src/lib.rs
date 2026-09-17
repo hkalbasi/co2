@@ -44,6 +44,11 @@ pub enum Statement<R: TypeResolver> {
         expr: Spanned<Expression<R>>,
         statement: Box<Spanned<Statement<R>>>,
     },
+    CaseRange {
+        lo: Spanned<Expression<R>>,
+        hi: Spanned<Expression<R>>,
+        statement: Box<Spanned<Statement<R>>>,
+    },
     Default {
         keyword_span: Span,
         statement: Box<Spanned<Statement<R>>>,

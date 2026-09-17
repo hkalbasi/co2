@@ -2627,12 +2627,23 @@ impl<'a, R: TypeResolver> P<'a, R> {
             }
             Some(Token::Case) => {
                 self.pos += 1;
-                let expr = crate::exp::parse_expression(self)?;
-                self.expect(&Token::Colon, ":")?;
-                let statement = self.parse_statement()?;
-                Statement::Case {
-                    expr,
-                    statement: Box::new(statement),
+                let lo = crate::exp::parse_expression(self)?;
+                if self.eat(&Token::Ellipsis).is_some() {
+                    let hi = crate::exp::parse_expression(self)?;
+                    self.expect(&Token::Colon, ":")?;
+                    let statement = self.parse_statement()?;
+                    Statement::CaseRange {
+                        lo,
+                        hi,
+                        statement: Box::new(statement),
+                    }
+                } else {
+                    self.expect(&Token::Colon, ":")?;
+                    let statement = self.parse_statement()?;
+                    Statement::Case {
+                        expr: lo,
+                        statement: Box::new(statement),
+                    }
                 }
             }
             Some(Token::Default) => {
