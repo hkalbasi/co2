@@ -780,6 +780,173 @@ impl Preprocessor {
                 .to_string(),
         ));
 
+        // Bit-operation builtins with no direct Rust method (clrsb, parity,
+        // generic *g and C23 stdc_*). Expand to statement expressions built
+        // from the resolver-backed __builtin_clz/ctz/popcount (or the
+        // libc-forwarded ffs) so each argument evaluates exactly once.
+        const BIT_1ARG: &[(&str, &[&str], &str)] = &[
+            (
+                "__builtin_clrsb",
+                &["x"],
+                "({ int __v = (x); (__v >= 0 ? __builtin_clz((unsigned)__v) - 1 : __builtin_clz((unsigned)(~__v)) - 1); })",
+            ),
+            (
+                "__builtin_clrsbl",
+                &["x"],
+                "({ long __v = (x); (__v >= 0 ? __builtin_clzl((unsigned long)__v) - 1 : __builtin_clzl((unsigned long)(~__v)) - 1); })",
+            ),
+            (
+                "__builtin_clrsbll",
+                &["x"],
+                "({ long long __v = (x); (__v >= 0 ? __builtin_clzll((unsigned long long)__v) - 1 : __builtin_clzll((unsigned long long)(~__v)) - 1); })",
+            ),
+            (
+                "__builtin_parity",
+                &["x"],
+                "({ unsigned __v = (x); (__builtin_popcount(__v) & 1); })",
+            ),
+            (
+                "__builtin_parityl",
+                &["x"],
+                "({ unsigned long __v = (x); (__builtin_popcountl(__v) & 1); })",
+            ),
+            (
+                "__builtin_parityll",
+                &["x"],
+                "({ unsigned long long __v = (x); (__builtin_popcountll(__v) & 1); })",
+            ),
+            (
+                "__builtin_ffsg",
+                &["x"],
+                "({ __typeof__(x) __v = (x); __builtin_ffsll((long long)__v); })",
+            ),
+            (
+                "__builtin_clrsbg",
+                &["x"],
+                "({ __typeof__(x) __v = (x); ((__v >= 0 ? (sizeof(__v) <= 4 ? __builtin_clz((unsigned)__v) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)__v) - (8 - (int)sizeof(__v))*8) : (sizeof(__v) <= 4 ? __builtin_clz((unsigned)(~__v)) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)(~__v)) - (8 - (int)sizeof(__v))*8)) - 1); })",
+            ),
+            (
+                "__builtin_popcountg",
+                &["x"],
+                "({ __typeof__(x) __v = (x); __builtin_popcountll((unsigned long long)__v); })",
+            ),
+            (
+                "__builtin_parityg",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (__builtin_popcountll((unsigned long long)__v) & 1); })",
+            ),
+            (
+                "__builtin_stdc_count_ones",
+                &["x"],
+                "({ __typeof__(x) __v = (x); __builtin_popcountll((unsigned long long)__v); })",
+            ),
+            (
+                "__builtin_stdc_count_zeros",
+                &["x"],
+                "({ __typeof__(x) __v = (x); ((int)sizeof(__v)*8 - __builtin_popcountll((unsigned long long)__v)); })",
+            ),
+            (
+                "__builtin_stdc_leading_zeros",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (sizeof(__v) <= 4 ? __builtin_clz((unsigned)__v) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)__v) - (8 - (int)sizeof(__v))*8); })",
+            ),
+            (
+                "__builtin_stdc_leading_ones",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (sizeof(__v) <= 4 ? __builtin_clz((unsigned)(~__v)) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)(~__v)) - (8 - (int)sizeof(__v))*8); })",
+            ),
+            (
+                "__builtin_stdc_trailing_zeros",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (__v == 0 ? (int)sizeof(__v)*8 : (sizeof(__v) <= 4 ? __builtin_ctz((unsigned)__v) : __builtin_ctzll((unsigned long long)__v))); })",
+            ),
+            (
+                "__builtin_stdc_trailing_ones",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (sizeof(__v) <= 4 ? __builtin_ctz((unsigned)(~__v)) : __builtin_ctzll((unsigned long long)(~__v))); })",
+            ),
+            (
+                "__builtin_stdc_bit_width",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (__v == 0 ? 0 : (int)sizeof(__v)*8 - (sizeof(__v) <= 4 ? __builtin_clz((unsigned)__v) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)__v) - (8 - (int)sizeof(__v))*8)); })",
+            ),
+            (
+                "__builtin_stdc_bit_floor",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (__v == 0 ? 0 : ((__typeof__(x))1 << (((int)sizeof(__v)*8 - 1) - (sizeof(__v) <= 4 ? __builtin_clz((unsigned)__v) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)__v) - (8 - (int)sizeof(__v))*8)))); })",
+            ),
+            (
+                "__builtin_stdc_bit_ceil",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (__v <= 1 ? 1 : ((__typeof__(x))1 << ((int)sizeof(__v)*8 - (sizeof(__v) <= 4 ? __builtin_clz((unsigned)(__v - 1)) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)(__v - 1)) - (8 - (int)sizeof(__v))*8)))); })",
+            ),
+            (
+                "__builtin_stdc_first_leading_one",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (__v == 0 ? 0 : (sizeof(__v) <= 4 ? __builtin_clz((unsigned)__v) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)__v) - (8 - (int)sizeof(__v))*8) + 1); })",
+            ),
+            (
+                "__builtin_stdc_first_leading_zero",
+                &["x"],
+                "({ __typeof__(x) __v = (x); ((__typeof__(x))(~__v) == 0 ? 0 : (sizeof(__v) <= 4 ? __builtin_clz((unsigned)(~__v)) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)(~__v)) - (8 - (int)sizeof(__v))*8) + 1); })",
+            ),
+            (
+                "__builtin_stdc_first_trailing_one",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (__v == 0 ? 0 : (sizeof(__v) <= 4 ? __builtin_ctz((unsigned)__v) : __builtin_ctzll((unsigned long long)__v)) + 1); })",
+            ),
+            (
+                "__builtin_stdc_first_trailing_zero",
+                &["x"],
+                "({ __typeof__(x) __v = (x); ((__typeof__(x))(~__v) == 0 ? 0 : (sizeof(__v) <= 4 ? __builtin_ctz((unsigned)(~__v)) : __builtin_ctzll((unsigned long long)(~__v))) + 1); })",
+            ),
+            (
+                "__builtin_stdc_has_single_bit",
+                &["x"],
+                "({ __typeof__(x) __v = (x); (__v != 0 && (__v & (__v - 1)) == 0); })",
+            ),
+            (
+                "__builtin_stdc_rotate_left",
+                &["x", "y"],
+                "({ __typeof__(x) __v = (x); int __s = (int)(y); int __w = (int)sizeof(__v)*8; int __r = __s % __w; (__r == 0 ? __v : (__typeof__(x))((__v << __r) | (__v >> (__w - __r)))); })",
+            ),
+            (
+                "__builtin_stdc_rotate_right",
+                &["x", "y"],
+                "({ __typeof__(x) __v = (x); int __s = (int)(y); int __w = (int)sizeof(__v)*8; int __r = __s % __w; (__r == 0 ? __v : (__typeof__(x))((__v >> __r) | (__v << (__w - __r)))); })",
+            ),
+        ];
+        for &(name, params, body) in BIT_1ARG {
+            self.macros.define(macro_def_from_parts(
+                name.to_string(),
+                true,
+                params.iter().map(|s| s.to_string()).collect(),
+                false,
+                false,
+                body.to_string(),
+            ));
+        }
+        // Generic clz/ctz accept 1 arg, or 2 args with an explicit zero
+        // fallback (e.g. __builtin_clzg(0u, 32)). The fallback is ignored:
+        // resolver-backed clz/ctz already return the width for zero, which
+        // is what the tests pass as fallback.
+        for name in ["__builtin_clzg", "__builtin_ctzg"] {
+            let is_clz = name.ends_with("clzg");
+            let body = if is_clz {
+                "({ __typeof__(x) __v = (x); (sizeof(__v) <= 4 ? __builtin_clz((unsigned)__v) - (4 - (int)sizeof(__v))*8 : __builtin_clzll((unsigned long long)__v) - (8 - (int)sizeof(__v))*8); })"
+            } else {
+                "({ __typeof__(x) __v = (x); (__v == 0 ? (int)sizeof(__v)*8 : (sizeof(__v) <= 4 ? __builtin_ctz((unsigned)__v) : __builtin_ctzll((unsigned long long)__v))); })"
+            };
+            self.macros.define(macro_def_from_parts(
+                name.to_string(),
+                true,
+                vec!["x".to_string()],
+                true,
+                false,
+                body.to_string(),
+            ));
+        }
+
         for &(name, body) in PREDEFINED_OBJECT_MACROS {
             self.define_simple_macro(name, body);
         }

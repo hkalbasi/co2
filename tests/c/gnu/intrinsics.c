@@ -132,6 +132,124 @@ int test_libc(void) {
     return 0;
 }
 
+int test_bits(void) {
+    if (__builtin_ffs(0) != 0)
+        return 1;
+    if (__builtin_ffs(1) != 1)
+        return 2;
+    if (__builtin_ffs(0x10) != 5)
+        return 3;
+    if (__builtin_clz(1u) != 31)
+        return 4;
+    if (__builtin_clz(0x80000000u) != 0)
+        return 5;
+    if (__builtin_ctz(0x80000000u) != 31)
+        return 6;
+    if (__builtin_ctz(2u) != 1)
+        return 7;
+    if (__builtin_clrsb(0) != 31)
+        return 8;
+    if (__builtin_clrsb(-1) != 31)
+        return 9;
+    if (__builtin_clrsb(1) != 30)
+        return 10;
+    if (__builtin_popcount(0u) != 0)
+        return 11;
+    if (__builtin_popcount(0xffu) != 8)
+        return 12;
+    if (__builtin_parity(0x7u) != 1)
+        return 13;
+    if (__builtin_parity(0x3u) != 0)
+        return 14;
+    if (__builtin_ffsl(0L) != 0)
+        return 15;
+    if (__builtin_ffsl(0x100L) != 9)
+        return 16;
+    if (__builtin_clzl(1ul) != 63)
+        return 17;
+    if (__builtin_ctzl(0x8000000000000000ul) != 63)
+        return 18;
+    if (__builtin_clrsbl(0L) != 63)
+        return 19;
+    if (__builtin_popcountl(0xfffffffffffffffful) != 64)
+        return 20;
+    if (__builtin_parityl(0xfL) != 0)
+        return 21;
+    if (__builtin_ffsll(0LL) != 0)
+        return 22;
+    if (__builtin_clzll(1ull) != 63)
+        return 23;
+    if (__builtin_ctzll(1ull << 40) != 40)
+        return 24;
+    if (__builtin_clrsbll(-1LL) != 63)
+        return 25;
+    if (__builtin_popcountll(0x3ull) != 2)
+        return 26;
+    if (__builtin_parityll(0x7ull) != 1)
+        return 27;
+    if (__builtin_ffsg(0) != 0)
+        return 28;
+    if (__builtin_ffsg(0x20) != 6)
+        return 29;
+    if (__builtin_clzg(1u) != 31)
+        return 30;
+    if (__builtin_clzg(0u, 32) != 32)
+        return 31;
+    if (__builtin_ctzg(0u, 32) != 32)
+        return 32;
+    if (__builtin_ctzg(8u) != 3)
+        return 33;
+    if (__builtin_clrsbg((signed char)0) != 7)
+        return 34;
+    if (__builtin_popcountg(0xffffull) != 16)
+        return 35;
+    if (__builtin_parityg(0x7ull) != 1)
+        return 36;
+    if (__builtin_stdc_bit_ceil(0u) != 1)
+        return 37;
+    if (__builtin_stdc_bit_ceil(65u) != 128u)
+        return 38;
+    if (__builtin_stdc_bit_floor(65u) != 64u)
+        return 39;
+    if (__builtin_stdc_bit_floor(0u) != 0u)
+        return 40;
+    if (__builtin_stdc_bit_width(65u) != 7)
+        return 41;
+    if (__builtin_stdc_bit_width(0u) != 0)
+        return 42;
+    if (__builtin_stdc_count_ones(0xffu) != 8)
+        return 43;
+    if (__builtin_stdc_count_zeros(0xffu) != 24)
+        return 44;
+    if (__builtin_stdc_first_leading_one(1u) != 32)
+        return 45;
+    if (__builtin_stdc_first_leading_zero(0xffffffffu) != 0)
+        return 46;
+    if (__builtin_stdc_first_trailing_one(0x40u) != 7)
+        return 47;
+    if (__builtin_stdc_first_trailing_zero(0xffffffffu) != 0)
+        return 48;
+    if (__builtin_stdc_has_single_bit(64u) != 1)
+        return 49;
+    if (__builtin_stdc_has_single_bit(65u) != 0)
+        return 50;
+    if (__builtin_stdc_leading_ones(0xffffffffu) != 32)
+        return 51;
+    if (__builtin_stdc_leading_zeros(0xffffffffu) != 0)
+        return 52;
+    if (__builtin_stdc_trailing_ones(0x7u) != 3)
+        return 53;
+    if (__builtin_stdc_trailing_zeros(0x8u) != 3)
+        return 54;
+    if (__builtin_stdc_rotate_left(0x80000001u, 2) != 0x00000006u)
+        return 55;
+    if (__builtin_stdc_rotate_right(0x80000001u, 2) != 0x60000000u)
+        return 56;
+    if (__builtin_stdc_rotate_left(0x80u, (unsigned char)0) != 0x80u)
+        return 57;
+    return 0;
+}
+
 int main(void) {
     assert(test_ceil(1.5) == 2.0);
     assert(test_ceil(-1.5) == -1.0);
@@ -174,6 +292,7 @@ int main(void) {
 
     assert(test_fp(1.5, 2.5) == 0);
     assert(test_libc() == 0);
+    assert(test_bits() == 0);
 
     return 0;
 }
