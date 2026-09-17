@@ -1228,11 +1228,10 @@ impl LocalResolverBase {
             }
             Expression::Offsetof {
                 ty: type_name,
-                field,
-                field_span,
+                designator,
             } => {
                 let ty = self.lower_type_name_for_const(*type_name.clone(), *span);
-                Ok(self.offsetof_hir_ty(&ty, field, *span, *field_span)? as i128)
+                Ok(self.offsetof_hir_ty(&ty, designator, *span)? as i128)
             }
             Expression::Sizeof(expr) => {
                 let ty = self.type_of_expr_for_sizeof(expr);
@@ -1937,11 +1936,51 @@ impl LocalResolverBase {
     fn offsetof_hir_ty(
         &mut self,
         ty: &HirTy,
+        designator: &[co2_ast::OffsetofMember<LocalResolver>],
+        span: Span,
+    ) -> Result<usize, (co2_ast::Span, String)> {
+        if designator.is_empty() {
+            return Err(spanned_error(span, "offsetof: expected member designator"));
+        }
+        let mut cur_ty = self.peel_typedefs_for_sizeof(ty.clone());
+        let mut offset = 0usize;
+        for m in designator {
+            match m {
+                co2_ast::OffsetofMember::Field(name) => {
+                    let (off, next) = self.offsetof_field_step(cur_ty, &name.0, span, name.1)?;
+                    offset += off;
+                    cur_ty = next;
+                }
+                co2_ast::OffsetofMember::Index(idx_expr) => {
+                    let idx = self.eval_const_expr(idx_expr)?;
+                    let idx_span = idx_expr.1;
+                    let idx = usize::try_from(idx).map_err(|_| {
+                        spanned_error(idx_span, format!("offsetof: negative array index {idx}"))
+                    })?;
+                    let peeled = self.peel_typedefs_for_sizeof(cur_ty.clone());
+                    let HirTyKind::Array(_, inner) = peeled.kind else {
+                        return Err(spanned_error(
+                            idx_span,
+                            "offsetof: index applied to non-array type",
+                        ));
+                    };
+                    let (elem_size, _) = self.sizeof_hir_ty(&inner, span)?;
+                    offset += idx * elem_size;
+                    cur_ty = (*inner).clone();
+                }
+            }
+        }
+        Ok(offset)
+    }
+
+    fn offsetof_field_step(
+        &mut self,
+        ty: HirTy,
         field: &str,
         span: Span,
         field_span: Span,
-    ) -> Result<usize, (co2_ast::Span, String)> {
-        let ty = self.peel_typedefs_for_sizeof(ty.clone());
+    ) -> Result<(usize, HirTy), (co2_ast::Span, String)> {
+        let ty = self.peel_typedefs_for_sizeof(ty);
         let access = self
             .resolve_offsetof_field_access(&ty, field)
             .ok_or_else(|| {
@@ -2001,7 +2040,7 @@ impl LocalResolverBase {
             offset += field_offset;
             cur_ty = field_ty;
         }
-        Ok(offset)
+        Ok((offset, cur_ty))
     }
 
     pub(crate) fn lower_type_name_for_const(

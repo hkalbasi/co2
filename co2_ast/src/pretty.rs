@@ -727,14 +727,21 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Expression<R>> {
             Expression::Alignof(expr) => {
                 pp.node("Alignof", &sp, |pp| expr.pretty_print(pp));
             }
-            Expression::Offsetof {
-                ty,
-                field,
-                field_span,
-            } => {
+            Expression::Offsetof { ty, designator } => {
                 pp.node("Offsetof", &sp, |pp| {
                     ty.pretty_print(pp);
-                    pp.leaf_data("Field", &fmt_span(field_span, pp.config), field);
+                    for m in designator {
+                        match m {
+                            crate::OffsetofMember::Field(name) => {
+                                pp.leaf_data("Field", &fmt_span(&name.1, pp.config), &name.0);
+                            }
+                            crate::OffsetofMember::Index(idx) => {
+                                pp.node("Index", &fmt_span(&idx.1, pp.config), |pp| {
+                                    idx.pretty_print(pp)
+                                });
+                            }
+                        }
+                    }
                 });
             }
             Expression::UnaryOp(op, expr) => {

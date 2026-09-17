@@ -2254,65 +2254,54 @@ impl HirCtx<'_> {
             }
             Expression::Offsetof {
                 ty: type_name,
-                field,
-                field_span,
+                designator,
             } => {
                 let ty =
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
-                let indices =
-                    match self
-                        .resolve_struct_field_access(ty, &field)
-                        .unwrap_or_else(|| {
-                            self.terminate_with_error(
-                                field_span,
-                                &format!("offsetof: field '{field}' not found in type"),
-                            )
-                        }) {
-                        ResolvedFieldAccess::Direct { path, .. } => path,
-                        ResolvedFieldAccess::Bitfield { .. } => {
-                            self.terminate_with_error(
-                                field_span,
-                                &format!("offsetof: field '{field}' is a bitfield"),
-                            );
-                        }
-                    };
-                // Walk the type hierarchy following `indices` to accumulate the byte offset.
+                if designator.is_empty() {
+                    self.terminate_with_error(parser_span, "offsetof: expected member designator");
+                }
                 let mut offset_bytes: u64 = 0;
                 let mut cur_ty = ty;
-                for &field_idx in &indices {
-                    let layout = cur_ty.layout().unwrap_or_else(|e| {
-                        self.terminate_with_error(
-                            parser_span,
-                            &format!("offsetof: failed to compute layout: {e}"),
-                        )
-                    });
-                    let field_offset = match &layout.shape().fields {
-                        FieldsShape::Arbitrary { offsets, .. } => offsets
-                            .get(field_idx)
-                            .unwrap_or_else(|| {
+                for m in designator {
+                    match m {
+                        co2_ast::OffsetofMember::Field(name) => {
+                            let (off, next) = self.offsetof_field_offset(
+                                cur_ty,
+                                &name.0,
+                                parser_span,
+                                name.1,
+                            )?;
+                            offset_bytes += off;
+                            cur_ty = next;
+                        }
+                        co2_ast::OffsetofMember::Index(idx_expr) => {
+                            let idx = self
+                                .eval_const_expr_in_scope(&idx_expr, locals, local_map)
+                                .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                            let idx_span = idx_expr.1;
+                            let idx = u64::try_from(idx).unwrap_or_else(|_| {
+                                self.terminate_with_error(
+                                    idx_span,
+                                    &format!("offsetof: negative array index {idx}"),
+                                )
+                            });
+                            let elem = array_elem_ty(cur_ty).unwrap_or_else(|| {
+                                self.terminate_with_error(
+                                    idx_span,
+                                    "offsetof: index applied to non-array type",
+                                )
+                            });
+                            let elem_size = elem.layout().unwrap_or_else(|e| {
                                 self.terminate_with_error(
                                     parser_span,
-                                    &format!("offsetof: field index {field_idx} out of bounds"),
+                                    &format!("offsetof: failed to compute layout: {e}"),
                                 )
-                            })
-                            .bytes(),
-                        other => {
-                            self.terminate_with_error(
-                                parser_span,
-                                &format!("offsetof: unsupported layout kind for type: {other:?}"),
-                            );
+                            });
+                            offset_bytes += idx * elem_size.shape().size.bytes() as u64;
+                            cur_ty = elem;
                         }
-                    };
-                    offset_bytes += field_offset as u64;
-                    // Descend into the field type for next iteration.
-                    cur_ty = adt_field_tys(cur_ty)
-                        .and_then(|tys| tys.into_iter().nth(field_idx))
-                        .unwrap_or_else(|| {
-                            self.terminate_with_error(
-                                parser_span,
-                                &format!("offsetof: failed to get field type at index {field_idx}"),
-                            )
-                        });
+                    }
                 }
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(i128::from(offset_bytes)),
@@ -2922,6 +2911,72 @@ impl HirCtx<'_> {
             }
         }
         None
+    }
+
+    fn offsetof_field_offset(
+        &self,
+        ty: Ty,
+        field: &str,
+        parser_span: co2_ast::Span,
+        field_span: co2_ast::Span,
+    ) -> Result<(u64, Ty), (co2_ast::Span, String)> {
+        let indices = match self
+            .resolve_struct_field_access(ty, field)
+            .unwrap_or_else(|| {
+                self.terminate_with_error(
+                    field_span,
+                    &format!("offsetof: field '{field}' not found in type"),
+                )
+            }) {
+            ResolvedFieldAccess::Direct { path, .. } => path,
+            ResolvedFieldAccess::Bitfield { .. } => {
+                self.terminate_with_error(
+                    field_span,
+                    &format!("offsetof: field '{field}' is a bitfield"),
+                );
+            }
+        };
+        // Walk the type hierarchy following `indices` to accumulate the byte offset.
+        let mut offset_bytes: u64 = 0;
+        let mut cur_ty = ty;
+        for &field_idx in &indices {
+            let layout = cur_ty.layout().unwrap_or_else(|e| {
+                self.terminate_with_error(
+                    parser_span,
+                    &format!("offsetof: failed to compute layout: {e}"),
+                )
+            });
+            let field_offset = match &layout.shape().fields {
+                FieldsShape::Arbitrary { offsets, .. } => offsets
+                    .get(field_idx)
+                    .unwrap_or_else(|| {
+                        self.terminate_with_error(
+                            parser_span,
+                            &format!("offsetof: field index {field_idx} out of bounds"),
+                        )
+                    })
+                    .bytes(),
+                // All union members start at offset 0.
+                FieldsShape::Union(_) => 0,
+                other => {
+                    self.terminate_with_error(
+                        parser_span,
+                        &format!("offsetof: unsupported layout kind for type: {other:?}"),
+                    );
+                }
+            };
+            offset_bytes += field_offset as u64;
+            // Descend into the field type for next iteration.
+            cur_ty = adt_field_tys(cur_ty)
+                .and_then(|tys| tys.into_iter().nth(field_idx))
+                .unwrap_or_else(|| {
+                    self.terminate_with_error(
+                        parser_span,
+                        &format!("offsetof: failed to get field type at index {field_idx}"),
+                    )
+                });
+        }
+        Ok((offset_bytes, cur_ty))
     }
 
     fn field_path_ty(

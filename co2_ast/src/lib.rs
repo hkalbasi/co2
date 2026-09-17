@@ -91,6 +91,12 @@ pub enum Constant {
 }
 
 #[derive(Debug, Clone)]
+pub enum OffsetofMember<R: TypeResolver> {
+    Field(Spanned<String>),
+    Index(Box<Spanned<Expression<R>>>),
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression<R: TypeResolver> {
     Empty,
     Constant(Constant),
@@ -129,8 +135,7 @@ pub enum Expression<R: TypeResolver> {
     Alignof(Box<Spanned<Expression<R>>>),
     Offsetof {
         ty: Box<TypeName<R>>,
-        field: String,
-        field_span: Span,
+        designator: Vec<OffsetofMember<R>>,
     },
     UnaryOp(UnaryOp, Box<Spanned<Expression<R>>>),
     BinOp(

@@ -307,12 +307,25 @@ fn parse_unary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R
             let ty = p.parse_type_name()?;
             p.expect(&Token::Comma, ",")?;
             let (field, field_span) = p.parse_identifier()?;
+            let mut designator = vec![co2_ast::OffsetofMember::Field((field, field_span))];
+            loop {
+                if p.eat(&Token::Dot).is_some() {
+                    let (name, span) = p.parse_identifier()?;
+                    designator.push(co2_ast::OffsetofMember::Field((name, span)));
+                } else if p.at(&Token::LBracket) {
+                    p.pos += 1;
+                    let idx = parse_expression(p)?;
+                    p.expect(&Token::RBracket, "]")?;
+                    designator.push(co2_ast::OffsetofMember::Index(Box::new(idx)));
+                } else {
+                    break;
+                }
+            }
             p.expect(&Token::RParen, ")")?;
             Ok((
                 Expression::Offsetof {
                     ty: Box::new(ty),
-                    field,
-                    field_span,
+                    designator,
                 },
                 p.span_since(start),
             ))

@@ -1226,16 +1226,16 @@ impl HirCtx<'_> {
             }
             Expression::Offsetof {
                 ty: type_name,
-                field,
-                field_span,
+                designator,
             } => {
                 let ty =
                     self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
                 Ok(i128::from(self.offsetof_ty(
                     ty,
-                    field,
+                    designator,
                     *span,
-                    *field_span,
+                    locals,
+                    local_map,
                 )?))
             }
             Expression::Sizeof(expr) => Ok(i128::from(self.sizeof_expr(expr, locals, local_map)?)),
@@ -1411,10 +1411,47 @@ impl HirCtx<'_> {
     fn offsetof_ty(
         &self,
         ty: Ty,
+        designator: &[co2_ast::OffsetofMember<LocalResolver>],
+        span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<u64, (co2_ast::Span, String)> {
+        if designator.is_empty() {
+            return Err(spanned_error(span, "offsetof: expected member designator"));
+        }
+        let mut offset_bytes = 0u64;
+        let mut cur_ty = ty;
+        for m in designator {
+            match m {
+                co2_ast::OffsetofMember::Field(name) => {
+                    let (off, next) = self.offsetof_field_step(cur_ty, &name.0, span, name.1)?;
+                    offset_bytes += off;
+                    cur_ty = next;
+                }
+                co2_ast::OffsetofMember::Index(idx_expr) => {
+                    let idx = self.eval_const_expr_in_scope(idx_expr, locals, local_map)?;
+                    let idx_span = idx_expr.1;
+                    let idx = u64::try_from(idx).map_err(|_| {
+                        spanned_error(idx_span, format!("offsetof: negative array index {idx}"))
+                    })?;
+                    let elem = array_elem_ty(cur_ty).ok_or_else(|| {
+                        spanned_error(idx_span, "offsetof: index applied to non-array type")
+                    })?;
+                    offset_bytes += idx * self.sizeof_ty(elem)?;
+                    cur_ty = elem;
+                }
+            }
+        }
+        Ok(offset_bytes)
+    }
+
+    fn offsetof_field_step(
+        &self,
+        ty: Ty,
         field: &str,
         span: co2_ast::Span,
         field_span: co2_ast::Span,
-    ) -> Result<u64, (co2_ast::Span, String)> {
+    ) -> Result<(u64, Ty), (co2_ast::Span, String)> {
         let access = self
             .resolve_offsetof_field_access(ty, field)
             .ok_or_else(|| {
@@ -1446,6 +1483,8 @@ impl HirCtx<'_> {
                         )
                     })?
                     .bytes() as u64,
+                // All union members start at offset 0.
+                FieldsShape::Union(_) => 0,
                 other => {
                     return Err(spanned_error(
                         span,
@@ -1463,7 +1502,7 @@ impl HirCtx<'_> {
                     )
                 })?;
         }
-        Ok(offset_bytes)
+        Ok((offset_bytes, cur_ty))
     }
 
     fn extract_decl_type(

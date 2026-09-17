@@ -516,9 +516,19 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         Expression::Cast { type_name, expr } => {
             type_name_contains_local(type_name) || expr_contains_local(&expr.0)
         }
-        Expression::SizeofType(type_name)
-        | Expression::AlignofType(type_name)
-        | Expression::Offsetof { ty: type_name, .. } => type_name_contains_local(type_name),
+        Expression::SizeofType(type_name) | Expression::AlignofType(type_name) => {
+            type_name_contains_local(type_name)
+        }
+        Expression::Offsetof {
+            ty: type_name,
+            designator,
+        } => {
+            type_name_contains_local(type_name)
+                || designator.iter().any(|m| match m {
+                    co2_ast::OffsetofMember::Field(_) => false,
+                    co2_ast::OffsetofMember::Index(idx) => expr_contains_local(&idx.0),
+                })
+        }
         Expression::Conditional {
             cond,
             then_expr,
