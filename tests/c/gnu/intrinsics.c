@@ -250,6 +250,13 @@ int test_bits(void) {
     return 0;
 }
 
+int test_control(int n) {
+    if (n) {
+        __builtin_unreachable();
+    }
+    return 0;
+}
+
 int main(void) {
     assert(test_ceil(1.5) == 2.0);
     assert(test_ceil(-1.5) == -1.0);
@@ -293,6 +300,8 @@ int main(void) {
     assert(test_fp(1.5, 2.5) == 0);
     assert(test_libc() == 0);
     assert(test_bits() == 0);
+
+    assert(test_control(0) == 0);
 
     return 0;
 }

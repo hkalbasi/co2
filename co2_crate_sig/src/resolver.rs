@@ -508,6 +508,10 @@ impl Resolver {
                 }
             }
         }
+        if let Ok(def) = this.resolve("core::hint::unreachable_unchecked") {
+            this.current
+                .insert_path(["__builtin_unreachable"].into_iter(), Some(def));
+        }
 
         // Populate prelude traits (auto-imported like Clone, Copy, etc.)
         // Try resolving them from known crate paths

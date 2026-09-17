@@ -299,6 +299,11 @@ impl Preprocessor {
                 &["a", "b", "c"],
                 "({ __typeof__(a) __a = (a); __typeof__(b) __b = (b); __typeof__(*c) *__p = (c); long long __a128 = __a; long long __b128 = __b; *__p = (__typeof__(*__p))((unsigned long long)__a * (unsigned long long)__b); long long __p128 = *__p; (__a128 * __b128 != __p128); })",
             ),
+            (
+                "__builtin_trap",
+                &[],
+                "({ extern void abort(void); (abort)(); })",
+            ),
         ];
 
         // Library builtins (https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html):
