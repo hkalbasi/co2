@@ -217,6 +217,9 @@ impl PrettyPrint for Constant {
                 };
                 pp.leaf_data("Int", "", &s);
             }
+            Constant::Bool(v) => {
+                pp.leaf_data("Bool", "", format_args!("{v}"));
+            }
             Constant::Float(v, suffix) => {
                 let s = match suffix {
                     FloatSuffix::None => format!("{v}"),

@@ -90,6 +90,7 @@ pub enum ForInit<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub enum Constant {
     Int(i128, IntegerSuffix),
+    Bool(bool),
     Float(f64, FloatSuffix),
     Char(u32, CharPrefix),
     String(StringLiteral),
@@ -658,6 +659,7 @@ pub enum Token {
 
     // Constants
     Integer(String, IntegerSuffix),
+    BoolLit(bool),
     FloatLit(String, FloatSuffix),
     CharLit(Vec<u8>, CharPrefix),
     StringLit(StringLiteral),
@@ -914,6 +916,7 @@ impl Display for Constant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Constant::Int(v, _) => write!(f, "{v}"),
+            Constant::Bool(v) => write!(f, "{v}"),
             Constant::Float(v, _) => write!(f, "{v}"),
             Constant::Char(value, _) => {
                 write!(f, "'")?;
@@ -1041,6 +1044,7 @@ impl Display for Token {
                 fmt_bytes(f, literal.to_bytes().as_ref())?;
                 write!(f, "\"")
             }
+            Token::BoolLit(v) => write!(f, "{v}"),
 
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),

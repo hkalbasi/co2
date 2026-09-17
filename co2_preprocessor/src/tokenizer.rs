@@ -274,7 +274,10 @@ impl<'a> Tokenizer<'a> {
     fn ident_to_keyword(&self, ident: &str) -> Token {
         match ident {
             "auto" => Token::Auto,
-            "_Bool" => Token::Bool,
+            "_Bool" | "bool" => Token::Bool,
+            // C23: true/false are keywords (not macros requiring <stdbool.h>).
+            "true" => Token::BoolLit(true),
+            "false" => Token::BoolLit(false),
             "break" => Token::Break,
             "case" => Token::Case,
             "char" => Token::Char,

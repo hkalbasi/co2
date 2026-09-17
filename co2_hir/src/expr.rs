@@ -1573,6 +1573,11 @@ impl HirCtx<'_> {
                 ty: int_suffix_ty(&suffix, v),
                 span,
             }),
+            Expression::Constant(Constant::Bool(v)) => Ok(HirExpr {
+                kind: HirExprKind::ConstInt(i128::from(v)),
+                ty: Ty::bool_ty(),
+                span,
+            }),
             Expression::Constant(Constant::Float(v, suffix)) => {
                 let float_ty = match suffix {
                     co2_ast::FloatSuffix::Float => FloatTy::F32,

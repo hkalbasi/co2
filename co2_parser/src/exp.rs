@@ -620,6 +620,11 @@ fn parse_primary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression
         Some(Token::Integer(_, _)) | Some(Token::FloatLit(_, _)) | Some(Token::CharLit(_, _)) => {
             return parse_literal(p, start);
         }
+        Some(Token::BoolLit(v)) => {
+            let v = *v;
+            p.pos += 1;
+            Expression::Constant(Constant::Bool(v))
+        }
         _ => {
             return Err(p.fail_here(format!("expected expression, found {}", p.describe())));
         }
