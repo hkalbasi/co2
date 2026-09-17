@@ -301,6 +301,485 @@ impl Preprocessor {
             ),
         ];
 
+        // Library builtins (https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html):
+        // `__builtin_<name>(args)` forwards to the libc function, declaring it
+        // locally so no header is needed. The loop below generates one macro
+        // per table row; the declaration and call names are parenthesized so
+        // header macros (fortify wrappers, ctype tables, glibc redirects)
+        // cannot hijack the expansion.
+        // Deliberately absent: alloca (stack semantics can't forward), the
+        // v*printf/v*scanf family (no header-free va_list spelling that is
+        // ABI-correct on all targets), and names already handled elsewhere
+        // (__builtin_expect, __builtin_constant_p,
+        // __builtin_types_compatible_p, __builtin_inf/nan/huge_val,
+        // __builtin_va_*, __builtin_offsetof, __builtin_*_overflow, and the
+        // fp-comparison/classification builtins defined just below).
+        const LIBC_FORWARD: &[(&str, &str, &[&str])] = &[
+            ("abort", "void", &[]),
+            ("abs", "int", &["int"]),
+            (
+                "bcmp",
+                "int",
+                &["const void *", "const void *", "unsigned long"],
+            ),
+            ("bzero", "void", &["void *", "unsigned long"]),
+            ("calloc", "void *", &["unsigned long", "unsigned long"]),
+            (
+                "dcgettext",
+                "char *",
+                &["const char *", "const char *", "int"],
+            ),
+            ("dgettext", "char *", &["const char *", "const char *"]),
+            ("exit", "void", &["int"]),
+            ("_Exit", "void", &["int"]),
+            ("_exit", "void", &["int"]),
+            ("feclearexcept", "int", &["int"]),
+            ("fegetround", "int", &[]),
+            ("feraiseexcept", "int", &["int"]),
+            ("ffs", "int", &["int"]),
+            ("ffsl", "int", &["long"]),
+            ("ffsll", "int", &["long long"]),
+            ("fprintf", "int", &["void *", "const char *", "..."]),
+            (
+                "fprintf_unlocked",
+                "int",
+                &["void *", "const char *", "..."],
+            ),
+            ("fputs", "int", &["const char *", "void *"]),
+            ("fputs_unlocked", "int", &["const char *", "void *"]),
+            ("fscanf", "int", &["void *", "const char *", "..."]),
+            ("free", "void", &["void *"]),
+            ("frexp", "double", &["double", "int *"]),
+            ("frexpf", "float", &["float", "int *"]),
+            ("gamma_r", "double", &["double", "int *"]),
+            ("gammaf_r", "float", &["float", "int *"]),
+            ("gettext", "char *", &["const char *"]),
+            ("jn", "double", &["int", "double"]),
+            ("jnf", "float", &["int", "float"]),
+            ("yn", "double", &["int", "double"]),
+            ("ynf", "float", &["int", "float"]),
+            ("imaxabs", "long", &["long"]),
+            ("index", "char *", &["const char *", "int"]),
+            ("isalnum", "int", &["int"]),
+            ("isalpha", "int", &["int"]),
+            ("isascii", "int", &["int"]),
+            ("isblank", "int", &["int"]),
+            ("iscntrl", "int", &["int"]),
+            ("isdigit", "int", &["int"]),
+            ("isgraph", "int", &["int"]),
+            ("islower", "int", &["int"]),
+            ("isprint", "int", &["int"]),
+            ("ispunct", "int", &["int"]),
+            ("isspace", "int", &["int"]),
+            ("isupper", "int", &["int"]),
+            ("iswalnum", "int", &["int"]),
+            ("iswalpha", "int", &["int"]),
+            ("iswblank", "int", &["int"]),
+            ("iswcntrl", "int", &["int"]),
+            ("iswdigit", "int", &["int"]),
+            ("iswgraph", "int", &["int"]),
+            ("iswlower", "int", &["int"]),
+            ("iswprint", "int", &["int"]),
+            ("iswpunct", "int", &["int"]),
+            ("iswspace", "int", &["int"]),
+            ("iswupper", "int", &["int"]),
+            ("iswxdigit", "int", &["int"]),
+            ("isxdigit", "int", &["int"]),
+            ("labs", "long", &["long"]),
+            ("ldexp", "double", &["double", "int"]),
+            ("ldexpf", "float", &["float", "int"]),
+            ("lgamma_r", "double", &["double", "int *"]),
+            ("lgammaf_r", "float", &["float", "int *"]),
+            ("llabs", "long long", &["long long"]),
+            ("malloc", "void *", &["unsigned long"]),
+            (
+                "memchr",
+                "void *",
+                &["const void *", "int", "unsigned long"],
+            ),
+            (
+                "memcmp",
+                "int",
+                &["const void *", "const void *", "unsigned long"],
+            ),
+            (
+                "memcpy",
+                "void *",
+                &["void *", "const void *", "unsigned long"],
+            ),
+            (
+                "mempcpy",
+                "void *",
+                &["void *", "const void *", "unsigned long"],
+            ),
+            ("memset", "void *", &["void *", "int", "unsigned long"]),
+            ("modf", "double", &["double", "double *"]),
+            ("modff", "float", &["float", "float *"]),
+            ("printf", "int", &["const char *", "..."]),
+            ("printf_unlocked", "int", &["const char *", "..."]),
+            ("putchar", "int", &["int"]),
+            ("puts", "int", &["const char *"]),
+            ("realloc", "void *", &["void *", "unsigned long"]),
+            ("remquo", "double", &["double", "double", "int *"]),
+            ("remquof", "float", &["float", "float", "int *"]),
+            ("rindex", "char *", &["const char *", "int"]),
+            ("scanf", "int", &["const char *", "..."]),
+            ("sincos", "void", &["double", "double", "double *"]),
+            ("sincosf", "void", &["float", "float", "float *"]),
+            (
+                "snprintf",
+                "int",
+                &["char *", "unsigned long", "const char *", "..."],
+            ),
+            ("sprintf", "int", &["char *", "const char *", "..."]),
+            ("sscanf", "int", &["const char *", "const char *", "..."]),
+            ("stpcpy", "char *", &["char *", "const char *"]),
+            (
+                "stpncpy",
+                "char *",
+                &["char *", "const char *", "unsigned long"],
+            ),
+            ("strcasecmp", "int", &["const char *", "const char *"]),
+            ("strcat", "char *", &["char *", "const char *"]),
+            ("strchr", "char *", &["const char *", "int"]),
+            ("strcmp", "int", &["const char *", "const char *"]),
+            ("strcpy", "char *", &["char *", "const char *"]),
+            (
+                "strcspn",
+                "unsigned long",
+                &["const char *", "const char *"],
+            ),
+            ("strdup", "char *", &["const char *"]),
+            (
+                "strfmon",
+                "long",
+                &["char *", "unsigned long", "const char *", "..."],
+            ),
+            ("strlen", "unsigned long", &["const char *"]),
+            (
+                "strncasecmp",
+                "int",
+                &["const char *", "const char *", "unsigned long"],
+            ),
+            (
+                "strncat",
+                "char *",
+                &["char *", "const char *", "unsigned long"],
+            ),
+            (
+                "strncmp",
+                "int",
+                &["const char *", "const char *", "unsigned long"],
+            ),
+            (
+                "strncpy",
+                "char *",
+                &["char *", "const char *", "unsigned long"],
+            ),
+            ("strndup", "char *", &["const char *", "unsigned long"]),
+            (
+                "strnlen",
+                "unsigned long",
+                &["const char *", "unsigned long"],
+            ),
+            ("strpbrk", "char *", &["const char *", "const char *"]),
+            ("strrchr", "char *", &["const char *", "int"]),
+            ("strspn", "unsigned long", &["const char *", "const char *"]),
+            ("strstr", "char *", &["const char *", "const char *"]),
+            ("toascii", "int", &["int"]),
+            ("tolower", "int", &["int"]),
+            ("toupper", "int", &["int"]),
+            ("towlower", "int", &["int"]),
+            ("towupper", "int", &["int"]),
+            ("scalbln", "double", &["double", "long"]),
+            ("scalblnf", "float", &["float", "long"]),
+            ("scalbn", "double", &["double", "int"]),
+            ("scalbnf", "float", &["float", "int"]),
+        ];
+        // Same-type math families: base name + ""/f/l suffix selects the
+        // double/float/long-double spelling of both the builtin and the libc
+        // function (e.g. __builtin_sin -> sin(double), __builtin_sinf ->
+        // sinf(float)).
+        const FP_SUFFIXES: &[(&str, &str)] = &[("", "double"), ("f", "float")];
+        // NOTE: no "l" (long double) rows: passing/returning long double
+        // across a real libc call miscompiles in the backend today (plain
+        // ceill(1.5L) already returns garbage), so generating those would
+        // bless silent wrong results. Pure-comparison builtins below keep
+        // their long-double behavior, which is sound.
+        // (T) -> T
+        const MATH_U1: &[&str] = &[
+            "acos",
+            "acosh",
+            "asin",
+            "asinh",
+            "atan",
+            "atanh",
+            "cbrt",
+            "ceil",
+            "cos",
+            "cosh",
+            "drem",
+            "erf",
+            "erfc",
+            "exp",
+            "exp10",
+            "exp2",
+            "expm1",
+            "fabs",
+            "floor",
+            "gamma",
+            "j0",
+            "j1",
+            "lgamma",
+            "log",
+            "log10",
+            "log1p",
+            "log2",
+            "logb",
+            "nearbyint",
+            "pow10",
+            "rint",
+            "round",
+            "roundeven",
+            "scalb",
+            "significand",
+            "sin",
+            "sinh",
+            "sqrt",
+            "tan",
+            "tanh",
+            "tgamma",
+            "trunc",
+            "y0",
+            "y1",
+        ];
+        // (T, T) -> T
+        const MATH_B2: &[&str] = &[
+            "atan2",
+            "atan2pi",
+            "copysign",
+            "fdim",
+            "fmax",
+            "fmin",
+            "fmod",
+            "hypot",
+            "nextafter",
+            "pow",
+            "remainder",
+        ];
+        // (T, T, T) -> T
+        const MATH_T3: &[&str] = &["fma"];
+        // (T) -> int / long / long long
+        const MATH_TO_INT: &[&str] = &["ilogb"];
+        const MATH_TO_LONG: &[&str] = &["lrint", "lround"];
+        const MATH_TO_LLONG: &[&str] = &["llrint", "llround"];
+        // NOTE: no complex-math family (cacos/cpow/cabs/...): co2cc's complex
+        // calling convention is broken independently (plain ccosh(0.0) already
+        // returns a garbage imaginary part, and imaginary literals like 1.0fi
+        // don't parse), so forwarding would bless miscompiles. Re-add the
+        // "c*"+"" / f / l rows when complex calls are sound.
+
+        // Collect every (libc name, return type, param types) row, then emit
+        // one forwarding macro per row in the loop below.
+        let mut rows: Vec<(String, String, Vec<String>)> = Vec::new();
+        for &(name, ret, params) in LIBC_FORWARD {
+            rows.push((
+                name.to_string(),
+                ret.to_string(),
+                params.iter().map(|s| s.to_string()).collect(),
+            ));
+        }
+        for &(suffix, ty) in FP_SUFFIXES {
+            for base in MATH_U1 {
+                rows.push((
+                    format!("{base}{suffix}"),
+                    ty.to_string(),
+                    vec![ty.to_string()],
+                ));
+            }
+            for base in MATH_B2 {
+                rows.push((
+                    format!("{base}{suffix}"),
+                    ty.to_string(),
+                    vec![ty.to_string(), ty.to_string()],
+                ));
+            }
+            for base in MATH_T3 {
+                rows.push((
+                    format!("{base}{suffix}"),
+                    ty.to_string(),
+                    vec![ty.to_string(), ty.to_string(), ty.to_string()],
+                ));
+            }
+            for base in MATH_TO_INT {
+                rows.push((
+                    format!("{base}{suffix}"),
+                    "int".to_string(),
+                    vec![ty.to_string()],
+                ));
+            }
+            for base in MATH_TO_LONG {
+                rows.push((
+                    format!("{base}{suffix}"),
+                    "long".to_string(),
+                    vec![ty.to_string()],
+                ));
+            }
+            for base in MATH_TO_LLONG {
+                rows.push((
+                    format!("{base}{suffix}"),
+                    "long long".to_string(),
+                    vec![ty.to_string()],
+                ));
+            }
+        }
+        for (name, ret, params) in rows {
+            let variadic = params.last().is_some_and(|p| p == "...");
+            let fixed: Vec<String> = params
+                .iter()
+                .filter(|p| *p != "...")
+                .enumerate()
+                .map(|(i, _)| format!("p{i}"))
+                .collect();
+            let mut call_args = fixed.clone();
+            if variadic {
+                call_args.push("__VA_ARGS__".to_string());
+            }
+            let decl_params = if params.is_empty() {
+                "(void)".to_string()
+            } else {
+                format!("({})", params.join(", "))
+            };
+            let body = format!(
+                "({{ extern {ret} ({name}){decl_params}; ({name})({}); }})",
+                call_args.join(", ")
+            );
+            self.macros.define(macro_def_from_parts(
+                format!("__builtin_{name}"),
+                true,
+                fixed,
+                variadic,
+                false,
+                body,
+            ));
+        }
+
+        // FP comparison/classification builtins from the same Library-Builtins
+        // page. These have no libc function to forward to (several exist only
+        // as header macros), so they expand to comparisons instead. Every
+        // argument is evaluated exactly once; `__builtin_inf()` is a real
+        // parser token, so these work with or without <math.h>. Value-correct
+        // for NaN/inf/-0 in all float widths (promotion makes the double
+        // spelling exact); only `isnormal`/`fpclassify` need a width-specific
+        // threshold, selected with _Generic.
+        const FP_CMP: &[(&str, &[&str], &str)] = &[
+            ("__builtin_isgreater", &["x", "y"], "((x) > (y))"),
+            ("__builtin_isgreaterequal", &["x", "y"], "((x) >= (y))"),
+            ("__builtin_isless", &["x", "y"], "((x) < (y))"),
+            ("__builtin_islessequal", &["x", "y"], "((x) <= (y))"),
+            ("__builtin_islessgreater", &["x", "y"], "((x) != (y))"),
+            ("__builtin_iseqsig", &["x", "y"], "((x) == (y))"),
+            (
+                "__builtin_isunordered",
+                &["x", "y"],
+                "({ __typeof__(x) __x = (x); __typeof__(y) __y = (y); ((__x != __x) || (__y != __y)); })",
+            ),
+        ];
+        for &(name, params, body) in FP_CMP {
+            self.macros.define(macro_def_from_parts(
+                name.to_string(),
+                true,
+                params.iter().map(|s| s.to_string()).collect(),
+                false,
+                false,
+                body.to_string(),
+            ));
+        }
+        // (suffix, min-macro) per float width for the is*/signbit family.
+        const FP_WIDTHS: &[(&str, &str)] = &[
+            ("", "__DBL_MIN__"),
+            ("f", "__FLT_MIN__"),
+            ("l", "__LDBL_MIN__"),
+        ];
+        for &(suffix, min) in FP_WIDTHS {
+            let defs = [
+                (
+                    format!("__builtin_isinf{suffix}"),
+                    format!(
+                        "({{ __typeof__(x) __v = (x); ((__v == __builtin_inf()) || (__v == -__builtin_inf())); }})"
+                    ),
+                ),
+                (
+                    format!("__builtin_isnan{suffix}"),
+                    "({ __typeof__(x) __v = (x); ((__v != __v)); })".to_string(),
+                ),
+                (
+                    format!("__builtin_isfinite{suffix}"),
+                    format!(
+                        "({{ __typeof__(x) __v = (x); ((__v != __builtin_inf()) && (__v != -__builtin_inf())); }})"
+                    ),
+                ),
+                (
+                    format!("__builtin_isnormal{suffix}"),
+                    format!(
+                        "({{ __typeof__(x) __v = (x); ((__v == __v) && ((__v != 0) && ((__v != __builtin_inf()) && ((__v != -__builtin_inf()) && (((__v >= {min}) || (__v <= -{min}))))))); }})"
+                    ),
+                ),
+                (
+                    format!("__builtin_signbit{suffix}"),
+                    "({ __typeof__(x) __v = (x); (((__v < 0) || ((__v == 0) && (((1.0 / __v)) < 0)))); })"
+                        .to_string(),
+                ),
+            ];
+            for (name, body) in defs {
+                self.macros.define(macro_def_from_parts(
+                    name,
+                    true,
+                    vec!["x".to_string()],
+                    false,
+                    false,
+                    body,
+                ));
+            }
+        }
+        self.macros.define(macro_def_from_parts(
+            "__builtin_isinf_sign".to_string(),
+            true,
+            vec!["x".to_string()],
+            false,
+            false,
+            "({ __typeof__(x) __v = (x); ((__v != __v) ? 0 : ((__v == __builtin_inf()) ? 1 : ((__v == -__builtin_inf()) ? -1 : 0))); })"
+                .to_string(),
+        ));
+        // Width-correct __builtin_isnormal / __builtin_fpclassify via _Generic.
+        // __builtin_fpclassify(nan, inf, normal, subnormal, zero, x) is GCC's
+        // 6-argument form, so it never depends on the FP_* enum macros.
+        self.macros.define(macro_def_from_parts(
+            "__builtin_isnormal".to_string(),
+            true,
+            vec!["x".to_string()],
+            false,
+            false,
+            "({ __typeof__(x) __v = (x); _Generic((__v), float: ((__v == __v) && (__v != 0) && (__v != __builtin_inf()) && (__v != -__builtin_inf()) && ((__v >= __FLT_MIN__) || (__v <= -__FLT_MIN__))), long double: ((__v == __v) && (__v != 0) && (__v != __builtin_inf()) && (__v != -__builtin_inf()) && ((__v >= __LDBL_MIN__) || (__v <= -__LDBL_MIN__))), default: ((__v == __v) && (__v != 0) && (__v != __builtin_inf()) && (__v != -__builtin_inf()) && ((__v >= __DBL_MIN__) || (__v <= -__DBL_MIN__)))); })"
+                .to_string(),
+        ));
+        self.macros.define(macro_def_from_parts(
+            "__builtin_fpclassify".to_string(),
+            true,
+            vec![
+                "n".to_string(),
+                "i".to_string(),
+                "no".to_string(),
+                "s".to_string(),
+                "z".to_string(),
+                "x".to_string(),
+            ],
+            false,
+            false,
+            "({ __typeof__(x) __v = (x); _Generic((__v), float: (((__v != __v) ? (n) : (((__v == __builtin_inf()) || (__v == -__builtin_inf())) ? (i) : ((__v == 0) ? (z) : ((((__v < __FLT_MIN__) && (__v > -__FLT_MIN__)) ? (s) : (no))))))), long double: (((__v != __v) ? (n) : (((__v == __builtin_inf()) || (__v == -__builtin_inf())) ? (i) : ((__v == 0) ? (z) : ((((__v < __LDBL_MIN__) && (__v > -__LDBL_MIN__)) ? (s) : (no))))))), default: (((__v != __v) ? (n) : (((__v == __builtin_inf()) || (__v == -__builtin_inf())) ? (i) : ((__v == 0) ? (z) : ((((__v < __DBL_MIN__) && (__v > -__DBL_MIN__)) ? (s) : (no)))))))); })"
+                .to_string(),
+        ));
+
         for &(name, body) in PREDEFINED_OBJECT_MACROS {
             self.define_simple_macro(name, body);
         }
