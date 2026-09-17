@@ -2,8 +2,8 @@
 //@ run-status: 66
 //@ compile-flags: -DFOO=66
 
-#ifdef __GNUC__
-    #error "co2cc is not gcc"
+#ifndef __GNUC__
+    #error "co2cc needs to define __GNUC__ to become able to consume libc headers"
 #endif
 #ifdef __clang__
     #error "co2cc is not clang"

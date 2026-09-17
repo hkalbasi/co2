@@ -66,7 +66,7 @@ pub fn preprocess(input: &Path, cpp_args: &[String]) -> PreprocessedSource {
             input.display()
         );
     };
-    let input_source = rewrite_main_source_for_preprocess(&input_bytes);
+    let input_source = prepend_co2_define(&input_bytes);
     let source = preprocessor.preprocess(&input_source.text, &input_source.boundaries);
     emit_preprocessor_diagnostics(&source, preprocessor.warnings(), preprocessor.errors());
     source
@@ -391,68 +391,19 @@ fn absolute_path(path: &Path) -> PathBuf {
         .join(path)
 }
 
-fn rewrite_main_source_for_preprocess(source: &str) -> MappedText {
+fn prepend_co2_define(source: &str) -> MappedText {
     let prefix = "#define __CO2__ 1\n";
-    let mut rewritten = String::from(prefix);
+    let mut rewritten = String::with_capacity(prefix.len() + source.len());
+    rewritten.push_str(prefix);
+    rewritten.push_str(source);
+    // Rewritten offsets [0..=prefix.len()] map to original offset 0 (the
+    // injected define); every original byte i maps to itself (shifted by the
+    // prefix length in the rewritten text).
     let mut boundaries = vec![0; prefix.len() + 1];
-    let mut line_start = 0usize;
-
-    for raw_line in source.split_inclusive('\n') {
-        let has_newline = raw_line.ends_with('\n');
-        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
-        let line_end = line_start + line.len();
-        if line.trim_start().starts_with('#') && !line.trim_start().starts_with("#[") {
-            rewrite_hidden_macros_in_directive(line, line_start, &mut rewritten, &mut boundaries);
-        } else {
-            rewritten.push_str(line);
-            for idx in line_start + 1..=line_end {
-                boundaries.push(idx);
-            }
-        }
-        if has_newline {
-            rewritten.push('\n');
-            boundaries.push(line_end + 1);
-        }
-        line_start += raw_line.len();
-    }
-
+    boundaries.extend(1..=source.len());
     MappedText {
         text: rewritten,
         boundaries,
-    }
-}
-
-fn rewrite_hidden_macros_in_directive(
-    line: &str,
-    absolute_start: usize,
-    rewritten: &mut String,
-    boundaries: &mut Vec<usize>,
-) {
-    let mut i = 0usize;
-    while i < line.len() {
-        let replacement = if line[i..].starts_with("__GNUC__") {
-            Some(("__CO2_HIDDEN_GNUC__", "__GNUC__".len()))
-        } else if line[i..].starts_with("__clang__") {
-            Some(("__CO2_HIDDEN_CLANG__", "__clang__".len()))
-        } else {
-            None
-        };
-        if let Some((replacement, consumed)) = replacement {
-            rewritten.push_str(replacement);
-            boundaries.extend(std::iter::repeat_n(
-                absolute_start + i + consumed,
-                replacement.len(),
-            ));
-            i += consumed;
-        } else {
-            let c = line[i..].chars().next().unwrap();
-            let consumed = c.len_utf8();
-            rewritten.push(c);
-            i += consumed;
-            for _ in 0..consumed {
-                boundaries.push(absolute_start + i);
-            }
-        }
     }
 }
 
