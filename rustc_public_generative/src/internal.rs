@@ -164,8 +164,12 @@ impl Context {
         let file = guard
             .get(&file)
             .unwrap_or_else(|| panic!("file id {file:?} not registered"));
-        let lo = file.start + BytePos(lo);
+        let mut lo = file.start + BytePos(lo);
         let mut hi = file.start + BytePos(hi);
+        // TODO: these clamping should ideally be unneccessary.
+        if lo > file.end {
+            lo = file.end;
+        }
         if hi > file.end {
             hi = file.end;
         }
