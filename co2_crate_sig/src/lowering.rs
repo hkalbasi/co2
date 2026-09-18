@@ -496,6 +496,7 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         | Expression::Update { expr: base, .. }
         | Expression::Sizeof(base)
         | Expression::Alignof(base)
+        | Expression::Countof(base)
         | Expression::UnaryOp(_, base)
         | Expression::BuiltinConstantP { expr: base } => expr_contains_local(&base.0),
         Expression::Subscript(base, index) => {
@@ -516,9 +517,9 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         Expression::Cast { type_name, expr } => {
             type_name_contains_local(type_name) || expr_contains_local(&expr.0)
         }
-        Expression::SizeofType(type_name) | Expression::AlignofType(type_name) => {
-            type_name_contains_local(type_name)
-        }
+        Expression::SizeofType(type_name)
+        | Expression::AlignofType(type_name)
+        | Expression::CountofType(type_name) => type_name_contains_local(type_name),
         Expression::Offsetof {
             ty: type_name,
             designator,

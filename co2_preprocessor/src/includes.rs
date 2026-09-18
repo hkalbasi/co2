@@ -841,6 +841,16 @@ impl Preprocessor {
                     "__builtin_offsetof(type, member)".to_string(),
                 ));
             }
+            "stdcountof.h" => {
+                self.macros.define(macro_def_from_parts(
+                    "countof".to_string(),
+                    true,
+                    vec!["x".to_string()],
+                    false,
+                    false,
+                    "_Countof(x)".to_string(),
+                ));
+            }
             "signal.h" => {
                 self.pending_injections
                     .push("typedef void (*sighandler_t)(int);\n".to_string());

@@ -113,7 +113,7 @@ fn keyword_kind(s: &str) -> Option<TokenKind> {
         | "false" | "this" | "typeid" | "static_cast" | "dynamic_cast" | "reinterpret_cast"
         | "const_cast" | "and" | "and_eq" | "bitand" | "bitor" | "compl" | "not" | "not_eq"
         | "or" | "or_eq" | "xor" | "xor_eq" | "_Bool" | "_Complex" | "_Imaginary" | "_Alignas"
-        | "_Alignof" | "_Atomic" | "_Generic" | "_Noreturn" | "_Static_assert"
+        | "_Alignof" | "_Atomic" | "_Countof" | "_Generic" | "_Noreturn" | "_Static_assert"
         | "_Thread_local" | "restrict" | "asm" | "__asm__" | "__asm" | "__volatile__" => {
             TokenKind::Keyword
         }

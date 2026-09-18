@@ -1245,6 +1245,14 @@ impl LocalResolverBase {
                 let ty = self.type_of_expr_for_sizeof(expr);
                 Ok(self.sizeof_hir_ty(&ty, *span)?.1 as i128)
             }
+            Expression::CountofType(type_name) => {
+                let ty = self.lower_type_name_for_const(*type_name.clone(), *span);
+                Ok(self.countof_hir_ty(&ty, *span)? as i128)
+            }
+            Expression::Countof(expr) => {
+                let ty = self.type_of_expr_for_sizeof(expr);
+                Ok(self.countof_hir_ty(&ty, *span)? as i128)
+            }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
                 let t1 = self.lower_type_name_for_const(*ty1.clone(), *span);
                 let t2 = self.lower_type_name_for_const(*ty2.clone(), *span);
@@ -2217,6 +2225,22 @@ impl LocalResolverBase {
             _ => Err(spanned_error(
                 span,
                 "unsupported type in sizeof(array size expr)",
+            )),
+        }
+    }
+
+    fn countof_hir_ty(&mut self, ty: &HirTy, span: Span) -> Result<usize, (co2_ast::Span, String)> {
+        match &self.peel_typedefs_for_sizeof(ty.clone()).kind {
+            HirTyKind::Array(HirTyConst::Literal(len), _) => Ok(*len),
+            HirTyKind::Array(HirTyConst::ConstDef(def_id), _) => {
+                let registered = self.lookup_array_len_const_by_def(*def_id).ok_or_else(|| {
+                    spanned_error(span, "'_Countof' requires an argument of array type")
+                })?;
+                self.eval_array_len_expr(&registered.expr)
+            }
+            _ => Err(spanned_error(
+                span,
+                "'_Countof' requires an argument of array type",
             )),
         }
     }

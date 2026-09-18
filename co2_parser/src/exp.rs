@@ -265,8 +265,8 @@ fn parse_cast<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R>
 fn parse_unary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R>>> {
     let start = p.pos;
     match p.peek(0) {
-        Some(Token::Sizeof) | Some(Token::Alignof) => {
-            let is_sizeof = matches!(p.peek(0), Some(Token::Sizeof));
+        Some(Token::Sizeof) | Some(Token::Alignof) | Some(Token::Countof) => {
+            let kind = p.peek(0).cloned();
             p.pos += 1;
             if p.at(&Token::LParen) {
                 let cp = p.checkpoint();
@@ -277,10 +277,10 @@ fn parse_unary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R
                             let span = p.span_since(start);
                             let ty = Box::new(ty);
                             return Ok((
-                                if is_sizeof {
-                                    Expression::SizeofType(ty)
-                                } else {
-                                    Expression::AlignofType(ty)
+                                match kind {
+                                    Some(Token::Sizeof) => Expression::SizeofType(ty),
+                                    Some(Token::Alignof) => Expression::AlignofType(ty),
+                                    _ => Expression::CountofType(ty),
                                 },
                                 span,
                             ));
@@ -293,10 +293,10 @@ fn parse_unary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R
             let e = parse_unary(p)?;
             let e = Box::new(e);
             Ok((
-                if is_sizeof {
-                    Expression::Sizeof(e)
-                } else {
-                    Expression::Alignof(e)
+                match kind {
+                    Some(Token::Sizeof) => Expression::Sizeof(e),
+                    Some(Token::Alignof) => Expression::Alignof(e),
+                    _ => Expression::Countof(e),
                 },
                 p.span_since(start),
             ))

@@ -422,6 +422,7 @@ fn keyword_token_str(token: &Token) -> Option<&'static str> {
         Token::Sizeof => "sizeof",
         Token::Typeof => "typeof",
         Token::Alignof => "_Alignof",
+        Token::Countof => "_Countof",
         Token::Offsetof => "offsetof",
         Token::Static => "static",
         Token::Atomic => "_Atomic",

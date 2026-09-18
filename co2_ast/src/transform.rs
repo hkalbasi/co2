@@ -456,6 +456,8 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
             Expression::Sizeof(e) => Expression::Sizeof(e.transform(b)),
             Expression::AlignofType(t) => Expression::AlignofType(t.transform(b)),
             Expression::Alignof(e) => Expression::Alignof(e.transform(b)),
+            Expression::CountofType(t) => Expression::CountofType(t.transform(b)),
+            Expression::Countof(e) => Expression::Countof(e.transform(b)),
             Expression::Offsetof { ty, designator } => Expression::Offsetof {
                 ty: ty.transform(b),
                 designator: designator

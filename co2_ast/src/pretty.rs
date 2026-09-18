@@ -737,6 +737,12 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Expression<R>> {
             Expression::Alignof(expr) => {
                 pp.node("Alignof", &sp, |pp| expr.pretty_print(pp));
             }
+            Expression::CountofType(ty) => {
+                pp.node("CountofType", &sp, |pp| ty.pretty_print(pp));
+            }
+            Expression::Countof(expr) => {
+                pp.node("Countof", &sp, |pp| expr.pretty_print(pp));
+            }
             Expression::Offsetof { ty, designator } => {
                 pp.node("Offsetof", &sp, |pp| {
                     ty.pretty_print(pp);

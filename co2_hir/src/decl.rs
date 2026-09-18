@@ -1269,6 +1269,18 @@ impl HirCtx<'_> {
                 let ty = self.type_of_expr_for_sizeof(expr, locals, local_map)?;
                 Ok(i128::from(self.alignof_ty(ty)?))
             }
+            Expression::CountofType(type_name) => {
+                let ty =
+                    self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
+                Ok(i128::from(self.countof_ty(ty)?))
+            }
+            Expression::Countof(expr) => {
+                if let Expression::Constant(Constant::String(s)) = &expr.0 {
+                    return Ok(s.nul_terminated_len() as i128);
+                }
+                let ty = self.type_of_expr_for_sizeof(expr, locals, local_map)?;
+                Ok(i128::from(self.countof_ty(ty)?))
+            }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
                 Ok(i128::from(self.type_names_compatible_in_scope(
                     *ty1.clone(),
@@ -1366,6 +1378,22 @@ impl HirCtx<'_> {
                 )
             })
             .map(|layout| layout.shape().abi_align)
+    }
+
+    fn countof_ty(&self, ty: Ty) -> Result<u64, (co2_ast::Span, String)> {
+        if let TyKind::RigidTy(RigidTy::Array(_, len)) = ty.kind() {
+            len.eval_target_usize().map_err(|_| {
+                spanned_error(
+                    invalid_span(),
+                    "'_Countof' argument has variable length; not a constant expression",
+                )
+            })
+        } else {
+            Err(spanned_error(
+                invalid_span(),
+                "'_Countof' requires an argument of array type",
+            ))
+        }
     }
 
     fn resolve_offsetof_field_access(

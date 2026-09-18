@@ -35,6 +35,14 @@ fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span,
     (span, msg.into())
 }
 
+fn countof_ty_len(ty: Ty) -> Option<u64> {
+    if let TyKind::RigidTy(RigidTy::Array(_, len)) = ty.kind() {
+        len.eval_target_usize().ok()
+    } else {
+        None
+    }
+}
+
 fn is_adt_overload(ty: Ty) -> bool {
     if is_maybe_uninit_fn_ptr_ty(ty).is_some() {
         return false;
@@ -2299,6 +2307,36 @@ impl HirCtx<'_> {
                     .abi_align;
                 Ok(HirExpr {
                     kind: HirExprKind::ConstInt(i128::from(align)),
+                    ty: Ty::usize_ty(),
+                    span,
+                })
+            }
+            Expression::CountofType(type_name) => {
+                let ty =
+                    self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
+                let len = countof_ty_len(ty).ok_or_else(|| {
+                    spanned_error(parser_span, "'_Countof' requires an argument of array type")
+                })?;
+                Ok(HirExpr {
+                    kind: HirExprKind::ConstInt(i128::from(len)),
+                    ty: Ty::usize_ty(),
+                    span,
+                })
+            }
+            Expression::Countof(expr) => {
+                let inner = self.lower_expr(*expr, locals, local_map)?;
+                if let HirExprKind::ConstStr(s) = &inner.kind {
+                    return Ok(HirExpr {
+                        kind: HirExprKind::ConstInt(s.nul_terminated_len() as i128),
+                        ty: Ty::usize_ty(),
+                        span,
+                    });
+                }
+                let len = countof_ty_len(inner.ty).ok_or_else(|| {
+                    spanned_error(parser_span, "'_Countof' requires an argument of array type")
+                })?;
+                Ok(HirExpr {
+                    kind: HirExprKind::ConstInt(i128::from(len)),
                     ty: Ty::usize_ty(),
                     span,
                 })

@@ -32,7 +32,8 @@ pub fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> boo
         | Expression::Arrow(base, _)
         | Expression::UnaryOp(_, base)
         | Expression::Sizeof(base)
-        | Expression::Alignof(base) => expr_contains_label_address(&base.0),
+        | Expression::Alignof(base)
+        | Expression::Countof(base) => expr_contains_label_address(&base.0),
         Expression::Subscript(base, index) | Expression::BinOp(base, _, index) => {
             expr_contains_label_address(&base.0) || expr_contains_label_address(&index.0)
         }
@@ -99,6 +100,7 @@ pub fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> boo
         | Expression::Constant(_)
         | Expression::SizeofType(_)
         | Expression::AlignofType(_)
+        | Expression::CountofType(_)
         | Expression::GnuStatementExpr { .. }
         | Expression::BuiltinTypesCompatibleP { .. } => false,
     }

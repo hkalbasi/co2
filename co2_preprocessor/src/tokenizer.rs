@@ -312,6 +312,7 @@ impl<'a> Tokenizer<'a> {
                 Token::Typeof
             }
             "alignof" | "_Alignof" | "__alignof" | "__alignof__" => Token::Alignof,
+            "_Countof" => Token::Countof,
             "alignas" | "_Alignas" => Token::Alignas,
             "__builtin_offsetof" => Token::Offsetof,
             "static" => Token::Static,
