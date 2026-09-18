@@ -300,6 +300,21 @@ impl Preprocessor {
                 "({ __typeof__(a) __a = (a); __typeof__(b) __b = (b); __typeof__(*c) *__p = (c); long long __a128 = __a; long long __b128 = __b; *__p = (__typeof__(*__p))((unsigned long long)__a * (unsigned long long)__b); long long __p128 = *__p; (__a128 * __b128 != __p128); })",
             ),
             (
+                "__builtin_add_overflow_p",
+                &["a", "b", "c"],
+                "({ __typeof__(a) __a = (a); __typeof__(b) __b = (b); __typeof__(c) __c = (c); __int128_t __r = (__int128_t)__a + (__int128_t)__b; (__r != (__int128_t)(__typeof__(c))__r); })",
+            ),
+            (
+                "__builtin_sub_overflow_p",
+                &["a", "b", "c"],
+                "({ __typeof__(a) __a = (a); __typeof__(b) __b = (b); __typeof__(c) __c = (c); __int128_t __r = (__int128_t)__a - (__int128_t)__b; (__r != (__int128_t)(__typeof__(c))__r); })",
+            ),
+            (
+                "__builtin_mul_overflow_p",
+                &["a", "b", "c"],
+                "({ __typeof__(a) __a = (a); __typeof__(b) __b = (b); __typeof__(c) __c = (c); __int128_t __r = (__int128_t)__a * (__int128_t)__b; (__r != (__int128_t)(__typeof__(c))__r); })",
+            ),
+            (
                 "__builtin_trap",
                 &[],
                 "({ extern void abort(void); (abort)(); })",

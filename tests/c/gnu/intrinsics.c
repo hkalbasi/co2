@@ -250,6 +250,34 @@ int test_bits(void) {
     return 0;
 }
 
+int test_overflow_p(void) {
+    // mul: overflows int but fits in long (third arg selects checked type).
+    if (__builtin_mul_overflow_p(100000, 100000, 0) != 1)
+        return 1;
+    if (__builtin_mul_overflow_p(100000, 100000, 0L) != 0)
+        return 2;
+    // add.
+    if (__builtin_add_overflow_p(2147483647, 1, 0) != 1)
+        return 3;
+    if (__builtin_add_overflow_p(2147483647, 1, 0L) != 0)
+        return 4;
+    // sub.
+    if (__builtin_sub_overflow_p(-2147483647 - 1, 1, 0) != 1)
+        return 5;
+    if (__builtin_sub_overflow_p(-2147483647 - 1, 1, 0L) != 0)
+        return 6;
+    // No promotions on the last argument: checked against char.
+    if (__builtin_add_overflow_p(100, 100, (char)0) != 1)
+        return 7;
+    // Each argument evaluated exactly once; third value ignored.
+    int e = 0;
+    if (__builtin_mul_overflow_p(e++, 2, (e++, 0)) != 0)
+        return 8;
+    if (e != 2)
+        return 9;
+    return 0;
+}
+
 int test_control(int n) {
     if (n) {
         __builtin_unreachable();
@@ -300,6 +328,7 @@ int main(void) {
     assert(test_fp(1.5, 2.5) == 0);
     assert(test_libc() == 0);
     assert(test_bits() == 0);
+    assert(test_overflow_p() == 0);
 
     assert(test_control(0) == 0);
 
