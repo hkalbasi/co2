@@ -1463,6 +1463,10 @@ impl Builder<'_, '_> {
         if src_ty == dst_ty {
             return inner_op;
         }
+        if matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::Never)) {
+            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
+            return MirOperand::Copy(place(tmp));
+        }
         let src_enum_payload = enum_payload_ty(src_ty);
         let dst_enum_payload = enum_payload_ty(dst_ty);
         if let Some(dst_payload_ty) = dst_enum_payload {
@@ -2334,12 +2338,24 @@ impl Builder<'_, '_> {
                         _ => arg,
                     })
                     .collect();
-            self.emit_call_block(
-                fn_const_operand(*fn_def, generic_args, span),
-                arg_ops,
-                destination,
-                span,
-            );
+            if matches!(
+                self.ctx.normalize_ty_defaults(ret_ty).kind(),
+                TyKind::RigidTy(RigidTy::Never)
+            ) {
+                self.emit_diverging_call_block(
+                    fn_const_operand(*fn_def, generic_args, span),
+                    arg_ops,
+                    destination,
+                    span,
+                );
+            } else {
+                self.emit_call_block(
+                    fn_const_operand(*fn_def, generic_args, span),
+                    arg_ops,
+                    destination,
+                    span,
+                );
+            }
         } else {
             let func_op = if let Some(inner_fn_ptr) = maybe_uninit_fn_ptr_inner(func.ty) {
                 let op = self.lower_expr_to_operand(func);
@@ -2347,7 +2363,14 @@ impl Builder<'_, '_> {
             } else {
                 self.lower_expr_to_operand(func)
             };
-            self.emit_call_block(func_op, arg_ops, destination, span);
+            if matches!(
+                self.ctx.normalize_ty_defaults(ret_ty).kind(),
+                TyKind::RigidTy(RigidTy::Never)
+            ) {
+                self.emit_diverging_call_block(func_op, arg_ops, destination, span);
+            } else {
+                self.emit_call_block(func_op, arg_ops, destination, span);
+            }
         }
     }
 

@@ -1,0 +1,26 @@
+//@ mode: co2
+//@ run-status: 0
+
+#include <assert.h>
+
+fn f1(x: bool) -> i32 {
+    if (x) {
+        return 5;
+    }
+    int y = __builtin_unreachable();
+    return y + 3;
+}
+
+fn f2(x: bool) -> i32 {
+    if (!x) {
+        return 5;
+    }
+    int y = std::process::exit(0);
+    return y + 3;
+}
+
+fn main() {
+    assert(f1(1) == 5);
+    assert(f2(0) == 5);
+    assert(f2(1) == 12);
+}

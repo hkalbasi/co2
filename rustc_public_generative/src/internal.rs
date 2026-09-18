@@ -5109,6 +5109,7 @@ fn build_mir_body<'tcx>(
                     rustc_middle::mir::TerminatorKind::SwitchInt { discr, targets }
                 }
                 MirTerminatorKind::Return => rustc_middle::mir::TerminatorKind::Return,
+                MirTerminatorKind::Unreachable => rustc_middle::mir::TerminatorKind::Unreachable,
                 MirTerminatorKind::Call {
                     func,
                     args,

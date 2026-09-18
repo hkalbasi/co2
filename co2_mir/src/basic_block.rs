@@ -265,6 +265,34 @@ impl Builder<'_, '_> {
             });
     }
 
+    pub(crate) fn emit_diverging_call_block(
+        &mut self,
+        func: rustc_public_generative::rustc_public::mir::Operand,
+        args: Vec<rustc_public_generative::rustc_public::mir::Operand>,
+        destination: rustc_public_generative::rustc_public::mir::Place,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) {
+        // `!`-returning callee never returns: no target. Following statements
+        // land in an unreachable block, so dataflow (borrowck) ignores them.
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements: std::mem::take(&mut self.stmts),
+                terminator: MirTerminator {
+                    kind: TerminatorKind::Call {
+                        func,
+                        args,
+                        destination,
+                        target: None,
+                        unwind: UnwindAction::Continue,
+                    },
+                    source_info: SourceInfo {
+                        span,
+                        scope: self.current_scope(),
+                    },
+                },
+            });
+    }
+
     pub(crate) fn push_terminator(
         &mut self,
         kind: TerminatorKind,

@@ -284,6 +284,13 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
     if lhs_ty == rhs_ty {
         return Some(lhs_ty);
     }
+    // `!` coerces to the other side; don't cast it.
+    if matches!(lhs_ty.kind(), TyKind::RigidTy(RigidTy::Never)) {
+        return Some(rhs_ty);
+    }
+    if matches!(rhs_ty.kind(), TyKind::RigidTy(RigidTy::Never)) {
+        return Some(lhs_ty);
+    }
     if let Some(r) = common_numeric_ty(lhs_ty, rhs_ty) {
         return Some(r);
     }
@@ -470,6 +477,10 @@ pub(crate) fn callable_sig(ty: Ty) -> Option<Binder<FnSig>> {
 pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
     if dst == src {
         return false;
+    }
+    // `!` coerces to any type (never coercion).
+    if matches!(src.kind(), TyKind::RigidTy(RigidTy::Never)) {
+        return true;
     }
 
     let src_is_mu_fn_ptr = is_maybe_uninit_fn_ptr_ty(src).is_some();
