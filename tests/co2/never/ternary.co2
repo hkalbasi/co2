@@ -2,6 +2,7 @@
 //@ run-status: 0
 
 #include <assert.h>
+#include <stddef.h>
 
 fn main() {
     assert((0 ? __builtin_unreachable() : 5) == 5);
@@ -9,6 +10,11 @@ fn main() {
     int my_false = 0;
     assert((my_false ? __builtin_unreachable() : 5) == 5);
     assert((!my_false ? 3 : std::process::exit(5)) == 3);
+
+    my_false ? __builtin_unreachable() : (void)0;
+
+    assert(!(my_false ? __builtin_unreachable() : NULL));
+    assert(!(my_false ? __builtin_unreachable() : 0));
 
     assert((0 ? 3 : std::process::exit(0)) == 7);
 }

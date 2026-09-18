@@ -25,7 +25,8 @@ use crate::stmt::HirStmt;
 use crate::ty::{
     adt_field_tys, array_elem_ty, callable_sig, common_numeric_ty, enum_payload_ty,
     integer_promote_ty, is_array_ty, is_integer_ty, is_maybe_uninit_fn_ptr_ty, is_numeric_ty,
-    needs_implicit_cast, resolve_field_path_in_adt, ty_matches_expected, variant_idx,
+    is_void_ptr_ty, needs_implicit_cast, resolve_field_path_in_adt, ty_matches_expected,
+    variant_idx,
 };
 use crate::{decl::CTy, decl::hir_ty_to_ty, ty::is_condition_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
@@ -219,13 +220,34 @@ pub struct HirExpr {
 }
 
 impl HirExpr {
-    fn is_null_like(&self) -> bool {
+    /// Folded integer constant expression with value 0. Per C 6.6p6, casts
+    /// in an ICE may only convert arithmetic types to integer types, so a
+    /// cast of a pointer (e.g. `(int)(void *)0`) is not one.
+    fn is_integer_zero(&self) -> bool {
         match &self.kind {
-            HirExprKind::Zeroed | HirExprKind::ConstInt(0) => true,
-            HirExprKind::Cast(inner) => inner.is_null_like(),
+            HirExprKind::ConstInt(0) => is_integer_ty(self.ty),
+            HirExprKind::Cast(inner) if is_integer_ty(self.ty) => inner.is_integer_zero(),
             _ => false,
         }
     }
+
+    /// C 6.3.2.3p3 null pointer constant: an integer constant expression
+    /// with value 0, or such an expression cast to `void *`. A `(void *)`
+    /// cast of a pointer (e.g. `(void *)(void *)0`) is not one, so it takes
+    /// the `void *` composite-pointer path instead of adopting the other
+    /// side's type.
+    fn is_null_pointer_constant(&self) -> bool {
+        self.is_integer_zero()
+            || matches!(&self.kind, HirExprKind::Cast(inner) if is_void_ptr_ty(self.ty) && inner.is_integer_zero())
+    }
+}
+
+fn is_pointer_like(ty: Ty) -> bool {
+    is_maybe_uninit_fn_ptr_ty(ty).is_some()
+        || matches!(
+            ty.kind(),
+            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
+        )
 }
 
 impl std::fmt::Debug for HirExpr {
@@ -2118,9 +2140,6 @@ impl HirCtx<'_> {
                 };
                 let target_ty =
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
-                if ty_matches_expected(target_ty, inner.ty) {
-                    return Ok(inner);
-                }
                 let src_is_int = is_numeric_ty(inner.ty);
                 let dst_is_int = is_numeric_ty(target_ty);
                 let src_is_ptr_like = matches!(
@@ -2135,11 +2154,7 @@ impl HirCtx<'_> {
                     matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
                 let dst_is_void =
                     matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
-                let dst_is_void_ptr = matches!(
-                    target_ty.kind(),
-                    TyKind::RigidTy(RigidTy::RawPtr(pointee, _))
-                        if matches!(pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(items)) if items.is_empty())
-                );
+                let dst_is_void_ptr = is_void_ptr_ty(target_ty);
                 if !(((dst_is_ptr_like || dst_is_int) && (src_is_ptr_like || src_is_int))
                     || dst_is_void
                     || (src_is_fn_item && dst_is_int)
@@ -2147,6 +2162,7 @@ impl HirCtx<'_> {
                         && (matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
                             || is_maybe_uninit_fn_ptr_ty(target_ty).is_some()))
                     || (src_is_fn_item && dst_is_void_ptr))
+                    && !ty_matches_expected(target_ty, inner.ty)
                 {
                     return Err(spanned_error(
                         parser_span,
@@ -2654,15 +2670,7 @@ impl HirCtx<'_> {
 
                 let then_or_cond = then_expr.as_ref().unwrap_or(&cond_val);
 
-                let common_ty = if then_or_cond.is_null_like() {
-                    else_expr.ty
-                } else if else_expr.is_null_like() {
-                    then_or_cond.ty
-                } else if let Some(common_ty) =
-                    self.ternary_common_ty(then_or_cond.ty, else_expr.ty)
-                {
-                    common_ty
-                } else {
+                let Some(common_ty) = self.ternary_common_ty(then_or_cond, &else_expr) else {
                     self.terminate_with_error(
                         parser_span,
                         &format!(
@@ -3138,16 +3146,23 @@ impl HirCtx<'_> {
         integer_promote_ty(ty)
     }
 
-    fn ternary_common_ty(&self, lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
-        if is_numeric_ty(lhs_ty) && is_numeric_ty(rhs_ty) {
-            if lhs_ty == rhs_ty && enum_payload_ty(lhs_ty).is_some() {
-                return Some(self.promote_integer_ty(lhs_ty));
+    fn ternary_common_ty(&self, lhs: &HirExpr, rhs: &HirExpr) -> Option<Ty> {
+        // Null pointer constant converts to the other side's pointer type.
+        if lhs.is_null_pointer_constant() && is_pointer_like(rhs.ty) {
+            return Some(rhs.ty);
+        }
+        if rhs.is_null_pointer_constant() && is_pointer_like(lhs.ty) {
+            return Some(lhs.ty);
+        }
+        if is_numeric_ty(lhs.ty) && is_numeric_ty(rhs.ty) {
+            if lhs.ty == rhs.ty && enum_payload_ty(lhs.ty).is_some() {
+                return Some(self.promote_integer_ty(lhs.ty));
             }
-            if let Some(r) = common_numeric_ty(lhs_ty, rhs_ty) {
+            if let Some(r) = common_numeric_ty(lhs.ty, rhs.ty) {
                 return Some(self.promote_integer_ty(r));
             }
         }
-        common_ternary_ty(lhs_ty, rhs_ty)
+        common_ternary_ty(lhs.ty, rhs.ty)
     }
 
     /// Applies C integer promotion (C11 6.3.1.1p2) to a single operand before

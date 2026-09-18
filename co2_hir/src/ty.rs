@@ -291,9 +291,7 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
     if matches!(rhs_ty.kind(), TyKind::RigidTy(RigidTy::Never)) {
         return Some(lhs_ty);
     }
-    if let Some(r) = common_numeric_ty(lhs_ty, rhs_ty) {
-        return Some(r);
-    }
+    // Numeric pairs are handled with integer promotion by the caller.
     let TyKind::RigidTy(lhs) = lhs_ty.kind() else {
         return None;
     };
@@ -593,8 +591,12 @@ fn pointer_pointee_ty(ty: Ty) -> Option<Ty> {
     }
 }
 
-fn is_void_ty(ty: Ty) -> bool {
+pub(crate) fn is_void_ty(ty: Ty) -> bool {
     matches!(ty.kind(), TyKind::RigidTy(RigidTy::Tuple(items)) if items.is_empty())
+}
+
+pub(crate) fn is_void_ptr_ty(ty: Ty) -> bool {
+    matches!(ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) if is_void_ty(pointee))
 }
 
 fn pointer_pointees_compatible(expected: Ty, actual: Ty) -> bool {
