@@ -21,6 +21,9 @@ int array_decl[(intptr_t)some_pointer]; // Valid (although not useful) in C, com
   So in C in x86_64, `long` and `long long` are distinct 64 bit integer types, but in CO2 both are the same type.
   This generally does not cause problems, since in C and CO2 there are permissive casts between primitive types,
   but it is observable with `_Generic`, `__builtin_types_compatible_p` and similar things.
+* `inline int func()` has a very strange semantic which is not representable in Rust. CO2 treats it as `inline int func()`
+  which can observably differs from what C99 semantic is for `inline int func()`. Use either `static inline int func()`
+  or `extern inline int func()` to avoid inconsistency between C and CO2.
 
 ## Incompatibilities which seems doesn't worth the effort to fix
 

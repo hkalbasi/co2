@@ -1,5 +1,6 @@
 //@ mode: c
 //@ compile-fail
+//@ requires-header: stdcountof.h
 
 #include <stdcountof.h>
 

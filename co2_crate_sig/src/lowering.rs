@@ -11,7 +11,8 @@ use std::{
 use crate::attr::{Co2Attr, co2_attrs_to_generated};
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Designator, DoTransform as _,
-    Expression, FunctionDefinitionSignature, InitDeclarator, Initializer, IntegerSuffix, ModItem,
+    Expression, FunctionDefinitionSignature, FunctionSpecifier, InitDeclarator, Initializer,
+    IntegerSuffix, ModItem,
     Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, StructOrUnionSpecifier,
     Token, TranslationUnit, TypeQualifier, TypeResolver, TypeSpecifier,
     Visibility as AstVisibility, co2_test_symbol_name,
@@ -712,6 +713,12 @@ fn deduplicate_tu_items(
     let mut errors: Vec<co2_ast::Rich<'_, String, co2_ast::Span>> = Vec::new();
     let mut tu_item_id: usize = 0;
     let mut name_to_important_def = FxHashMap::<String, (usize, TuItemKind)>::default();
+    // Functions with a file-scope `extern` declaration. Per C99 6.7.4p7 an
+    // `inline` definition is only an inline definition (no external
+    // definition emitted) if every file-scope declaration says `inline`
+    // without `extern`; an `extern` declaration makes the definition
+    // provide the single external definition.
+    let mut extern_fn_names = FxHashSet::<String>::default();
 
     for (item, _) in &tu.items {
         match item {
@@ -805,6 +812,9 @@ fn deduplicate_tu_items(
                     } else {
                         StaticUninit
                     };
+                    if kind == ExternFunction {
+                        extern_fn_names.insert(name.clone());
+                    }
                     match name_to_important_def.entry(name.clone()) {
                         std::collections::hash_map::Entry::Occupied(mut entry) => {
                             let (_, old_kind) = *entry.get();
@@ -839,6 +849,37 @@ fn deduplicate_tu_items(
             let name = signature.ident().unwrap();
             let is_needed = name_to_important_def[&name].0 == tu_item_id;
             tu_item_id += 1;
+            // An `inline`-only definition merged with an `extern` function
+            // declaration provides the TU's external definition: record the
+            // `extern` on the definition itself so lowering emits it.
+            if is_needed
+                && let FunctionDefinitionSignature::C {
+                    declaration_specifiers,
+                    ..
+                } = signature
+                && extern_fn_names.contains(&name)
+                && declaration_specifiers.iter().any(|spec| {
+                    matches!(
+                        spec.0,
+                        co2_ast::DeclarationSpecifier::FunctionSpecifier((
+                            co2_ast::FunctionSpecifier::Inline,
+                            _
+                        ))
+                    )
+                })
+                && !declaration_specifiers
+                    .iter()
+                    .any(|spec| spec.0.is_extern() || spec.0.is_static())
+            {
+                let span = item.1;
+                declaration_specifiers.push((
+                    co2_ast::DeclarationSpecifier::StorageSpecifier((
+                        co2_ast::StorageClassSpecifier::Extern,
+                        span,
+                    )),
+                    span,
+                ));
+            }
             is_needed
         }
         Declaration::RustTypeAlias { .. } | Declaration::RustStruct { .. } => {
@@ -1326,8 +1367,19 @@ fn lower_translation_unit_items(
                         declaration_specifiers,
                         declarator,
                     } => {
-                        let is_static =
-                            declaration_specifiers.iter().any(|spec| spec.0.is_static());
+                        let is_extern =
+                            declaration_specifiers.iter().any(|spec| spec.0.is_extern());
+                        let is_static = declaration_specifiers.iter().any(|spec| {
+                            spec.0.is_static()
+                                || (!is_extern
+                                    && matches!(
+                                        spec.0,
+                                        DeclarationSpecifier::FunctionSpecifier((
+                                            FunctionSpecifier::Inline,
+                                            _
+                                        ))
+                                    ))
+                        });
                         let transformed_specs = declaration_specifiers;
                         let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
                         let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
