@@ -1219,7 +1219,36 @@ impl LocalResolverBase {
                 }
             }
             Expression::Cast { type_name, expr } => {
-                let value = self.eval_const_expr(expr)?;
+                let value = match self.eval_const_expr(expr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        // Support `(int)float_literal` in constant expressions.
+                        // Only a direct float literal (optionally with a unary
+                        // `+`/`-`) is allowed here; float arithmetic such as
+                        // `(int)(1.2 + 3.4)` is still rejected as non-constant.
+                        let float_value = match &expr.0 {
+                            Expression::Constant(Constant::Float(f, _)) => Some(*f),
+                            Expression::UnaryOp(op, inner)
+                                if matches!(op, UnaryOp::Plus | UnaryOp::Minus) =>
+                            {
+                                if let Expression::Constant(Constant::Float(f, _)) = &inner.0 {
+                                    Some(if matches!(op, UnaryOp::Minus) {
+                                        -*f
+                                    } else {
+                                        *f
+                                    })
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        let Some(float_value) = float_value else {
+                            return Err(err);
+                        };
+                        float_value.trunc() as i128
+                    }
+                };
                 let target_ty = self.lower_type_name_for_const(*type_name.clone(), *span);
                 self.cast_const_int(value, &target_ty, *span)
             }

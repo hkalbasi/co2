@@ -10,6 +10,9 @@ static int global_copy = global;
 int global_arr[global];
 constexpr int *global_null = 0;
 
+constexpr int eval1 = 42 + 24;
+constexpr int eval2 = (int)(1.6);
+
 int main(void) {
     constexpr int local = 4;
     int local_arr[local];
@@ -44,6 +47,12 @@ int main(void) {
     }
     if (global3[0] != 'h' || global3[1] != 'e' || global3[4] != 'o' || global3[5] != '\0') {
         return 10;
+    }
+    if (eval1 != 66) {
+        return 11;
+    }
+    if (eval2 != 1) {
+        return 12;
     }
     return 0;
 }

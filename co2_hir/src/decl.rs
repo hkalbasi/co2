@@ -300,7 +300,7 @@ fn validate_local_constexpr_decl(
         && ctx.decl_resolver.eval_const_expr(expr).is_err()
     {
         return Err(spanned_error(
-            span,
+            expr.1,
             "`constexpr` initializer must be a constant expression",
         ));
     }
@@ -1239,7 +1239,39 @@ impl HirCtx<'_> {
                     )?;
                     return cast_const_int_to_ty(i128::from(off), target_ty);
                 }
-                let value = self.eval_const_expr_in_scope(expr, locals, local_map)?;
+                let value = match self.eval_const_expr_in_scope(expr, locals, local_map) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        // Support `(int)float_literal` in constant expressions.
+                        // Only a direct float literal (optionally with a unary
+                        // `+`/`-`) is allowed here; float arithmetic such as
+                        // `(int)(1.2 + 3.4)` is still rejected as non-constant.
+                        let float_value = match &expr.0 {
+                            Expression::Constant(Constant::Float(f, _)) => Some(*f),
+                            Expression::UnaryOp(op, inner)
+                                if matches!(
+                                    op,
+                                    co2_ast::UnaryOp::Plus | co2_ast::UnaryOp::Minus
+                                ) =>
+                            {
+                                if let Expression::Constant(Constant::Float(f, _)) = &inner.0 {
+                                    Some(if matches!(op, co2_ast::UnaryOp::Minus) {
+                                        -*f
+                                    } else {
+                                        *f
+                                    })
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        let Some(float_value) = float_value else {
+                            return Err(err);
+                        };
+                        float_value.trunc() as i128
+                    }
+                };
                 let target_ty =
                     self.lower_type_name_in_scope(*type_name.clone(), *span, locals, local_map)?;
                 cast_const_int_to_ty(value, target_ty)

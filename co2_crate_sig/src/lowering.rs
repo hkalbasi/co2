@@ -1585,25 +1585,34 @@ fn lower_translation_unit_items(
                     match ty {
                         CTy::Ty(ty) => {
                             let (id, _) = resolve_in_module(ctx, module_path, &name);
+                            let mut constexpr_valid = false;
                             if is_constexpr {
-                                ctx.resolver
-                                    .borrow_mut()
-                                    .validate_constexpr_decl(
+                                let validation =
+                                    ctx.resolver.borrow_mut().validate_constexpr_decl(
                                         &original_specs,
                                         &declarator_for_checks.0,
                                         &CTy::Ty(ty.clone()),
                                         initializer.as_ref(),
-                                    )
-                                    .unwrap_or_else(|err| {
-                                        CrateSigCtx::<'_>::terminate_with_spanned_error(err)
-                                    });
-                                if let Some((co2_ast::Initializer::Expr(expr), _span)) =
-                                    initializer.clone()
-                                {
-                                    ctx.resolver
-                                        .borrow_mut()
-                                        .constexpr_def_exprs
-                                        .insert(id, expr);
+                                    );
+                                match validation {
+                                    Ok(()) => {
+                                        constexpr_valid = true;
+                                        if let Some((
+                                            co2_ast::Initializer::Expr(expr),
+                                            _span,
+                                        )) = initializer.clone()
+                                        {
+                                            ctx.resolver
+                                                .borrow_mut()
+                                                .constexpr_def_exprs
+                                                .insert(id, expr);
+                                        }
+                                    }
+                                    Err((span, msg)) => {
+                                        co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                                            span, msg,
+                                        )]);
+                                    }
                                 }
                             }
                             if is_extern {
@@ -1615,7 +1624,7 @@ fn lower_translation_unit_items(
                                     is_thread_local,
                                     span,
                                 });
-                            } else if is_constexpr && is_scalar_type(&ty) {
+                            } else if constexpr_valid && is_scalar_type(&ty) {
                                 // For non-pointer constexpr, create an AnonConst DefId for the initializer
                                 let rhs = ctx.allocate_def_id(id, &DefData::AnonConst);
                                 if let Some(init) = initializer {
@@ -1681,18 +1690,16 @@ fn lower_translation_unit_items(
                         }
                         CTy::UnsizedArray(elem_ty) => {
                             let (id, _) = resolve_in_module(ctx, module_path, &name);
-                            if is_constexpr {
-                                ctx.resolver
-                                    .borrow_mut()
-                                    .validate_constexpr_decl(
+                            if is_constexpr
+                                && let Err((span, msg)) =
+                                    ctx.resolver.borrow_mut().validate_constexpr_decl(
                                         &original_specs,
                                         &declarator_for_checks.0,
                                         &CTy::UnsizedArray(elem_ty.clone()),
                                         initializer.as_ref(),
                                     )
-                                    .unwrap_or_else(|err| {
-                                        CrateSigCtx::<'_>::terminate_with_spanned_error(err)
-                                    });
+                            {
+                                co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
                             }
                             if let Some(initializer) = initializer {
                                 let len =
@@ -2086,22 +2093,26 @@ pub fn lower_crate_sig(
         match ty {
             CTy::Ty(ty) => {
                 if is_constexpr {
-                    ctx.resolver
-                        .borrow_mut()
-                        .validate_constexpr_decl(
-                            &original_specs,
-                            &declarator_for_checks.0,
-                            &CTy::Ty(ty.clone()),
-                            declarator.initializer.as_ref(),
-                        )
-                        .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_spanned_error(err));
-                    if let Some((co2_ast::Initializer::Expr(expr), _span)) =
-                        declarator.initializer.clone()
-                    {
-                        ctx.resolver
-                            .borrow_mut()
-                            .constexpr_def_exprs
-                            .insert(id, expr);
+                    let validation = ctx.resolver.borrow_mut().validate_constexpr_decl(
+                        &original_specs,
+                        &declarator_for_checks.0,
+                        &CTy::Ty(ty.clone()),
+                        declarator.initializer.as_ref(),
+                    );
+                    match validation {
+                        Ok(()) => {
+                            if let Some((co2_ast::Initializer::Expr(expr), _span)) =
+                                declarator.initializer.clone()
+                            {
+                                ctx.resolver
+                                    .borrow_mut()
+                                    .constexpr_def_exprs
+                                    .insert(id, expr);
+                            }
+                        }
+                        Err((span, msg)) => {
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
+                        }
                     }
                 }
                 ctx.hir_items.push(HirModuleItem::Static {
@@ -2127,16 +2138,16 @@ pub fn lower_crate_sig(
                 }
             }
             CTy::UnsizedArray(elem_ty) => {
-                if is_constexpr {
-                    ctx.resolver
-                        .borrow_mut()
-                        .validate_constexpr_decl(
+                if is_constexpr
+                    && let Err((span, msg)) =
+                        ctx.resolver.borrow_mut().validate_constexpr_decl(
                             &original_specs,
                             &declarator_for_checks.0,
                             &CTy::UnsizedArray(elem_ty.clone()),
                             declarator.initializer.as_ref(),
                         )
-                        .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_spanned_error(err));
+                {
+                    co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
                 }
                 let initializer = if let Some((initializer, init_span)) = declarator.initializer {
                     (initializer, init_span)

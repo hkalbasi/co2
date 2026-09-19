@@ -5,7 +5,7 @@
 
 int ar1[12] = {};
 int ar2[12 + 3] = {};
-int ar3[12 / 3 + 4 * 5] = {};
+int ar3[12 / ((int)3.2) + 4 * 5] = {};
 int ar4[sizeof(int) + 3] = {};
 int ar5[sizeof(ar3) + 3] = {};
 
