@@ -689,7 +689,7 @@ fn build_rustc_object_args(
         "rustc".to_owned(),
         "--crate-name".to_owned(),
         stem,
-        "--crate-type=bin".to_owned(),
+        "--crate-type=staticlib".to_owned(),
         "--edition=2024".to_owned(),
         emit,
     ];
@@ -749,7 +749,7 @@ fn build_rustc_asm_args(
         "rustc".to_owned(),
         "--crate-name".to_owned(),
         stem,
-        "--crate-type=bin".to_owned(),
+        "--crate-type=staticlib".to_owned(),
         "--edition=2024".to_owned(),
         emit,
     ];
