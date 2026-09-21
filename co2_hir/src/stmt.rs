@@ -40,36 +40,17 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) {
-        let mut body_stmts = Vec::new();
         for (stmt_or_decl, _) in compound.statements {
-            let mut lowered = Vec::new();
             match stmt_or_decl {
                 StatementOrDeclaration::Statement((stmt, span)) => {
-                    self.lower_stmt(stmt, span, &mut lowered, locals, local_map);
+                    self.lower_stmt(stmt, span, out, locals, local_map);
                 }
                 StatementOrDeclaration::Declaration((decl, _span)) => {
-                    self.lower_decl(decl, &mut lowered, locals, local_map)
+                    self.lower_decl(decl, out, locals, local_map)
                         .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                 }
             }
-            for stmt in lowered {
-                if matches!(
-                    &stmt,
-                    HirStmt::Decl(HirDecl {
-                        initializer: Some(HirExpr {
-                            kind: HirExprKind::Zeroed,
-                            ..
-                        }),
-                        ..
-                    })
-                ) {
-                    self.hoist_zeroed_decl(stmt);
-                } else {
-                    body_stmts.push(stmt);
-                }
-            }
         }
-        out.extend(body_stmts);
     }
 
     pub(crate) fn lower_stmt(

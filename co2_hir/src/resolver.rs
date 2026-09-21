@@ -10,7 +10,6 @@ use la_arena::Arena;
 
 use crate::expr::HirExpr;
 use crate::item::{HirLabel, LabelId, LocalId};
-use crate::stmt::HirStmt;
 
 pub(crate) struct SwitchScope {
     pub(crate) discr_local: LocalId,
@@ -66,7 +65,6 @@ pub struct HirCtx<'a> {
     continue_labels: RefCell<Vec<LabelId>>,
     break_labels: RefCell<Vec<LabelId>>,
     switch_scopes: RefCell<Vec<SwitchScope>>,
-    hoisted_zeroed_decls: RefCell<Vec<HirStmt>>,
     pub(crate) c_variadic_local: Option<LocalId>,
     pub(crate) decl_resolver: LocalResolver,
     pub(crate) function_name: Option<String>,
@@ -91,7 +89,6 @@ impl<'a> HirCtx<'a> {
             continue_labels: RefCell::new(Vec::new()),
             break_labels: RefCell::new(Vec::new()),
             switch_scopes: RefCell::new(Vec::new()),
-            hoisted_zeroed_decls: RefCell::new(Vec::new()),
             c_variadic_local: None,
             decl_resolver,
             function_name,
@@ -145,19 +142,10 @@ impl<'a> HirCtx<'a> {
         self.continue_labels.borrow_mut().clear();
         self.break_labels.borrow_mut().clear();
         self.switch_scopes.borrow_mut().clear();
-        self.hoisted_zeroed_decls.borrow_mut().clear();
     }
 
     pub(crate) fn take_labels(&self) -> Arena<HirLabel> {
         std::mem::take(&mut *self.labels.borrow_mut())
-    }
-
-    pub(crate) fn hoist_zeroed_decl(&self, stmt: HirStmt) {
-        self.hoisted_zeroed_decls.borrow_mut().push(stmt);
-    }
-
-    pub(crate) fn take_hoisted_zeroed_decls(&self) -> Vec<HirStmt> {
-        std::mem::take(&mut *self.hoisted_zeroed_decls.borrow_mut())
     }
 
     pub(crate) fn fresh_label(&self) -> LabelId {
