@@ -178,6 +178,10 @@ impl<A: TypeResolver> DoTransform for TypeSpecifier<A> {
             TypeSpecifier::Long => TypeSpecifier::Long,
             TypeSpecifier::Float => TypeSpecifier::Float,
             TypeSpecifier::Double => TypeSpecifier::Double,
+            TypeSpecifier::Float16 => TypeSpecifier::Float16,
+            TypeSpecifier::Float32 => TypeSpecifier::Float32,
+            TypeSpecifier::Float64 => TypeSpecifier::Float64,
+            TypeSpecifier::Float128 => TypeSpecifier::Float128,
             TypeSpecifier::Signed => TypeSpecifier::Signed,
             TypeSpecifier::Unsigned => TypeSpecifier::Unsigned,
             TypeSpecifier::StructOrUnion { kind, specifier } => {

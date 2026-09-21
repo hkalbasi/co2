@@ -225,6 +225,13 @@ impl PrettyPrint for Constant {
                     FloatSuffix::None => format!("{v}"),
                     FloatSuffix::Float => format!("{v}f"),
                     FloatSuffix::Long => format!("{v}l"),
+                    FloatSuffix::F16 => format!("{v}f16"),
+                    FloatSuffix::F32 => format!("{v}f32"),
+                    FloatSuffix::F64 => format!("{v}f64"),
+                    FloatSuffix::F128 => format!("{v}f128"),
+                    FloatSuffix::F32x => format!("{v}f32x"),
+                    FloatSuffix::F64x => format!("{v}f64x"),
+                    FloatSuffix::F128x => format!("{v}f128x"),
                 };
                 pp.leaf_data("Float", "", &s);
             }
@@ -373,6 +380,10 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
             TypeSpecifier::Long => pp.leaf("Long", &sp),
             TypeSpecifier::Float => pp.leaf("Float", &sp),
             TypeSpecifier::Double => pp.leaf("Double", &sp),
+            TypeSpecifier::Float16 => pp.leaf("Float16", &sp),
+            TypeSpecifier::Float32 => pp.leaf("Float32", &sp),
+            TypeSpecifier::Float64 => pp.leaf("Float64", &sp),
+            TypeSpecifier::Float128 => pp.leaf("Float128", &sp),
             TypeSpecifier::Signed => pp.leaf("Signed", &sp),
             TypeSpecifier::Unsigned => pp.leaf("Unsigned", &sp),
             TypeSpecifier::StructOrUnion { kind, specifier } => {

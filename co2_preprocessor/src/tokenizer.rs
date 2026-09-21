@@ -291,6 +291,14 @@ impl<'a> Tokenizer<'a> {
             "enum" => Token::Enum,
             "extern" => Token::Extern,
             "float" => Token::Float,
+            "_Float16" => Token::Float16,
+            "_Float32" => Token::Float32,
+            "_Float64" => Token::Float64,
+            "_Float128" => Token::Float128,
+            "_Float32x" => Token::Float32x,
+            "_Float64x" => Token::Float64x,
+            "_Float128x" => Token::Float128x,
+            "__float128" => Token::GnuFloat128,
             "for" => Token::For,
             "goto" => Token::Goto,
             "if" => Token::If,
@@ -1360,7 +1368,59 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn parse_float_suffix(&mut self) -> FloatSuffix {
+        // Longest C23 _FloatN suffixes first (case-insensitive for the
+        // letter part, e.g. 1.0F32X == 1.0f32x).
+        let rest = |s: &[u8]| std::str::from_utf8(s).unwrap_or("").to_ascii_lowercase();
         if self.pos < self.len {
+            // 6-char: f128x
+            if self.pos + 5 <= self.len {
+                let five = rest(&self.bytes[self.pos..self.pos + 5]);
+                match five.as_str() {
+                    "f128x" => {
+                        self.pos += 5;
+                        return FloatSuffix::F128x;
+                    }
+                    _ => {}
+                }
+            }
+            // 4-char: f128, f32x, f64x
+            if self.pos + 4 <= self.len {
+                let four = rest(&self.bytes[self.pos..self.pos + 4]);
+                match four.as_str() {
+                    "f128" => {
+                        self.pos += 4;
+                        return FloatSuffix::F128;
+                    }
+                    "f32x" => {
+                        self.pos += 4;
+                        return FloatSuffix::F32x;
+                    }
+                    "f64x" => {
+                        self.pos += 4;
+                        return FloatSuffix::F64x;
+                    }
+                    _ => {}
+                }
+            }
+            // 3-char: f16, f32, f64
+            if self.pos + 3 <= self.len {
+                let three = rest(&self.bytes[self.pos..self.pos + 3]);
+                match three.as_str() {
+                    "f16" => {
+                        self.pos += 3;
+                        return FloatSuffix::F16;
+                    }
+                    "f32" => {
+                        self.pos += 3;
+                        return FloatSuffix::F32;
+                    }
+                    "f64" => {
+                        self.pos += 3;
+                        return FloatSuffix::F64;
+                    }
+                    _ => {}
+                }
+            }
             match self.bytes[self.pos] {
                 b'f' | b'F' => {
                     self.pos += 1;

@@ -486,6 +486,10 @@ pub enum TypeSpecifier<R: TypeResolver> {
     Double,
     Signed,
     Unsigned,
+    Float16,
+    Float32,
+    Float64,
+    Float128,
     StructOrUnion {
         kind: StructOrUnionKind,
         specifier: Spanned<R::StructOrUnionIdentifier>,
@@ -623,6 +627,14 @@ pub enum Token {
     Enum,
     Extern,
     Float,
+    Float16,
+    Float32,
+    Float64,
+    Float128,
+    Float32x,
+    Float64x,
+    Float128x,
+    GnuFloat128,
     For,
     Goto,
     If,
@@ -761,6 +773,13 @@ pub enum FloatSuffix {
     None,
     Float, // f or F
     Long,  // l or L
+    F16,   // f16 or F16
+    F32,   // f32 or F32
+    F64,   // f64 or F64
+    F128,  // f128 or F128
+    F32x,  // f32x or F32x
+    F64x,  // f64x or F64x
+    F128x, // f128x or F128x
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -957,6 +976,14 @@ impl Display for Token {
             Token::Enum => write!(f, "enum"),
             Token::Extern => write!(f, "extern"),
             Token::Float => write!(f, "float"),
+            Token::Float16 => write!(f, "_Float16"),
+            Token::Float32 => write!(f, "_Float32"),
+            Token::Float64 => write!(f, "_Float64"),
+            Token::Float128 => write!(f, "_Float128"),
+            Token::Float32x => write!(f, "_Float32x"),
+            Token::Float64x => write!(f, "_Float64x"),
+            Token::Float128x => write!(f, "_Float128x"),
+            Token::GnuFloat128 => write!(f, "__float128"),
             Token::For => write!(f, "for"),
             Token::Goto => write!(f, "goto"),
             Token::If => write!(f, "if"),
@@ -1036,6 +1063,13 @@ impl Display for Token {
                     FloatSuffix::None => Ok(()),
                     FloatSuffix::Float => write!(f, "f"),
                     FloatSuffix::Long => write!(f, "l"),
+                    FloatSuffix::F16 => write!(f, "f16"),
+                    FloatSuffix::F32 => write!(f, "f32"),
+                    FloatSuffix::F64 => write!(f, "f64"),
+                    FloatSuffix::F128 => write!(f, "f128"),
+                    FloatSuffix::F32x => write!(f, "f32x"),
+                    FloatSuffix::F64x => write!(f, "f64x"),
+                    FloatSuffix::F128x => write!(f, "f128x"),
                 }
             }
             Token::CharLit(bytes, prefix) => {

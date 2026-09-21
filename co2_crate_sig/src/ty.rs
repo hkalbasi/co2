@@ -88,6 +88,22 @@ impl CompressedTypeSpecifier {
                     TypeSpecifier::Float => {
                         CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F32))
                     }
+                    // C23 _FloatN / _FloatNx and GNU __float128. The x-types
+                    // alias the matching standard width (same representation);
+                    // _Float32/_Float64 stay distinct from float/double only
+                    // for _Generic (see c_generic_ty_matches).
+                    TypeSpecifier::Float16 => {
+                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F16))
+                    }
+                    TypeSpecifier::Float32 => {
+                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F32))
+                    }
+                    TypeSpecifier::Float64 => {
+                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F64))
+                    }
+                    TypeSpecifier::Float128 => {
+                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F128))
+                    }
                     TypeSpecifier::Bool => CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::Bool),
                     &TypeSpecifier::StructOrUnion { kind, specifier } => {
                         CompressedTypeSpecifier::StructOrUnion { kind, specifier }
@@ -136,6 +152,10 @@ impl CompressedTypeSpecifier {
                 TypeSpecifier::Bool
                 | TypeSpecifier::Void
                 | TypeSpecifier::Float
+                | TypeSpecifier::Float16
+                | TypeSpecifier::Float32
+                | TypeSpecifier::Float64
+                | TypeSpecifier::Float128
                 | TypeSpecifier::StructOrUnion { .. }
                 | TypeSpecifier::Enum(_)
                 | TypeSpecifier::TypedefName(_)
@@ -2630,9 +2650,12 @@ impl PrimitiveTy {
             "bool" => Some(PrimitiveTy::Bool),
             "char" => Some(PrimitiveTy::Char),
             "f16" => Some(PrimitiveTy::FloatTy(FloatTy::F16)),
-            "f32" | "_Float32" | "_Float32x" => Some(PrimitiveTy::FloatTy(FloatTy::F32)),
-            "f64" | "_Float64" | "_Float64x" => Some(PrimitiveTy::FloatTy(FloatTy::F64)),
-            "f128" | "_Float128" => Some(PrimitiveTy::FloatTy(FloatTy::F128)),
+            "f32" => Some(PrimitiveTy::FloatTy(FloatTy::F32)),
+            "f64" => Some(PrimitiveTy::FloatTy(FloatTy::F64)),
+            "f128" => {
+                Some(PrimitiveTy::FloatTy(FloatTy::F128))
+            }
+            "_Float32x" => Some(PrimitiveTy::FloatTy(FloatTy::F64)),
             _ => None,
         }
     }

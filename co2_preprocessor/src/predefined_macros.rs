@@ -207,20 +207,90 @@ impl Preprocessor {
             // which differs from C11 _Alignof on i686.
             // Named address spaces (Linux kernel): __seg_gs/__seg_fs are handled
             // as keyword tokens in the lexer (token.rs), not as macros.
-            // __float128 -> long double (glibc compat)
-            ("__float128", "long double"),
+            // C23 _FloatN/_FloatNx and GNU __float128 are real keywords now
+            // (see tokenizer.rs); they must NOT be macros so _Generic can
+            // distinguish _Float32 from float etc.
             ("__SIZEOF_FLOAT128__", "16"),
-            // _Float* types: For GCC >= 7, glibc expects the compiler to provide these
-            // natively. We define them as macros to the corresponding standard C types.
-            // TODO: Implement _Float* as proper builtin types with correct semantics
-            // (e.g., _Float128 should be true IEEE binary128, not 80-bit long double
-            // on x86-64). The macro approach works for glibc header compatibility but
-            // loses precision for _Float128 operations on x86-64.
-            ("_Float128", "long double"),
-            ("_Float32", "float"),
-            ("_Float64", "double"),
-            ("_Float32x", "double"),
-            ("_Float64x", "long double"),
+            ("__SIZEOF_FLOAT16__", "2"),
+            // C23 IEC 60559 floating types are all supported.
+            ("__STDC_IEC_60559_TYPES__", "1"),
+            ("__STDC_IEC_60559_BFP__", "201404L"),
+            ("__STDC_IEC_60559_DFP__", "201404L"),
+            // __FLT* feature macros (match GCC 14 values; suffixes parse via
+            // the f16/f32/f64/f128/f32x/f64x tokenizer suffixes).
+            ("__FLT16_MANT_DIG__", "11"),
+            ("__FLT16_DIG__", "3"),
+            ("__FLT16_MIN_EXP__", "(-13)"),
+            ("__FLT16_MIN_10_EXP__", "(-4)"),
+            ("__FLT16_MAX_EXP__", "16"),
+            ("__FLT16_MAX_10_EXP__", "4"),
+            ("__FLT16_MAX__", "6.5504e+4F16"),
+            ("__FLT16_MIN__", "6.103515625e-5F16"),
+            ("__FLT16_EPSILON__", "9.765625e-4F16"),
+            ("__FLT16_DENORM_MIN__", "5.960464477539063e-8F16"),
+            ("__FLT32_MANT_DIG__", "24"),
+            ("__FLT32_DIG__", "6"),
+            ("__FLT32_MIN_EXP__", "(-125)"),
+            ("__FLT32_MIN_10_EXP__", "(-37)"),
+            ("__FLT32_MAX_EXP__", "128"),
+            ("__FLT32_MAX_10_EXP__", "38"),
+            ("__FLT32_MAX__", "3.4028234663852886e+38F32"),
+            ("__FLT32_MIN__", "1.1754943508222875e-38F32"),
+            ("__FLT32_EPSILON__", "1.1920928955078125e-7F32"),
+            ("__FLT32_DENORM_MIN__", "1.4012984643248171e-45F32"),
+            ("__FLT64_MANT_DIG__", "53"),
+            ("__FLT64_DIG__", "15"),
+            ("__FLT64_MIN_EXP__", "(-1021)"),
+            ("__FLT64_MIN_10_EXP__", "(-307)"),
+            ("__FLT64_MAX_EXP__", "1024"),
+            ("__FLT64_MAX_10_EXP__", "308"),
+            ("__FLT64_MAX__", "1.7976931348623157e+308F64"),
+            ("__FLT64_MIN__", "2.2250738585072014e-308F64"),
+            ("__FLT64_EPSILON__", "2.2204460492503131e-16F64"),
+            ("__FLT64_DENORM_MIN__", "4.9406564584124654e-324F64"),
+            ("__FLT128_MANT_DIG__", "113"),
+            ("__FLT128_DIG__", "33"),
+            ("__FLT128_MIN_EXP__", "(-16381)"),
+            ("__FLT128_MIN_10_EXP__", "(-4931)"),
+            ("__FLT128_MAX_EXP__", "16384"),
+            ("__FLT128_MAX_10_EXP__", "4932"),
+            ("__FLT128_MAX__", "1.1897314953572318e+4932F128"),
+            // TODO: f64-range placeholder; true min underflows f64 parsing.
+            ("__FLT128_MIN__", "2.2250738585072014e-308F128"),
+            ("__FLT128_EPSILON__", "1.9259299443872359e-34F128"),
+            ("__FLT128_DENORM_MIN__", "6.4751751194380251e-4966F128"),
+            ("__FLT32X_MANT_DIG__", "53"),
+            ("__FLT32X_DIG__", "15"),
+            ("__FLT32X_MIN_EXP__", "(-1021)"),
+            ("__FLT32X_MIN_10_EXP__", "(-307)"),
+            ("__FLT32X_MAX_EXP__", "1024"),
+            ("__FLT32X_MAX_10_EXP__", "308"),
+            ("__FLT32X_MAX__", "1.7976931348623157e+308F32x"),
+            ("__FLT32X_MIN__", "2.2250738585072014e-308F32x"),
+            ("__FLT32X_EPSILON__", "2.2204460492503131e-16F32x"),
+            ("__FLT32X_DENORM_MIN__", "4.9406564584124654e-324F32x"),
+            ("__FLT64X_MANT_DIG__", "64"),
+            ("__FLT64X_DIG__", "18"),
+            ("__FLT64X_MIN_EXP__", "(-16381)"),
+            ("__FLT64X_MIN_10_EXP__", "(-4931)"),
+            ("__FLT64X_MAX_EXP__", "16384"),
+            ("__FLT64X_MAX_10_EXP__", "4932"),
+            ("__FLT64X_MAX__", "1.1897314953572318e+4932F64x"),
+            // TODO: f64-range placeholder; true min underflows f64 parsing.
+            ("__FLT64X_MIN__", "2.2250738585072014e-308F64x"),
+            ("__FLT64X_EPSILON__", "1.0842021724855044e-19F64x"),
+            ("__FLT64X_DENORM_MIN__", "3.6451995318824746e-4951F64x"),
+            ("__FLT128X_MANT_DIG__", "113"),
+            ("__FLT128X_DIG__", "33"),
+            ("__FLT128X_MIN_EXP__", "(-16381)"),
+            ("__FLT128X_MIN_10_EXP__", "(-4931)"),
+            ("__FLT128X_MAX_EXP__", "16384"),
+            ("__FLT128X_MAX_10_EXP__", "4932"),
+            ("__FLT128X_MAX__", "1.1897314953572318e+4932F128x"),
+            // TODO: f64-range placeholder; true min underflows f64 parsing.
+            ("__FLT128X_MIN__", "2.2250738585072014e-308F128x"),
+            ("__FLT128X_EPSILON__", "1.9259299443872359e-34F128x"),
+            ("__FLT128X_DENORM_MIN__", "6.4751751194380251e-4966F128x"),
             // MSVC integer type specifiers
             ("__int8", "char"),
             ("__int16", "short"),

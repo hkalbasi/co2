@@ -340,6 +340,14 @@ fn c_type_keyword_token_str(token: &Token) -> Option<&'static str> {
         Token::Const => "const",
         Token::Double => "double",
         Token::Float => "float",
+        Token::Float16 => "_Float16",
+        Token::Float32 => "_Float32",
+        Token::Float64 => "_Float64",
+        Token::Float128 => "_Float128",
+        Token::Float32x => "_Float32x",
+        Token::Float64x => "_Float64x",
+        Token::Float128x => "_Float128x",
+        Token::GnuFloat128 => "__float128",
         Token::Int => "int",
         Token::Long => "long",
         Token::Restrict => "restrict",
@@ -408,6 +416,14 @@ fn keyword_token_str(token: &Token) -> Option<&'static str> {
         Token::Enum => "enum",
         Token::Extern => "extern",
         Token::Float => "float",
+        Token::Float16 => "_Float16",
+        Token::Float32 => "_Float32",
+        Token::Float64 => "_Float64",
+        Token::Float128 => "_Float128",
+        Token::Float32x => "_Float32x",
+        Token::Float64x => "_Float64x",
+        Token::Float128x => "_Float128x",
+        Token::GnuFloat128 => "__float128",
         Token::For => "for",
         Token::Goto => "goto",
         Token::If => "if",
@@ -1012,6 +1028,14 @@ impl<'a, R: TypeResolver> P<'a, R> {
             Some(Token::Long) => TypeSpecifier::Long,
             Some(Token::Float) => TypeSpecifier::Float,
             Some(Token::Double) => TypeSpecifier::Double,
+            Some(Token::Float16) => TypeSpecifier::Float16,
+            Some(Token::Float32) => TypeSpecifier::Float32,
+            Some(Token::Float64) => TypeSpecifier::Float64,
+            Some(Token::Float128) => TypeSpecifier::Float128,
+            Some(Token::Float32x) => TypeSpecifier::Float64,
+            Some(Token::Float64x) => TypeSpecifier::Float128,
+            Some(Token::Float128x) => TypeSpecifier::Float128,
+            Some(Token::GnuFloat128) => TypeSpecifier::Float128,
             Some(Token::Signed) => TypeSpecifier::Signed,
             Some(Token::Unsigned) => TypeSpecifier::Unsigned,
             _ => {
@@ -1344,6 +1368,14 @@ impl<'a, R: TypeResolver> P<'a, R> {
                     | Token::Long
                     | Token::Float
                     | Token::Double
+                    | Token::Float16
+                    | Token::Float32
+                    | Token::Float64
+                    | Token::Float128
+                    | Token::Float32x
+                    | Token::Float64x
+                    | Token::Float128x
+                    | Token::GnuFloat128
                     | Token::Signed
                     | Token::Unsigned
                     | Token::Alignas
@@ -2560,6 +2592,14 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 | Token::Long
                 | Token::Float
                 | Token::Double
+                | Token::Float16
+                | Token::Float32
+                | Token::Float64
+                | Token::Float128
+                | Token::Float32x
+                | Token::Float64x
+                | Token::Float128x
+                | Token::GnuFloat128
                 | Token::Signed
                 | Token::Unsigned
                 | Token::Typeof

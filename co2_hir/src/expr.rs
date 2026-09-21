@@ -1613,6 +1613,13 @@ impl HirCtx<'_> {
                     co2_ast::FloatSuffix::Float => FloatTy::F32,
                     co2_ast::FloatSuffix::None => FloatTy::F64,
                     co2_ast::FloatSuffix::Long => FloatTy::F128,
+                    co2_ast::FloatSuffix::F16 => FloatTy::F16,
+                    co2_ast::FloatSuffix::F32 => FloatTy::F32,
+                    co2_ast::FloatSuffix::F64 => FloatTy::F64,
+                    co2_ast::FloatSuffix::F128 => FloatTy::F128,
+                    co2_ast::FloatSuffix::F32x => FloatTy::F64,
+                    co2_ast::FloatSuffix::F64x => FloatTy::F128,
+                    co2_ast::FloatSuffix::F128x => FloatTy::F128,
                 };
                 Ok(HirExpr {
                     kind: HirExprKind::ConstFloat(v),
