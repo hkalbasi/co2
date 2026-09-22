@@ -25,6 +25,12 @@ Options:
   -Wl,<option>         Pass option to linker
   -Xlinker <option>    Pass option to linker
   -masm=<flavor>       Use given assembly style (att/intel) for -S output
+  -march=<cpu>         Target CPU for codegen (e.g. native, haswell, x86-64-v3);
+                       maps to rustc -C target-cpu=<cpu>
+  -mtune=<cpu>         Accepted for compatibility (no codegen effect)
+  -m<feature>          Enable x86 target feature (e.g. -mavx2, -mfma, -msse4.2);
+                       maps to rustc -C target-feature=+<feature>
+  -mno-<feature>       Disable x86 target feature
   -ftime-report        Print timing report
   -MD                  Generate make dependency file
   -MMD                 Like -MD but ignore system headers

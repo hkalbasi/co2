@@ -332,6 +332,16 @@ impl Preprocessor {
         // These use compiler builtins and should always be available.
         self.inject_builtin_macros_for_header(&include_path);
 
+        // CO2 provides its own implementation of x86 SIMD intrinsic
+        // headers (`immintrin.h` and friends) on top of `::core::arch::x86_64`.
+        // The GCC versions rely on `__attribute__((vector_size))`,
+        // `__builtin_ia32_*` and `(type)func(...)` casts, which CO2 does not
+        // support. Serve the builtin shim instead so `#include <immintrin.h>`
+        // works.
+        if Self::is_x86_simd_header(&include_path) {
+            return self.handle_builtin_x86_simd_header(&include_path);
+        }
+
         // Resolve the include path to an actual file
         if let Some(resolved_path) = self.resolve_include_path(&include_path, is_system) {
             // Check for #pragma once
@@ -511,6 +521,10 @@ impl Preprocessor {
         } else {
             include_path
         };
+
+        if Self::is_x86_simd_header(&include_path) {
+            return self.handle_builtin_x86_simd_header(&include_path);
+        }
 
         // Get the current file path for include_next resolution
         let current_file = self.include_stack.last().cloned();
@@ -923,4 +937,101 @@ impl Preprocessor {
             _ => {}
         }
     }
+
+    /// Check whether `header` is an x86 SIMD intrinsic header
+    /// (`immintrin.h`, `xmmintrin.h`, `avxintrin.h`, ...).
+    ///
+    /// These GCC headers rely on `__attribute__((vector_size))`,
+    /// `__builtin_ia32_*` and similar extensions that CO2 does not support,
+    /// so CO2 serves its own shim on top of `::core::arch::x86_64` instead.
+    fn is_x86_simd_header(header: &str) -> bool {
+        let base = header.rsplit('/').next().unwrap_or(header);
+        base.contains("intrin")
+    }
+
+    /// Serve CO2's builtin x86 SIMD shim for `header`.
+    ///
+    /// Defines the header's own include guard (e.g. `_IMMINTRIN_H_INCLUDED`)
+    /// so user `#ifndef` checks behave as if the system header was included,
+    /// then preprocesses the shared shim content (which is itself guarded by
+    /// `__CO2_X86_SIMD_SHIM__` so repeated includes are no-ops).
+    fn handle_builtin_x86_simd_header(&mut self, header: &str) -> bool {
+        let base = header.rsplit('/').next().unwrap_or(header);
+        let guard = format!(
+            "_{}_INCLUDED",
+            base.to_ascii_uppercase()
+                .replace('.', "_")
+                .replace('-', "_")
+                .replace('/', "_")
+        );
+        self.define_macro(&guard, "1");
+        self.preprocess_included(CO2_X86_SIMD_SHIM);
+        true
+    }
 }
+
+/// Implementation of the x86 SIMD intrinsic API used by CO2 tests
+/// (`tests/c/simd/saxpy_dot.c`) on top of Rust's `::core::arch::x86_64`,
+/// which CO2 can use directly from C via Rust paths (see language guide).
+///
+/// The real GCC `*intrin.h` headers cannot be parsed by CO2: they use
+/// `__attribute__((vector_size))` vector types, `__builtin_ia32_*` builtins
+/// and `(type)func(...)` casts. This shim instead aliases `__m128`/`__m256`
+/// to the corresponding `core::arch::x86_64` vector types and forwards each
+/// intrinsic to its Rust counterpart, so the test executes real SIMD
+/// instructions.
+///
+/// Only the subset actually exercised by CO2's test-suite is provided.
+/// The content is guarded so including several `*intrin.h` headers in one
+/// TU does not cause duplicate definitions. It deliberately avoids
+/// `__attribute__`, `__extension__`, GCC vector types and casts of call
+/// expressions, sticking to the C subset CO2 supports well.
+///
+/// NOTE: using these intrinsics requires the `avx`/`fma`/`sse3` target
+/// features. `co2_driver_lib::compile_co2_source` enables them automatically
+/// for crates whose preprocessed source uses `core::arch`, so no extra
+/// compiler flags are needed by callers.
+///
+/// `_mm256_extractf128_ps` cannot forward directly: in Rust it takes a const
+/// generic (`::<IMM>`) which CO2's turbofish cannot express, so it is
+/// implemented via store + reload of the selected half.
+const CO2_X86_SIMD_SHIM: &str = r#"
+#ifndef __CO2_X86_SIMD_SHIM__
+#define __CO2_X86_SIMD_SHIM__
+#define _IMMINTRIN_H_INCLUDED 1
+#define _XMMINTRIN_H_INCLUDED 1
+#define _EMMINTRIN_H_INCLUDED 1
+#define _PMMINTRIN_H_INCLUDED 1
+#define _TMMINTRIN_H_INCLUDED 1
+#define _SMMINTRIN_H_INCLUDED 1
+#define _NMMINTRIN_H_INCLUDED 1
+#define _WMMINTRIN_H_INCLUDED 1
+#define _AVXINTRIN_H_INCLUDED 1
+#define _AVX2INTRIN_H_INCLUDED 1
+#define _FMAINTRIN_H_INCLUDED 1
+#define _MMINTRIN_H_INCLUDED 1
+#define _X86GPRINTRIN_H_INCLUDED 1
+#define _X86INTRIN_H_INCLUDED 1
+typedef core::arch::x86_64::__m128 __m128;
+typedef core::arch::x86_64::__m128d __m128d;
+typedef core::arch::x86_64::__m128i __m128i;
+typedef core::arch::x86_64::__m256 __m256;
+typedef core::arch::x86_64::__m256d __m256d;
+typedef core::arch::x86_64::__m256i __m256i;
+static inline __m256 _mm256_set1_ps(float a) { return core::arch::x86_64::_mm256_set1_ps(a); }
+static inline __m256 _mm256_setzero_ps(void) { return core::arch::x86_64::_mm256_setzero_ps(); }
+static inline __m256 _mm256_loadu_ps(float const *p) { return core::arch::x86_64::_mm256_loadu_ps(p); }
+static inline void _mm256_storeu_ps(float *p, __m256 a) { core::arch::x86_64::_mm256_storeu_ps(p, a); }
+static inline __m256 _mm256_fmadd_ps(__m256 a, __m256 b, __m256 c) { return core::arch::x86_64::_mm256_fmadd_ps(a, b, c); }
+static inline __m128 _mm256_castps256_ps128(__m256 a) { return core::arch::x86_64::_mm256_castps256_ps128(a); }
+static inline __m128 _mm256_extractf128_ps(__m256 a, const int n) {
+    float tmp[8] = {0};
+    core::arch::x86_64::_mm256_storeu_ps(tmp, a);
+    if (n == 0) return core::arch::x86_64::_mm_loadu_ps(tmp);
+    return core::arch::x86_64::_mm_loadu_ps(tmp + 4);
+}
+static inline __m128 _mm_add_ps(__m128 a, __m128 b) { return core::arch::x86_64::_mm_add_ps(a, b); }
+static inline __m128 _mm_hadd_ps(__m128 a, __m128 b) { return core::arch::x86_64::_mm_hadd_ps(a, b); }
+static inline float _mm_cvtss_f32(__m128 a) { return core::arch::x86_64::_mm_cvtss_f32(a); }
+#endif
+"#;

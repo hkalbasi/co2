@@ -43,6 +43,13 @@ struct CcArgs {
     linker_args: Vec<String>,
     asm_flavor: Option<String>,
     dep_args: DepFileArgs,
+    /// `-C target-cpu=` derived from `-march=<cpu>` (`native` included).
+    target_cpu: Option<String>,
+    /// `+feature`/`-feature` entries derived from `-m<feat>`/`-mno-<feat>`.
+    target_features: Vec<String>,
+    /// Original `-march=`/`-mtune=`/`-m<feat>` spellings, forwarded to
+    /// sub-`co2cc` invocations and the assembler driver.
+    arch_flags: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -103,6 +110,12 @@ Options:
   -Wl,<option>         Pass option to linker
   -Xlinker <option>    Pass option to linker
   -masm=<flavor>       Use given assembly style (att/intel) for -S output
+  -march=<cpu>         Target CPU for codegen (e.g. native, haswell, x86-64-v3);
+                       maps to rustc -C target-cpu=<cpu>
+  -mtune=<cpu>         Accepted for compatibility (no codegen effect)
+  -m<feature>          Enable x86 target feature (e.g. -mavx2, -mfma, -msse4.2);
+                       maps to rustc -C target-feature=+<feature>
+  -mno-<feature>       Disable x86 target feature
   -ftime-report        Print timing report
   -MD                  Generate make dependency file
   -MMD                 Like -MD but ignore system headers
@@ -294,6 +307,7 @@ fn run_co2c(args: &CcArgs) {
             force_pic,
             args.asm_flavor.as_deref(),
             args.emit_llvm,
+            args,
         );
         compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
         if args.time_report {
@@ -338,6 +352,7 @@ fn run_co2c(args: &CcArgs) {
                 output.as_deref().unwrap_or(&temp_dir.join("out.o")),
                 force_pic,
                 args.time_report,
+                &args.arch_flags,
             );
             if has_stdin {
                 let _ = fs::remove_dir_all(&temp_dir);
@@ -365,6 +380,7 @@ fn run_co2c(args: &CcArgs) {
             args.debuginfo,
             force_pic,
             args.emit_llvm,
+            args,
         );
         compile_co2_source(CompileMode::C, resolved, preprocessed, rustc_args);
         if args.time_report {
@@ -409,7 +425,13 @@ fn run_co2c(args: &CcArgs) {
                     .replace('-', "_")
                     + ".o",
             );
-            compile_asm_to_object(&resolved, &object_path, force_pic, args.time_report);
+            compile_asm_to_object(
+                &resolved,
+                &object_path,
+                force_pic,
+                args.time_report,
+                &args.arch_flags,
+            );
             object_paths.push(object_path);
             continue;
         }
@@ -430,6 +452,7 @@ fn run_co2c(args: &CcArgs) {
             force_pic,
             args.time_report,
             &args.dep_args,
+            &args.arch_flags,
         );
         object_paths.push(object_path);
     }
@@ -464,6 +487,9 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     let mut debuginfo = None;
     let mut cpp_args = Vec::new();
     let mut linker_args = Vec::new();
+    let mut target_cpu = None;
+    let mut target_features = Vec::new();
+    let mut arch_flags: Vec<String> = Vec::new();
     let mut dep_args = DepFileArgs {
         generate: false,
         exclude_system: false,
@@ -569,6 +595,28 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
                     }
                 }
             }
+            f if f.starts_with("-march=") => {
+                let cpu = f.strip_prefix("-march=").unwrap().to_owned();
+                if cpu.is_empty() {
+                    return Err(ParseArgsError::InvalidArgument(format!("'{f}'")));
+                }
+                target_cpu = Some(cpu);
+                arch_flags.push(arg.clone());
+            }
+            f if f.starts_with("-mtune=") => {
+                // Accepted for compatibility; scheduling-only, no codegen effect.
+                arch_flags.push(arg.clone());
+            }
+            f if f.starts_with("-m") && !f.starts_with("-M") => {
+                if let Some(mapped) = map_m_feature_flag(f) {
+                    for feature in mapped {
+                        push_target_feature(&mut target_features, feature);
+                    }
+                    arch_flags.push(arg.clone());
+                }
+                // Unknown -m flags stay silently ignored (e.g. -m32/-m64),
+                // matching the historical behavior for unknown dash flags.
+            }
             "-fPIC" | "-fpic" => pic = true,
             "-ftime-report" => time_report = true,
             "-g0" => debuginfo = Some(0),
@@ -645,7 +693,90 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
         linker_args,
         asm_flavor,
         dep_args,
+        target_cpu,
+        target_features,
+        arch_flags,
     })
+}
+
+/// Map a GCC-style `-m<feature>`/`-mno-<feature>` flag to rustc
+/// `-C target-feature=` entries (`+feat` to enable, `-feat` to disable).
+/// Returns `None` for flags co2cc does not model (silently ignored).
+fn map_m_feature_flag(flag: &str) -> Option<Vec<String>> {
+    let body = flag.strip_prefix("-m")?;
+    let (negated, name) = match body.strip_prefix("no-") {
+        Some(rest) => (true, rest),
+        None => (false, body),
+    };
+    // rustc target-feature names for the matching GCC -m spelling.
+    // (`-msse4` enables both halves, like GCC.)
+    let feats: &[&str] = match name {
+        "avx" => &["avx"],
+        "avx2" => &["avx2"],
+        "fma" => &["fma"],
+        "sse" => &["sse"],
+        "sse2" => &["sse2"],
+        "sse3" => &["sse3"],
+        "ssse3" => &["ssse3"],
+        "sse4" => &["sse4.1", "sse4.2"],
+        "sse4.1" => &["sse4.1"],
+        "sse4.2" => &["sse4.2"],
+        "avx512f" => &["avx512f"],
+        "avx512cd" => &["avx512cd"],
+        "avx512dq" => &["avx512dq"],
+        "avx512bw" => &["avx512bw"],
+        "avx512vl" => &["avx512vl"],
+        "avx512vbmi" => &["avx512vbmi"],
+        "avx512vbmi2" => &["avx512vbmi2"],
+        "bmi" => &["bmi1"],
+        "bmi2" => &["bmi2"],
+        "lzcnt" => &["lzcnt"],
+        "abm" => &["lzcnt", "popcnt"],
+        "popcnt" => &["popcnt"],
+        "aes" => &["aes"],
+        "pclmul" => &["pclmulqdq"],
+        "rdrnd" => &["rdrand"],
+        "rdseed" => &["rdseed"],
+        "sha" => &["sha"],
+        "adx" => &["adx"],
+        "movbe" => &["movbe"],
+        "fxsr" => &["fxsr"],
+        "xsave" => &["xsave"],
+        "xsaveopt" => &["xsaveopt"],
+        "fsgsbase" => &["fsgsbase"],
+        "cx16" => &["cmpxchg16b"],
+        _ => return None,
+    };
+    let sign = if negated { '-' } else { '+' };
+    Some(feats.iter().map(|feat| format!("{sign}{feat}")).collect())
+}
+
+/// Record a `+feat`/`-feat` entry, with later flags winning over earlier
+/// ones for the same feature (matching GCC last-flag-wins).
+fn push_target_feature(features: &mut Vec<String>, feature: String) {
+    let name = &feature[1..];
+    features.retain(|existing| &existing[1..] != name);
+    features.push(feature);
+}
+
+/// Append rustc codegen args for `-march=`/`-m<feature>` flags.
+fn push_arch_rustc_args(rustc_args: &mut Vec<String>, args: &CcArgs) {
+    if let Some(cpu) = &args.target_cpu {
+        rustc_args.push("-C".to_owned());
+        rustc_args.push(format!("target-cpu={cpu}"));
+    }
+    if !args.target_features.is_empty() {
+        rustc_args.push("-C".to_owned());
+        rustc_args.push(format!("target-feature={}", args.target_features.join(",")));
+    }
+    if args.target_cpu.is_some() || !args.target_features.is_empty() {
+        // C SIMD code passes vectors by value over extern "C" (exactly what
+        // GCC/Clang accept); rustc's FFI-safety lint does not understand the
+        // x86 vector ABI, so silence it once the user explicitly opts into
+        // SIMD codegen flags.
+        rustc_args.push("-A".to_owned());
+        rustc_args.push("improper-ctypes-definitions".to_owned());
+    }
 }
 
 fn sanitize_crate_name(stem: &str) -> String {
@@ -673,6 +804,7 @@ fn build_rustc_object_args(
     debuginfo: Option<u8>,
     pic: bool,
     emit_llvm: bool,
+    arch: &CcArgs,
 ) -> Vec<String> {
     let stem = input
         .file_stem()
@@ -720,6 +852,8 @@ fn build_rustc_object_args(
     rustc_args.push("-C".to_owned());
     rustc_args.push("panic=abort".to_owned());
 
+    push_arch_rustc_args(&mut rustc_args, arch);
+
     rustc_args.extend(shared_rust_flags());
 
     rustc_args
@@ -733,6 +867,7 @@ fn build_rustc_asm_args(
     pic: bool,
     asm_flavor: Option<&str>,
     emit_llvm: bool,
+    arch: &CcArgs,
 ) -> Vec<String> {
     let stem = input
         .file_stem()
@@ -783,6 +918,8 @@ fn build_rustc_asm_args(
     // Keep asm/LLVM emission consistent with panic=abort objects.
     rustc_args.push("-C".to_owned());
     rustc_args.push("panic=abort".to_owned());
+
+    push_arch_rustc_args(&mut rustc_args, arch);
 
     rustc_args.extend(shared_rust_flags());
 
@@ -899,10 +1036,19 @@ fn resolve_c_compiler() -> String {
     co2_preprocessor::detect_c_compiler().unwrap_or_else(|| "cc".to_owned())
 }
 
-fn compile_asm_to_object(input: &Path, output: &Path, pic: bool, time_report: bool) {
+fn compile_asm_to_object(
+    input: &Path,
+    output: &Path,
+    pic: bool,
+    time_report: bool,
+    arch_flags: &[String],
+) {
     let assembler = std::env::var("CO2_AS").unwrap_or_else(|_| "gcc".to_owned());
     let mut cmd = Command::new(&assembler);
     cmd.arg("-c").arg(input).arg("-o").arg(output);
+    for flag in arch_flags {
+        cmd.arg(flag);
+    }
     if pic {
         cmd.arg("-fPIC");
     }
@@ -930,12 +1076,16 @@ fn compile_c_to_object(
     pic: bool,
     time_report: bool,
     dep_args: &DepFileArgs,
+    arch_flags: &[String],
 ) {
     let exe = current_invocation_path()
         .or_else(|| std::env::current_exe().ok())
         .expect("failed to locate co2cc executable");
     let mut cmd = Command::new(exe);
     cmd.arg("-c").arg(input).arg("-o").arg(output);
+    for flag in arch_flags {
+        cmd.arg(flag);
+    }
     if let Some(level) = opt_level {
         cmd.arg(format!("-O{level}"));
     }
