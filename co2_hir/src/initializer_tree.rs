@@ -403,16 +403,19 @@ impl HirCtx<'_> {
                 }
                 let expr = self.lower_expr(expr, locals, local_map)?;
                 let expr_ty = expr.ty;
-                let coerced = coerce_expr_to_type(expr, expected_ty).ok_or_else(|| {
-                    spanned_error(
-                        initializer.1,
-                        format!(
-                            "initializer type mismatch: expected {}, got {}",
-                            self.format_ty(expected_ty),
-                            self.format_ty(expr_ty)
-                        ),
-                    )
-                })?;
+                let coerced = self
+                    .coerce_to_complex_ty(&expr, expected_ty)
+                    .or_else(|| coerce_expr_to_type(expr, expected_ty))
+                    .ok_or_else(|| {
+                        spanned_error(
+                            initializer.1,
+                            format!(
+                                "initializer type mismatch: expected {}, got {}",
+                                self.format_ty(expected_ty),
+                                self.format_ty(expr_ty)
+                            ),
+                        )
+                    })?;
                 Ok(InitializerTree::Leaf(coerced))
             }
             Initializer::List(items) => {
@@ -481,7 +484,19 @@ impl HirCtx<'_> {
                         grow_for_infer,
                     );
                 }
-                if self.adt_logical_field_tys(expected_ty).is_none() && !is_array_ty(expected_ty) {
+                // A complex type is scalar-like in C: a single-expression braced
+                // init like `(double _Complex){ 3.0 + 4.0 * I }` converts the
+                // value instead of initializing the `re` field.
+                let is_scalar_complex_init = self.complex_inner_ty_of(expected_ty).is_some()
+                    && matches!(
+                        items.as_slice(),
+                        [(item, _)] if item.designators.is_none()
+                            && matches!(item.initializer.0, Initializer::Expr(_))
+                    );
+                if is_scalar_complex_init
+                    || (self.adt_logical_field_tys(expected_ty).is_none()
+                        && !is_array_ty(expected_ty))
+                {
                     let first = items.into_iter().next().ok_or_else(|| {
                         spanned_error(initializer.1, "empty initializer list for scalar type")
                     })?;
@@ -662,7 +677,9 @@ impl HirCtx<'_> {
                             self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
                             loop {
                                 if let Some(coerced) =
-                                    coerce_expr_to_type(expr.clone(), value_cursor.ty())
+                                    self.coerce_to_complex_ty(&expr, value_cursor.ty()).or_else(
+                                        || coerce_expr_to_type(expr.clone(), value_cursor.ty()),
+                                    )
                                 {
                                     break InitializerTree::Leaf(coerced);
                                 }

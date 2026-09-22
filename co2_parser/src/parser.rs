@@ -337,6 +337,7 @@ fn c_type_keyword_token_str(token: &Token) -> Option<&'static str> {
     Some(match token {
         Token::Bool => "_Bool",
         Token::Char => "char",
+        Token::Complex => "_Complex",
         Token::Const => "const",
         Token::Double => "double",
         Token::Float => "float",
@@ -395,6 +396,9 @@ fn c_type_keywords_suggestion(words: &[&str]) -> Option<(&'static str, &'static 
         ["float"] => Some(("f32", "c_float")),
         ["double"] => Some(("f64", "c_double")),
         ["long", "double"] => Some(("f64", "c_longdouble")),
+        ["float", "_Complex"] => Some(("Complex<f32>", "c_float")),
+        ["double", "_Complex"] | ["_Complex"] => Some(("Complex<f64>", "c_double")),
+        ["long", "double", "_Complex"] => Some(("Complex<f128>", "c_longdouble")),
         _ => None,
     }
 }
@@ -406,6 +410,7 @@ fn keyword_token_str(token: &Token) -> Option<&'static str> {
         Token::Break => "break",
         Token::Case => "case",
         Token::Char => "char",
+        Token::Complex => "_Complex",
         Token::Const => "const",
         Token::Constexpr => "constexpr",
         Token::Continue => "continue",
@@ -460,6 +465,7 @@ fn keyword_token_str(token: &Token) -> Option<&'static str> {
         Token::BuiltinNan => "__builtin_nan",
         Token::BuiltinConstantP => "__builtin_constant_p",
         Token::BuiltinTypesCompatibleP => "__builtin_types_compatible_p",
+        Token::BuiltinComplex => "__builtin_complex",
         _ => return None,
     })
 }
@@ -1028,6 +1034,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
             Some(Token::Long) => TypeSpecifier::Long,
             Some(Token::Float) => TypeSpecifier::Float,
             Some(Token::Double) => TypeSpecifier::Double,
+            Some(Token::Complex) => TypeSpecifier::Complex,
             Some(Token::Float16) => TypeSpecifier::Float16,
             Some(Token::Float32) => TypeSpecifier::Float32,
             Some(Token::Float64) => TypeSpecifier::Float64,
@@ -1376,6 +1383,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                     | Token::Float64x
                     | Token::Float128x
                     | Token::GnuFloat128
+                    | Token::Complex
                     | Token::Signed
                     | Token::Unsigned
                     | Token::Alignas
@@ -2600,6 +2608,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 | Token::Float64x
                 | Token::Float128x
                 | Token::GnuFloat128
+                | Token::Complex
                 | Token::Signed
                 | Token::Unsigned
                 | Token::Typeof

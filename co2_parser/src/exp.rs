@@ -357,6 +357,21 @@ fn parse_unary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R
                 p.span_since(start),
             ))
         }
+        Some(Token::BuiltinComplex) => {
+            p.pos += 1;
+            p.expect(&Token::LParen, "(")?;
+            let re = parse_assignment(p)?;
+            p.expect(&Token::Comma, ",")?;
+            let im = parse_assignment(p)?;
+            p.expect(&Token::RParen, ")")?;
+            Ok((
+                Expression::BuiltinComplex {
+                    re: Box::new(re),
+                    im: Box::new(im),
+                },
+                p.span_since(start),
+            ))
+        }
         Some(Token::Inc) | Some(Token::Dec) => {
             let op = if matches!(p.peek(0), Some(Token::Inc)) {
                 UpdateOp::Inc
@@ -617,7 +632,10 @@ fn parse_primary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression
             let span = p.span_since(start);
             Expression::Constant(Constant::String(merge_string_literals(parts, span)))
         }
-        Some(Token::Integer(_, _)) | Some(Token::FloatLit(_, _)) | Some(Token::CharLit(_, _)) => {
+        Some(Token::Integer(_, _))
+        | Some(Token::FloatLit(_, _))
+        | Some(Token::ImaginaryLit(_, _))
+        | Some(Token::CharLit(_, _)) => {
             return parse_literal(p, start);
         }
         Some(Token::BoolLit(v)) => {
@@ -786,6 +804,27 @@ fn parse_literal<'a, R: TypeResolver>(
                         "Invalid float literal",
                     )]);
                     Expression::Constant(Constant::Float(0.0, suffix))
+                }
+            };
+            Ok((expr, span))
+        }
+        Some(Token::ImaginaryLit(s, suffix)) => {
+            let i = s.clone();
+            let suffix = suffix.clone();
+            p.pos += 1;
+            let span = p.span_since(start);
+            let value = i
+                .parse::<f64>()
+                .ok()
+                .or_else(|| parse_hex_float_constant(&i));
+            let expr = match value {
+                Some(v) => Expression::Constant(Constant::Imaginary(v, suffix)),
+                None => {
+                    co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                        span,
+                        "Invalid imaginary literal",
+                    )]);
+                    Expression::Constant(Constant::Imaginary(0.0, suffix))
                 }
             };
             Ok((expr, span))

@@ -92,6 +92,7 @@ pub enum Constant {
     Int(i128, IntegerSuffix),
     Bool(bool),
     Float(f64, FloatSuffix),
+    Imaginary(f64, FloatSuffix),
     Char(u32, CharPrefix),
     String(StringLiteral),
 }
@@ -237,6 +238,10 @@ pub enum Expression<R: TypeResolver> {
     BuiltinTypesCompatibleP {
         ty1: Box<TypeName<R>>,
         ty2: Box<TypeName<R>>,
+    },
+    BuiltinComplex {
+        re: Box<Spanned<Expression<R>>>,
+        im: Box<Spanned<Expression<R>>>,
     },
 }
 
@@ -484,6 +489,7 @@ pub enum TypeSpecifier<R: TypeResolver> {
     Long,
     Float,
     Double,
+    Complex,
     Signed,
     Unsigned,
     Float16,
@@ -619,6 +625,7 @@ pub enum Token {
     Char,
     Const,
     Constexpr,
+    Complex,
     Continue,
     Default,
     Do,
@@ -676,6 +683,7 @@ pub enum Token {
     Integer(String, IntegerSuffix),
     BoolLit(bool),
     FloatLit(String, FloatSuffix),
+    ImaginaryLit(String, FloatSuffix),
     CharLit(Vec<u8>, CharPrefix),
     StringLit(StringLiteral),
 
@@ -755,6 +763,7 @@ pub enum Token {
     // GCC builtin predicates
     BuiltinConstantP,
     BuiltinTypesCompatibleP,
+    BuiltinComplex,
 
     // GCC attributes
     TransparentUnionAttr,
@@ -940,6 +949,7 @@ impl Display for Constant {
             Constant::Int(v, _) => write!(f, "{v}"),
             Constant::Bool(v) => write!(f, "{v}"),
             Constant::Float(v, _) => write!(f, "{v}"),
+            Constant::Imaginary(v, _) => write!(f, "{v}i"),
             Constant::Char(value, _) => {
                 write!(f, "'")?;
                 if let Ok(byte) = u8::try_from(*value) {
@@ -968,6 +978,7 @@ impl Display for Token {
             Token::Char => write!(f, "char"),
             Token::Const => write!(f, "const"),
             Token::Constexpr => write!(f, "constexpr"),
+            Token::Complex => write!(f, "_Complex"),
             Token::Continue => write!(f, "continue"),
             Token::Default => write!(f, "default"),
             Token::Do => write!(f, "do"),
@@ -1023,6 +1034,7 @@ impl Display for Token {
             Token::BuiltinNan => write!(f, "__builtin_nan"),
             Token::BuiltinConstantP => write!(f, "__builtin_constant_p"),
             Token::BuiltinTypesCompatibleP => write!(f, "__builtin_types_compatible_p"),
+            Token::BuiltinComplex => write!(f, "__builtin_complex"),
             Token::TransparentUnionAttr => write!(f, "__attribute__((__transparent_union__))"),
 
             Token::Ident(s) => write!(f, "{s}"),
@@ -1071,6 +1083,22 @@ impl Display for Token {
                     FloatSuffix::F64x => write!(f, "f64x"),
                     FloatSuffix::F128x => write!(f, "f128x"),
                 }
+            }
+            Token::ImaginaryLit(num, suffix) => {
+                write!(f, "{num}")?;
+                match suffix {
+                    FloatSuffix::None => Ok(()),
+                    FloatSuffix::Float => write!(f, "f"),
+                    FloatSuffix::Long => write!(f, "l"),
+                    FloatSuffix::F16 => write!(f, "f16"),
+                    FloatSuffix::F32 => write!(f, "f32"),
+                    FloatSuffix::F64 => write!(f, "f64"),
+                    FloatSuffix::F128 => write!(f, "f128"),
+                    FloatSuffix::F32x => write!(f, "f32x"),
+                    FloatSuffix::F64x => write!(f, "f64x"),
+                    FloatSuffix::F128x => write!(f, "f128x"),
+                }?;
+                write!(f, "i")
             }
             Token::CharLit(bytes, prefix) => {
                 write!(f, "{}'", prefix.as_str())?;

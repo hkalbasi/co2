@@ -178,6 +178,7 @@ impl<A: TypeResolver> DoTransform for TypeSpecifier<A> {
             TypeSpecifier::Long => TypeSpecifier::Long,
             TypeSpecifier::Float => TypeSpecifier::Float,
             TypeSpecifier::Double => TypeSpecifier::Double,
+            TypeSpecifier::Complex => TypeSpecifier::Complex,
             TypeSpecifier::Float16 => TypeSpecifier::Float16,
             TypeSpecifier::Float32 => TypeSpecifier::Float32,
             TypeSpecifier::Float64 => TypeSpecifier::Float64,
@@ -519,6 +520,10 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
             }
             Expression::BuiltinConstantP { expr } => Expression::BuiltinConstantP {
                 expr: expr.transform(b),
+            },
+            Expression::BuiltinComplex { re, im } => Expression::BuiltinComplex {
+                re: re.transform(b),
+                im: im.transform(b),
             },
         }
     }

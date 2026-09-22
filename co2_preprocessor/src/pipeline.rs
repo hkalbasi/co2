@@ -1413,9 +1413,7 @@ impl Preprocessor {
                         // Not an attribute: fall through to examine the next token.
                     }
                 }
-                Token::Ident(name)
-                    if name == "__extension__" || name == "_Complex" || name == "_Noreturn" =>
-                {
+                Token::Ident(name) if name == "__extension__" || name == "_Noreturn" => {
                     let _ = tokens.remove(i);
                     continue;
                 }

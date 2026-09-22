@@ -235,6 +235,21 @@ impl PrettyPrint for Constant {
                 };
                 pp.leaf_data("Float", "", &s);
             }
+            Constant::Imaginary(v, suffix) => {
+                let s = match suffix {
+                    FloatSuffix::None => format!("{v}i"),
+                    FloatSuffix::Float => format!("{v}fi"),
+                    FloatSuffix::Long => format!("{v}li"),
+                    FloatSuffix::F16 => format!("{v}f16i"),
+                    FloatSuffix::F32 => format!("{v}f32i"),
+                    FloatSuffix::F64 => format!("{v}f64i"),
+                    FloatSuffix::F128 => format!("{v}f128i"),
+                    FloatSuffix::F32x => format!("{v}f32xi"),
+                    FloatSuffix::F64x => format!("{v}f64xi"),
+                    FloatSuffix::F128x => format!("{v}f128xi"),
+                };
+                pp.leaf_data("Imaginary", "", &s);
+            }
             Constant::Char(c, _) => {
                 if let Ok(b) = u8::try_from(*c) {
                     let escaped: String = escape_default(b).map(|e| e as char).collect();
@@ -380,6 +395,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
             TypeSpecifier::Long => pp.leaf("Long", &sp),
             TypeSpecifier::Float => pp.leaf("Float", &sp),
             TypeSpecifier::Double => pp.leaf("Double", &sp),
+            TypeSpecifier::Complex => pp.leaf("Complex", &sp),
             TypeSpecifier::Float16 => pp.leaf("Float16", &sp),
             TypeSpecifier::Float32 => pp.leaf("Float32", &sp),
             TypeSpecifier::Float64 => pp.leaf("Float64", &sp),
@@ -852,6 +868,12 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Expression<R>> {
                 pp.node("BuiltinTypesCompatibleP", &sp, |pp| {
                     ty1.pretty_print(pp);
                     ty2.pretty_print(pp);
+                });
+            }
+            Expression::BuiltinComplex { re, im } => {
+                pp.node("BuiltinComplex", &sp, |pp| {
+                    re.pretty_print(pp);
+                    im.pretty_print(pp);
                 });
             }
         }

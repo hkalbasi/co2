@@ -285,6 +285,7 @@ impl<'a> Tokenizer<'a> {
             "constexpr" => Token::Constexpr,
             "continue" => Token::Continue,
             "default" => Token::Default,
+            "__complex__" | "_Complex" => Token::Complex,
             "do" => Token::Do,
             "double" => Token::Double,
             "else" => Token::Else,
@@ -350,6 +351,7 @@ impl<'a> Tokenizer<'a> {
             "__builtin_nan" | "__builtin_nanf" | "__builtin_nanl" => Token::BuiltinNan,
             "__builtin_constant_p" => Token::BuiltinConstantP,
             "__builtin_types_compatible_p" => Token::BuiltinTypesCompatibleP,
+            "__builtin_complex" => Token::BuiltinComplex,
             "__co2_transparent_union_attr" => Token::TransparentUnionAttr,
             _ => Token::Ident(ident.to_string()),
         }
@@ -1205,8 +1207,24 @@ impl<'a> Tokenizer<'a> {
 
     fn finish_float_suffix(&mut self, out: &mut Vec<(Token, usize, usize)>) {
         let text = std::str::from_utf8(&self.buf).unwrap_or("").to_string();
+        // GNU imaginary constants: `1.0i`, `1.0iF` (as in `_Complex_I`),
+        // `1.0fi`. The `i`/`j` marker may precede or follow the float suffix.
+        let mut imaginary = false;
+        if matches!(self.bytes.get(self.pos), Some(b'i' | b'I' | b'j' | b'J')) {
+            self.pos += 1;
+            imaginary = true;
+        }
         let suffix = self.parse_float_suffix();
-        out.push((Token::FloatLit(text, suffix), self.token_start, self.pos));
+        if !imaginary && matches!(self.bytes.get(self.pos), Some(b'i' | b'I' | b'j' | b'J')) {
+            self.pos += 1;
+            imaginary = true;
+        }
+        let token = if imaginary {
+            Token::ImaginaryLit(text, suffix)
+        } else {
+            Token::FloatLit(text, suffix)
+        };
+        out.push((token, self.token_start, self.pos));
         self.state = State::Start;
         self.buf.clear();
     }

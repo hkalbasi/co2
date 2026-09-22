@@ -12,9 +12,8 @@ use crate::attr::{Co2Attr, co2_attrs_to_generated};
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Designator, DoTransform as _,
     Expression, FunctionDefinitionSignature, FunctionSpecifier, InitDeclarator, Initializer,
-    IntegerSuffix, ModItem,
-    Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind, StructOrUnionSpecifier,
-    Token, TranslationUnit, TypeQualifier, TypeResolver, TypeSpecifier,
+    IntegerSuffix, ModItem, Rich, StatelessResolver, StorageClassSpecifier, StructOrUnionKind,
+    StructOrUnionSpecifier, Token, TranslationUnit, TypeQualifier, TypeResolver, TypeSpecifier,
     Visibility as AstVisibility, co2_test_symbol_name,
 };
 use co2_parser::{
@@ -24,7 +23,7 @@ use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::rustc_public::{
     DefId,
     mir::Mutability,
-    ty::{AdtDef, FnDef, IntTy, RigidTy, Span, Ty, UintTy},
+    ty::{AdtDef, FloatTy, FnDef, IntTy, RigidTy, Span, Ty, UintTy},
 };
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
@@ -45,6 +44,10 @@ use crate::{
 pub struct WellknownDefs {
     pub maybe_uninit: AdtDef,
     pub maybe_uninit_uninit: FnDef,
+    pub complex: AdtDef,
+    pub complex_new: FnDef,
+    pub f64_sqrt: FnDef,
+    pub f64_atan2: FnDef,
     pub valist: AdtDef,
     pub valist_fn_arg: FnDef,
     pub clone: FnDef,
@@ -566,6 +569,9 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         }
         Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
             type_name_contains_local(ty1) || type_name_contains_local(ty2)
+        }
+        Expression::BuiltinComplex { re, im } => {
+            expr_contains_local(&re.0) || expr_contains_local(&im.0)
         }
         Expression::Empty
         | Expression::Constant(_)
@@ -1639,20 +1645,17 @@ fn lower_translation_unit_items(
                             let (id, _) = resolve_in_module(ctx, module_path, &name);
                             let mut constexpr_valid = false;
                             if is_constexpr {
-                                let validation =
-                                    ctx.resolver.borrow_mut().validate_constexpr_decl(
-                                        &original_specs,
-                                        &declarator_for_checks.0,
-                                        &CTy::Ty(ty.clone()),
-                                        initializer.as_ref(),
-                                    );
+                                let validation = ctx.resolver.borrow_mut().validate_constexpr_decl(
+                                    &original_specs,
+                                    &declarator_for_checks.0,
+                                    &CTy::Ty(ty.clone()),
+                                    initializer.as_ref(),
+                                );
                                 match validation {
                                     Ok(()) => {
                                         constexpr_valid = true;
-                                        if let Some((
-                                            co2_ast::Initializer::Expr(expr),
-                                            _span,
-                                        )) = initializer.clone()
+                                        if let Some((co2_ast::Initializer::Expr(expr), _span)) =
+                                            initializer.clone()
                                         {
                                             ctx.resolver
                                                 .borrow_mut()
@@ -2191,13 +2194,12 @@ pub fn lower_crate_sig(
             }
             CTy::UnsizedArray(elem_ty) => {
                 if is_constexpr
-                    && let Err((span, msg)) =
-                        ctx.resolver.borrow_mut().validate_constexpr_decl(
-                            &original_specs,
-                            &declarator_for_checks.0,
-                            &CTy::UnsizedArray(elem_ty.clone()),
-                            declarator.initializer.as_ref(),
-                        )
+                    && let Err((span, msg)) = ctx.resolver.borrow_mut().validate_constexpr_decl(
+                        &original_specs,
+                        &declarator_for_checks.0,
+                        &CTy::UnsizedArray(elem_ty.clone()),
+                        declarator.initializer.as_ref(),
+                    )
                 {
                     co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
                 }
@@ -2427,6 +2429,20 @@ pub fn lower_crate_sig(
             ctx.resolve("core::mem::MaybeUninit::<T>::uninit")
                 .unwrap()
                 .0,
+        ),
+        complex: AdtDef(ctx.resolve("core::num::Complex").unwrap().0),
+        complex_new: FnDef(ctx.resolve("core::num::Complex::<T>::new").unwrap().0),
+        // co2's `long double` is IEEE-quad `f128`, but the platform C ABI
+        // passes 80-bit extended floats, so long-double libm calls would read
+        // garbage. Long-double complex `cabs`/`carg` fall back to these
+        // double-precision implementations instead.
+        f64_sqrt: resolve_inherent_method(
+            Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
+            "sqrt",
+        ),
+        f64_atan2: resolve_inherent_method(
+            Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
+            "atan2",
         ),
         valist: AdtDef(ctx.resolve("core::ffi::VaList").unwrap().0),
         valist_fn_arg: FnDef(ctx.resolve("core::ffi::VaList::<'f>::next_arg").unwrap().0),

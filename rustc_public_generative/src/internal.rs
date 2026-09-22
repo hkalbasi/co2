@@ -2164,7 +2164,7 @@ impl<S: CrateGeneratorState> InterfaceCallbacks<S> {
             });
         }
 
-        for (idx, feature) in ["extern_types", "linkage", "thread_local"]
+        for (idx, feature) in ["extern_types", "linkage", "thread_local", "complex_numbers"]
             .into_iter()
             .enumerate()
         {

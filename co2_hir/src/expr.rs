@@ -14,8 +14,8 @@ use rustc_public_generative::rustc_public::{
     abi::FieldsShape,
     mir::Mutability,
     ty::{
-        AdtDef, FloatTy, GenericArgKind, GenericArgs, IntTy, ParamTy, Region, RegionKind, RigidTy,
-        Span as RustSpan, Ty, TyConst, TyKind, UintTy,
+        AdtDef, FloatTy, FnDef, GenericArgKind, GenericArgs, IntTy, ParamTy, Region, RegionKind,
+        RigidTy, Span as RustSpan, Ty, TyConst, TyKind, UintTy,
     },
 };
 
@@ -937,7 +937,9 @@ impl HirCtx<'_> {
                 }
                 ty_passed_to_variadic(actual.ty)
             };
-            if needs_implicit_cast(expected, actual.ty) {
+            if let Some(converted) = self.coerce_to_complex_ty(actual, expected) {
+                *actual = converted;
+            } else if needs_implicit_cast(expected, actual.ty) {
                 *actual = HirExpr {
                     kind: HirExprKind::Cast(Box::new(actual.clone())),
                     ty: expected,
@@ -1627,6 +1629,33 @@ impl HirCtx<'_> {
                     span,
                 })
             }
+            Expression::Constant(Constant::Imaginary(v, suffix)) => {
+                // GNU imaginary literal: `Complex::new(0, v)`.
+                let float_ty = match suffix {
+                    co2_ast::FloatSuffix::Float => FloatTy::F32,
+                    co2_ast::FloatSuffix::None => FloatTy::F64,
+                    co2_ast::FloatSuffix::Long => FloatTy::F128,
+                    co2_ast::FloatSuffix::F16 => FloatTy::F16,
+                    co2_ast::FloatSuffix::F32 => FloatTy::F32,
+                    co2_ast::FloatSuffix::F64 => FloatTy::F64,
+                    co2_ast::FloatSuffix::F128 => FloatTy::F128,
+                    co2_ast::FloatSuffix::F32x => FloatTy::F64,
+                    co2_ast::FloatSuffix::F64x => FloatTy::F128,
+                    co2_ast::FloatSuffix::F128x => FloatTy::F128,
+                };
+                let inner_ty = Ty::from_rigid_kind(RigidTy::Float(float_ty));
+                let zero = HirExpr {
+                    kind: HirExprKind::ConstFloat(0.0),
+                    ty: inner_ty,
+                    span,
+                };
+                let imag = HirExpr {
+                    kind: HirExprKind::ConstFloat(v),
+                    ty: inner_ty,
+                    span,
+                };
+                Ok(self.complex_new_call(zero, imag, span))
+            }
             Expression::Constant(Constant::Char(ch, prefix)) => Ok(HirExpr {
                 kind: HirExprKind::ConstInt(i128::from(ch as i32)),
                 ty: match prefix {
@@ -1644,6 +1673,11 @@ impl HirCtx<'_> {
             }),
             Expression::Call { func, params } => {
                 let func_name = func.1.source_text().unwrap_or_default();
+                if let Some(lowered) =
+                    self.try_lower_complex_libm_call(&func_name, &params, span, locals, local_map)?
+                {
+                    return Ok(lowered);
+                }
                 let (func_expr, sig, mut lowered_args) = if let Some(lowered) =
                     self.try_lower_method_call(&func, &params, locals, local_map)?
                 {
@@ -1941,7 +1975,9 @@ impl HirCtx<'_> {
                     }
                     let mut rhs = self.lower_expr(*rhs, locals, local_map)?;
                     self.array_to_pointer_decay_if_array(&mut rhs);
-                    if needs_implicit_cast(lhs.ty, rhs.ty) {
+                    if let Some(converted) = self.coerce_to_complex_ty(&rhs, lhs.ty) {
+                        rhs = converted;
+                    } else if needs_implicit_cast(lhs.ty, rhs.ty) {
                         rhs = HirExpr {
                             kind: HirExprKind::Cast(Box::new(rhs.clone())),
                             ty: lhs.ty,
@@ -2170,6 +2206,12 @@ impl HirCtx<'_> {
                 let dst_is_void =
                     matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
                 let dst_is_void_ptr = is_void_ptr_ty(target_ty);
+                if !dst_is_void
+                    && (self.complex_inner_ty_of(inner.ty).is_some()
+                        || self.complex_inner_ty_of(target_ty).is_some())
+                {
+                    return Ok(self.lower_complex_cast(inner, target_ty, parser_span));
+                }
                 if !(((dst_is_ptr_like || dst_is_int) && (src_is_ptr_like || src_is_int))
                     || dst_is_void
                     || (src_is_fn_item && dst_is_int)
@@ -2259,6 +2301,31 @@ impl HirCtx<'_> {
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
                 })
+            }
+            Expression::BuiltinComplex { re, im } => {
+                // `__builtin_complex(re, im)` backs `CMPLX`/`CMPLXF`/`CMPLXL`:
+                // usual arithmetic conversions on the parts, then `Complex::new`.
+                let re = self.lower_expr(*re, locals, local_map)?;
+                let im = self.lower_expr(*im, locals, local_map)?;
+                let Some(inner) = common_numeric_ty(re.ty, im.ty) else {
+                    return Err(spanned_error(
+                        parser_span,
+                        format!(
+                            "invalid operands to __builtin_complex: {} and {}",
+                            self.format_ty(re.ty),
+                            self.format_ty(im.ty),
+                        ),
+                    ));
+                };
+                let inner = match inner.kind() {
+                    TyKind::RigidTy(RigidTy::Float(_)) => inner,
+                    _ => Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
+                };
+                Ok(self.complex_new_call(
+                    self.emit_cast(re, inner),
+                    self.emit_cast(im, inner),
+                    span,
+                ))
             }
             Expression::SizeofType(type_name) => {
                 let ty =
@@ -2444,6 +2511,27 @@ impl HirCtx<'_> {
                         })
                     }
                     ParsedUnaryOp::Minus => {
+                        // Complex negation negates both parts.
+                        if self.complex_inner_ty_of(inner.ty).is_some() {
+                            let (re, im) = self.split_complex(inner);
+                            let neg = |part: HirExpr| {
+                                let ty = part.ty;
+                                HirExpr {
+                                    kind: HirExprKind::Binary {
+                                        op: HirBinOp::Sub,
+                                        lhs: Box::new(HirExpr {
+                                            kind: HirExprKind::ConstFloat(-0.0),
+                                            ty,
+                                            span,
+                                        }),
+                                        rhs: Box::new(part),
+                                    },
+                                    ty,
+                                    span,
+                                }
+                            };
+                            return Ok(self.complex_new_call(neg(re), neg(im), span));
+                        }
                         let inner = self.promote_integer_operand(inner);
                         if !is_numeric_ty(inner.ty) {
                             return Err(spanned_error(
@@ -3233,6 +3321,419 @@ impl HirCtx<'_> {
         }
     }
 
+    /// If `ty` is a C complex type (`core::num::Complex<T>`), return `T`.
+    pub(crate) fn complex_inner_ty_of(&self, ty: Ty) -> Option<Ty> {
+        let TyKind::RigidTy(RigidTy::Adt(adt, args)) = ty.kind() else {
+            return None;
+        };
+        if adt.0 != self.wellknown_defs.complex.0 {
+            return None;
+        }
+        let [GenericArgKind::Type(inner)] = &args.0[..] else {
+            return None;
+        };
+        Some(*inner)
+    }
+
+    /// Build a direct call to a well-known function (no arg adaptation).
+    fn wellknown_call(
+        &self,
+        func: FnDef,
+        generic_args: Vec<GenericArgKind>,
+        args: Vec<HirExpr>,
+        span: RustSpan,
+    ) -> HirExpr {
+        let resolved = ResolvedValue::Fn(func, generic_args);
+        let func_ty = resolved.ty();
+        let Some(sig) = callable_sig(func_ty) else {
+            self.terminate_with_error(invalid_span(), "well-known function is not callable");
+        };
+        let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
+        HirExpr {
+            kind: HirExprKind::Call {
+                func: Box::new(HirExpr {
+                    kind: HirExprKind::Path(resolved),
+                    ty: func_ty,
+                    span,
+                }),
+                args,
+            },
+            ty: sig.output(),
+            span,
+        }
+    }
+
+    /// Build a `Complex::new(re, im)` call. Both parts must already have the
+    /// same float type, which becomes the complex component type.
+    fn complex_new_call(&self, re: HirExpr, im: HirExpr, span: RustSpan) -> HirExpr {
+        let inner_ty = re.ty;
+        self.wellknown_call(
+            self.wellknown_defs.complex_new,
+            vec![GenericArgKind::Type(inner_ty)],
+            vec![re, im],
+            span,
+        )
+    }
+
+    /// Project the `re` (`is_re == true`) or `im` part of a complex expression.
+    fn complex_part(&self, expr: HirExpr, is_re: bool) -> HirExpr {
+        let span = expr.span;
+        let Some(inner) = self.complex_inner_ty_of(expr.ty) else {
+            self.terminate_with_error(invalid_span(), "expected complex type");
+        };
+        let name = if is_re { "re" } else { "im" };
+        let Some((path, _)) = self.resolve_logical_field_path(expr.ty, name) else {
+            self.terminate_with_error(invalid_span(), &format!("Complex has no `{name}` field"));
+        };
+        match self.project_field_path(expr, &path, inner, span) {
+            Ok(it) => it,
+            Err((_, msg)) => self.terminate_with_error(invalid_span(), &msg),
+        }
+    }
+
+    fn split_complex(&self, expr: HirExpr) -> (HirExpr, HirExpr) {
+        let im = self.complex_part(expr.clone(), false);
+        let re = self.complex_part(expr, true);
+        (re, im)
+    }
+
+    /// Decompose `expr` (complex or real) into `(re, im)` parts of float type
+    /// `inner`, converting as needed. Terminates on non-arithmetic input.
+    fn complex_parts(&self, expr: HirExpr, inner: Ty) -> (HirExpr, HirExpr) {
+        let span = expr.span;
+        if self.complex_inner_ty_of(expr.ty).is_some() {
+            let (re, im) = self.split_complex(expr);
+            (self.emit_cast(re, inner), self.emit_cast(im, inner))
+        } else if is_numeric_ty(expr.ty) {
+            let zero = HirExpr {
+                kind: HirExprKind::ConstFloat(0.0),
+                ty: inner,
+                span,
+            };
+            (self.emit_cast(expr, inner), zero)
+        } else {
+            self.terminate_with_error(
+                self.to_parser_span(span),
+                &format!("cannot convert {} to complex type", self.format_ty(expr.ty),),
+            );
+        }
+    }
+
+    /// Implicit conversion to a complex target type (initializers,
+    /// assignments, call arguments): from complex of another component type
+    /// or from a real number (imaginary part zero). `None` when inapplicable.
+    pub(crate) fn coerce_to_complex_ty(&self, expr: &HirExpr, expected_ty: Ty) -> Option<HirExpr> {
+        let dst_inner = self.complex_inner_ty_of(expected_ty)?;
+        if self.complex_inner_ty_of(expr.ty).is_some() || is_numeric_ty(expr.ty) {
+            Some(self.convert_to_complex(expr.clone(), dst_inner))
+        } else {
+            None
+        }
+    }
+
+    /// Convert a complex or real expression to `Complex<inner>`.
+    fn convert_to_complex(&self, expr: HirExpr, inner: Ty) -> HirExpr {
+        let span = expr.span;
+        if self.complex_inner_ty_of(expr.ty) == Some(inner) {
+            return expr;
+        }
+        let (re, im) = self.complex_parts(expr, inner);
+        self.complex_new_call(re, im, span)
+    }
+
+    /// Lower `+ - * / == !=` where at least one side is complex, following C11
+    /// 6.3.1.8 (usual arithmetic conversions): the result component type is the
+    /// common real type of the complex component(s) and any real operand.
+    fn lower_complex_binop(
+        &self,
+        lhs: HirExpr,
+        rhs: HirExpr,
+        op: HirBinOp,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let lhs_inner = self.complex_inner_ty_of(lhs.ty);
+        let rhs_inner = self.complex_inner_ty_of(rhs.ty);
+        let inner = match (lhs_inner, rhs_inner) {
+            (Some(a), Some(b)) => common_numeric_ty(a, b),
+            (Some(a), None) if is_numeric_ty(rhs.ty) => common_numeric_ty(a, rhs.ty),
+            (None, Some(b)) if is_numeric_ty(lhs.ty) => common_numeric_ty(lhs.ty, b),
+            _ => None,
+        };
+        let Some(inner) = inner else {
+            return Err(spanned_error(
+                parser_span,
+                format!(
+                    "invalid operands to complex operator: {} and {}",
+                    self.format_ty(lhs.ty),
+                    self.format_ty(rhs.ty),
+                ),
+            ));
+        };
+        // `__builtin_complex` with integer operands has no complex-int
+        // representation here; fall back to double like the usual conversions
+        // would for a mixed int/double computation.
+        let inner = match inner.kind() {
+            TyKind::RigidTy(RigidTy::Float(_)) => inner,
+            _ => Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
+        };
+        let lhs_ty = lhs.ty;
+        let rhs_ty = rhs.ty;
+        let lhs = self.convert_to_complex(lhs, inner);
+        let rhs = self.convert_to_complex(rhs, inner);
+        let (lre, lim) = self.split_complex(lhs);
+        let (rre, rim) = self.split_complex(rhs);
+        let fbin = |op, lhs: HirExpr, rhs: HirExpr| HirExpr {
+            kind: HirExprKind::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            ty: inner,
+            span,
+        };
+        match op {
+            HirBinOp::Add => Ok(self.complex_new_call(
+                fbin(HirBinOp::Add, lre, rre),
+                fbin(HirBinOp::Add, lim, rim),
+                span,
+            )),
+            HirBinOp::Sub => Ok(self.complex_new_call(
+                fbin(HirBinOp::Sub, lre, rre),
+                fbin(HirBinOp::Sub, lim, rim),
+                span,
+            )),
+            HirBinOp::Mul => Ok(self.complex_new_call(
+                fbin(
+                    HirBinOp::Sub,
+                    fbin(HirBinOp::Mul, lre.clone(), rre.clone()),
+                    fbin(HirBinOp::Mul, lim.clone(), rim.clone()),
+                ),
+                fbin(
+                    HirBinOp::Add,
+                    fbin(HirBinOp::Mul, lre, rim),
+                    fbin(HirBinOp::Mul, lim, rre),
+                ),
+                span,
+            )),
+            HirBinOp::Div => {
+                let denom = fbin(
+                    HirBinOp::Add,
+                    fbin(HirBinOp::Mul, rre.clone(), rre.clone()),
+                    fbin(HirBinOp::Mul, rim.clone(), rim.clone()),
+                );
+                Ok(self.complex_new_call(
+                    fbin(
+                        HirBinOp::Div,
+                        fbin(
+                            HirBinOp::Add,
+                            fbin(HirBinOp::Mul, lre.clone(), rre.clone()),
+                            fbin(HirBinOp::Mul, lim.clone(), rim.clone()),
+                        ),
+                        denom.clone(),
+                    ),
+                    fbin(
+                        HirBinOp::Div,
+                        fbin(
+                            HirBinOp::Sub,
+                            fbin(HirBinOp::Mul, lim, rre),
+                            fbin(HirBinOp::Mul, lre, rim),
+                        ),
+                        denom,
+                    ),
+                    span,
+                ))
+            }
+            HirBinOp::Eq | HirBinOp::Ne => {
+                let (cmp_op, log_op) = match op {
+                    HirBinOp::Eq => (HirBinOp::Eq, HirLogicalOp::And),
+                    _ => (HirBinOp::Ne, HirLogicalOp::Or),
+                };
+                let int_ty = Ty::signed_ty(IntTy::I32);
+                let re_cmp = HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: cmp_op,
+                        lhs: Box::new(lre),
+                        rhs: Box::new(rre),
+                    },
+                    ty: int_ty,
+                    span,
+                };
+                let im_cmp = HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: cmp_op,
+                        lhs: Box::new(lim),
+                        rhs: Box::new(rim),
+                    },
+                    ty: int_ty,
+                    span,
+                };
+                Ok(HirExpr {
+                    kind: HirExprKind::Logical {
+                        op: log_op,
+                        lhs: Box::new(self.condition_to_bool(re_cmp, parser_span)),
+                        rhs: Box::new(self.condition_to_bool(im_cmp, parser_span)),
+                    },
+                    ty: int_ty,
+                    span,
+                })
+            }
+            _ => Err(spanned_error(
+                parser_span,
+                format!(
+                    "can not use `{}` on complex types {} and {}",
+                    op.as_str(),
+                    self.format_ty(lhs_ty),
+                    self.format_ty(rhs_ty),
+                ),
+            )),
+        }
+    }
+
+    /// Lower an explicit cast where the source or target is complex:
+    /// real to complex (imaginary part zero), complex to complex
+    /// (component-wise), or complex to real (imaginary part discarded).
+    fn lower_complex_cast(
+        &self,
+        src: HirExpr,
+        target_ty: Ty,
+        parser_span: co2_ast::Span,
+    ) -> HirExpr {
+        let span = src.span;
+        let src_ty = src.ty;
+        if let Some(dst_inner) = self.complex_inner_ty_of(target_ty) {
+            return self.convert_to_complex(src, dst_inner);
+        }
+        if target_ty == Ty::bool_ty() {
+            // `_Bool` conversion: nonzero iff either part is nonzero.
+            let (re, im) = self.split_complex(src);
+            let part_ty = re.ty;
+            let nonzero = |part: HirExpr| HirExpr {
+                kind: HirExprKind::Binary {
+                    op: HirBinOp::Ne,
+                    lhs: Box::new(part),
+                    rhs: Box::new(HirExpr {
+                        kind: HirExprKind::ConstFloat(0.0),
+                        ty: part_ty,
+                        span,
+                    }),
+                },
+                ty: Ty::signed_ty(IntTy::I32),
+                span,
+            };
+            return HirExpr {
+                kind: HirExprKind::Logical {
+                    op: HirLogicalOp::Or,
+                    lhs: Box::new(self.condition_to_bool(nonzero(re), parser_span)),
+                    rhs: Box::new(self.condition_to_bool(nonzero(im), parser_span)),
+                },
+                ty: Ty::bool_ty(),
+                span,
+            };
+        }
+        if is_numeric_ty(target_ty) {
+            let (re, _) = self.split_complex(src);
+            return self.emit_cast(re, target_ty);
+        }
+        self.terminate_with_error(
+            parser_span,
+            &format!(
+                "unsupported cast from {} to {}",
+                self.format_ty(src_ty),
+                self.format_ty(target_ty),
+            ),
+        );
+    }
+
+    /// Lower long-double complex math (`creall`, `cimagl`, `conjl`, `cabsl`,
+    /// `cargl`, plus their `__`-prefixed glibc aliases) without calling libm:
+    /// co2's `long double` is IEEE-quad `f128` while the platform C ABI
+    /// passes 80-bit extended floats, so those calls would read garbage.
+    /// Returns `Ok(None)` for anything else (normal call lowering applies).
+    fn try_lower_complex_libm_call(
+        &self,
+        func_name: &str,
+        params: &[Spanned<Expression<LocalResolver>>],
+        span: RustSpan,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<Option<HirExpr>, (co2_ast::Span, String)> {
+        let kind = match func_name {
+            "creall" | "__creall" => 0,
+            "cimagl" | "__cimagl" => 1,
+            "conjl" | "__conjl" => 2,
+            "cabsl" | "__cabsl" => 3,
+            "cargl" | "__cargl" => 4,
+            _ => return Ok(None),
+        };
+        let [param] = params else {
+            return Ok(None);
+        };
+        let arg = self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
+        if self.complex_inner_ty_of(arg.ty).is_none() && !is_numeric_ty(arg.ty) {
+            return Ok(None);
+        }
+        let f128 = Ty::from_rigid_kind(RigidTy::Float(FloatTy::F128));
+        let f64 = Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64));
+        let arg = self.convert_to_complex(arg, f128);
+        let (re, im) = self.split_complex(arg);
+        let neg = |part: HirExpr| {
+            let ty = part.ty;
+            HirExpr {
+                kind: HirExprKind::Binary {
+                    op: HirBinOp::Sub,
+                    lhs: Box::new(HirExpr {
+                        kind: HirExprKind::ConstFloat(-0.0),
+                        ty,
+                        span,
+                    }),
+                    rhs: Box::new(part),
+                },
+                ty,
+                span,
+            }
+        };
+        match kind {
+            0 => Ok(Some(re)),
+            1 => Ok(Some(im)),
+            2 => Ok(Some(self.complex_new_call(re, neg(im), span))),
+            // Magnitude via double precision: no quad libm is callable.
+            3 => {
+                let square = |part: HirExpr| HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: HirBinOp::Mul,
+                        lhs: Box::new(self.emit_cast(part.clone(), f64)),
+                        rhs: Box::new(self.emit_cast(part, f64)),
+                    },
+                    ty: f64,
+                    span,
+                };
+                let sum = HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: HirBinOp::Add,
+                        lhs: Box::new(square(re)),
+                        rhs: Box::new(square(im)),
+                    },
+                    ty: f64,
+                    span,
+                };
+                let mag =
+                    self.wellknown_call(self.wellknown_defs.f64_sqrt, vec![], vec![sum], span);
+                Ok(Some(self.emit_cast(mag, f128)))
+            }
+            // cargl(z) = atan2(im, re) in double precision, widened back.
+            _ => {
+                let atan = self.wellknown_call(
+                    self.wellknown_defs.f64_atan2,
+                    vec![],
+                    vec![self.emit_cast(im, f64), self.emit_cast(re, f64)],
+                    span,
+                );
+                Ok(Some(self.emit_cast(atan, f128)))
+            }
+        }
+    }
+
     pub(crate) fn lower_binop_from_lowered(
         &self,
         mut lhs: HirExpr,
@@ -3286,6 +3787,12 @@ impl HirCtx<'_> {
         }
         self.array_to_pointer_decay_if_array(&mut lhs);
         self.array_to_pointer_decay_if_array(&mut rhs);
+
+        // C complex arithmetic lowers to `re`/`im` float operations.
+        if self.complex_inner_ty_of(lhs.ty).is_some() || self.complex_inner_ty_of(rhs.ty).is_some()
+        {
+            return self.lower_complex_binop(lhs, rhs, op, span, parser_span);
+        }
 
         // Operator overloading is not supported for ADT types like `String`.
         // Check early before other diagnostics to prefer this message over

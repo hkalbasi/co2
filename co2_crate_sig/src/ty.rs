@@ -29,6 +29,7 @@ pub enum CTy {
 pub enum CompressedTypeSpecifier {
     Void,
     PrimitiveTy(PrimitiveTy),
+    Complex(FloatTy),
     StructOrUnion {
         kind: StructOrUnionKind,
         specifier: Spanned<<LocalResolver as TypeResolver>::StructOrUnionIdentifier>,
@@ -126,8 +127,22 @@ impl CompressedTypeSpecifier {
         let mut signed = None;
         let mut long = 0u32;
         let mut short = 0u32;
+        let mut complex = false;
+        let mut float_spec = false;
         for spec in specifiers {
             match spec {
+                TypeSpecifier::Complex => {
+                    if complex {
+                        return Err(spanned_error(span, "duplicate _Complex specifier found"));
+                    }
+                    complex = true;
+                }
+                TypeSpecifier::Float => {
+                    if float_spec {
+                        return Err(spanned_error(span, "duplicate base specifier found"));
+                    }
+                    float_spec = true;
+                }
                 TypeSpecifier::Int | TypeSpecifier::Char | TypeSpecifier::Double => {
                     if base.is_some() {
                         return Err(spanned_error(span, "duplicate base specifier found"));
@@ -151,7 +166,6 @@ impl CompressedTypeSpecifier {
                 TypeSpecifier::Alignas => {}
                 TypeSpecifier::Bool
                 | TypeSpecifier::Void
-                | TypeSpecifier::Float
                 | TypeSpecifier::Float16
                 | TypeSpecifier::Float32
                 | TypeSpecifier::Float64
@@ -164,6 +178,35 @@ impl CompressedTypeSpecifier {
                     return Err(spanned_error(span, "This specifier should be used alone"));
                 }
             }
+        }
+        if complex {
+            // `float _Complex`, `double _Complex`, `long double _Complex`
+            // or bare `_Complex` (= `double _Complex`). Lowered to
+            // `core::num::Complex<foo>`; arithmetic is not supported yet.
+            if short > 0 {
+                return Err(spanned_error(span, "short _Complex is invalid"));
+            }
+            if signed.is_some() {
+                return Err(spanned_error(span, "signedness for _Complex is invalid"));
+            }
+            if long > 1 {
+                return Err(spanned_error(span, "long repeated too many times"));
+            }
+            let float_ty = match (float_spec, base, long) {
+                (true, None, 0) => FloatTy::F32,
+                (false, None, 0) | (false, Some(Base::Double), 0) => FloatTy::F64,
+                (false, Some(Base::Double), 1) => FloatTy::F128,
+                _ => {
+                    return Err(spanned_error(
+                        span,
+                        "only float, double and long double can be combined with _Complex",
+                    ));
+                }
+            };
+            return Ok(CompressedTypeSpecifier::Complex(float_ty));
+        }
+        if float_spec {
+            return Err(spanned_error(span, "This specifier should be used alone"));
         }
         let base = base.unwrap_or(Base::Int);
         Ok(CompressedTypeSpecifier::PrimitiveTy(match base {
@@ -1076,10 +1119,9 @@ impl LocalResolverBase {
             Expression::Constant(Constant::Int(v, _)) => Ok(*v),
             Expression::Constant(Constant::Bool(v)) => Ok(i128::from(*v)),
             Expression::Constant(Constant::Char(ch, _)) => Ok(i128::from(*ch as i32)),
-            Expression::Constant(Constant::Float(_, _)) => Err(spanned_error(
-                *span,
-                "cannot use floats in const expressions",
-            )),
+            Expression::Constant(Constant::Float(_, _) | Constant::Imaginary(_, _)) => Err(
+                spanned_error(*span, "cannot use floats in const expressions"),
+            ),
             Expression::Identifier((resolved, _)) => match resolved {
                 crate::DefOrLocal::Const(def_id) => {
                     if self.has_local_const_value(*def_id) {
@@ -2187,6 +2229,17 @@ impl LocalResolverBase {
         }
     }
 
+    fn complex_inner_ty(&mut self, def: DefId, args: &[HirGenericArg]) -> Option<HirTy> {
+        let (complex_def, _) = self.resolver.resolve("core::num::Complex").ok()?;
+        if complex_def != def {
+            return None;
+        }
+        let [HirGenericArg::Ty(inner)] = args else {
+            return None;
+        };
+        Some(inner.clone())
+    }
+
     fn sizeof_hir_ty(
         &mut self,
         ty: &HirTy,
@@ -2249,6 +2302,10 @@ impl LocalResolverBase {
                     Ok((round_up(size, align), align))
                 } else if let Some(ty) = self.typedef_tys.get(def).cloned() {
                     self.sizeof_hir_ty(&ty, span)
+                } else if let Some(inner) = self.complex_inner_ty(*def, args) {
+                    // `core::num::Complex<T>` is `#[repr(C)] { re: T, im: T }`.
+                    let (inner_size, inner_align) = self.sizeof_hir_ty(&inner, span)?;
+                    Ok((inner_size * 2, inner_align))
                 } else if self
                     .resolver
                     .resolve("core::mem::MaybeUninit")
@@ -2382,6 +2439,9 @@ impl LocalResolverBase {
         let ty = match specifier {
             CompressedTypeSpecifier::Void => HirTy::new_tuple(vec![], span),
             CompressedTypeSpecifier::PrimitiveTy(ty) => self.hir_ty_of_prim(ty, span),
+            CompressedTypeSpecifier::Complex(float_ty) => {
+                self.complex_of(HirTy::float_ty(float_ty, span), span, type_span)
+            }
             CompressedTypeSpecifier::Enum(specifier) => HirTy::adt(specifier.0, vec![], span),
             CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
                 HirTy::adt(specifier.0, vec![], span)
@@ -2593,6 +2653,24 @@ impl LocalResolverBase {
         HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span)
     }
 
+    fn complex_of(
+        &mut self,
+        inner: HirTy,
+        span: rustc_public_generative::rustc_public::ty::Span,
+        co2_span: co2_ast::Span,
+    ) -> HirTy {
+        let (def, _) = self
+            .resolver
+            .resolve("core::num::Complex")
+            .unwrap_or_else(|e| {
+                self.terminate_with_error(
+                    co2_span,
+                    &format!("failed to resolve core::num::Complex: {e}"),
+                )
+            });
+        HirTy::adt(def, vec![HirGenericArg::Ty(inner)], span)
+    }
+
     pub(crate) fn terminate_with_spanned_error(&self, (span, msg): (co2_ast::Span, String)) -> ! {
         self.terminate_with_error(span, &msg)
     }
@@ -2652,9 +2730,7 @@ impl PrimitiveTy {
             "f16" => Some(PrimitiveTy::FloatTy(FloatTy::F16)),
             "f32" => Some(PrimitiveTy::FloatTy(FloatTy::F32)),
             "f64" => Some(PrimitiveTy::FloatTy(FloatTy::F64)),
-            "f128" => {
-                Some(PrimitiveTy::FloatTy(FloatTy::F128))
-            }
+            "f128" => Some(PrimitiveTy::FloatTy(FloatTy::F128)),
             "_Float32x" => Some(PrimitiveTy::FloatTy(FloatTy::F64)),
             _ => None,
         }

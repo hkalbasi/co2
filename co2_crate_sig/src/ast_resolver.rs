@@ -91,6 +91,9 @@ pub fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> boo
         }
         Expression::VaArg { args, .. } => expr_contains_label_address(&args.0),
         Expression::BuiltinConstantP { expr } => expr_contains_label_address(&expr.0),
+        Expression::BuiltinComplex { re, im } => {
+            expr_contains_label_address(&re.0) || expr_contains_label_address(&im.0)
+        }
         Expression::Offsetof { designator, .. } => designator.iter().any(|m| match m {
             co2_ast::OffsetofMember::Field(_) => false,
             co2_ast::OffsetofMember::Index(idx) => expr_contains_label_address(&idx.0),

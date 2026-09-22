@@ -328,6 +328,13 @@ impl HirCtx<'_> {
         ))
     }
 
+    pub(crate) fn complex_of(&self, inner: Ty) -> Ty {
+        Ty::from_rigid_kind(RigidTy::Adt(
+            self.wellknown_defs.complex,
+            GenericArgs(vec![GenericArgKind::Type(inner)]),
+        ))
+    }
+
     /// Lower generic args that may contain `RustTy::Wild`.
     /// `Wild` is replaced with the function's own `TyKind::Param` at the given `param_idx`,
     /// so inference can fill it in later.
@@ -795,7 +802,10 @@ impl HirCtx<'_> {
                                     expr
                                 } else {
                                     let expr_ty = expr.ty;
-                                    match coerce_expr_to_type(expr, local_ty) {
+                                    match self
+                                        .coerce_to_complex_ty(&expr, local_ty)
+                                        .or_else(|| coerce_expr_to_type(expr, local_ty))
+                                    {
                                         Some(it) => it,
                                         None => self.terminate_with_error(
                                             parser_span,
@@ -1016,6 +1026,9 @@ impl HirCtx<'_> {
         let ty = match specifier {
             CompressedTypeSpecifier::Void => Ty::new_tuple(&[]),
             CompressedTypeSpecifier::PrimitiveTy(primitive_ty) => prim_ty_to_ty(primitive_ty),
+            CompressedTypeSpecifier::Complex(float_ty) => {
+                self.complex_of(Ty::from_rigid_kind(RigidTy::Float(float_ty)))
+            }
             CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
                 // For forward-declared (incomplete) structs, lowering.rs registers them in
                 // `typedef_tys` as `HirTy::adt(foreign_def, ...)` where `foreign_def` is a
@@ -1103,10 +1116,9 @@ impl HirCtx<'_> {
             Expression::Constant(Constant::Int(v, _)) => Ok(*v),
             Expression::Constant(Constant::Bool(v)) => Ok(i128::from(*v)),
             Expression::Constant(Constant::Char(ch, _)) => Ok(i128::from(*ch as i32)),
-            Expression::Constant(Constant::Float(_, _)) => Err(spanned_error(
-                *span,
-                "cannot use floats in const expressions",
-            )),
+            Expression::Constant(Constant::Float(_, _) | Constant::Imaginary(_, _)) => Err(
+                spanned_error(*span, "cannot use floats in const expressions"),
+            ),
             Expression::Identifier((resolved, _)) => match resolved {
                 co2_crate_sig::DefOrLocal::Const(def_id) => {
                     if self.decl_resolver.has_local_const_value(*def_id) {
