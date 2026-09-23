@@ -937,14 +937,8 @@ impl HirCtx<'_> {
                 }
                 ty_passed_to_variadic(actual.ty)
             };
-            if let Some(converted) = self.coerce_to_complex_ty(actual, expected) {
-                *actual = converted;
-            } else if needs_implicit_cast(expected, actual.ty) {
-                *actual = HirExpr {
-                    kind: HirExprKind::Cast(Box::new(actual.clone())),
-                    ty: expected,
-                    span: actual.span,
-                };
+            if let Some(coerced) = self.coerce_expr_to_type(actual, expected) {
+                *actual = coerced;
             }
             if !ty_matches_expected(expected, actual.ty)
                 && let Some(coerced) = self.coerce_transparent_union_arg(expected, actual)
@@ -1975,14 +1969,8 @@ impl HirCtx<'_> {
                     }
                     let mut rhs = self.lower_expr(*rhs, locals, local_map)?;
                     self.array_to_pointer_decay_if_array(&mut rhs);
-                    if let Some(converted) = self.coerce_to_complex_ty(&rhs, lhs.ty) {
-                        rhs = converted;
-                    } else if needs_implicit_cast(lhs.ty, rhs.ty) {
-                        rhs = HirExpr {
-                            kind: HirExprKind::Cast(Box::new(rhs.clone())),
-                            ty: lhs.ty,
-                            span: rhs.span,
-                        };
+                    if let Some(coerced) = self.coerce_expr_to_type(&rhs, lhs.ty) {
+                        rhs = coerced;
                     }
                     if !ty_matches_expected(lhs.ty, rhs.ty) {
                         return Err(spanned_error(
@@ -2520,7 +2508,7 @@ impl HirCtx<'_> {
                                     kind: HirExprKind::Binary {
                                         op: HirBinOp::Sub,
                                         lhs: Box::new(HirExpr {
-                                            kind: HirExprKind::ConstFloat(-0.0),
+                                            kind: HirExprKind::Zeroed,
                                             ty,
                                             span,
                                         }),
@@ -3364,7 +3352,7 @@ impl HirCtx<'_> {
     }
 
     /// Build a `Complex::new(re, im)` call. Both parts must already have the
-    /// same float type, which becomes the complex component type.
+    /// same component type, which becomes the complex component type.
     fn complex_new_call(&self, re: HirExpr, im: HirExpr, span: RustSpan) -> HirExpr {
         let inner_ty = re.ty;
         self.wellknown_call(
@@ -3397,8 +3385,8 @@ impl HirCtx<'_> {
         (re, im)
     }
 
-    /// Decompose `expr` (complex or real) into `(re, im)` parts of float type
-    /// `inner`, converting as needed. Terminates on non-arithmetic input.
+    /// Decompose `expr` (complex or real) into `(re, im)` parts of component
+    /// type `inner`, converting as needed. Terminates on non-arithmetic input.
     fn complex_parts(&self, expr: HirExpr, inner: Ty) -> (HirExpr, HirExpr) {
         let span = expr.span;
         if self.complex_inner_ty_of(expr.ty).is_some() {
@@ -3406,7 +3394,7 @@ impl HirCtx<'_> {
             (self.emit_cast(re, inner), self.emit_cast(im, inner))
         } else if is_numeric_ty(expr.ty) {
             let zero = HirExpr {
-                kind: HirExprKind::ConstFloat(0.0),
+                kind: HirExprKind::Zeroed,
                 ty: inner,
                 span,
             };
@@ -3414,21 +3402,77 @@ impl HirCtx<'_> {
         } else {
             self.terminate_with_error(
                 self.to_parser_span(span),
-                &format!("cannot convert {} to complex type", self.format_ty(expr.ty),),
+                &format!("cannot convert {} to complex type", self.format_ty(expr.ty)),
             );
         }
     }
 
-    /// Implicit conversion to a complex target type (initializers,
-    /// assignments, call arguments): from complex of another component type
-    /// or from a real number (imaginary part zero). `None` when inapplicable.
-    pub(crate) fn coerce_to_complex_ty(&self, expr: &HirExpr, expected_ty: Ty) -> Option<HirExpr> {
+    /// Implicit conversion to a complex target type: from complex of another
+    /// component type or from a real number (imaginary part zero). Prefer
+    /// [`Self::coerce_expr_to_type`], which is the single implicit-cast path.
+    fn coerce_to_complex_ty(&self, expr: &HirExpr, expected_ty: Ty) -> Option<HirExpr> {
         let dst_inner = self.complex_inner_ty_of(expected_ty)?;
         if self.complex_inner_ty_of(expr.ty).is_some() || is_numeric_ty(expr.ty) {
             Some(self.convert_to_complex(expr.clone(), dst_inner))
         } else {
             None
         }
+    }
+
+    /// The single path for every implicit cast / conversion in the compiler.
+    ///
+    /// Order: exact type match → complex reconstruction (component-wise, not a
+    /// `Cast` node — complex is an aggregate and cannot lower through MIR
+    /// cast) → array→pointer decay → null-ptr constant → `needs_implicit_cast`
+    /// wrapping `HirExprKind::Cast`.
+    ///
+    /// Borrows `expr` so callers retain it on `None` for diagnostics.
+    pub(crate) fn coerce_expr_to_type(&self, expr: &HirExpr, expected_ty: Ty) -> Option<HirExpr> {
+        if ty_matches_expected(expected_ty, expr.ty) {
+            return Some(expr.clone());
+        }
+        if let Some(converted) = self.coerce_to_complex_ty(expr, expected_ty) {
+            return Some(converted);
+        }
+        if is_array_ty(expr.ty)
+            && matches!(expected_ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(..)))
+        {
+            let elem = array_elem_ty(expr.ty).expect("Expr is not array");
+            let span = expr.span;
+            let mutability = if matches!(
+                expected_ty.kind(),
+                TyKind::RigidTy(RigidTy::RawPtr(_, Mutability::Mut))
+            ) {
+                Mutability::Mut
+            } else {
+                Mutability::Not
+            };
+            return Some(HirExpr {
+                kind: HirExprKind::ArrayToPointer(Box::new(expr.clone())),
+                ty: Ty::new_ptr(elem, mutability),
+                span,
+            });
+        }
+        if matches!(expr.kind, HirExprKind::ConstInt(0))
+            && matches!(
+                expected_ty.kind(),
+                TyKind::RigidTy(RigidTy::RawPtr(..) | RigidTy::FnPtr(..))
+            )
+        {
+            return Some(HirExpr {
+                kind: HirExprKind::Zeroed,
+                ty: expected_ty,
+                span: expr.span,
+            });
+        }
+        if needs_implicit_cast(expected_ty, expr.ty) {
+            return Some(HirExpr {
+                kind: HirExprKind::Cast(Box::new(expr.clone())),
+                ty: expected_ty,
+                span: expr.span,
+            });
+        }
+        None
     }
 
     /// Convert a complex or real expression to `Complex<inner>`.
@@ -3470,13 +3514,18 @@ impl HirCtx<'_> {
                 ),
             ));
         };
-        // `__builtin_complex` with integer operands has no complex-int
-        // representation here; fall back to double like the usual conversions
-        // would for a mixed int/double computation.
-        let inner = match inner.kind() {
-            TyKind::RigidTy(RigidTy::Float(_)) => inner,
-            _ => Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
-        };
+        // GNU extension: keep integer component types (e.g. `int _Complex`).
+        // GCC rejects `/` on integer complex, so surface that as an error too.
+        if matches!(op, HirBinOp::Div) && is_integer_ty(inner) {
+            return Err(spanned_error(
+                parser_span,
+                format!(
+                    "can not use `/` on integer complex types {} and {}",
+                    self.format_ty(lhs.ty),
+                    self.format_ty(rhs.ty),
+                ),
+            ));
+        }
         let lhs_ty = lhs.ty;
         let rhs_ty = rhs.ty;
         let lhs = self.convert_to_complex(lhs, inner);
@@ -3613,7 +3662,7 @@ impl HirCtx<'_> {
                     op: HirBinOp::Ne,
                     lhs: Box::new(part),
                     rhs: Box::new(HirExpr {
-                        kind: HirExprKind::ConstFloat(0.0),
+                        kind: HirExprKind::Zeroed,
                         ty: part_ty,
                         span,
                     }),
@@ -3788,7 +3837,7 @@ impl HirCtx<'_> {
         self.array_to_pointer_decay_if_array(&mut lhs);
         self.array_to_pointer_decay_if_array(&mut rhs);
 
-        // C complex arithmetic lowers to `re`/`im` float operations.
+        // C complex arithmetic lowers to `re`/`im` component operations.
         if self.complex_inner_ty_of(lhs.ty).is_some() || self.complex_inner_ty_of(rhs.ty).is_some()
         {
             return self.lower_complex_binop(lhs, rhs, op, span, parser_span);
@@ -4429,47 +4478,4 @@ fn int_suffix_ty(suffix: &IntegerSuffix, value: i128) -> Ty {
         IntegerSuffix::I64 => Ty::signed_ty(IntTy::I64),
         IntegerSuffix::I128 => Ty::signed_ty(IntTy::I128),
     }
-}
-
-pub(crate) fn coerce_expr_to_type(expr: HirExpr, expected_ty: Ty) -> Option<HirExpr> {
-    if ty_matches_expected(expected_ty, expr.ty) {
-        return Some(expr);
-    }
-    if is_array_ty(expr.ty) && matches!(expected_ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(..))) {
-        let elem = array_elem_ty(expr.ty).expect("Expr is not array");
-        let span = expr.span;
-        let mutability = if matches!(
-            expected_ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(_, Mutability::Mut))
-        ) {
-            Mutability::Mut
-        } else {
-            Mutability::Not
-        };
-        return Some(HirExpr {
-            kind: HirExprKind::ArrayToPointer(Box::new(expr)),
-            ty: Ty::new_ptr(elem, mutability),
-            span,
-        });
-    }
-    if matches!(expr.kind, HirExprKind::ConstInt(0))
-        && matches!(
-            expected_ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(..) | RigidTy::FnPtr(..))
-        )
-    {
-        return Some(HirExpr {
-            kind: HirExprKind::Zeroed,
-            ty: expected_ty,
-            span: expr.span,
-        });
-    }
-    if needs_implicit_cast(expected_ty, expr.ty) {
-        return Some(HirExpr {
-            kind: HirExprKind::Cast(Box::new(expr.clone())),
-            ty: expected_ty,
-            span: expr.span,
-        });
-    }
-    None
 }

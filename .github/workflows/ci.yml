@@ -31,7 +31,7 @@ jobs:
       - name: "copy nushell to /usr/bin"
         run: |
           sudo cp $(which nu) /usr/bin/
-      
+
 
       - name: Install test dependencies
         run: |

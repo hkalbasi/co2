@@ -8,12 +8,10 @@ use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{Span as RustSpan, Ty};
 
 use crate::HirDecl;
-use crate::expr::{HirExpr, HirExprKind, coerce_expr_to_type};
+use crate::expr::{HirExpr, HirExprKind};
 use crate::item::{HirLocal, LabelId, LocalId};
 use crate::resolver::HirCtx;
-use crate::ty::{
-    integer_promote_ty, is_condition_ty, is_integer_ty, needs_implicit_cast, ty_matches_expected,
-};
+use crate::ty::{integer_promote_ty, is_condition_ty, is_integer_ty, ty_matches_expected};
 
 #[derive(Clone, Debug)]
 pub enum HirStmt {
@@ -104,7 +102,7 @@ impl HirCtx<'_> {
                     );
                 }
                 let case_expr_ty = case_expr.ty;
-                let Some(case_expr) = coerce_expr_to_type(case_expr, discr_ty) else {
+                let Some(case_expr) = self.coerce_expr_to_type(&case_expr, discr_ty) else {
                     self.terminate_with_error(
                         case_expr_span,
                         &format!(
@@ -159,7 +157,7 @@ impl HirCtx<'_> {
                     );
                 }
                 let lo_ty = lo_expr.ty;
-                let Some(lo_expr) = coerce_expr_to_type(lo_expr, discr_ty) else {
+                let Some(lo_expr) = self.coerce_expr_to_type(&lo_expr, discr_ty) else {
                     self.terminate_with_error(
                         lo_span,
                         &format!(
@@ -182,7 +180,7 @@ impl HirCtx<'_> {
                     );
                 }
                 let hi_ty = hi_expr.ty;
-                let Some(hi_expr) = coerce_expr_to_type(hi_expr, discr_ty) else {
+                let Some(hi_expr) = self.coerce_expr_to_type(&hi_expr, discr_ty) else {
                     self.terminate_with_error(
                         hi_span,
                         &format!(
@@ -269,12 +267,8 @@ impl HirCtx<'_> {
                         .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                     self.array_to_pointer_decay_if_array(&mut expr);
                     self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
-                    if needs_implicit_cast(self.ret_ty, expr.ty) {
-                        expr = HirExpr {
-                            kind: HirExprKind::Cast(Box::new(expr.clone())),
-                            ty: self.ret_ty,
-                            span: expr.span,
-                        };
+                    if let Some(coerced) = self.coerce_expr_to_type(&expr, self.ret_ty) {
+                        expr = coerced;
                     }
                     if !ty_matches_expected(self.ret_ty, expr.ty) {
                         self.terminate_with_error(

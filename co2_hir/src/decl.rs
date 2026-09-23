@@ -23,15 +23,12 @@ use rustc_public_generative::{
 };
 
 use crate::expr::HirExpr;
+use crate::item::{HirLocal, LocalId};
 use crate::resolver::HirCtx;
 use crate::stmt::HirStmt;
 use crate::ty::{
     adt_field_tys, array_elem_ty, enum_payload_ty, is_array_ty, is_unsized_ty,
     resolve_field_path_in_adt, ty_matches_expected,
-};
-use crate::{
-    expr::coerce_expr_to_type,
-    item::{HirLocal, LocalId},
 };
 
 pub enum CTy {
@@ -802,10 +799,7 @@ impl HirCtx<'_> {
                                     expr
                                 } else {
                                     let expr_ty = expr.ty;
-                                    match self
-                                        .coerce_to_complex_ty(&expr, local_ty)
-                                        .or_else(|| coerce_expr_to_type(expr, local_ty))
-                                    {
+                                    match self.coerce_expr_to_type(&expr, local_ty) {
                                         Some(it) => it,
                                         None => self.terminate_with_error(
                                             parser_span,
@@ -1026,9 +1020,7 @@ impl HirCtx<'_> {
         let ty = match specifier {
             CompressedTypeSpecifier::Void => Ty::new_tuple(&[]),
             CompressedTypeSpecifier::PrimitiveTy(primitive_ty) => prim_ty_to_ty(primitive_ty),
-            CompressedTypeSpecifier::Complex(float_ty) => {
-                self.complex_of(Ty::from_rigid_kind(RigidTy::Float(float_ty)))
-            }
+            CompressedTypeSpecifier::Complex(prim) => self.complex_of(prim_ty_to_ty(prim)),
             CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
                 // For forward-declared (incomplete) structs, lowering.rs registers them in
                 // `typedef_tys` as `HirTy::adt(foreign_def, ...)` where `foreign_def` is a

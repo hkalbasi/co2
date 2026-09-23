@@ -6,7 +6,7 @@ use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{AdtKind, RigidTy, Ty, TyKind};
 
 use crate::{
-    expr::{HirExpr, HirExprKind, coerce_expr_to_type},
+    expr::{HirExpr, HirExprKind},
     item::{HirLocal, LocalId},
     resolver::HirCtx,
     ty::{adt_field_tys, array_elem_ty, is_array_ty, is_union_ty},
@@ -404,8 +404,7 @@ impl HirCtx<'_> {
                 let expr = self.lower_expr(expr, locals, local_map)?;
                 let expr_ty = expr.ty;
                 let coerced = self
-                    .coerce_to_complex_ty(&expr, expected_ty)
-                    .or_else(|| coerce_expr_to_type(expr, expected_ty))
+                    .coerce_expr_to_type(&expr, expected_ty)
                     .ok_or_else(|| {
                         spanned_error(
                             initializer.1,
@@ -677,9 +676,7 @@ impl HirCtx<'_> {
                             self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
                             loop {
                                 if let Some(coerced) =
-                                    self.coerce_to_complex_ty(&expr, value_cursor.ty()).or_else(
-                                        || coerce_expr_to_type(expr.clone(), value_cursor.ty()),
-                                    )
+                                    self.coerce_expr_to_type(&expr, value_cursor.ty())
                                 {
                                     break InitializerTree::Leaf(coerced);
                                 }

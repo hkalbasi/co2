@@ -29,7 +29,7 @@ pub enum CTy {
 pub enum CompressedTypeSpecifier {
     Void,
     PrimitiveTy(PrimitiveTy),
-    Complex(FloatTy),
+    Complex(PrimitiveTy),
     StructOrUnion {
         kind: StructOrUnionKind,
         specifier: Spanned<<LocalResolver as TypeResolver>::StructOrUnionIdentifier>,
@@ -86,25 +86,6 @@ impl CompressedTypeSpecifier {
             'b: {
                 return Ok(match specifier {
                     TypeSpecifier::Void => CompressedTypeSpecifier::Void,
-                    TypeSpecifier::Float => {
-                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F32))
-                    }
-                    // C23 _FloatN / _FloatNx and GNU __float128. The x-types
-                    // alias the matching standard width (same representation);
-                    // _Float32/_Float64 stay distinct from float/double only
-                    // for _Generic (see c_generic_ty_matches).
-                    TypeSpecifier::Float16 => {
-                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F16))
-                    }
-                    TypeSpecifier::Float32 => {
-                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F32))
-                    }
-                    TypeSpecifier::Float64 => {
-                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F64))
-                    }
-                    TypeSpecifier::Float128 => {
-                        CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::FloatTy(FloatTy::F128))
-                    }
                     TypeSpecifier::Bool => CompressedTypeSpecifier::PrimitiveTy(PrimitiveTy::Bool),
                     &TypeSpecifier::StructOrUnion { kind, specifier } => {
                         CompressedTypeSpecifier::StructOrUnion { kind, specifier }
@@ -128,7 +109,7 @@ impl CompressedTypeSpecifier {
         let mut long = 0u32;
         let mut short = 0u32;
         let mut complex = false;
-        let mut float_spec = false;
+        let mut float_spec = None;
         for spec in specifiers {
             match spec {
                 TypeSpecifier::Complex => {
@@ -137,11 +118,22 @@ impl CompressedTypeSpecifier {
                     }
                     complex = true;
                 }
-                TypeSpecifier::Float => {
-                    if float_spec {
+                TypeSpecifier::Float16
+                | TypeSpecifier::Float32
+                | TypeSpecifier::Float64
+                | TypeSpecifier::Float128
+                | TypeSpecifier::Float => {
+                    if float_spec.is_some() {
                         return Err(spanned_error(span, "duplicate base specifier found"));
                     }
-                    float_spec = true;
+                    float_spec = Some(match spec {
+                        TypeSpecifier::Float => FloatTy::F32,
+                        TypeSpecifier::Float16 => FloatTy::F16,
+                        TypeSpecifier::Float32 => FloatTy::F32,
+                        TypeSpecifier::Float64 => FloatTy::F64,
+                        TypeSpecifier::Float128 => FloatTy::F128,
+                        _ => unreachable!(),
+                    });
                 }
                 TypeSpecifier::Int | TypeSpecifier::Char | TypeSpecifier::Double => {
                     if base.is_some() {
@@ -166,10 +158,6 @@ impl CompressedTypeSpecifier {
                 TypeSpecifier::Alignas => {}
                 TypeSpecifier::Bool
                 | TypeSpecifier::Void
-                | TypeSpecifier::Float16
-                | TypeSpecifier::Float32
-                | TypeSpecifier::Float64
-                | TypeSpecifier::Float128
                 | TypeSpecifier::StructOrUnion { .. }
                 | TypeSpecifier::Enum(_)
                 | TypeSpecifier::TypedefName(_)
@@ -179,37 +167,25 @@ impl CompressedTypeSpecifier {
                 }
             }
         }
-        if complex {
-            // `float _Complex`, `double _Complex`, `long double _Complex`
-            // or bare `_Complex` (= `double _Complex`). Lowered to
-            // `core::num::Complex<foo>`; arithmetic is not supported yet.
-            if short > 0 {
-                return Err(spanned_error(span, "short _Complex is invalid"));
+        if let Some(float_ty) = float_spec {
+            // `float` / `_FloatN` may only appear alone, optionally with `_Complex`.
+            if base.is_some() || long > 0 || short > 0 || signed.is_some() {
+                return Err(spanned_error(span, "This specifier should be used alone"));
             }
-            if signed.is_some() {
-                return Err(spanned_error(span, "signedness for _Complex is invalid"));
+            let prim = PrimitiveTy::FloatTy(float_ty);
+            if complex {
+                return Ok(CompressedTypeSpecifier::Complex(prim));
             }
-            if long > 1 {
-                return Err(spanned_error(span, "long repeated too many times"));
-            }
-            let float_ty = match (float_spec, base, long) {
-                (true, None, 0) => FloatTy::F32,
-                (false, None, 0) | (false, Some(Base::Double), 0) => FloatTy::F64,
-                (false, Some(Base::Double), 1) => FloatTy::F128,
-                _ => {
-                    return Err(spanned_error(
-                        span,
-                        "only float, double and long double can be combined with _Complex",
-                    ));
-                }
-            };
-            return Ok(CompressedTypeSpecifier::Complex(float_ty));
+            return Ok(CompressedTypeSpecifier::PrimitiveTy(prim));
         }
-        if float_spec {
-            return Err(spanned_error(span, "This specifier should be used alone"));
+        // Bare `_Complex` is `double _Complex`.
+        if complex && base.is_none() && long == 0 && short == 0 && signed.is_none() {
+            return Ok(CompressedTypeSpecifier::Complex(PrimitiveTy::FloatTy(
+                FloatTy::F64,
+            )));
         }
         let base = base.unwrap_or(Base::Int);
-        Ok(CompressedTypeSpecifier::PrimitiveTy(match base {
+        let primitive = match base {
             Base::Int => {
                 let signed = signed.unwrap_or(true);
                 match (long, short, signed) {
@@ -250,7 +226,11 @@ impl CompressedTypeSpecifier {
                     Some(false) => PrimitiveTy::UintTy(UintTy::U8),
                 }
             }
-        }))
+        };
+        if complex {
+            return Ok(CompressedTypeSpecifier::Complex(primitive));
+        }
+        Ok(CompressedTypeSpecifier::PrimitiveTy(primitive))
     }
 }
 
@@ -2439,8 +2419,9 @@ impl LocalResolverBase {
         let ty = match specifier {
             CompressedTypeSpecifier::Void => HirTy::new_tuple(vec![], span),
             CompressedTypeSpecifier::PrimitiveTy(ty) => self.hir_ty_of_prim(ty, span),
-            CompressedTypeSpecifier::Complex(float_ty) => {
-                self.complex_of(HirTy::float_ty(float_ty, span), span, type_span)
+            CompressedTypeSpecifier::Complex(prim) => {
+                let inner = self.hir_ty_of_prim(prim, span);
+                self.complex_of(inner, span, type_span)
             }
             CompressedTypeSpecifier::Enum(specifier) => HirTy::adt(specifier.0, vec![], span),
             CompressedTypeSpecifier::StructOrUnion { kind: _, specifier } => {
