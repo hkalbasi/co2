@@ -1,4 +1,5 @@
 //@ mode: c
+//@ run-status: 0
 
 int main(void) {
     _Atomic unsigned int value = 1;
