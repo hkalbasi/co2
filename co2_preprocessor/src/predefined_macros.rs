@@ -1104,6 +1104,89 @@ impl Preprocessor {
         }
     }
 
+    /// Define x86 feature macros from `-m<feat>`/`-mno-<feat>`/`-march=<cpu>`
+    /// flags in `args` (forwarded by co2cc alongside the usual cpp args).
+    ///
+    /// Baseline SSE/SSE2/MMX macros are already defined; enabling a feature
+    /// also enables its prerequisites (`-mavx2` implies `avx`, `sse4.2`, ...),
+    /// while `-mno-<feat>` disables the feature plus everything requiring it.
+    /// Later flags win. Unknown `-m` spellings and `-mtune=` are ignored.
+    /// `-march=native` enables the host C compiler's reported features,
+    /// `x86-64-v2/v3/v4` their level's features; other `-march` values only
+    /// affect codegen.
+    /// Must be called after set_target(); non-x86 targets ignore the flags.
+    pub fn apply_arch_flags(&mut self, args: &[String]) {
+        if !self.macros.is_defined("__x86_64__") && !self.macros.is_defined("__i386__") {
+            return;
+        }
+        let mut enabled: Vec<String> = Vec::new();
+        for arg in args {
+            if let Some(cpu) = arg.strip_prefix("-march=") {
+                match cpu {
+                    "native" => {
+                        enabled.clear();
+                        for feat in native_x86_features() {
+                            enable_x86_feature(&mut enabled, &feat);
+                        }
+                    }
+                    "x86-64" | "x86_64" | "x86-64-v1" | "i686" | "i386" => {
+                        enabled.clear();
+                    }
+                    "x86-64-v2" => {
+                        enabled.clear();
+                        enable_x86_feature(&mut enabled, "sse4.2");
+                        enable_x86_feature(&mut enabled, "popcnt");
+                    }
+                    "x86-64-v3" => {
+                        enabled.clear();
+                        for feat in ["avx2", "fma", "bmi", "bmi2", "lzcnt", "popcnt", "movbe"] {
+                            enable_x86_feature(&mut enabled, feat);
+                        }
+                    }
+                    "x86-64-v4" => {
+                        enabled.clear();
+                        for feat in [
+                            "avx2", "fma", "bmi", "bmi2", "lzcnt", "popcnt", "movbe", "avx512f",
+                            "avx512bw", "avx512cd", "avx512dq", "avx512vl",
+                        ] {
+                            enable_x86_feature(&mut enabled, feat);
+                        }
+                    }
+                    // Named CPUs (haswell, ...) only affect codegen.
+                    _ => {}
+                }
+                continue;
+            }
+            if arg.starts_with("-mtune=") {
+                continue;
+            }
+            let Some(body) = arg.strip_prefix("-m") else {
+                continue;
+            };
+            // Skip -M* (depfile flags) and -masm=; only lowercase -m<feat>.
+            if !body.starts_with(|c: char| c.is_ascii_lowercase()) || body.starts_with("asm=") {
+                continue;
+            }
+            let (negated, name) = match body.strip_prefix("no-") {
+                Some(rest) => (true, rest),
+                None => (false, body),
+            };
+            if !is_known_x86_flag(name) {
+                continue;
+            }
+            if negated {
+                disable_x86_feature(&mut enabled, name);
+            } else {
+                enable_x86_feature(&mut enabled, name);
+            }
+        }
+        for feat in &enabled {
+            if let Some(name) = x86_flag_macro(feat) {
+                self.define_simple_macro(name, "1");
+            }
+        }
+    }
+
     /// Set the target architecture, updating predefined macros and include paths.
     pub fn set_target(&mut self, target: &str) {
         match target {
@@ -1307,4 +1390,188 @@ impl Preprocessor {
         self.define_simple_macro("LDBL_DIG", "33");
         self.define_simple_macro("DECIMAL_DIG", "36");
     }
+}
+
+/// GCC `-m` names co2cc accepts (see co2cc `map_m_feature_flag`) that have a
+/// predefined macro or affect the SIMD implication chain. `sse4` enables both
+/// halves like GCC; `cx16` has no macro.
+const X86_KNOWN_FLAGS: &[&str] = &[
+    "sse",
+    "sse2",
+    "sse3",
+    "ssse3",
+    "sse4",
+    "sse4.1",
+    "sse4.2",
+    "avx",
+    "avx2",
+    "fma",
+    "avx512f",
+    "avx512cd",
+    "avx512dq",
+    "avx512bw",
+    "avx512vl",
+    "avx512vbmi",
+    "avx512vbmi2",
+    "bmi",
+    "bmi2",
+    "lzcnt",
+    "abm",
+    "popcnt",
+    "aes",
+    "pclmul",
+    "rdrnd",
+    "rdseed",
+    "sha",
+    "adx",
+    "movbe",
+    "fxsr",
+    "xsave",
+    "xsaveopt",
+    "fsgsbase",
+    "cx16",
+];
+
+fn is_known_x86_flag(name: &str) -> bool {
+    X86_KNOWN_FLAGS.contains(&name)
+}
+
+/// Prerequisites enabled alongside an x86 feature (GCC implication chain).
+fn x86_prereqs(name: &str) -> &'static [&'static str] {
+    match name {
+        "sse2" => &["sse"],
+        "sse3" => &["sse2"],
+        "ssse3" => &["sse3"],
+        "sse4.1" => &["ssse3"],
+        "sse4.2" => &["sse4.1"],
+        "avx" => &["sse4.2"],
+        "avx2" => &["avx"],
+        "fma" => &["avx"],
+        "avx512f" => &["avx2"],
+        "avx512cd" | "avx512dq" | "avx512bw" | "avx512vl" => &["avx512f"],
+        "avx512vbmi" => &["avx512bw"],
+        "avx512vbmi2" => &["avx512vbmi"],
+        "xsaveopt" => &["xsave"],
+        "abm" => &["lzcnt", "popcnt"],
+        _ => &[],
+    }
+}
+
+/// Predefined macro for an x86 feature (`None` for flag-only `cx16`).
+fn x86_flag_macro(name: &str) -> Option<&'static str> {
+    match name {
+        "sse" => Some("__SSE__"),
+        "sse2" => Some("__SSE2__"),
+        "sse3" => Some("__SSE3__"),
+        "ssse3" => Some("__SSSE3__"),
+        "sse4.1" => Some("__SSE4_1__"),
+        "sse4.2" => Some("__SSE4_2__"),
+        "avx" => Some("__AVX__"),
+        "avx2" => Some("__AVX2__"),
+        "fma" => Some("__FMA__"),
+        "avx512f" => Some("__AVX512F__"),
+        "avx512cd" => Some("__AVX512CD__"),
+        "avx512dq" => Some("__AVX512DQ__"),
+        "avx512bw" => Some("__AVX512BW__"),
+        "avx512vl" => Some("__AVX512VL__"),
+        "avx512vbmi" => Some("__AVX512VBMI__"),
+        "avx512vbmi2" => Some("__AVX512VBMI2__"),
+        "bmi" => Some("__BMI__"),
+        "bmi2" => Some("__BMI2__"),
+        "lzcnt" => Some("__LZCNT__"),
+        "abm" => Some("__ABM__"),
+        "popcnt" => Some("__POPCNT__"),
+        "aes" => Some("__AES__"),
+        "pclmul" => Some("__PCLMUL__"),
+        "rdrnd" => Some("__RDRND__"),
+        "rdseed" => Some("__RDSEED__"),
+        "sha" => Some("__SHA__"),
+        "adx" => Some("__ADX__"),
+        "movbe" => Some("__MOVBE__"),
+        "fxsr" => Some("__FXSR__"),
+        "xsave" => Some("__XSAVE__"),
+        "xsaveopt" => Some("__XSAVEOPT__"),
+        "fsgsbase" => Some("__FSGSBASE__"),
+        _ => None,
+    }
+}
+
+/// Enable an x86 feature plus its prerequisites (`sse4` enables both halves).
+fn enable_x86_feature(enabled: &mut Vec<String>, name: &str) {
+    let mut stack = vec![name.to_owned()];
+    while let Some(feat) = stack.pop() {
+        if enabled.iter().any(|e| e == &feat) {
+            continue;
+        }
+        if feat == "sse4" {
+            stack.push("sse4.1".to_owned());
+            stack.push("sse4.2".to_owned());
+            continue;
+        }
+        for pre in x86_prereqs(&feat) {
+            stack.push(pre.to_string());
+        }
+        enabled.push(feat);
+    }
+}
+
+/// Disable an x86 feature plus everything (transitively) requiring it.
+fn disable_x86_feature(enabled: &mut Vec<String>, name: &str) {
+    let mut removed = vec![name.to_owned()];
+    if name == "sse4" {
+        removed.push("sse4.1".to_owned());
+        removed.push("sse4.2".to_owned());
+    }
+    loop {
+        let mut progress = false;
+        enabled.retain(|feat| {
+            if removed.iter().any(|r| r == feat) {
+                progress = true;
+                return false;
+            }
+            if x86_prereqs(feat)
+                .iter()
+                .any(|pre| removed.iter().any(|r| r == pre))
+            {
+                removed.push(feat.clone());
+                progress = true;
+                return false;
+            }
+            true
+        });
+        if !progress {
+            break;
+        }
+    }
+}
+
+/// Host x86 features for `-march=native`, from LLVM's own host detection
+/// (the same `LLVMGetHostCPUFeatures` rustc's backend uses for
+/// `-C target-cpu=native`, so macros always agree with codegen).
+/// Only known `-m` features are kept; unrelated LLVM features are ignored.
+fn native_x86_features() -> Vec<String> {
+    // SAFETY: LLVMGetHostCPUFeatures returns a comma-separated
+    // "+feat,..." C string owned by the caller, released with
+    // LLVMDisposeMessage after copying. Both resolve from the already-linked
+    // LLVM (via librustc_driver), like every other rustc_private import.
+    let raw = unsafe { LLVMGetHostCPUFeatures() };
+    if raw.is_null() {
+        return Vec::new();
+    }
+    let text = unsafe { std::ffi::CStr::from_ptr(raw) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { LLVMDisposeMessage(raw) };
+    let mut out = Vec::new();
+    for feat in text.split(',').filter_map(|f| f.strip_prefix('+')) {
+        if is_known_x86_flag(feat) && !out.contains(&feat.to_owned()) {
+            out.push(feat.to_owned());
+        }
+    }
+    out
+}
+
+unsafe extern "C" {
+    fn LLVMGetHostCPUFeatures() -> *mut std::ffi::c_char;
+    fn LLVMDisposeMessage(msg: *mut std::ffi::c_char);
 }

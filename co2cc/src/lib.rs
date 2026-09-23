@@ -264,7 +264,8 @@ fn run_co2c(args: &CcArgs) {
             .expect("missing C input file for preprocess-only");
         let resolved = resolve_stdin(&input);
 
-        let preprocessed = co2_preprocessor::preprocess(&resolved, cpp_args);
+        let full_cpp_args = preprocess_args(args, cpp_args);
+        let preprocessed = co2_preprocessor::preprocess(&resolved, &full_cpp_args);
         let output = &preprocessed.raw_src;
         match &args.output {
             Some(path) => {
@@ -289,7 +290,10 @@ fn run_co2c(args: &CcArgs) {
         if args.time_report {
             co2_driver_lib::time_report::enable_timing();
         }
-        let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, cpp_args));
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(
+            &resolved,
+            &preprocess_args(args, cpp_args),
+        ));
         write_dep_file(
             &preprocessed,
             args.output.as_deref(),
@@ -363,7 +367,10 @@ fn run_co2c(args: &CcArgs) {
         if args.time_report {
             co2_driver_lib::time_report::enable_timing();
         }
-        let preprocessed = Arc::new(co2_preprocessor::preprocess(&resolved, cpp_args));
+        let preprocessed = Arc::new(co2_preprocessor::preprocess(
+            &resolved,
+            &preprocess_args(args, cpp_args),
+        ));
         write_dep_file(
             &preprocessed,
             args.output.as_deref(),
@@ -757,6 +764,16 @@ fn push_target_feature(features: &mut Vec<String>, feature: String) {
     let name = &feature[1..];
     features.retain(|existing| &existing[1..] != name);
     features.push(feature);
+}
+
+/// cpp_args plus the original `-march=`/`-m<feat>` spellings so the
+/// preprocessor can derive predefined feature macros (`__AVX__`, ...).
+fn preprocess_args(args: &CcArgs, cpp_args: &[String]) -> Vec<String> {
+    cpp_args
+        .iter()
+        .cloned()
+        .chain(args.arch_flags.iter().cloned())
+        .collect()
 }
 
 /// Append rustc codegen args for `-march=`/`-m<feature>` flags.
