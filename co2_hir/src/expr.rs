@@ -2013,8 +2013,39 @@ impl HirCtx<'_> {
                 }
                 let rhs = self.lower_expr(*rhs, locals, local_map)?;
                 let ty = lhs.ty;
+                // Complex `a + b` expands to component ops + a
+                // `Complex::new` call, not a `Binary`, so it cannot lower
+                // through `AssignWithBinOp` (MIR `Rvalue::BinaryOp` only
+                // supports primitives). Expand complex `a op= b` to
+                // `a = a op b` here instead, converting the common-type
+                // result back to the lhs type as in simple assignment.
+                // (Single-evaluation of side-effecting lvalues such as
+                // `a[i++] += b` is not preserved; simple variables, the
+                // common case, are unaffected.)
+                let is_complex = self.complex_inner_ty_of(lhs.ty).is_some()
+                    || self.complex_inner_ty_of(rhs.ty).is_some();
                 let lowered =
                     self.lower_binop_from_lowered(lhs.clone(), rhs, op, span, parser_span, true)?;
+                if is_complex {
+                    let Some(rhs) = self.coerce_expr_to_type(&lowered, ty) else {
+                        return Err(spanned_error(
+                            parser_span,
+                            format!(
+                                "assignment type mismatch: expected {}, got {}",
+                                self.format_ty(ty),
+                                self.format_ty(lowered.ty)
+                            ),
+                        ));
+                    };
+                    return Ok(HirExpr {
+                        kind: HirExprKind::Assign {
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        },
+                        ty,
+                        span,
+                    });
+                }
                 Ok(HirExpr {
                     kind: match lowered.kind {
                         HirExprKind::Binary { op, lhs, rhs } => HirExprKind::AssignWithBinOp {

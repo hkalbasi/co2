@@ -133,6 +133,39 @@ void test_arithmetic(void) {
 }
 
 // ------------------------------------------------------------------
+// 4b. Compound assignment (+=, -=, *=, /=)
+// ------------------------------------------------------------------
+
+void test_compound_assign(void) {
+    double _Complex a = 1.0 + 2.0 * I;
+    double _Complex b = 3.0 - 4.0 * I;
+
+    a += b;
+    assert(creal(a) == 4.0 && cimag(a) == -2.0);
+
+    a -= b;
+    assert(creal(a) == 1.0 && cimag(a) == 2.0);
+
+    a *= b;
+    assert(creal(a) == 11.0 && cimag(a) == 2.0);
+
+    a /= b;
+    assert(fabs(creal(a) - 1.0) < 1e-12);
+    assert(fabs(cimag(a) - 2.0) < 1e-12);
+
+    // Compound assignment with a real operand acts on both parts via
+    // conversion of the real operand to complex.
+    a += 1.0;
+    assert(creal(a) == 2.0 && cimag(a) == 2.0);
+    a -= 1.0;
+    assert(creal(a) == 1.0 && cimag(a) == 2.0);
+    a *= 2.0;
+    assert(creal(a) == 2.0 && cimag(a) == 4.0);
+    a /= 2.0;
+    assert(creal(a) == 1.0 && cimag(a) == 2.0);
+}
+
+// ------------------------------------------------------------------
 // 5. Conjugate, absolute value, argument, projection
 // ------------------------------------------------------------------
 
@@ -334,6 +367,7 @@ int main(void) {
     test_parts();
     test_i_macro();
     test_arithmetic();
+    test_compound_assign();
     test_functions();
     test_comparison();
     test_conversions();
