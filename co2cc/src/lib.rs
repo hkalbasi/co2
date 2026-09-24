@@ -789,8 +789,8 @@ fn push_arch_rustc_args(rustc_args: &mut Vec<String>, args: &CcArgs) {
     if args.target_cpu.is_some() || !args.target_features.is_empty() {
         // C SIMD code passes vectors by value over extern "C" (exactly what
         // GCC/Clang accept); rustc's FFI-safety lint does not understand the
-        // x86 vector ABI, so silence it once the user explicitly opts into
-        // SIMD codegen flags.
+        // x86 vector ABI.
+        // TODO: work with upstream to address this.
         rustc_args.push("-A".to_owned());
         rustc_args.push("improper-ctypes-definitions".to_owned());
     }

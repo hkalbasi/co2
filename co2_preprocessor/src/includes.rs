@@ -1048,5 +1048,9 @@ static inline __m256i _mm256_loadu_si256(__m256i const *p) { return core::arch::
 static inline void _mm256_storeu_si256(__m256i *p, __m256i a) { core::arch::x86_64::_mm256_storeu_si256(p, a); }
 static inline __m256i _mm256_add_epi32(__m256i a, __m256i b) { return core::arch::x86_64::_mm256_add_epi32(a, b); }
 static inline __m256i _mm256_sub_epi32(__m256i a, __m256i b) { return core::arch::x86_64::_mm256_sub_epi32(a, b); }
+static inline unsigned char _addcarry_u64(unsigned char c_in, unsigned long long a, unsigned long long b, unsigned long long *out) { return core::arch::x86_64::_addcarry_u64(c_in, a, b, out); }
+static inline unsigned char _subborrow_u64(unsigned char b_in, unsigned long long a, unsigned long long b, unsigned long long *out) { return core::arch::x86_64::_subborrow_u64(b_in, a, b, out); }
+static inline unsigned char _addcarry_u32(unsigned char c_in, unsigned int a, unsigned int b, unsigned int *out) { return core::arch::x86_64::_addcarry_u32(c_in, a, b, out); }
+static inline unsigned char _subborrow_u32(unsigned char b_in, unsigned int a, unsigned int b, unsigned int *out) { return core::arch::x86_64::_subborrow_u32(b_in, a, b, out); }
 #endif
 "#;
