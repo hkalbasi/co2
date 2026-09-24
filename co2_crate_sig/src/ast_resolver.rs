@@ -131,13 +131,14 @@ fn resolve_or_create_block_extern(
     if let Some((def_id, _)) = base.resolver.resolve_relative(module_path, &name) {
         return def_id;
     }
-    if let Some(pending) = base.pending_extern.get(&name) {
-        return pending.def_id;
+    if let Some(pending) = base.pending_extern_ids.get(&name) {
+        return *pending;
     }
     let def_id = base
         .hir_ctx
         .allocate_def_id(base.foreign_mod, &DefData::ValueNs(name.clone()));
-    base.pending_extern.insert(
+    base.pending_extern_ids.insert(name.clone(), def_id);
+    base.pending_items.push(PendingItem::Extern(
         name.clone(),
         PendingExtern {
             def_id,
@@ -145,7 +146,7 @@ fn resolve_or_create_block_extern(
             declarator,
             span,
         },
-    );
+    ));
     def_id
 }
 
@@ -161,27 +162,32 @@ pub struct PendingExtern {
     pub span: co2_ast::Span,
 }
 
-pub struct LocalResolverBase {
-    pub resolver: Resolver,
-    pub local_counter: usize,
-    pub fake_defs_counter: usize,
-    pub array_len_const_counter: usize,
-    pub pending_typedefs: Vec<(
+pub enum PendingItem {
+    Typedef(
         DefId,
         String,
         Vec<co2_ast::Spanned<DeclarationSpecifier<LocalResolver>>>,
         Declarator<LocalResolver>,
         co2_ast::Span,
         bool,
-    )>,
-    pub pending_static: Vec<(
+    ),
+    Static(
         DefId,
         String,
         Vec<co2_ast::Spanned<DeclarationSpecifier<LocalResolver>>>,
         InitDeclarator<LocalResolver>,
         co2_ast::Span,
-    )>,
-    pub pending_extern: FxHashMap<String, PendingExtern>,
+    ),
+    Extern(String, PendingExtern),
+}
+
+pub struct LocalResolverBase {
+    pub resolver: Resolver,
+    pub local_counter: usize,
+    pub fake_defs_counter: usize,
+    pub array_len_const_counter: usize,
+    pub pending_items: Vec<PendingItem>,
+    pub pending_extern_ids: FxHashMap<String, DefId>,
     pub foreign_mod: DefId,
     pub array_len_consts: FxHashMap<usize, RegisteredArrayLenConst>,
     pub array_len_const_exprs: FxHashMap<usize, co2_ast::Spanned<Expression<LocalResolver>>>,
@@ -993,7 +999,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                         let mut base = next.base.borrow_mut();
                         let (def_id, fake_name) =
                             base.emit_fake_def(rustc_public_generative::DefData::TypeNs);
-                        base.pending_typedefs.push((
+                        base.pending_items.push(PendingItem::Typedef(
                             def_id,
                             fake_name,
                             declaration_specifiers.clone(),
@@ -1027,7 +1033,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                         {
                             base.constexpr_def_exprs.insert(def_id, expr);
                         }
-                        base.pending_static.push((
+                        base.pending_items.push(PendingItem::Static(
                             def_id,
                             fake_name,
                             declaration_specifiers.clone(),

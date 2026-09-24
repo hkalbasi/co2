@@ -2027,9 +2027,8 @@ pub fn lower_crate_sig(
             local_counter: 0,
             fake_defs_counter: 0,
             array_len_const_counter: 0,
-            pending_typedefs: vec![],
-            pending_static: vec![],
-            pending_extern: FxHashMap::default(),
+            pending_items: vec![],
+            pending_extern_ids: FxHashMap::default(),
             foreign_mod,
             array_len_consts: FxHashMap::default(),
             array_len_const_exprs: FxHashMap::default(),
@@ -2097,181 +2096,200 @@ pub fn lower_crate_sig(
     );
     ctx.hir_items.extend(root_items);
 
-    let pending_typedefs = std::mem::take(&mut ctx.resolver.borrow_mut().pending_typedefs);
-    for (id, name, specifiers, declarator, parser_span, is_transparent_union) in pending_typedefs {
-        let span = ctx.co2_span_to_rustc(parser_span);
-        let base_const = has_const_qualifier_in_decl_specs(&specifiers);
-        let ty = ctx.base_ty_of_decl(specifiers, parser_span);
-        let (_, ty, _) = ctx.lower_value_decl_ctype(ty, base_const, (declarator, parser_span));
-        let CTy::Ty(ty) = ty else {
-            CrateSigCtx::<'_>::terminate_with_error(
+    let pending_items = std::mem::take(&mut ctx.resolver.borrow_mut().pending_items);
+    for item in pending_items {
+        match item {
+            crate::ast_resolver::PendingItem::Typedef(
+                id,
+                name,
+                specifiers,
+                declarator,
                 parser_span,
-                "typedef did not lower to a first-class type",
-            );
-        };
-        ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
-        if is_transparent_union {
-            ctx.resolver.borrow_mut().mark_transparent_union(&ty);
-        }
-        ctx.hir_items.push(HirModuleItem::TypeDef {
-            name,
-            id,
-            ty,
-            attrs: Vec::new(),
-            visibility: Visibility::Public,
-            span,
-        });
-    }
-
-    let pending_static = std::mem::take(&mut ctx.resolver.borrow_mut().pending_static);
-    for (id, name, specifiers, declarator, parser_span) in pending_static {
-        let span = ctx.co2_span_to_rustc(parser_span);
-        let original_specs = specifiers.clone();
-        let is_constexpr = specifiers.iter().any(|spec| spec.0.is_constexpr());
-        let is_thread_local = is_thread_local(&specifiers);
-        let tls_attrs = if is_thread_local {
-            vec![GeneratedAttr::ThreadLocal]
-        } else {
-            Vec::new()
-        };
-        let base_const = has_const_qualifier_in_decl_specs(&specifiers);
-        let base_ty = ctx.base_ty_of_decl(specifiers, parser_span);
-        let resolver = LocalResolver::new(ctx.resolver.clone());
-        let declarator_for_checks = declarator.declarator.clone();
-        let (_, ty, _) = ctx.lower_value_decl_ctype(base_ty, base_const, declarator.declarator);
-        if let CTy::Ty(ty) = &ty {
-            ctx.resolver
-                .borrow_mut()
-                .global_value_tys
-                .insert(id, ty.clone());
-        }
-        match ty {
-            CTy::Ty(ty) => {
-                if is_constexpr {
-                    let validation = ctx.resolver.borrow_mut().validate_constexpr_decl(
-                        &original_specs,
-                        &declarator_for_checks.0,
-                        &CTy::Ty(ty.clone()),
-                        declarator.initializer.as_ref(),
+                is_transparent_union,
+            ) => {
+                let span = ctx.co2_span_to_rustc(parser_span);
+                let base_const = has_const_qualifier_in_decl_specs(&specifiers);
+                let ty = ctx.base_ty_of_decl(specifiers, parser_span);
+                let (_, ty, _) =
+                    ctx.lower_value_decl_ctype(ty, base_const, (declarator, parser_span));
+                let CTy::Ty(ty) = ty else {
+                    CrateSigCtx::<'_>::terminate_with_error(
+                        parser_span,
+                        "typedef did not lower to a first-class type",
                     );
-                    match validation {
-                        Ok(()) => {
-                            if let Some((co2_ast::Initializer::Expr(expr), _span)) =
-                                declarator.initializer.clone()
-                            {
-                                ctx.resolver
-                                    .borrow_mut()
-                                    .constexpr_def_exprs
-                                    .insert(id, expr);
-                            }
-                        }
-                        Err((span, msg)) => {
-                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
-                        }
-                    }
+                };
+                ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
+                if is_transparent_union {
+                    ctx.resolver.borrow_mut().mark_transparent_union(&ty);
                 }
-                ctx.hir_items.push(HirModuleItem::Static {
+                ctx.hir_items.push(HirModuleItem::TypeDef {
                     name,
                     id,
                     ty,
-                    span,
-                    mutable: !is_constexpr,
-                    no_mangle: false,
-                    attrs: tls_attrs.clone(),
+                    attrs: Vec::new(),
                     visibility: Visibility::Public,
+                    span,
                 });
-                if let Some(initializer) = declarator.initializer {
-                    ctx.mir_owners.insert(
-                        id,
-                        MirOwnerInfo::Static {
-                            resolver: resolver.clone(),
-                            initializer,
-                        },
-                    );
-                } else {
-                    ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
-                }
             }
-            CTy::UnsizedArray(elem_ty) => {
-                if is_constexpr
-                    && let Err((span, msg)) = ctx.resolver.borrow_mut().validate_constexpr_decl(
-                        &original_specs,
-                        &declarator_for_checks.0,
-                        &CTy::UnsizedArray(elem_ty.clone()),
-                        declarator.initializer.as_ref(),
-                    )
-                {
-                    co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
-                }
-                let initializer = if let Some((initializer, init_span)) = declarator.initializer {
-                    (initializer, init_span)
+            crate::ast_resolver::PendingItem::Static(
+                id,
+                name,
+                specifiers,
+                declarator,
+                parser_span,
+            ) => {
+                let span = ctx.co2_span_to_rustc(parser_span);
+                let original_specs = specifiers.clone();
+                let is_constexpr = specifiers.iter().any(|spec| spec.0.is_constexpr());
+                let is_thread_local = is_thread_local(&specifiers);
+                let tls_attrs = if is_thread_local {
+                    vec![GeneratedAttr::ThreadLocal]
                 } else {
-                    CrateSigCtx::<'_>::terminate_with_error(
-                        parser_span,
-                        "local static with unsized array type must have an initializer",
-                    );
+                    Vec::new()
                 };
-                let len = infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
-                    .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_spanned_error(err));
-                let sized_ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
-                ctx.resolver
-                    .borrow_mut()
-                    .global_value_tys
-                    .insert(id, sized_ty.clone());
-                ctx.hir_items.push(HirModuleItem::Static {
-                    name,
-                    id,
-                    ty: sized_ty,
-                    span,
-                    mutable: !is_constexpr,
-                    no_mangle: false,
-                    attrs: tls_attrs.clone(),
-                    visibility: Visibility::Public,
-                });
-                ctx.mir_owners.insert(
-                    id,
-                    MirOwnerInfo::Static {
-                        resolver: resolver.clone(),
-                        initializer,
-                    },
-                );
+                let base_const = has_const_qualifier_in_decl_specs(&specifiers);
+                let base_ty = ctx.base_ty_of_decl(specifiers, parser_span);
+                let resolver = LocalResolver::new(ctx.resolver.clone());
+                let declarator_for_checks = declarator.declarator.clone();
+                let (_, ty, _) =
+                    ctx.lower_value_decl_ctype(base_ty, base_const, declarator.declarator);
+                if let CTy::Ty(ty) = &ty {
+                    ctx.resolver
+                        .borrow_mut()
+                        .global_value_tys
+                        .insert(id, ty.clone());
+                }
+                match ty {
+                    CTy::Ty(ty) => {
+                        if is_constexpr {
+                            let validation = ctx.resolver.borrow_mut().validate_constexpr_decl(
+                                &original_specs,
+                                &declarator_for_checks.0,
+                                &CTy::Ty(ty.clone()),
+                                declarator.initializer.as_ref(),
+                            );
+                            match validation {
+                                Ok(()) => {
+                                    if let Some((co2_ast::Initializer::Expr(expr), _span)) =
+                                        declarator.initializer.clone()
+                                    {
+                                        ctx.resolver
+                                            .borrow_mut()
+                                            .constexpr_def_exprs
+                                            .insert(id, expr);
+                                    }
+                                }
+                                Err((span, msg)) => {
+                                    co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
+                                }
+                            }
+                        }
+                        ctx.hir_items.push(HirModuleItem::Static {
+                            name,
+                            id,
+                            ty,
+                            span,
+                            mutable: !is_constexpr,
+                            no_mangle: false,
+                            attrs: tls_attrs.clone(),
+                            visibility: Visibility::Public,
+                        });
+                        if let Some(initializer) = declarator.initializer {
+                            ctx.mir_owners.insert(
+                                id,
+                                MirOwnerInfo::Static {
+                                    resolver: resolver.clone(),
+                                    initializer,
+                                },
+                            );
+                        } else {
+                            ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+                        }
+                    }
+                    CTy::UnsizedArray(elem_ty) => {
+                        if is_constexpr
+                            && let Err((span, msg)) =
+                                ctx.resolver.borrow_mut().validate_constexpr_decl(
+                                    &original_specs,
+                                    &declarator_for_checks.0,
+                                    &CTy::UnsizedArray(elem_ty.clone()),
+                                    declarator.initializer.as_ref(),
+                                )
+                        {
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, msg)]);
+                        }
+                        let initializer =
+                            if let Some((initializer, init_span)) = declarator.initializer {
+                                (initializer, init_span)
+                            } else {
+                                CrateSigCtx::<'_>::terminate_with_error(
+                                    parser_span,
+                                    "local static with unsized array type must have an initializer",
+                                );
+                            };
+                        let len = infer_unsized_array_len(&initializer.0, &resolver, &elem_ty)
+                            .unwrap_or_else(|err| {
+                                CrateSigCtx::<'_>::terminate_with_spanned_error(err)
+                            });
+                        let sized_ty = HirTy::new_array(elem_ty, HirTyConst::Literal(len), span);
+                        ctx.resolver
+                            .borrow_mut()
+                            .global_value_tys
+                            .insert(id, sized_ty.clone());
+                        ctx.hir_items.push(HirModuleItem::Static {
+                            name,
+                            id,
+                            ty: sized_ty,
+                            span,
+                            mutable: !is_constexpr,
+                            no_mangle: false,
+                            attrs: tls_attrs.clone(),
+                            visibility: Visibility::Public,
+                        });
+                        ctx.mir_owners.insert(
+                            id,
+                            MirOwnerInfo::Static {
+                                resolver: resolver.clone(),
+                                initializer,
+                            },
+                        );
+                    }
+                    CTy::Function(_) => {
+                        CrateSigCtx::<'_>::terminate_with_error(
+                            parser_span,
+                            "static did not lower to a first-class type",
+                        );
+                    }
+                }
             }
-            CTy::Function(_) => {
-                CrateSigCtx::<'_>::terminate_with_error(
-                    parser_span,
-                    "static did not lower to a first-class type",
+            // Block-scope `extern` without prior file-scope declaration (e.g. `extern int puts(...);` inside a function).
+            crate::ast_resolver::PendingItem::Extern(name, pending) => {
+                let crate::ast_resolver::PendingExtern {
+                    def_id: id,
+                    specs: specifiers,
+                    declarator,
+                    span: parser_span,
+                } = pending;
+                let is_thread_local = is_thread_local(&specifiers);
+                let span = ctx.co2_span_to_rustc(parser_span);
+                let cleaned = strip_storage_specs(specifiers);
+                let base_const = has_const_qualifier_in_decl_specs(&cleaned);
+                let base = ctx.base_ty_of_decl(cleaned, parser_span);
+                let (decl_name, ty, _array_len) =
+                    ctx.lower_value_decl_ctype(base.clone(), base_const, (declarator, parser_span));
+                // `decl_name` should match `name`; use `id` directly.
+                let _ = decl_name;
+                emit_foreign_item(
+                    &mut ctx,
+                    id,
+                    name,
+                    ty,
+                    span,
+                    &mut foreign_items,
+                    is_thread_local,
                 );
             }
         }
-    }
-
-    // Block-scope `extern` without prior file-scope declaration (e.g. `extern int puts(...);` inside a function).
-    let pending_extern = std::mem::take(&mut ctx.resolver.borrow_mut().pending_extern);
-    for (name, pending) in pending_extern {
-        let crate::ast_resolver::PendingExtern {
-            def_id: id,
-            specs: specifiers,
-            declarator,
-            span: parser_span,
-        } = pending;
-        let is_thread_local = is_thread_local(&specifiers);
-        let span = ctx.co2_span_to_rustc(parser_span);
-        let cleaned = strip_storage_specs(specifiers);
-        let base_const = has_const_qualifier_in_decl_specs(&cleaned);
-        let base = ctx.base_ty_of_decl(cleaned, parser_span);
-        let (decl_name, ty, _array_len) =
-            ctx.lower_value_decl_ctype(base.clone(), base_const, (declarator, parser_span));
-        // `decl_name` should match `name`; use `id` directly.
-        let _ = decl_name;
-        emit_foreign_item(
-            &mut ctx,
-            id,
-            name,
-            ty,
-            span,
-            &mut foreign_items,
-            is_thread_local,
-        );
     }
 
     let structs = ctx.resolver.borrow_mut().emit_structs();
