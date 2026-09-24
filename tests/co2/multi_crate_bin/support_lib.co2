@@ -47,6 +47,12 @@ typedef unsigned char Co2UChar;
 typedef _Bool Co2Bool;
 typedef usize Co2Usize;
 typedef isize Co2Isize;
+typedef __int128 Co2GnuI128;
+typedef unsigned __int128 Co2GnuU128;
+typedef _Complex double Co2ComplexDouble;
+typedef _Complex _Float16 Co2ComplexF16;
+typedef _Complex unsigned int Co2ComplexUInt;
+typedef _Complex unsigned __int128 Co2ComplexGnuU128;
 
 typedef Union1* Union1MutPtr;
 typedef const Union1* Union1ConstPtr;

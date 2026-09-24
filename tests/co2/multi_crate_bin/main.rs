@@ -1,5 +1,7 @@
 #![feature(const_cmp)]
 #![feature(const_trait_impl)]
+#![feature(complex_numbers)]
+#![feature(f16)]
 
 use support_lib::{
     add, hypot,
@@ -63,6 +65,12 @@ const _: () = {
     let _: *const support_lib::Co2Bool = null::<bool>();
     let _: *const support_lib::Co2Usize = null::<usize>();
     let _: *const support_lib::Co2Isize = null::<isize>();
+    let _: *const support_lib::Co2GnuI128 = null::<i128>();
+    let _: *const support_lib::Co2GnuU128 = null::<u128>();
+    let _: *const support_lib::Co2ComplexDouble = null::<core::num::Complex<ffi::c_double>>();
+    let _: *const support_lib::Co2ComplexUInt = null::<core::num::Complex<ffi::c_uint>>();
+    let _: *const support_lib::Co2ComplexF16 = null::<core::num::Complex<f16>>();
+    let _: *const support_lib::Co2ComplexGnuU128 = null::<core::num::Complex<u128>>();
 
     let _: *const support_lib::Union1MutPtr = null::<*mut Union1>();
     let _: *const support_lib::Union1ConstPtr = null::<*const Union1>();

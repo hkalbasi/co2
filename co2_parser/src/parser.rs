@@ -350,6 +350,7 @@ fn c_type_keyword_token_str(token: &Token) -> Option<&'static str> {
         Token::Float128x => "_Float128x",
         Token::GnuFloat128 => "__float128",
         Token::Int => "int",
+        Token::Int128 => "__int128",
         Token::Long => "long",
         Token::Restrict => "restrict",
         Token::Short => "short",
@@ -393,6 +394,8 @@ fn c_type_keywords_suggestion(words: &[&str]) -> Option<(&'static str, &'static 
         ["unsigned", "long", "long"] | ["unsigned", "long", "long", "int"] => {
             Some(("u64", "c_ulonglong"))
         }
+        ["__int128"] | ["signed", "__int128"] => Some(("i128", "c_int")),
+        ["unsigned", "__int128"] => Some(("u128", "c_uint")),
         ["float"] => Some(("f32", "c_float")),
         ["double"] => Some(("f64", "c_double")),
         ["long", "double"] => Some(("f64", "c_longdouble")),
@@ -434,6 +437,7 @@ fn keyword_token_str(token: &Token) -> Option<&'static str> {
         Token::If => "if",
         Token::Inline => "inline",
         Token::Int => "int",
+        Token::Int128 => "__int128",
         Token::Long => "long",
         Token::Register => "register",
         Token::Restrict => "restrict",
@@ -1027,6 +1031,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
         let start = self.pos;
         let spec = match self.peek(0) {
             Some(Token::Int) => TypeSpecifier::Int,
+            Some(Token::Int128) => TypeSpecifier::Int128,
             Some(Token::Bool) => TypeSpecifier::Bool,
             Some(Token::Void) => TypeSpecifier::Void,
             Some(Token::Char) => TypeSpecifier::Char,
@@ -1368,6 +1373,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
             self.peek(0),
             Some(
                 Token::Int
+                    | Token::Int128
                     | Token::Bool
                     | Token::Void
                     | Token::Char
@@ -2593,6 +2599,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 | Token::Union
                 | Token::Enum
                 | Token::Int
+                | Token::Int128
                 | Token::Bool
                 | Token::Void
                 | Token::Char

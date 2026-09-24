@@ -388,6 +388,7 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
         let sp = fmt_span(&self.1, pp.config);
         match &self.0 {
             TypeSpecifier::Int => pp.leaf("Int", &sp),
+            TypeSpecifier::Int128 => pp.leaf("Int128", &sp),
             TypeSpecifier::Bool => pp.leaf("Bool", &sp),
             TypeSpecifier::Void => pp.leaf("Void", &sp),
             TypeSpecifier::Char => pp.leaf("Char", &sp),

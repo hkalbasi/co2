@@ -482,6 +482,7 @@ pub enum TypeQueryResult {
 #[derive(Debug, Clone)]
 pub enum TypeSpecifier<R: TypeResolver> {
     Int,
+    Int128,
     Bool,
     Void,
     Char,
@@ -647,6 +648,7 @@ pub enum Token {
     If,
     Inline,
     Int,
+    Int128,
     Long,
     Register,
     Restrict,
@@ -1000,6 +1002,7 @@ impl Display for Token {
             Token::If => write!(f, "if"),
             Token::Inline => write!(f, "inline"),
             Token::Int => write!(f, "int"),
+            Token::Int128 => write!(f, "__int128"),
             Token::Long => write!(f, "long"),
             Token::Register => write!(f, "register"),
             Token::Restrict => write!(f, "restrict"),

@@ -51,6 +51,7 @@ impl CompressedTypeSpecifier {
     ) -> Result<Self, (co2_ast::Span, String)> {
         enum Base {
             Int,
+            Int128,
             Double,
             Char,
         }
@@ -135,12 +136,16 @@ impl CompressedTypeSpecifier {
                         _ => unreachable!(),
                     });
                 }
-                TypeSpecifier::Int | TypeSpecifier::Char | TypeSpecifier::Double => {
+                TypeSpecifier::Int
+                | TypeSpecifier::Int128
+                | TypeSpecifier::Char
+                | TypeSpecifier::Double => {
                     if base.is_some() {
                         return Err(spanned_error(span, "duplicate base specifier found"));
                     }
                     base = Some(match spec {
                         TypeSpecifier::Int => Base::Int,
+                        TypeSpecifier::Int128 => Base::Int128,
                         TypeSpecifier::Char => Base::Char,
                         TypeSpecifier::Double => Base::Double,
                         _ => unreachable!(),
@@ -224,6 +229,18 @@ impl CompressedTypeSpecifier {
                 match signed {
                     Some(true) | None => PrimitiveTy::IntTy(IntTy::I8),
                     Some(false) => PrimitiveTy::UintTy(UintTy::U8),
+                }
+            }
+            Base::Int128 => {
+                if short > 0 || long > 0 {
+                    return Err(spanned_error(
+                        span,
+                        "__int128 cannot combine with other specifiers",
+                    ));
+                }
+                match signed.unwrap_or(true) {
+                    true => PrimitiveTy::IntTy(IntTy::I128),
+                    false => PrimitiveTy::UintTy(UintTy::U128),
                 }
             }
         };

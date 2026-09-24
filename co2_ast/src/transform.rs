@@ -171,6 +171,7 @@ impl<A: TypeResolver> DoTransform for TypeSpecifier<A> {
     fn transform<B: Transformable<A>>(&self, b: &B) -> TypeSpecifier<B> {
         match self {
             TypeSpecifier::Int => TypeSpecifier::Int,
+            TypeSpecifier::Int128 => TypeSpecifier::Int128,
             TypeSpecifier::Bool => TypeSpecifier::Bool,
             TypeSpecifier::Void => TypeSpecifier::Void,
             TypeSpecifier::Char => TypeSpecifier::Char,
