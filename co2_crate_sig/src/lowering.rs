@@ -719,11 +719,13 @@ fn deduplicate_tu_items(
     let mut errors: Vec<co2_ast::Rich<'_, String, co2_ast::Span>> = Vec::new();
     let mut tu_item_id: usize = 0;
     let mut name_to_important_def = FxHashMap::<String, (usize, TuItemKind)>::default();
-    // Functions with a file-scope `extern` declaration. Per C99 6.7.4p7 an
-    // `inline` definition is only an inline definition (no external
-    // definition emitted) if every file-scope declaration says `inline`
-    // without `extern`; an `extern` declaration makes the definition
-    // provide the single external definition.
+    // Functions with a file-scope declaration that is not `inline` without
+    // `extern`. Per C99 6.7.4p7 an `inline` definition is only an inline
+    // definition (no external definition emitted) if every file-scope
+    // declaration says `inline` without `extern`; any other declaration
+    // (`extern` with or without `inline`, or a plain non-`inline`
+    // declaration) makes the definition provide the single external
+    // definition.
     let mut extern_fn_names = FxHashSet::<String>::default();
 
     for (item, _) in &tu.items {
@@ -818,7 +820,18 @@ fn deduplicate_tu_items(
                     } else {
                         StaticUninit
                     };
-                    if kind == ExternFunction {
+                    if !is_typedef
+                        && !declaration_specifiers.iter().any(|x| x.0.is_static())
+                        && !(declaration_specifiers.iter().any(|spec| {
+                            matches!(
+                                spec.0,
+                                co2_ast::DeclarationSpecifier::FunctionSpecifier((
+                                    co2_ast::FunctionSpecifier::Inline,
+                                    _
+                                ))
+                            )
+                        }) && !is_extern)
+                    {
                         extern_fn_names.insert(name.clone());
                     }
                     match name_to_important_def.entry(name.clone()) {
@@ -855,7 +868,7 @@ fn deduplicate_tu_items(
             let name = signature.ident().unwrap();
             let is_needed = name_to_important_def[&name].0 == tu_item_id;
             tu_item_id += 1;
-            // An `inline`-only definition merged with an `extern` function
+            // An `inline`-only definition merged with an instantiating
             // declaration provides the TU's external definition: record the
             // `extern` on the definition itself so lowering emits it.
             if is_needed

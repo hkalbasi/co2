@@ -3,3 +3,5 @@
 // C99 instantiation: this TU provides the single external definition for
 // the inline-only `myinlinefn` defined in the header.
 extern inline int myinlinefn(int x);
+// non-inline declaration makes inline function extern.
+int myinlinefn2(int x);
