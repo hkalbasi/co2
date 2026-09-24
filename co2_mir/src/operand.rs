@@ -417,6 +417,21 @@ impl Builder<'_, '_> {
         out_ty: Ty,
         span: RustSpan,
     ) -> MirOperand {
+        let is_void = matches!(
+            pointee_ty.kind(),
+            TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty()
+        );
+        let mut base_op = base_op;
+        let mut pointee_ty = pointee_ty;
+        let mut out_ty_inner = out_ty;
+        if is_void {
+            let byte_ty = Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8));
+            let src_ptr_ty = Ty::new_ptr(pointee_ty, ptr_mutability);
+            let byte_ptr_ty = Ty::new_ptr(byte_ty, ptr_mutability);
+            base_op = self.lower_cast(base_op, src_ptr_ty, byte_ptr_ty, span);
+            pointee_ty = byte_ty;
+            out_ty_inner = byte_ptr_ty;
+        }
         let isize_ty = Ty::signed_ty(IntTy::Isize);
         let idx_ty = index.ty;
         let idx_op = self.lower_expr_to_operand(index);
@@ -437,14 +452,19 @@ impl Builder<'_, '_> {
             _ => vec![GenericArgKind::Type(pointee_ty)],
         };
 
-        let ret_local = self.new_temp(out_ty, Mutability::Mut, span);
+        let ret_local = self.new_temp(out_ty_inner, Mutability::Mut, span);
         self.emit_call_block(
             fn_const_operand(offset, generic_args, span),
             vec![base_op, idx_op],
             place(ret_local),
             span,
         );
-        MirOperand::Copy(place(ret_local))
+        let result = MirOperand::Copy(place(ret_local));
+        if is_void && out_ty_inner != out_ty {
+            self.lower_cast(result, out_ty_inner, out_ty, span)
+        } else {
+            result
+        }
     }
 
     fn write_value_into_maybe_uninit_storage(
@@ -879,9 +899,15 @@ impl Builder<'_, '_> {
             HirExprKind::PtrDiff { lhs, rhs } => {
                 let lhs_op = self.lower_expr_to_operand(lhs);
                 let rhs_op = self.lower_expr_to_operand(rhs);
-                let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, _)) = lhs.ty.kind() else {
+                let TyKind::RigidTy(RigidTy::RawPtr(mut pointee_ty, _)) = lhs.ty.kind() else {
                     panic!("ptr diff lhs must be raw pointer, got {:?}", lhs.ty);
                 };
+                if matches!(
+                    pointee_ty.kind(),
+                    TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty()
+                ) {
+                    pointee_ty = Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8));
+                }
                 let isize_ty = Ty::signed_ty(IntTy::Isize);
                 let ret_local = self.new_temp(isize_ty, Mutability::Mut, expr.span);
                 let offset_from = {
