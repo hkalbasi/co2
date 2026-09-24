@@ -1,9 +1,7 @@
 //@ mode: c
 //@ run-status: 0
 
-// Legacy __sync_* atomic builtins (companion to atomic_gnu_builtins.c,
-// which covers the __atomic_* family).
-// Needed by vpp (src/vppinfra/atomics.h: clib_atomic_* maps onto these).
+// Legacy __sync_* atomic builtins.
 
 typedef unsigned int uint32_t;
 

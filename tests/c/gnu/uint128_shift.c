@@ -1,10 +1,6 @@
 //@ mode: c
 //@ run-status: 0
 
-// 128-bit shifts by large counts are in range and must neither warn
-// (the harness fails on unexpected warnings) nor miscompile.
-// Found via vpp-style u32x4/u128 packet-counter arithmetic.
-
 #include <assert.h>
 
 int main(void) {

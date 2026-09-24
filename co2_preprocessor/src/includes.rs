@@ -1012,6 +1012,7 @@ const CO2_X86_SIMD_SHIM: &str = r#"
 #define _MMINTRIN_H_INCLUDED 1
 #define _X86GPRINTRIN_H_INCLUDED 1
 #define _X86INTRIN_H_INCLUDED 1
+typedef u64 __m64;
 typedef core::arch::x86_64::__m128 __m128;
 typedef core::arch::x86_64::__m128d __m128d;
 typedef core::arch::x86_64::__m128i __m128i;
@@ -1033,5 +1034,19 @@ static inline __m128 _mm256_extractf128_ps(__m256 a, const int n) {
 static inline __m128 _mm_add_ps(__m128 a, __m128 b) { return core::arch::x86_64::_mm_add_ps(a, b); }
 static inline __m128 _mm_hadd_ps(__m128 a, __m128 b) { return core::arch::x86_64::_mm_hadd_ps(a, b); }
 static inline float _mm_cvtss_f32(__m128 a) { return core::arch::x86_64::_mm_cvtss_f32(a); }
+static inline __m128i _mm_setzero_si128(void) { return core::arch::x86_64::_mm_setzero_si128(); }
+static inline __m128i _mm_set1_epi32(int a) { return core::arch::x86_64::_mm_set1_epi32(a); }
+static inline __m128i _mm_set_epi32(int e3, int e2, int e1, int e0) { return core::arch::x86_64::_mm_set_epi32(e3, e2, e1, e0); }
+static inline __m128i _mm_loadu_si128(__m128i const *p) { return core::arch::x86_64::_mm_loadu_si128(p); }
+static inline void _mm_storeu_si128(__m128i *p, __m128i a) { core::arch::x86_64::_mm_storeu_si128(p, a); }
+static inline __m128i _mm_add_epi32(__m128i a, __m128i b) { return core::arch::x86_64::_mm_add_epi32(a, b); }
+static inline __m128i _mm_sub_epi32(__m128i a, __m128i b) { return core::arch::x86_64::_mm_sub_epi32(a, b); }
+static inline __m128i _mm_cmpeq_epi32(__m128i a, __m128i b) { return core::arch::x86_64::_mm_cmpeq_epi32(a, b); }
+static inline int _mm_movemask_epi8(__m128i a) { return core::arch::x86_64::_mm_movemask_epi8(a); }
+static inline __m256i _mm256_set1_epi32(int a) { return core::arch::x86_64::_mm256_set1_epi32(a); }
+static inline __m256i _mm256_loadu_si256(__m256i const *p) { return core::arch::x86_64::_mm256_loadu_si256(p); }
+static inline void _mm256_storeu_si256(__m256i *p, __m256i a) { core::arch::x86_64::_mm256_storeu_si256(p, a); }
+static inline __m256i _mm256_add_epi32(__m256i a, __m256i b) { return core::arch::x86_64::_mm256_add_epi32(a, b); }
+static inline __m256i _mm256_sub_epi32(__m256i a, __m256i b) { return core::arch::x86_64::_mm256_sub_epi32(a, b); }
 #endif
 "#;
