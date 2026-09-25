@@ -1382,6 +1382,57 @@ impl HirCtx<'_> {
         }
     }
 
+    /// Shared `_Generic` association matching (C23 6.5.1.1): select the branch
+    /// expression for `controlling_ty`. Both runtime lowering and constant
+    /// evaluation route through here so constraint diagnostics (e.g. duplicate
+    /// `default`) are reported consistently in every context.
+    pub(crate) fn resolve_generic_association(
+        &self,
+        controlling_ty: Ty,
+        associations: &[Spanned<GenericAssociation<LocalResolver>>],
+        no_match_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<Spanned<Expression<LocalResolver>>, (co2_ast::Span, String)> {
+        let mut seen_default = false;
+        for (assoc, assoc_span) in associations {
+            if matches!(assoc, GenericAssociation::Default { .. }) {
+                if seen_default {
+                    return Err(spanned_error(
+                        *assoc_span,
+                        "duplicate default association in _Generic",
+                    ));
+                }
+                seen_default = true;
+            }
+        }
+        let mut default_expr = None;
+        for (assoc, assoc_span) in associations {
+            match assoc {
+                GenericAssociation::Default { expr } => {
+                    default_expr = Some(expr.clone());
+                }
+                GenericAssociation::Type { type_name, expr } => {
+                    let assoc_ty = self.lower_type_name_in_scope(
+                        type_name.clone(),
+                        *assoc_span,
+                        locals,
+                        local_map,
+                    )?;
+                    if self.c_generic_ty_matches(assoc_ty, controlling_ty) {
+                        return Ok(expr.clone());
+                    }
+                }
+            }
+        }
+        default_expr.map(Ok).unwrap_or_else(|| {
+            Err(spanned_error(
+                no_match_span,
+                "no matching association in _Generic and no default provided",
+            ))
+        })
+    }
+
     pub(crate) fn lower_expr(
         &self,
         (expr, parser_span): Spanned<Expression<LocalResolver>>,
@@ -2735,36 +2786,16 @@ impl HirCtx<'_> {
                 self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut controlling_expr);
                 let controlling_ty = controlling_expr.ty;
 
-                let mut default_expr = None;
-                for (assoc, assoc_span) in associations {
-                    match assoc {
-                        GenericAssociation::Default { expr } => {
-                            if default_expr.is_some() {
-                                self.terminate_with_error(
-                                    assoc_span,
-                                    "duplicate default association in _Generic",
-                                );
-                            }
-                            default_expr = Some(expr);
-                        }
-                        GenericAssociation::Type { type_name, expr } => {
-                            let assoc_ty = self.lower_type_name_in_scope(
-                                type_name, assoc_span, locals, local_map,
-                            )?;
-                            if self.c_generic_ty_matches(assoc_ty, controlling_ty) {
-                                return self.lower_expr(expr, locals, local_map);
-                            }
-                        }
-                    }
-                }
-                if let Some(expr) = default_expr {
-                    self.lower_expr(expr, locals, local_map)
-                } else {
-                    self.terminate_with_error(
+                let expr = self
+                    .resolve_generic_association(
+                        controlling_ty,
+                        &associations,
                         parser_span,
-                        "no matching association in _Generic and no default provided",
-                    );
-                }
+                        locals,
+                        local_map,
+                    )
+                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                self.lower_expr(expr, locals, local_map)
             }
             Expression::Empty => Ok(HirExpr {
                 kind: HirExprKind::Zeroed,

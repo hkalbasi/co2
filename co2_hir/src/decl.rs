@@ -1351,35 +1351,14 @@ impl HirCtx<'_> {
             } => {
                 let controlling_ty =
                     self.type_of_expr_for_sizeof(controlling, locals, local_map)?;
-                let mut default_expr = None;
-                for (assoc, _) in associations {
-                    match assoc {
-                        co2_ast::GenericAssociation::Default { expr } => {
-                            if default_expr.is_none() {
-                                default_expr = Some(expr);
-                            }
-                        }
-                        co2_ast::GenericAssociation::Type { type_name, expr } => {
-                            let assoc_ty = self.lower_type_name_in_scope(
-                                type_name.clone(),
-                                *span,
-                                locals,
-                                local_map,
-                            )?;
-                            if self.c_generic_ty_matches(assoc_ty, controlling_ty) {
-                                return self.eval_const_expr_in_scope(expr, locals, local_map);
-                            }
-                        }
-                    }
-                }
-                if let Some(expr) = default_expr {
-                    self.eval_const_expr_in_scope(expr, locals, local_map)
-                } else {
-                    Err(spanned_error(
-                        *span,
-                        "no matching association in _Generic and no default provided",
-                    ))
-                }
+                let expr = self.resolve_generic_association(
+                    controlling_ty,
+                    associations,
+                    *span,
+                    locals,
+                    local_map,
+                )?;
+                self.eval_const_expr_in_scope(&expr, locals, local_map)
             }
             Expression::Call { .. } => Err(spanned_error(*span, "cannot call non-const function")),
             _ => Err(spanned_error(*span, "unsupported constant expression")),
