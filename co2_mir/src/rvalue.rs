@@ -3,8 +3,8 @@ use co2_hir::HirBinOp;
 use rustc_public_generative::rustc_public::{
     mir::{
         BinOp as MirBinOp, CastKind, ConstOperand, Mutability, Operand as MirOperand,
-        Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind, Rvalue, SourceInfo,
-        Statement as MirStatement, StatementKind as MirStatementKind, WithRetag,
+        Place as MirPlace, ProjectionElem as MirProjection, RawPtrKind, Rvalue,
+        StatementKind as MirStatementKind,
     },
     ty::{IntTy, MirConst, RigidTy, Span as RustSpan, Ty, TyKind, UintTy},
 };
@@ -123,51 +123,25 @@ impl Builder<'_, '_> {
         let str_const = MirConst::from_bytes_aligned(&bytes, elem_size as u64);
         let str_ref_ty = str_const.ty(); // &'static str
 
+        // Use Mutability::Mut so that if this assignment is inside a loop body
+        // (a basic block executed multiple times), rustc does not emit E0384.
+        let str_ref_local = self.new_temp(str_ref_ty, Mutability::Mut, span);
+        self.emit_assign_use(
+            place(str_ref_local),
+            MirOperand::Constant(ConstOperand {
+                span,
+                user_ty: None,
+                const_: str_const,
+            }),
+            span,
+        );
+
         // If the requested type is a reference (e.g. &str for s"..." literals),
         // return the &'static str constant directly without the raw-pointer
         // round-trip.
         if matches!(ptr_ty.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, _))) {
-            let str_ref_local = self.new_temp(str_ref_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(str_ref_local),
-                    Rvalue::Use(
-                        MirOperand::Constant(ConstOperand {
-                            span,
-                            user_ty: None,
-                            const_: str_const,
-                        }),
-                        WithRetag::Yes,
-                    ),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
             return MirOperand::Copy(place(str_ref_local));
         }
-
-        // Use Mutability::Mut so that if this assignment is inside a loop body
-        // (a basic block executed multiple times), rustc does not emit E0384.
-        let str_ref_local = self.new_temp(str_ref_ty, Mutability::Mut, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(str_ref_local),
-                Rvalue::Use(
-                    MirOperand::Constant(ConstOperand {
-                        span,
-                        user_ty: None,
-                        const_: str_const,
-                    }),
-                    WithRetag::Yes,
-                ),
-            ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
 
         // Deref the &str reference to produce a `str` DST place, then take its raw
         // address.  This yields `*const str` — a fat pointer whose data component
@@ -179,23 +153,20 @@ impl Builder<'_, '_> {
             local: str_ref_local,
             projection: vec![MirProjection::Deref],
         };
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
+        self.push_statement(
+            MirStatementKind::Assign(
                 place(ptr_str_local),
                 Rvalue::AddressOf(RawPtrKind::Const, deref_place),
             ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+            span,
+        );
 
         // Cast *const str (fat) → *const u8 (thin, data component only).
         let elem_ty = Ty::unsigned_ty(UintTy::U8);
         let ptr_u8_ty = Ty::new_ptr(elem_ty, Mutability::Not);
         let ptr_u8_local = self.new_temp(ptr_u8_ty, Mutability::Mut, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
+        self.push_statement(
+            MirStatementKind::Assign(
                 place(ptr_u8_local),
                 Rvalue::Cast(
                     CastKind::PtrToPtr,
@@ -203,15 +174,12 @@ impl Builder<'_, '_> {
                     ptr_u8_ty,
                 ),
             ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+            span,
+        );
 
         let ptr_local = self.new_temp(ptr_ty, Mutability::Mut, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
+        self.push_statement(
+            MirStatementKind::Assign(
                 place(ptr_local),
                 Rvalue::Cast(
                     CastKind::PtrToPtr,
@@ -219,11 +187,8 @@ impl Builder<'_, '_> {
                     ptr_ty,
                 ),
             ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+            span,
+        );
 
         MirOperand::Copy(place(ptr_local))
     }

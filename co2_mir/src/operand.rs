@@ -1,4 +1,7 @@
-use co2_hir::{HirExpr, HirExprKind, HirLogicalOp, ResolvedValue, ReturnSemantic, WellknownDefs};
+use co2_hir::{
+    HirExpr, HirExprKind, HirLogicalOp, ResolvedValue, ReturnSemantic, WellknownDefs,
+    enum_payload_ty,
+};
 use rustc_public_generative::{
     DependencyConstValue,
     rustc_public::{
@@ -6,9 +9,8 @@ use rustc_public_generative::{
         mir::{
             AggregateKind, BorrowKind, CastKind, ConstOperand, MutBorrowKind, Mutability,
             Operand as MirOperand, PointerCoercion, ProjectionElem as MirProjection, RawPtrKind,
-            Rvalue, Safety, SourceInfo, Statement as MirStatement,
-            StatementKind as MirStatementKind, SwitchTargets, Terminator as MirTerminator,
-            TerminatorKind, WithRetag,
+            Rvalue, Safety, SourceInfo, StatementKind as MirStatementKind, SwitchTargets,
+            Terminator as MirTerminator, TerminatorKind, WithRetag,
         },
         ty::{
             FloatTy, GenericArgKind, GenericArgs, IntTy, MirConst, Region, RegionKind, RigidTy,
@@ -19,8 +21,7 @@ use rustc_public_generative::{
 
 use crate::{
     build::{
-        Builder, complete_fn_generic_args, fn_const_operand, infer_fn_generic_args,
-        ty_matches_expected, variant_idx,
+        Builder, complete_fn_generic_args, fn_const_operand, ty_matches_expected, variant_idx,
     },
     place::place,
 };
@@ -35,7 +36,23 @@ fn find_ptr_offset_fn(
     }
 }
 
-fn maybe_uninit_fn_ptr_inner(ty: Ty) -> Option<Ty> {
+fn ptr_offset_generic_args(func_ty: Ty, pointee_ty: Ty) -> Vec<GenericArgKind> {
+    match func_ty.kind() {
+        TyKind::RigidTy(RigidTy::FnDef(_, existing)) if !existing.0.is_empty() => existing
+            .0
+            .iter()
+            .map(|arg| match arg {
+                GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_)) => {
+                    GenericArgKind::Type(pointee_ty)
+                }
+                _ => arg.clone(),
+            })
+            .collect(),
+        _ => vec![GenericArgKind::Type(pointee_ty)],
+    }
+}
+
+pub(crate) fn maybe_uninit_fn_ptr_inner(ty: Ty) -> Option<Ty> {
     let TyKind::RigidTy(RigidTy::Adt(_, args)) = ty.kind() else {
         return None;
     };
@@ -52,16 +69,23 @@ fn maybe_uninit_fn_ptr_inner(ty: Ty) -> Option<Ty> {
     }
 }
 
-fn enum_payload_ty(ty: Ty) -> Option<Ty> {
-    let TyKind::RigidTy(RigidTy::Adt(adt, args)) = ty.kind() else {
-        return None;
-    };
-    let variant = adt.variant(variant_idx(0))?;
-    let fields = variant.fields();
-    if fields.len() != 1 || fields[0].name.clone() != "__co2_enum_value" {
-        return None;
+/// Cast pointer-like values (raw/fn pointers, fn items, and C function
+/// pointers which allow null) to `usize` so they can be compared or used
+/// as a `SwitchInt` discriminant. Other types pass through unchanged.
+pub(crate) fn ptr_like_to_usize_expr(expr: &HirExpr) -> HirExpr {
+    if matches!(
+        expr.ty.kind(),
+        TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
+    ) || maybe_uninit_fn_ptr_inner(expr.ty).is_some()
+    {
+        HirExpr {
+            kind: HirExprKind::Cast(Box::new(expr.clone())),
+            ty: Ty::usize_ty(),
+            span: expr.span,
+        }
+    } else {
+        expr.clone()
     }
-    Some(fields[0].ty_with_args(&args))
 }
 
 fn callable_sig(
@@ -148,13 +172,7 @@ impl Builder<'_, '_> {
         payload_place
             .projection
             .push(MirProjection::Field(0, payload_ty));
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(enum_op, WithRetag::Yes)),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+        self.emit_assign_use(place(tmp), enum_op, span);
         self.place_operand_for_ty(payload_place, payload_ty)
     }
 
@@ -166,8 +184,8 @@ impl Builder<'_, '_> {
         span: RustSpan,
     ) -> MirOperand {
         let tmp = self.new_temp(enum_ty, Mutability::Mut, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
+        self.push_statement(
+            MirStatementKind::Assign(
                 place(tmp),
                 Rvalue::Aggregate(
                     match enum_ty.kind() {
@@ -179,11 +197,8 @@ impl Builder<'_, '_> {
                     vec![payload_op],
                 ),
             ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+            span,
+        );
         MirOperand::Copy(place(tmp))
     }
 
@@ -438,19 +453,7 @@ impl Builder<'_, '_> {
         let idx_op = self.lower_cast(idx_op, idx_ty, isize_ty, span);
 
         let offset = find_ptr_offset_fn(&self.wellknown_defs, ptr_mutability);
-        let generic_args = match offset.ty().kind() {
-            TyKind::RigidTy(RigidTy::FnDef(_, existing)) if !existing.0.is_empty() => existing
-                .0
-                .iter()
-                .map(|arg| match arg {
-                    GenericArgKind::Type(ty) if matches!(ty.kind(), TyKind::Param(_)) => {
-                        GenericArgKind::Type(pointee_ty)
-                    }
-                    _ => arg.clone(),
-                })
-                .collect(),
-            _ => vec![GenericArgKind::Type(pointee_ty)],
-        };
+        let generic_args = ptr_offset_generic_args(offset.ty(), pointee_ty);
 
         let ret_local = self.new_temp(out_ty_inner, Mutability::Mut, span);
         self.emit_call_block(
@@ -467,6 +470,41 @@ impl Builder<'_, '_> {
         }
     }
 
+    fn reinterpret_place(
+        &mut self,
+        src_place: rustc_public_generative::rustc_public::mir::Place,
+        src_ty: Ty,
+        dst_ty: Ty,
+        span: RustSpan,
+    ) -> rustc_public_generative::rustc_public::mir::Place {
+        let ptr_src_ty = Ty::new_ptr(src_ty, Mutability::Mut);
+        let ptr_src_local = self.new_temp(ptr_src_ty, Mutability::Mut, span);
+        self.push_statement(
+            MirStatementKind::Assign(
+                place(ptr_src_local),
+                Rvalue::AddressOf(RawPtrKind::Mut, src_place),
+            ),
+            span,
+        );
+        let ptr_dst_ty = Ty::new_ptr(dst_ty, Mutability::Mut);
+        let ptr_dst_local = self.new_temp(ptr_dst_ty, Mutability::Mut, span);
+        self.push_statement(
+            MirStatementKind::Assign(
+                place(ptr_dst_local),
+                Rvalue::Cast(
+                    CastKind::PtrToPtr,
+                    MirOperand::Copy(place(ptr_src_local)),
+                    ptr_dst_ty,
+                ),
+            ),
+            span,
+        );
+        rustc_public_generative::rustc_public::mir::Place {
+            local: ptr_dst_local,
+            projection: vec![MirProjection::Deref],
+        }
+    }
+
     fn write_value_into_maybe_uninit_storage(
         &mut self,
         dst_maybe_ty: Ty,
@@ -475,45 +513,8 @@ impl Builder<'_, '_> {
         span: RustSpan,
     ) -> MirOperand {
         let dst_local = self.new_temp(dst_maybe_ty, Mutability::Mut, span);
-        let ptr_maybe_ty = Ty::new_ptr(dst_maybe_ty, Mutability::Mut);
-        let ptr_maybe_local = self.new_temp(ptr_maybe_ty, Mutability::Mut, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(ptr_maybe_local),
-                Rvalue::AddressOf(RawPtrKind::Mut, place(dst_local)),
-            ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
-        let ptr_value_ty = Ty::new_ptr(value_ty, Mutability::Mut);
-        let ptr_value_local = self.new_temp(ptr_value_ty, Mutability::Mut, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(ptr_value_local),
-                Rvalue::Cast(
-                    CastKind::PtrToPtr,
-                    MirOperand::Copy(place(ptr_maybe_local)),
-                    ptr_value_ty,
-                ),
-            ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
-        let value_place = rustc_public_generative::rustc_public::mir::Place {
-            local: ptr_value_local,
-            projection: vec![MirProjection::Deref],
-        };
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(value_place, Rvalue::Use(value_op, WithRetag::Yes)),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+        let value_place = self.reinterpret_place(place(dst_local), dst_maybe_ty, value_ty, span);
+        self.emit_assign_use(value_place, value_op, span);
         MirOperand::Copy(place(dst_local))
     }
 
@@ -526,79 +527,69 @@ impl Builder<'_, '_> {
     ) -> MirOperand {
         let src_place = {
             let tmp = self.new_temp(op_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(op, WithRetag::Yes)),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+            self.emit_assign_use(place(tmp), op, span);
             place(tmp)
         };
-        let ptr_maybe_ty = Ty::new_ptr(op_ty, Mutability::Mut);
-        let ptr_maybe_local = self.new_temp(ptr_maybe_ty, Mutability::Mut, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(ptr_maybe_local),
-                Rvalue::AddressOf(RawPtrKind::Mut, src_place),
-            ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
-        let ptr_value_ty = Ty::new_ptr(value_ty, Mutability::Mut);
-        let ptr_value_local = self.new_temp(ptr_value_ty, Mutability::Mut, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(ptr_value_local),
-                Rvalue::Cast(
-                    CastKind::PtrToPtr,
-                    MirOperand::Copy(place(ptr_maybe_local)),
-                    ptr_value_ty,
-                ),
-            ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+        let value_place = self.reinterpret_place(src_place, op_ty, value_ty, span);
         let out_local = self.new_temp(value_ty, Mutability::Mut, span);
-        let value_place = rustc_public_generative::rustc_public::mir::Place {
-            local: ptr_value_local,
-            projection: vec![MirProjection::Deref],
-        };
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(out_local),
-                Rvalue::Use(MirOperand::Copy(value_place), WithRetag::Yes),
-            ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+        self.emit_assign_use(place(out_local), MirOperand::Copy(value_place), span);
         MirOperand::Copy(place(out_local))
+    }
+
+    fn lower_va_copy(
+        &mut self,
+        src: rustc_public_generative::rustc_public::mir::Place,
+        src_ty: Ty,
+        dst: rustc_public_generative::rustc_public::mir::Place,
+        dst_ty: Ty,
+        result_ty: Ty,
+        span: RustSpan,
+    ) -> MirOperand {
+        let reg = Region {
+            kind: RegionKind::ReErased,
+        };
+        let src_ref_ty = Ty::new_ref(reg.clone(), src_ty, Mutability::Not);
+        let src_ref_local = self.new_temp(src_ref_ty, Mutability::Not, span);
+        self.push_statement(
+            MirStatementKind::Assign(
+                place(src_ref_local),
+                Rvalue::Ref(reg, BorrowKind::Shared, src),
+            ),
+            span,
+        );
+
+        let clone_local = self.new_temp(src_ty, Mutability::Mut, span);
+        self.emit_call_block(
+            fn_const_operand(
+                self.wellknown_defs.clone,
+                vec![GenericArgKind::Type(src_ty)],
+                span,
+            ),
+            vec![MirOperand::Copy(place(src_ref_local))],
+            place(clone_local),
+            span,
+        );
+
+        let generic_args = vec![GenericArgKind::Type(src_ty), GenericArgKind::Type(dst_ty)];
+        self.emit_call_block(
+            fn_const_operand(self.wellknown_defs.transmute, generic_args, span),
+            vec![MirOperand::Move(place(clone_local))],
+            dst,
+            span,
+        );
+        self.zeroed_operand(result_ty, span)
+    }
+
+    fn zeroed_operand(&mut self, ty: Ty, span: RustSpan) -> MirOperand {
+        let temp = self.new_temp(ty, Mutability::Mut, span);
+        self.lower_zeroed_to_destination(place(temp), span, ty);
+        MirOperand::Copy(place(temp))
     }
 
     pub(crate) fn lower_expr_to_operand(&mut self, expr: &HirExpr) -> MirOperand {
         match &expr.kind {
             HirExprKind::ArrayToPointer(inner) => {
-                let base_place = self.lower_expr_to_place(inner).unwrap_or_else(|| {
-                    let tmp = self.new_temp(inner.ty, Mutability::Mut, inner.span);
-                    let value = self.lower_expr_to_operand(inner);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
-                            place(tmp),
-                            Rvalue::Use(value, WithRetag::Yes),
-                        ),
-                        source_info: SourceInfo {
-                            span: inner.span,
-                            scope: self.current_scope(),
-                        },
-                    });
-                    place(tmp)
-                });
+                let base_place = self.lower_expr_to_place_or_temp(inner);
                 let rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
                     rustc_public_generative::rustc_public::ty::RigidTy::Array(_, _),
                 ) = inner.ty.kind()
@@ -610,8 +601,8 @@ impl Builder<'_, '_> {
                 };
                 let array_ptr_ty = Ty::new_ptr(inner.ty, ptr_mutability);
                 let array_ptr_local = self.new_temp(array_ptr_ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(array_ptr_local),
                         Rvalue::AddressOf(
                             if ptr_mutability == Mutability::Mut {
@@ -622,14 +613,11 @@ impl Builder<'_, '_> {
                             base_place,
                         ),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    expr.span,
+                );
                 let ptr_local = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(ptr_local),
                         Rvalue::Cast(
                             CastKind::PtrToPtr,
@@ -637,11 +625,8 @@ impl Builder<'_, '_> {
                             expr.ty,
                         ),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    expr.span,
+                );
                 MirOperand::Copy(place(ptr_local))
             }
             HirExprKind::VaStart(args) => {
@@ -651,46 +636,7 @@ impl Builder<'_, '_> {
                 };
                 let src_local = self.c_variadic_local.unwrap();
                 let src_ty = self.locals[src_local].ty;
-                let reg = Region {
-                    kind: RegionKind::ReErased,
-                };
-                let src_ref_ty = Ty::new_ref(reg.clone(), src_ty, Mutability::Not);
-                let src_ref_local = self.new_temp(src_ref_ty, Mutability::Not, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(src_ref_local),
-                        Rvalue::Ref(reg, BorrowKind::Shared, place(src_local)),
-                    ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
-
-                let clone_local = self.new_temp(src_ty, Mutability::Mut, expr.span);
-                self.emit_call_block(
-                    fn_const_operand(
-                        self.wellknown_defs.clone,
-                        vec![GenericArgKind::Type(src_ty)],
-                        expr.span,
-                    ),
-                    vec![MirOperand::Copy(place(src_ref_local))],
-                    place(clone_local),
-                    expr.span,
-                );
-
-                let transmute_fn = self.wellknown_defs.transmute;
-                let generic_args =
-                    vec![GenericArgKind::Type(src_ty), GenericArgKind::Type(args_ty)];
-                self.emit_call_block(
-                    fn_const_operand(transmute_fn, generic_args, expr.span),
-                    vec![MirOperand::Move(place(clone_local))],
-                    args,
-                    expr.span,
-                );
-                let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
-                MirOperand::Copy(place(temp))
+                self.lower_va_copy(place(src_local), src_ty, args, args_ty, expr.ty, expr.span)
             }
             HirExprKind::VaArg(args) => {
                 let reg = Region {
@@ -708,8 +654,8 @@ impl Builder<'_, '_> {
                 };
                 let arg_ref = {
                     let tmp = self.new_temp(arg_ref_ty, Mutability::Mut, expr.span);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
+                    self.push_statement(
+                        MirStatementKind::Assign(
                             place(tmp),
                             Rvalue::Ref(
                                 reg.clone(),
@@ -719,11 +665,8 @@ impl Builder<'_, '_> {
                                 args,
                             ),
                         ),
-                        source_info: SourceInfo {
-                            span: expr.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                        expr.span,
+                    );
                     MirOperand::Move(place(tmp))
                 };
 
@@ -754,60 +697,16 @@ impl Builder<'_, '_> {
                     panic!("VaCopy source operand was not lvalue");
                 };
 
-                let reg = Region {
-                    kind: RegionKind::ReErased,
-                };
-                let src_ref_ty = Ty::new_ref(reg.clone(), src_ty, Mutability::Not);
-                let src_ref_local = self.new_temp(src_ref_ty, Mutability::Not, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(src_ref_local),
-                        Rvalue::Ref(reg, BorrowKind::Shared, src),
-                    ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
-
-                let clone_local = self.new_temp(src_ty, Mutability::Mut, expr.span);
-                self.emit_call_block(
-                    fn_const_operand(
-                        self.wellknown_defs.clone,
-                        vec![GenericArgKind::Type(src_ty)],
-                        expr.span,
-                    ),
-                    vec![MirOperand::Copy(place(src_ref_local))],
-                    place(clone_local),
-                    expr.span,
-                );
-
-                let generic_args =
-                    vec![GenericArgKind::Type(src_ty), GenericArgKind::Type(dest_ty)];
-                self.emit_call_block(
-                    fn_const_operand(self.wellknown_defs.transmute, generic_args, expr.span),
-                    vec![MirOperand::Move(place(clone_local))],
-                    dest,
-                    expr.span,
-                );
-                let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
-                MirOperand::Copy(place(temp))
+                self.lower_va_copy(src, src_ty, dest, dest_ty, expr.ty, expr.span)
             }
             HirExprKind::VaEnd(args) => {
                 let Some(_args) = self.lower_expr_to_place(args) else {
                     panic!("VaEnd operand was not lvalue");
                 };
-                let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
-                MirOperand::Copy(place(temp))
+                self.zeroed_operand(expr.ty, expr.span)
             }
 
-            HirExprKind::Zeroed => {
-                let temp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.lower_zeroed_to_destination(place(temp), expr.span, expr.ty);
-                MirOperand::Copy(place(temp))
-            }
+            HirExprKind::Zeroed => self.zeroed_operand(expr.ty, expr.span),
             HirExprKind::Local(local) | HirExprKind::LocalConst(local) => {
                 let local_index = self.local_to_index(*local);
                 self.place_operand_for_ty(place(local_index), self.locals[local_index].ty)
@@ -826,41 +725,12 @@ impl Builder<'_, '_> {
                     span: expr.span,
                 })
             }
-            HirExprKind::ConstInt(v) => {
-                let span = expr.span;
-                let (uint_ty, bits) = crate::rvalue::int_literal_bits(*v, expr.ty);
-                let c = MirConst::try_from_uint(bits, uint_ty).expect("failed to build int const");
-                let const_op = MirOperand::Constant(ConstOperand {
-                    span,
-                    user_ty: None,
-                    const_: c,
-                });
-
-                let src_ty = Ty::unsigned_ty(uint_ty);
-                if src_ty == expr.ty {
-                    return const_op;
-                }
-                self.lower_cast(const_op, src_ty, expr.ty, span)
-            }
+            HirExprKind::ConstInt(v) => self.make_int_const(*v, expr.ty, expr.span),
             HirExprKind::ConstFloat(v) => {
-                let span = expr.span;
                 let TyKind::RigidTy(RigidTy::Float(_)) = expr.ty.kind() else {
                     panic!("float const must have float type, got {:?}", expr.ty);
                 };
-                let c = MirConst::try_from_float(v.to_bits() as u128, FloatTy::F64)
-                    .expect("failed to build float const");
-                let const_op = MirOperand::Constant(ConstOperand {
-                    span,
-                    user_ty: None,
-                    const_: c,
-                });
-
-                self.lower_cast(
-                    const_op,
-                    Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
-                    expr.ty,
-                    span,
-                )
+                self.make_float_const(*v, expr.ty, expr.span)
             }
             HirExprKind::Field { .. } => {
                 let place = self
@@ -916,44 +786,22 @@ impl Builder<'_, '_> {
                 };
                 let const_ptr_ty = Ty::new_ptr(pointee_ty, Mutability::Not);
                 let lhs_cast = self.new_temp(const_ptr_ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(lhs_cast),
                         Rvalue::Cast(CastKind::PtrToPtr, lhs_op, const_ptr_ty),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    expr.span,
+                );
                 let rhs_cast = self.new_temp(const_ptr_ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(rhs_cast),
                         Rvalue::Cast(CastKind::PtrToPtr, rhs_op, const_ptr_ty),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
-                let generic_args = match offset_from.ty().kind() {
-                    TyKind::RigidTy(RigidTy::FnDef(_, existing)) if !existing.0.is_empty() => {
-                        existing
-                            .0
-                            .iter()
-                            .map(|arg| match arg {
-                                GenericArgKind::Type(ty)
-                                    if matches!(ty.kind(), TyKind::Param(_)) =>
-                                {
-                                    GenericArgKind::Type(pointee_ty)
-                                }
-                                _ => arg.clone(),
-                            })
-                            .collect()
-                    }
-                    _ => vec![GenericArgKind::Type(pointee_ty)],
-                };
+                    expr.span,
+                );
+                let generic_args = ptr_offset_generic_args(offset_from.ty(), pointee_ty);
                 self.emit_call_block(
                     fn_const_operand(offset_from, generic_args, expr.span),
                     vec![
@@ -980,40 +828,20 @@ impl Builder<'_, '_> {
                         | co2_hir::HirBinOp::Ge
                         | co2_hir::HirBinOp::Gt
                 ) {
-                    let normalize_cmp_operand = |expr: &HirExpr| {
-                        if matches!(
-                            expr.ty.kind(),
-                            TyKind::RigidTy(
-                                RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)
-                            )
-                        ) || maybe_uninit_fn_ptr_inner(expr.ty).is_some()
-                        {
-                            HirExpr {
-                                kind: HirExprKind::Cast(Box::new(expr.clone())),
-                                ty: Ty::usize_ty(),
-                                span: expr.span,
-                            }
-                        } else {
-                            expr.clone()
-                        }
-                    };
-                    let lhs = self.lower_expr_to_operand(&normalize_cmp_operand(lhs));
-                    let rhs = self.lower_expr_to_operand(&normalize_cmp_operand(rhs));
+                    let lhs = self.lower_expr_to_operand(&ptr_like_to_usize_expr(lhs));
+                    let rhs = self.lower_expr_to_operand(&ptr_like_to_usize_expr(rhs));
                     let bool_local = self.new_temp(Ty::bool_ty(), Mutability::Mut, expr.span);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
+                    self.push_statement(
+                        MirStatementKind::Assign(
                             place(bool_local),
                             Rvalue::BinaryOp(self.lower_bin_op(*op), lhs, rhs),
                         ),
-                        source_info: SourceInfo {
-                            span: expr.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                        expr.span,
+                    );
 
                     let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
+                    self.push_statement(
+                        MirStatementKind::Assign(
                             place(tmp),
                             Rvalue::Cast(
                                 CastKind::IntToInt,
@@ -1021,26 +849,20 @@ impl Builder<'_, '_> {
                                 expr.ty,
                             ),
                         ),
-                        source_info: SourceInfo {
-                            span: expr.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                        expr.span,
+                    );
                     return MirOperand::Copy(place(tmp));
                 }
                 let lhs = self.lower_expr_to_operand(lhs);
                 let rhs = self.lower_expr_to_operand(rhs);
                 let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(tmp),
                         Rvalue::BinaryOp(self.lower_bin_op(*op), lhs, rhs),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    expr.span,
+                );
                 MirOperand::Copy(place(tmp))
             }
             HirExprKind::Logical { op, lhs, rhs } => {
@@ -1076,19 +898,16 @@ impl Builder<'_, '_> {
                     tmp_ty = payload_ty;
                 }
                 let tmp = self.new_temp(tmp_ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(tmp),
                         Rvalue::UnaryOp(
                             rustc_public_generative::rustc_public::mir::UnOp::Not,
                             inner_op,
                         ),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    expr.span,
+                );
                 let mut result = MirOperand::Copy(place(tmp));
 
                 if let Some(payload_ty) = enum_ty {
@@ -1104,19 +923,16 @@ impl Builder<'_, '_> {
                         operands.push(self.lower_expr_to_operand(arg));
                     }
                     let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
+                    self.push_statement(
+                        MirStatementKind::Assign(
                             place(tmp),
                             Rvalue::Aggregate(
                                 AggregateKind::Adt(adt, variant_idx(0), adt_args, None, None),
                                 operands,
                             ),
                         ),
-                        source_info: SourceInfo {
-                            span: expr.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                        expr.span,
+                    );
                     MirOperand::Copy(place(tmp))
                 }
                 TyKind::RigidTy(RigidTy::Array(elem, _)) => {
@@ -1125,16 +941,13 @@ impl Builder<'_, '_> {
                         operands.push(self.lower_expr_to_operand(arg));
                     }
                     let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
+                    self.push_statement(
+                        MirStatementKind::Assign(
                             place(tmp),
                             Rvalue::Aggregate(AggregateKind::Array(elem), operands),
                         ),
-                        source_info: SourceInfo {
-                            span: expr.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                        expr.span,
+                    );
                     MirOperand::Copy(place(tmp))
                 }
                 _ => {
@@ -1147,8 +960,8 @@ impl Builder<'_, '_> {
                 };
                 let operand = self.lower_expr_to_operand(arg);
                 let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(tmp),
                         Rvalue::Aggregate(
                             AggregateKind::Adt(
@@ -1161,11 +974,8 @@ impl Builder<'_, '_> {
                             vec![operand],
                         ),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    expr.span,
+                );
                 MirOperand::Copy(place(tmp))
             }
             HirExprKind::ConstStr(s) => self.lower_const_string(s, expr.ty, expr.span),
@@ -1200,8 +1010,8 @@ impl Builder<'_, '_> {
                         const_: fn_const,
                     });
                     let tmp = self.new_temp(fn_ptr_ty, Mutability::Mut, expr.span);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
+                    self.push_statement(
+                        MirStatementKind::Assign(
                             place(tmp),
                             Rvalue::Cast(
                                 CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
@@ -1211,29 +1021,11 @@ impl Builder<'_, '_> {
                                 fn_ptr_ty,
                             ),
                         ),
-                        source_info: SourceInfo {
-                            span: expr.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                        expr.span,
+                    );
                     MirOperand::Copy(place(tmp))
                 }
-                ResolvedValue::ConstInt(v) => {
-                    let (uint_ty, bits) = crate::rvalue::int_literal_bits(*v, expr.ty);
-                    let c =
-                        MirConst::try_from_uint(bits, uint_ty).expect("failed to build enum const");
-                    let const_op = MirOperand::Constant(ConstOperand {
-                        span: expr.span,
-                        user_ty: None,
-                        const_: c,
-                    });
-                    let src_ty = Ty::unsigned_ty(uint_ty);
-                    if src_ty == expr.ty {
-                        const_op
-                    } else {
-                        self.lower_cast(const_op, src_ty, expr.ty, expr.span)
-                    }
-                }
+                ResolvedValue::ConstInt(v) => self.make_int_const(*v, expr.ty, expr.span),
                 ResolvedValue::Static(def) | ResolvedValue::StaticConst(def) => {
                     if let Some(const_value) = self.ctx.dependency_const_value(*def) {
                         return self.lower_dependency_const_value(const_value, expr.ty, expr.span);
@@ -1256,16 +1048,7 @@ impl Builder<'_, '_> {
                     .lower_expr_to_place(lhs)
                     .expect("assignment lhs should be place-expressible");
                 let rhs_value = self.lower_expr_to_operand(rhs);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        lhs_place.clone(),
-                        Rvalue::Use(rhs_value, WithRetag::Yes),
-                    ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                self.emit_assign_use(lhs_place.clone(), rhs_value, expr.span);
                 MirOperand::Copy(lhs_place)
             }
             HirExprKind::AssignWithBinOp {
@@ -1324,16 +1107,11 @@ impl Builder<'_, '_> {
                     .expect("assignment lhs should be place-expressible");
                 let rhs_value = self.lower_expr_to_operand(rhs);
                 let old_lhs = self.new_temp(lhs.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(old_lhs),
-                        Rvalue::Use(MirOperand::Copy(lhs_place.clone()), WithRetag::Yes),
-                    ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                self.emit_assign_use(
+                    place(old_lhs),
+                    MirOperand::Copy(lhs_place.clone()),
+                    expr.span,
+                );
                 let new_val = self.new_temp(*binop_ty, Mutability::Mut, expr.span);
                 let lhs_casted = self.lower_cast(
                     MirOperand::Copy(place(old_lhs)),
@@ -1341,32 +1119,20 @@ impl Builder<'_, '_> {
                     *binop_ty,
                     lhs.span,
                 );
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(new_val),
                         Rvalue::BinaryOp(self.lower_bin_op(*op), lhs_casted, rhs_value),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    expr.span,
+                );
                 let new_val_casted = self.lower_cast(
                     MirOperand::Copy(place(new_val)),
                     *binop_ty,
                     lhs.ty,
                     lhs.span,
                 );
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        lhs_place.clone(),
-                        Rvalue::Use(new_val_casted, WithRetag::Yes),
-                    ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                self.emit_assign_use(lhs_place.clone(), new_val_casted, expr.span);
                 match return_semantic {
                     ReturnSemantic::AfterAssign => MirOperand::Copy(lhs_place),
                     ReturnSemantic::BeforeAssign => MirOperand::Copy(place(old_lhs)),
@@ -1381,16 +1147,11 @@ impl Builder<'_, '_> {
                     .lower_expr_to_place(lhs)
                     .expect("assignment lhs should be place-expressible");
                 let old_lhs = self.new_temp(lhs.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(old_lhs),
-                        Rvalue::Use(MirOperand::Copy(lhs_place.clone()), WithRetag::Yes),
-                    ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                self.emit_assign_use(
+                    place(old_lhs),
+                    MirOperand::Copy(lhs_place.clone()),
+                    expr.span,
+                );
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee_ty, mutability)) = lhs.ty.kind() else {
                     panic!(
                         "ptr offset assignment lhs must be raw pointer, got {:?}",
@@ -1405,16 +1166,7 @@ impl Builder<'_, '_> {
                     lhs.ty,
                     expr.span,
                 );
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        lhs_place.clone(),
-                        Rvalue::Use(new_ptr, WithRetag::Yes),
-                    ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                self.emit_assign_use(lhs_place.clone(), new_ptr, expr.span);
                 match return_semantic {
                     ReturnSemantic::AfterAssign => MirOperand::Copy(lhs_place),
                     ReturnSemantic::BeforeAssign => MirOperand::Copy(place(old_lhs)),
@@ -1427,26 +1179,10 @@ impl Builder<'_, '_> {
                         expr.ty
                     );
                 };
-                let target_place = if let Some(place) = self.lower_expr_to_place(inner) {
-                    place
-                } else {
-                    let tmp_target = self.new_temp(inner.ty, Mutability::Mut, inner.span);
-                    let value = self.lower_expr_to_operand(inner);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
-                            place(tmp_target),
-                            Rvalue::Use(value, WithRetag::Yes),
-                        ),
-                        source_info: SourceInfo {
-                            span: inner.span,
-                            scope: self.current_scope(),
-                        },
-                    });
-                    place(tmp_target)
-                };
+                let target_place = self.lower_expr_to_place_or_temp(inner);
                 let tmp = self.new_temp(expr.ty, Mutability::Mut, expr.span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(tmp),
                         Rvalue::AddressOf(
                             if mutability == Mutability::Mut {
@@ -1457,11 +1193,8 @@ impl Builder<'_, '_> {
                             target_place,
                         ),
                     ),
-                    source_info: SourceInfo {
-                        span: expr.span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    expr.span,
+                );
                 MirOperand::Copy(place(tmp))
             }
             HirExprKind::Deref(_) => {
@@ -1532,22 +1265,17 @@ impl Builder<'_, '_> {
         let dst_is_void =
             matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
         if dst_is_void {
-            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.lower_zeroed_to_destination(place(tmp), span, dst_ty);
-            return MirOperand::Copy(place(tmp));
+            return self.zeroed_operand(dst_ty, span);
         }
         if src_is_ref && (dst_is_ptr || dst_is_ref) {
             let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
+            self.push_statement(
+                MirStatementKind::Assign(
                     place(tmp),
                     Rvalue::Cast(CastKind::Transmute, inner_op, dst_ty),
                 ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+                span,
+            );
             return self.place_operand_for_ty(place(tmp), dst_ty);
         }
         if src_is_ptr && dst_is_ref {
@@ -1564,21 +1292,12 @@ impl Builder<'_, '_> {
             let tmp1_place = place(tmp1);
             let mut tmp1_deref = tmp1_place.clone();
             tmp1_deref.projection.push(MirProjection::Deref);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(tmp1_place, Rvalue::Use(inner_op, WithRetag::Yes)),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+            self.emit_assign_use(tmp1_place, inner_op, span);
             let tmp2 = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(place(tmp2), Rvalue::Ref(region, kind, tmp1_deref)),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+            self.push_statement(
+                MirStatementKind::Assign(place(tmp2), Rvalue::Ref(region, kind, tmp1_deref)),
+                span,
+            );
             return self.place_operand_for_ty(place(tmp2), dst_ty);
         }
         if dst_is_bool
@@ -1604,8 +1323,8 @@ impl Builder<'_, '_> {
                 .expect("failed to build zero usize const"),
             });
             let bool_local = self.new_temp(Ty::bool_ty(), Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
+            self.push_statement(
+                MirStatementKind::Assign(
                     place(bool_local),
                     Rvalue::BinaryOp(
                         rustc_public_generative::rustc_public::mir::BinOp::Ne,
@@ -1613,11 +1332,8 @@ impl Builder<'_, '_> {
                         zero,
                     ),
                 ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+                span,
+            );
             return MirOperand::Copy(place(bool_local));
         }
         if dst_is_bool && src_is_float {
@@ -1630,8 +1346,8 @@ impl Builder<'_, '_> {
                 const_: MirConst::try_from_float(0, float_ty).expect("failed to build float zero"),
             });
             let bool_local = self.new_temp(Ty::bool_ty(), Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
+            self.push_statement(
+                MirStatementKind::Assign(
                     place(bool_local),
                     Rvalue::BinaryOp(
                         rustc_public_generative::rustc_public::mir::BinOp::Ne,
@@ -1639,82 +1355,24 @@ impl Builder<'_, '_> {
                         zero,
                     ),
                 ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+                span,
+            );
             return MirOperand::Copy(place(bool_local));
         }
         if src_is_int && dst_is_int {
-            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(tmp),
-                    Rvalue::Cast(CastKind::IntToInt, inner_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(tmp));
+            return self.emit_cast_copy(CastKind::IntToInt, inner_op, dst_ty, span);
         }
         if src_is_bool && dst_is_int {
-            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(tmp),
-                    Rvalue::Cast(CastKind::IntToInt, inner_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(tmp));
+            return self.emit_cast_copy(CastKind::IntToInt, inner_op, dst_ty, span);
         }
         if src_is_float && dst_is_int {
-            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(tmp),
-                    Rvalue::Cast(CastKind::FloatToInt, inner_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(tmp));
+            return self.emit_cast_copy(CastKind::FloatToInt, inner_op, dst_ty, span);
         }
         if src_is_int && dst_is_float {
-            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(tmp),
-                    Rvalue::Cast(CastKind::IntToFloat, inner_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(tmp));
+            return self.emit_cast_copy(CastKind::IntToFloat, inner_op, dst_ty, span);
         }
         if src_is_float && dst_is_float {
-            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(tmp),
-                    Rvalue::Cast(CastKind::FloatToFloat, inner_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(tmp));
+            return self.emit_cast_copy(CastKind::FloatToFloat, inner_op, dst_ty, span);
         }
         if src_is_fn_def && dst_is_fn_ptr {
             let src_sig = src_ty
@@ -1724,8 +1382,8 @@ impl Builder<'_, '_> {
             let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig));
             if !ty_matches_expected(dst_ty, src_fn_ptr_ty) {
                 let fn_ptr_local = self.new_temp(src_fn_ptr_ty, Mutability::Mut, span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
+                self.push_statement(
+                    MirStatementKind::Assign(
                         place(fn_ptr_local),
                         Rvalue::Cast(
                             CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
@@ -1735,11 +1393,8 @@ impl Builder<'_, '_> {
                             src_fn_ptr_ty,
                         ),
                     ),
-                    source_info: SourceInfo {
-                        span,
-                        scope: self.current_scope(),
-                    },
-                });
+                    span,
+                );
                 let dst_local = self.new_temp(dst_ty, Mutability::Mut, span);
                 let generic_args = vec![
                     GenericArgKind::Type(src_fn_ptr_ty),
@@ -1756,8 +1411,8 @@ impl Builder<'_, '_> {
         }
         if src_is_fn_def && dst_is_fn_ptr {
             let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
+            self.push_statement(
+                MirStatementKind::Assign(
                     place(tmp),
                     Rvalue::Cast(
                         CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
@@ -1765,11 +1420,8 @@ impl Builder<'_, '_> {
                         dst_ty,
                     ),
                 ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+                span,
+            );
             return MirOperand::Copy(place(tmp));
         }
         if src_is_fn_def && let Some(fn_ptr_ty) = dst_mu_fn_ptr {
@@ -1779,8 +1431,8 @@ impl Builder<'_, '_> {
                 .expect("fn def should have signature");
             let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig));
             let src_fn_ptr_local = self.new_temp(src_fn_ptr_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
+            self.push_statement(
+                MirStatementKind::Assign(
                     place(src_fn_ptr_local),
                     Rvalue::Cast(
                         CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
@@ -1788,11 +1440,8 @@ impl Builder<'_, '_> {
                         src_fn_ptr_ty,
                     ),
                 ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+                span,
+            );
             let dst_fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
             let generic_args = vec![
                 GenericArgKind::Type(src_fn_ptr_ty),
@@ -1811,42 +1460,8 @@ impl Builder<'_, '_> {
                 span,
             );
         }
-        if src_is_fn_def && let Some(fn_ptr_ty) = dst_mu_fn_ptr {
-            let fn_ptr_local = self.new_temp(fn_ptr_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(fn_ptr_local),
-                    Rvalue::Cast(
-                        CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
-                        inner_op,
-                        fn_ptr_ty,
-                    ),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return self.write_value_into_maybe_uninit_storage(
-                dst_ty,
-                MirOperand::Copy(place(fn_ptr_local)),
-                fn_ptr_ty,
-                span,
-            );
-        }
         if dst_is_ptr && src_is_fn_ptr {
-            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(tmp),
-                    Rvalue::Cast(CastKind::FnPtrToPtr, inner_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(tmp));
+            return self.emit_cast_copy(CastKind::FnPtrToPtr, inner_op, dst_ty, span);
         }
         if src_mu_fn_ptr.is_some() && dst_is_ptr {
             return self.read_maybe_uninit_as(inner_op, src_ty, dst_ty, span);
@@ -1855,18 +1470,7 @@ impl Builder<'_, '_> {
             return self.write_value_into_maybe_uninit_storage(dst_ty, inner_op, src_ty, span);
         }
         if src_is_ptr && dst_is_ptr {
-            let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(tmp),
-                    Rvalue::Cast(CastKind::PtrToPtr, inner_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(tmp));
+            return self.emit_cast_copy(CastKind::PtrToPtr, inner_op, dst_ty, span);
         }
         if src_is_fn_def {
             let middle_ty = {
@@ -1881,85 +1485,23 @@ impl Builder<'_, '_> {
         }
         if src_is_fn_ptr && dst_is_int {
             let raw_ptr_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Not);
-            let raw_ptr_local = self.new_temp(raw_ptr_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(raw_ptr_local),
-                    Rvalue::Cast(CastKind::FnPtrToPtr, inner_op, raw_ptr_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+            let raw_ptr_op = self.emit_cast_copy(CastKind::FnPtrToPtr, inner_op, raw_ptr_ty, span);
             let usize_ty = Ty::usize_ty();
-            let usize_tmp = self.new_temp(usize_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(usize_tmp),
-                    Rvalue::Cast(
-                        CastKind::PointerExposeAddress,
-                        MirOperand::Copy(place(raw_ptr_local)),
-                        usize_ty,
-                    ),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+            let usize_op =
+                self.emit_cast_copy(CastKind::PointerExposeAddress, raw_ptr_op, usize_ty, span);
             if dst_ty == usize_ty {
-                return MirOperand::Copy(place(usize_tmp));
+                return usize_op;
             }
-            let dst_tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(dst_tmp),
-                    Rvalue::Cast(
-                        CastKind::IntToInt,
-                        MirOperand::Copy(place(usize_tmp)),
-                        dst_ty,
-                    ),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(dst_tmp));
+            return self.emit_cast_copy(CastKind::IntToInt, usize_op, dst_ty, span);
         }
         if src_is_ptr && dst_is_int {
             let usize_ty = Ty::usize_ty();
-            let usize_tmp = self.new_temp(usize_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(usize_tmp),
-                    Rvalue::Cast(CastKind::PointerExposeAddress, inner_op, usize_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
+            let usize_op =
+                self.emit_cast_copy(CastKind::PointerExposeAddress, inner_op, usize_ty, span);
             if dst_ty == usize_ty {
-                return MirOperand::Copy(place(usize_tmp));
+                return usize_op;
             }
-            let dst_tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(dst_tmp),
-                    Rvalue::Cast(
-                        CastKind::IntToInt,
-                        MirOperand::Copy(place(usize_tmp)),
-                        dst_ty,
-                    ),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(dst_tmp));
+            return self.emit_cast_copy(CastKind::IntToInt, usize_op, dst_ty, span);
         }
         if src_mu_fn_ptr.is_some() && dst_is_int {
             let usize_ty = Ty::usize_ty();
@@ -1967,49 +1509,21 @@ impl Builder<'_, '_> {
             if dst_ty == usize_ty {
                 return usize_op;
             }
-            let dst_tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(dst_tmp),
-                    Rvalue::Cast(CastKind::IntToInt, usize_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(dst_tmp));
+            return self.emit_cast_copy(CastKind::IntToInt, usize_op, dst_ty, span);
         }
         if src_is_int && dst_is_ptr {
             let usize_ty = Ty::usize_ty();
             let usize_op = if src_ty == usize_ty {
                 inner_op
             } else {
-                let usize_tmp = self.new_temp(usize_ty, Mutability::Mut, span);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(usize_tmp),
-                        Rvalue::Cast(CastKind::IntToInt, inner_op, usize_ty),
-                    ),
-                    source_info: SourceInfo {
-                        span,
-                        scope: self.current_scope(),
-                    },
-                });
-                MirOperand::Copy(place(usize_tmp))
+                self.emit_cast_copy(CastKind::IntToInt, inner_op, usize_ty, span)
             };
-            let dst_tmp = self.new_temp(dst_ty, Mutability::Mut, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(dst_tmp),
-                    Rvalue::Cast(CastKind::PointerWithExposedProvenance, usize_op, dst_ty),
-                ),
-                source_info: SourceInfo {
-                    span,
-                    scope: self.current_scope(),
-                },
-            });
-            return MirOperand::Copy(place(dst_tmp));
+            return self.emit_cast_copy(
+                CastKind::PointerWithExposedProvenance,
+                usize_op,
+                dst_ty,
+                span,
+            );
         }
         if src_is_ptr && dst_mu_fn_ptr.is_some() {
             return self.write_value_into_maybe_uninit_storage(dst_ty, inner_op, src_ty, span);
@@ -2019,19 +1533,7 @@ impl Builder<'_, '_> {
             let usize_op = if src_ty == usize_ty {
                 inner_op
             } else {
-                let usize_tmp = self.new_temp(usize_ty, Mutability::Mut, span);
-                let cast_kind = CastKind::IntToInt;
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(
-                        place(usize_tmp),
-                        Rvalue::Cast(cast_kind, inner_op, usize_ty),
-                    ),
-                    source_info: SourceInfo {
-                        span,
-                        scope: self.current_scope(),
-                    },
-                });
-                MirOperand::Copy(place(usize_tmp))
+                self.emit_cast_copy(CastKind::IntToInt, inner_op, usize_ty, span)
             };
             return self.write_value_into_maybe_uninit_storage(dst_ty, usize_op, usize_ty, span);
         }
@@ -2055,24 +1557,8 @@ impl Builder<'_, '_> {
         span: RustSpan,
     ) -> MirOperand {
         match value {
-            DependencyConstValue::Bool(v) => {
-                let c = MirConst::try_from_uint(v as u128, UintTy::U8).expect("bool const");
-                let op = MirOperand::Constant(ConstOperand {
-                    span,
-                    user_ty: None,
-                    const_: c,
-                });
-                self.lower_cast(op, Ty::unsigned_ty(UintTy::U8), target_ty, span)
-            }
-            DependencyConstValue::Char(v) => {
-                let c = MirConst::try_from_uint(v as u128, UintTy::U32).expect("char const");
-                let op = MirOperand::Constant(ConstOperand {
-                    span,
-                    user_ty: None,
-                    const_: c,
-                });
-                self.lower_cast(op, Ty::unsigned_ty(UintTy::U32), target_ty, span)
-            }
+            DependencyConstValue::Bool(v) => self.make_int_const(i128::from(v), target_ty, span),
+            DependencyConstValue::Char(v) => self.make_int_const(v as i128, target_ty, span),
             DependencyConstValue::I8(v) => self.make_int_const(v as i128, target_ty, span),
             DependencyConstValue::I16(v) => self.make_int_const(v as i128, target_ty, span),
             DependencyConstValue::I32(v) => self.make_int_const(v as i128, target_ty, span),
@@ -2183,19 +1669,16 @@ impl Builder<'_, '_> {
         let inner_op = self.lower_expr_to_operand(inner);
         let bool_ty = Ty::bool_ty();
         let bool_tmp = self.new_temp(bool_ty, Mutability::Not, span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
+        self.push_statement(
+            MirStatementKind::Assign(
                 place(bool_tmp),
                 Rvalue::UnaryOp(
                     rustc_public_generative::rustc_public::mir::UnOp::Not,
                     inner_op,
                 ),
             ),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+            span,
+        );
         if bool_ty == ty {
             return MirOperand::Copy(place(bool_tmp));
         }
@@ -2208,13 +1691,34 @@ impl Builder<'_, '_> {
             ty,
             span,
         });
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(place(local), Rvalue::Use(operand, WithRetag::Yes)),
-            source_info: SourceInfo {
-                span,
-                scope: self.current_scope(),
-            },
-        });
+        self.emit_assign_use(place(local), operand, span);
+    }
+
+    pub(crate) fn emit_assign_use(
+        &mut self,
+        dst: rustc_public_generative::rustc_public::mir::Place,
+        op: MirOperand,
+        span: RustSpan,
+    ) {
+        self.push_statement(
+            MirStatementKind::Assign(dst, Rvalue::Use(op, WithRetag::Yes)),
+            span,
+        );
+    }
+
+    fn emit_cast_copy(
+        &mut self,
+        cast_kind: CastKind,
+        inner_op: MirOperand,
+        dst_ty: Ty,
+        span: RustSpan,
+    ) -> MirOperand {
+        let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
+        self.push_statement(
+            MirStatementKind::Assign(place(tmp), Rvalue::Cast(cast_kind, inner_op, dst_ty)),
+            span,
+        );
+        MirOperand::Copy(place(tmp))
     }
 
     fn lower_conditional_expr(
@@ -2232,29 +1736,11 @@ impl Builder<'_, '_> {
                 span,
                 |b| {
                     let op = b.lower_expr_to_operand(then_expr);
-                    b.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
-                            place(result_local),
-                            Rvalue::Use(op, WithRetag::Yes),
-                        ),
-                        source_info: SourceInfo {
-                            span: then_expr.span,
-                            scope: b.current_scope(),
-                        },
-                    });
+                    b.emit_assign_use(place(result_local), op, then_expr.span);
                 },
                 |b| {
                     let op = b.lower_expr_to_operand(else_expr);
-                    b.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
-                            place(result_local),
-                            Rvalue::Use(op, WithRetag::Yes),
-                        ),
-                        source_info: SourceInfo {
-                            span: else_expr.span,
-                            scope: b.current_scope(),
-                        },
-                    });
+                    b.emit_assign_use(place(result_local), op, else_expr.span);
                 },
             );
             return MirOperand::Copy(place(result_local));
@@ -2262,16 +1748,7 @@ impl Builder<'_, '_> {
         // GNU elvis `a ?: b` : `a` evaluated once, condition local reused as then
         let cond_operand = self.lower_expr_to_operand(cond);
         let cond_tmp = self.new_temp(cond.ty, Mutability::Mut, cond.span);
-        self.stmts.push(MirStatement {
-            kind: MirStatementKind::Assign(
-                place(cond_tmp),
-                Rvalue::Use(cond_operand, WithRetag::Yes),
-            ),
-            source_info: SourceInfo {
-                span: cond.span,
-                scope: self.current_scope(),
-            },
-        });
+        self.emit_assign_use(place(cond_tmp), cond_operand, cond.span);
         let cond_copy = MirOperand::Copy(place(cond_tmp));
         let bool_operand = self.lower_cast(cond_copy.clone(), cond.ty, Ty::bool_ty(), span);
         let entry_kind = TerminatorKind::SwitchInt {
@@ -2293,16 +1770,7 @@ impl Builder<'_, '_> {
         let then_start = self.blocks.len();
         {
             let then_op = self.lower_cast(cond_copy.clone(), cond.ty, ty, span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(result_local),
-                    Rvalue::Use(then_op, WithRetag::Yes),
-                ),
-                source_info: SourceInfo {
-                    span: cond.span,
-                    scope: self.current_scope(),
-                },
-            });
+            self.emit_assign_use(place(result_local), then_op, cond.span);
         }
         let then_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
         let else_start = self.blocks.len();
@@ -2313,16 +1781,7 @@ impl Builder<'_, '_> {
             } else {
                 self.lower_cast(else_op, else_expr.ty, ty, span)
             };
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
-                    place(result_local),
-                    Rvalue::Use(else_op, WithRetag::Yes),
-                ),
-                source_info: SourceInfo {
-                    span: else_expr.span,
-                    scope: self.current_scope(),
-                },
-            });
+            self.emit_assign_use(place(result_local), else_op, else_expr.span);
         }
         let else_exit = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, span);
         let join_bb = self.blocks.len();
@@ -2330,6 +1789,24 @@ impl Builder<'_, '_> {
         self.patch_goto_target(else_exit, join_bb);
         self.patch_switch_targets(entry_bb, then_start, else_start);
         MirOperand::Copy(place(result_local))
+    }
+
+    fn emit_call_for_ret_ty(
+        &mut self,
+        func: MirOperand,
+        args: Vec<MirOperand>,
+        destination: rustc_public_generative::rustc_public::mir::Place,
+        span: RustSpan,
+        ret_ty: Ty,
+    ) {
+        if matches!(
+            self.ctx.normalize_ty_defaults(ret_ty).kind(),
+            TyKind::RigidTy(RigidTy::Never)
+        ) {
+            self.emit_diverging_call_block(func, args, destination, span);
+        } else {
+            self.emit_call_block(func, args, destination, span);
+        }
     }
 
     pub(crate) fn lower_call_to_destination(
@@ -2364,24 +1841,13 @@ impl Builder<'_, '_> {
                         _ => arg,
                     })
                     .collect();
-            if matches!(
-                self.ctx.normalize_ty_defaults(ret_ty).kind(),
-                TyKind::RigidTy(RigidTy::Never)
-            ) {
-                self.emit_diverging_call_block(
-                    fn_const_operand(*fn_def, generic_args, span),
-                    arg_ops,
-                    destination,
-                    span,
-                );
-            } else {
-                self.emit_call_block(
-                    fn_const_operand(*fn_def, generic_args, span),
-                    arg_ops,
-                    destination,
-                    span,
-                );
-            }
+            self.emit_call_for_ret_ty(
+                fn_const_operand(*fn_def, generic_args, span),
+                arg_ops,
+                destination,
+                span,
+                ret_ty,
+            );
         } else {
             let func_op = if let Some(inner_fn_ptr) = maybe_uninit_fn_ptr_inner(func.ty) {
                 let op = self.lower_expr_to_operand(func);
@@ -2389,14 +1855,7 @@ impl Builder<'_, '_> {
             } else {
                 self.lower_expr_to_operand(func)
             };
-            if matches!(
-                self.ctx.normalize_ty_defaults(ret_ty).kind(),
-                TyKind::RigidTy(RigidTy::Never)
-            ) {
-                self.emit_diverging_call_block(func_op, arg_ops, destination, span);
-            } else {
-                self.emit_call_block(func_op, arg_ops, destination, span);
-            }
+            self.emit_call_for_ret_ty(func_op, arg_ops, destination, span, ret_ty);
         }
     }
 
@@ -2406,56 +1865,27 @@ impl Builder<'_, '_> {
         span: RustSpan,
         ret_ty: Ty,
     ) {
-        let zeroed_fn = self.wellknown_defs.zeroed;
-        let sig = zeroed_fn
-            .ty()
-            .kind()
-            .fn_sig()
-            .expect("std::mem::zeroed has no signature")
-            .skip_binder();
-        let generic_args = infer_fn_generic_args(zeroed_fn, &sig, &[], ret_ty);
-        self.emit_call_block(
-            fn_const_operand(zeroed_fn, generic_args, span),
-            vec![],
-            destination,
-            span,
-        );
+        self.emit_nullary_call(self.wellknown_defs.zeroed, ret_ty, destination, span);
     }
 
     pub(crate) fn lower_call_arg(&mut self, arg: &HirExpr, expected_ty: Ty) -> MirOperand {
         if let TyKind::RigidTy(RigidTy::Adt(adt, _)) = expected_ty.kind()
             && adt == self.wellknown_defs.valist
         {
-            let borrowed_place = if let Some(place) = self.lower_expr_to_place(arg) {
-                place
-            } else {
-                let tmp = self.new_temp(arg.ty, Mutability::Mut, arg.span);
-                let value = self.lower_expr_to_operand(arg);
-                self.stmts.push(MirStatement {
-                    kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value, WithRetag::Yes)),
-                    source_info: SourceInfo {
-                        span: arg.span,
-                        scope: self.current_scope(),
-                    },
-                });
-                place(tmp)
-            };
+            let borrowed_place = self.lower_expr_to_place_or_temp(arg);
 
             let reg = Region {
                 kind: RegionKind::ReErased,
             };
             let ref_ty = Ty::new_ref(reg.clone(), arg.ty, Mutability::Not);
             let ref_local = self.new_temp(ref_ty, Mutability::Not, arg.span);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(
+            self.push_statement(
+                MirStatementKind::Assign(
                     place(ref_local),
                     Rvalue::Ref(reg, BorrowKind::Shared, borrowed_place),
                 ),
-                source_info: SourceInfo {
-                    span: arg.span,
-                    scope: self.current_scope(),
-                },
-            });
+                arg.span,
+            );
 
             let transmute_copy_fn = self.wellknown_defs.transmute_copy;
             let generic_args = vec![

@@ -204,7 +204,7 @@ fn format_float_ty(ty: FloatTy) -> &'static str {
     }
 }
 
-pub(crate) fn enum_payload_ty(ty: Ty) -> Option<Ty> {
+pub fn enum_payload_ty(ty: Ty) -> Option<Ty> {
     if let TyKind::RigidTy(RigidTy::Pat(inner, _)) = ty.kind() {
         return enum_payload_ty(inner);
     }

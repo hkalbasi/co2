@@ -3,8 +3,7 @@ use rustc_public_generative::rustc_public::{
     CrateItem,
     mir::{
         ConstOperand, Mutability, Operand, Place as MirPlace, ProjectionElem as MirProjection,
-        Rvalue, SourceInfo, Statement as MirStatement, StatementKind as MirStatementKind,
-        WithRetag,
+        Rvalue, StatementKind as MirStatementKind,
     },
     ty::Ty,
 };
@@ -41,38 +40,27 @@ impl Builder<'_, '_> {
                     let value_ty = CrateItem(*def).ty();
                     let tmp_place = self.new_temp(value_ty, Mutability::Not, expr.span);
                     let c = self.ctx.make_unevaluated_const(*def);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
-                            place(tmp_place),
-                            Rvalue::Use(
-                                Operand::Constant(ConstOperand {
-                                    span: expr.span,
-                                    user_ty: None,
-                                    const_: c,
-                                }),
-                                WithRetag::Yes,
-                            ),
-                        ),
-                        source_info: SourceInfo {
+                    self.emit_assign_use(
+                        place(tmp_place),
+                        Operand::Constant(ConstOperand {
                             span: expr.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                            user_ty: None,
+                            const_: c,
+                        }),
+                        expr.span,
+                    );
                     Some(place(tmp_place))
                 } else {
                     let value_ty = CrateItem(*def).ty();
                     let ptr_ty = Ty::new_ptr(value_ty, Mutability::Mut);
                     let tmp_ptr = self.new_temp(ptr_ty, Mutability::Mut, expr.span);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
+                    self.push_statement(
+                        MirStatementKind::Assign(
                             place(tmp_ptr),
                             Rvalue::ThreadLocalRef(CrateItem(*def)),
                         ),
-                        source_info: SourceInfo {
-                            span: expr.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                        expr.span,
+                    );
                     let mut base_place = place(tmp_ptr);
                     base_place.projection.push(MirProjection::Deref);
                     Some(base_place)
@@ -88,19 +76,13 @@ impl Builder<'_, '_> {
         }
     }
 
-    fn lower_expr_to_place_or_temp(&mut self, inner: &HirExpr) -> MirPlace {
+    pub(crate) fn lower_expr_to_place_or_temp(&mut self, inner: &HirExpr) -> MirPlace {
         if let Some(place) = self.lower_expr_to_place(inner) {
             place
         } else {
             let tmp = self.new_temp(inner.ty, Mutability::Mut, inner.span);
             let value = self.lower_expr_to_operand(inner);
-            self.stmts.push(MirStatement {
-                kind: MirStatementKind::Assign(place(tmp), Rvalue::Use(value, WithRetag::Yes)),
-                source_info: SourceInfo {
-                    span: inner.span,
-                    scope: self.current_scope(),
-                },
-            });
+            self.emit_assign_use(place(tmp), value, inner.span);
             place(tmp)
         }
     }

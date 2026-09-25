@@ -1,13 +1,13 @@
 use co2_hir::{HirDecl, HirExpr, HirExprKind, HirStmt, LabelId};
 use rustc_public_generative::rustc_public::{
     mir::{
-        Rvalue, SourceInfo, Statement as MirStatement, StatementKind as MirStatementKind,
-        SwitchTargets, Terminator as MirTerminator, TerminatorKind, UnwindAction, WithRetag,
+        SourceInfo, Statement as MirStatement, StatementKind as MirStatementKind, SwitchTargets,
+        Terminator as MirTerminator, TerminatorKind, UnwindAction,
     },
-    ty::{RigidTy, Span as RustSpan, Ty, TyKind},
+    ty::{RigidTy, Span as RustSpan, TyKind},
 };
 
-use crate::{build::Builder, place::place};
+use crate::{build::Builder, operand::ptr_like_to_usize_expr, place::place};
 
 impl Builder<'_, '_> {
     pub(crate) fn lower_stmt(&mut self, stmt: &HirStmt) {
@@ -21,16 +21,7 @@ impl Builder<'_, '_> {
                 let local_index = self.local_to_index(*local);
                 if let Some(init) = initializer {
                     let value = self.lower_expr_to_operand(init);
-                    self.stmts.push(MirStatement {
-                        kind: MirStatementKind::Assign(
-                            place(local_index),
-                            Rvalue::Use(value, WithRetag::Yes),
-                        ),
-                        source_info: SourceInfo {
-                            span: init.span,
-                            scope: self.current_scope(),
-                        },
-                    });
+                    self.emit_assign_use(place(local_index), value, init.span);
                 }
                 if let Some(&vdi_idx) = self.local_vdi_map.get(&local_index) {
                     self.var_debug_info[vdi_idx].source_info.scope = self.current_scope();
@@ -47,18 +38,7 @@ impl Builder<'_, '_> {
                 self.pending_gotos.push((bb, *label));
             }
             HirStmt::IndirectGoto(expr, span) => {
-                let discr_expr = if matches!(
-                    expr.ty.kind(),
-                    TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
-                ) {
-                    HirExpr {
-                        kind: HirExprKind::Cast(Box::new(expr.clone())),
-                        ty: Ty::usize_ty(),
-                        span: expr.span,
-                    }
-                } else {
-                    expr.clone()
-                };
+                let discr_expr = ptr_like_to_usize_expr(expr);
                 let discr = self.lower_expr_to_operand(&discr_expr);
                 let bb = self.push_terminator(
                     TerminatorKind::SwitchInt {
@@ -81,16 +61,7 @@ impl Builder<'_, '_> {
                         );
                     } else {
                         let value = self.lower_expr_to_operand(expr);
-                        self.stmts.push(MirStatement {
-                            kind: MirStatementKind::Assign(
-                                place(0),
-                                Rvalue::Use(value, WithRetag::Yes),
-                            ),
-                            source_info: SourceInfo {
-                                span: expr.span,
-                                scope: self.current_scope(),
-                            },
-                        });
+                        self.emit_assign_use(place(0), value, expr.span);
                     }
                 }
 
@@ -246,23 +217,7 @@ impl Builder<'_, '_> {
         span: rustc_public_generative::rustc_public::ty::Span,
     ) {
         let next = self.blocks.len() + 1;
-        self.blocks
-            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
-                statements: std::mem::take(&mut self.stmts),
-                terminator: MirTerminator {
-                    kind: TerminatorKind::Call {
-                        func,
-                        args,
-                        destination,
-                        target: Some(next),
-                        unwind: UnwindAction::Continue,
-                    },
-                    source_info: SourceInfo {
-                        span,
-                        scope: self.current_scope(),
-                    },
-                },
-            });
+        self.emit_call_terminator(func, args, destination, span, Some(next));
     }
 
     pub(crate) fn emit_diverging_call_block(
@@ -274,23 +229,41 @@ impl Builder<'_, '_> {
     ) {
         // `!`-returning callee never returns: no target. Following statements
         // land in an unreachable block, so dataflow (borrowck) ignores them.
-        self.blocks
-            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
-                statements: std::mem::take(&mut self.stmts),
-                terminator: MirTerminator {
-                    kind: TerminatorKind::Call {
-                        func,
-                        args,
-                        destination,
-                        target: None,
-                        unwind: UnwindAction::Continue,
-                    },
-                    source_info: SourceInfo {
-                        span,
-                        scope: self.current_scope(),
-                    },
-                },
-            });
+        self.emit_call_terminator(func, args, destination, span, None);
+    }
+
+    fn emit_call_terminator(
+        &mut self,
+        func: rustc_public_generative::rustc_public::mir::Operand,
+        args: Vec<rustc_public_generative::rustc_public::mir::Operand>,
+        destination: rustc_public_generative::rustc_public::mir::Place,
+        span: rustc_public_generative::rustc_public::ty::Span,
+        target: Option<usize>,
+    ) {
+        self.push_terminator(
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                target,
+                unwind: UnwindAction::Continue,
+            },
+            span,
+        );
+    }
+
+    pub(crate) fn push_statement(
+        &mut self,
+        kind: MirStatementKind,
+        span: rustc_public_generative::rustc_public::ty::Span,
+    ) {
+        self.stmts.push(MirStatement {
+            kind,
+            source_info: SourceInfo {
+                span,
+                scope: self.current_scope(),
+            },
+        });
     }
 
     pub(crate) fn push_terminator(

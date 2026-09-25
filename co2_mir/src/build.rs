@@ -223,6 +223,28 @@ impl Builder<'_, '_> {
     pub(crate) fn exit_scope(&mut self) {
         self.scope_stack.pop();
     }
+
+    pub(crate) fn emit_nullary_call(
+        &mut self,
+        func: FnDef,
+        ret_ty: Ty,
+        dst: Place,
+        span: RustSpan,
+    ) {
+        let sig = func
+            .ty()
+            .kind()
+            .fn_sig()
+            .expect("nullary callee has no signature")
+            .skip_binder();
+        let generic_args = infer_fn_generic_args(func, &sig, &[], ret_ty);
+        self.emit_call_block(
+            fn_const_operand(func, generic_args, span),
+            vec![],
+            dst,
+            span,
+        );
+    }
 }
 
 impl Builder<'_, '_> {
