@@ -1368,30 +1368,14 @@ impl HirCtx<'_> {
                 self.terminate_with_error(parser_span, "Function is invalid as a type name");
             }
             CTy::UnsizedArray(elem) => {
-                let count = match &initializer.0 {
-                    Initializer::List(items) => {
-                        let mut len = 0usize;
-                        for (item, _) in items {
-                            match &item.initializer.0 {
-                                Initializer::Expr((expr, _)) => match expr {
-                                    Expression::Constant(Constant::String(s)) => {
-                                        len += s.nul_terminated_len();
-                                    }
-                                    _ => len += 1,
-                                },
-                                Initializer::List(_) => {
-                                    len += 1;
-                                }
-                            }
-                        }
-                        len
-                    }
-                    Initializer::Expr((expr, _)) => match expr {
-                        Expression::Constant(Constant::String(s)) => s.nul_terminated_len(),
-                        _ => 1,
-                    },
-                };
-                let ty_const = TyConst::try_from_target_usize(count as u64)
+                let count = crate::infer_array_len_from_initializer_in_scope(
+                    initializer.clone(),
+                    elem,
+                    self,
+                    locals,
+                    local_map,
+                );
+                let ty_const = TyConst::try_from_target_usize(count)
                     .map_err(|_| spanned_error(parser_span, "compound literal array too large"))?;
                 Ok(Ty::from_rigid_kind(RigidTy::Array(elem, ty_const)))
             }
