@@ -233,7 +233,6 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     target,
                     &param_names,
                     span,
-                    &self.wellknown_defs,
                 );
                 let mir_start = Instant::now();
                 let mir_result = co2_mir::build_mir_for_body(

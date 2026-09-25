@@ -3,9 +3,8 @@ use std::collections::BTreeMap;
 
 use co2_ast::{
     BinOp as ParsedBinOp, CharPrefix, Constant, DoTransform as _, Expression, GenericAssociation,
-    Initializer, IntegerSuffix, RustTy, Span, Spanned, Statement, StatementOrDeclaration,
-    StringLiteral, StringLiteralPrefix, TypeName, UnaryOp as ParsedUnaryOp,
-    UpdateOp as ParsedUpdateOp,
+    Initializer, IntegerSuffix, RustTy, Spanned, Statement, StatementOrDeclaration, StringLiteral,
+    StringLiteralPrefix, TypeName, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
 use co2_crate_sig::{LocalResolver, LogicalAdtFieldKind, MethodResolutionKind};
 use la_arena::Arena;
@@ -20,7 +19,8 @@ use rustc_public_generative::rustc_public::{
 };
 
 use crate::item::{HirLocal, LocalId};
-use crate::resolver::{HirCtx, ResolvedValue};
+use crate::resolver::invalid_span;
+use crate::resolver::{HirCtx, ResolvedValue, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
     adt_field_tys, array_elem_ty, callable_sig, common_numeric_ty, enum_payload_ty,
@@ -30,10 +30,6 @@ use crate::ty::{
 };
 use crate::{decl::CTy, decl::hir_ty_to_ty, ty::is_condition_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
-
-fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span, String) {
-    (span, msg.into())
-}
 
 fn countof_ty_len(ty: Ty) -> Option<u64> {
     if let TyKind::RigidTy(RigidTy::Array(_, len)) = ty.kind() {
@@ -57,10 +53,6 @@ fn is_adt_overload(ty: Ty) -> bool {
         return true;
     }
     false
-}
-
-fn invalid_span() -> Span {
-    Span::from_parts(co2_ast::FileId::INVALID, 0..0)
 }
 
 fn first_unresolved_generic_arg_index(args: &[GenericArgKind]) -> usize {
@@ -445,6 +437,12 @@ pub enum HirLogicalOp {
     And,
 }
 
+fn collect_sig_bindings_for_receiver(expected: &[Ty], actual: &[Ty], out: &mut BTreeMap<u32, Ty>) {
+    for (expected_ty, actual_ty) in expected.iter().zip(actual.iter()) {
+        collect_param_bindings_for_receiver(*expected_ty, *actual_ty, out);
+    }
+}
+
 fn collect_param_bindings_for_receiver(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>) {
     match (expected.kind(), actual.kind()) {
         (TyKind::Param(param), _) => {
@@ -468,28 +466,22 @@ fn collect_param_bindings_for_receiver(expected: Ty, actual: Ty, out: &mut BTree
         ) => {
             let actual = Ty::from_rigid_kind(RigidTy::FnDef(def, args.clone()));
             if let Some(sig) = callable_sig(actual) {
-                for (expected_ty, actual_ty) in expected_sig
-                    .value
-                    .inputs_and_output
-                    .iter()
-                    .zip(sig.value.inputs_and_output.iter())
-                {
-                    collect_param_bindings_for_receiver(*expected_ty, *actual_ty, out);
-                }
+                collect_sig_bindings_for_receiver(
+                    &expected_sig.value.inputs_and_output,
+                    &sig.value.inputs_and_output,
+                    out,
+                );
             }
         }
         (
             TyKind::RigidTy(RigidTy::FnPtr(expected_sig)),
             TyKind::RigidTy(RigidTy::FnPtr(actual_sig)),
         ) => {
-            for (expected_ty, actual_ty) in expected_sig
-                .value
-                .inputs_and_output
-                .iter()
-                .zip(actual_sig.value.inputs_and_output.iter())
-            {
-                collect_param_bindings_for_receiver(*expected_ty, *actual_ty, out);
-            }
+            collect_sig_bindings_for_receiver(
+                &expected_sig.value.inputs_and_output,
+                &actual_sig.value.inputs_and_output,
+                out,
+            );
         }
         (
             TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
@@ -582,23 +574,27 @@ fn normalize_stable_defaulted_ty(ty: Ty) -> Ty {
     }
 }
 
-fn receiver_generic_args(ty: Ty) -> Vec<GenericArgKind> {
+/// Peel `&`/`*` layers. Shared by `receiver_generic_args` (which reads the
+/// generic args of the peeled ADT) and `trait_method_self_ty` (which returns
+/// the peeled type itself).
+fn strip_ref_ptr_ty(ty: Ty) -> Ty {
     match ty.kind() {
-        TyKind::RigidTy(RigidTy::Adt(_, args)) => args.0.clone(),
         TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
-            receiver_generic_args(inner)
+            strip_ref_ptr_ty(inner)
         }
+        _ => ty,
+    }
+}
+
+fn receiver_generic_args(ty: Ty) -> Vec<GenericArgKind> {
+    match strip_ref_ptr_ty(ty).kind() {
+        TyKind::RigidTy(RigidTy::Adt(_, args)) => args.0.clone(),
         _ => vec![],
     }
 }
 
 fn trait_method_self_ty(ty: Ty) -> Ty {
-    match ty.kind() {
-        TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _)) => {
-            trait_method_self_ty(inner)
-        }
-        _ => ty,
-    }
+    strip_ref_ptr_ty(ty)
 }
 
 fn generic_args_extend_to_method_total(args: &mut Vec<GenericArgKind>, method_def: DefId) {
@@ -741,6 +737,78 @@ impl HirCtx<'_> {
         receiver
     }
 
+    /// Lower plain (non-receiver) call arguments with array-to-pointer decay.
+    /// Shared by method-call lowering and the plain call fallback.
+    fn lower_call_params(
+        &self,
+        params: &[Spanned<Expression<LocalResolver>>],
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<Vec<HirExpr>, (co2_ast::Span, String)> {
+        let mut lowered_args = Vec::with_capacity(params.len());
+        for param in params {
+            let mut arg = self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
+            self.array_to_pointer_decay_if_array(&mut arg);
+            lowered_args.push(arg);
+        }
+        Ok(lowered_args)
+    }
+
+    /// Shared tail of method-call lowering: infer remaining generic args from
+    /// argument types, re-derive the sig from the concrete `FnDef` type
+    /// (normalizing projections for the MIR builder), and check predicates.
+    /// `skip_leading_args` skips the receiver when collecting inference inputs.
+    fn finalize_method_sig(
+        &self,
+        fn_def: rustc_public_generative::rustc_public::ty::FnDef,
+        resolved_generic_args: Vec<GenericArgKind>,
+        prev_sig: rustc_public_generative::rustc_public::ty::FnSig,
+        lowered_args: &[HirExpr],
+        skip_leading_args: usize,
+        err_span: co2_ast::Span,
+    ) -> Result<
+        (
+            Vec<GenericArgKind>,
+            rustc_public_generative::rustc_public::ty::FnSig,
+        ),
+        (co2_ast::Span, String),
+    > {
+        let dependencies = self.decl_resolver.dependency_info();
+        let arg_tys: Vec<Ty> = lowered_args
+            .iter()
+            .skip(skip_leading_args)
+            .map(|a| a.ty)
+            .collect();
+        let (new_args, _) = dependencies
+            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys)
+            .map_err(|msg| spanned_error(err_span, msg))?;
+        let resolved_generic_args = new_args.0;
+        // Re-derive sig from func_ty which has fully-concrete generic args now.
+        // This normalizes any Alias(Projection) types that the MIR builder handles.
+        let mut sig = prev_sig;
+        let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
+        let func_ty = resolved.ty();
+        if let Some(new_sig) = callable_sig(func_ty) {
+            let mut new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
+            if new_sig.inputs().len() == sig.inputs().len() {
+                new_sig.inputs_and_output = new_sig
+                    .inputs_and_output
+                    .iter()
+                    .map(|ty| self.decl_resolver.normalize_ty_for_current_owner(*ty))
+                    .collect();
+                sig = new_sig;
+            }
+        }
+        check_fn_predicates(
+            &dependencies,
+            fn_def.0,
+            &resolved_generic_args,
+            self.decl_resolver.current_owner(),
+        )
+        .map_err(|msg| spanned_error(err_span, msg))?;
+        Ok((resolved_generic_args, sig))
+    }
+
     fn lower_method_receiver_and_params(
         &self,
         sig: &rustc_public_generative::rustc_public::ty::FnSig,
@@ -751,7 +819,6 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<Vec<HirExpr>, (co2_ast::Span, String)> {
-        let mut lowered_args = Vec::with_capacity(params.len() + 1);
         let receiver = if let Some(adjustment) = adjustment {
             self.apply_resolved_receiver_adjustment(
                 receiver.clone(),
@@ -766,12 +833,8 @@ impl HirCtx<'_> {
                 .map(|expected| self.method_receiver_arg(receiver.clone(), expected))
                 .unwrap_or(receiver.clone())
         };
-        lowered_args.push(receiver);
-        for param in params {
-            let mut arg = self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
-            self.array_to_pointer_decay_if_array(&mut arg);
-            lowered_args.push(arg);
-        }
+        let mut lowered_args = self.lower_call_params(params, locals, local_map)?;
+        lowered_args.insert(0, receiver);
         Ok(lowered_args)
     }
 
@@ -818,37 +881,17 @@ impl HirCtx<'_> {
             locals,
             local_map,
         )?;
-        let dependencies = self.decl_resolver.dependency_info();
         // Resolve remaining method-level generic params from argument types
-        let arg_tys: Vec<Ty> = lowered_args.iter().skip(1).map(|a| a.ty).collect();
-        let (new_args, _) = dependencies
-            .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys)
-            .map_err(|msg| spanned_error(method_span, msg))?;
-        resolved_generic_args = new_args.0;
-        // Re-derive sig from func_ty which has fully-concrete generic args now.
-        // Normalize aliases (projections) in the sig.
-        let mut sig = resolved_method.sig;
+        let (resolved_generic_args, sig) = self.finalize_method_sig(
+            fn_def,
+            resolved_generic_args,
+            resolved_method.sig,
+            &lowered_args,
+            1,
+            method_span,
+        )?;
         let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
         let func_ty = resolved.ty();
-        if let Some(new_sig) = callable_sig(func_ty) {
-            let mut new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
-            if new_sig.inputs().len() == sig.inputs().len() {
-                new_sig.inputs_and_output = new_sig
-                    .inputs_and_output
-                    .iter()
-                    .map(|ty| self.decl_resolver.normalize_ty_for_current_owner(*ty))
-                    .collect();
-                sig = new_sig;
-            }
-        }
-
-        check_fn_predicates(
-            &dependencies,
-            fn_def.0,
-            &resolved_generic_args,
-            self.decl_resolver.current_owner(),
-        )
-        .map_err(|msg| spanned_error(method_span, msg))?;
         self.lower_call_args(parser_span, &sig, &mut lowered_args, func_name);
         Ok(HirExpr {
             kind: HirExprKind::Call {
@@ -1079,39 +1122,16 @@ impl HirCtx<'_> {
             local_map,
         )?;
 
-        let dependencies = self.decl_resolver.dependency_info();
-
-        let resolved_generic_args = {
-            let arg_tys: Vec<Ty> = lowered_args.iter().skip(1).map(|a| a.ty).collect();
-            let (new_args, _) = dependencies
-                .infer_fn_args(fn_def.0, &GenericArgs(resolved_generic_args), &arg_tys)
-                .map_err(|msg| spanned_error(method_span, msg))?;
-            new_args.0
-        };
-        // Re-derive sig from func_ty which has fully-concrete generic args now.
-        // This normalizes any Alias(Projection) types that the MIR builder handles.
-        let mut sig = resolved_method.sig;
+        let (resolved_generic_args, sig) = self.finalize_method_sig(
+            fn_def,
+            resolved_generic_args,
+            resolved_method.sig,
+            &lowered_args,
+            1,
+            method_span,
+        )?;
         let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
         let func_ty = resolved.ty();
-        if let Some(new_sig) = callable_sig(func_ty) {
-            let mut new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
-            if new_sig.inputs().len() == sig.inputs().len() {
-                new_sig.inputs_and_output = new_sig
-                    .inputs_and_output
-                    .iter()
-                    .map(|ty| self.decl_resolver.normalize_ty_for_current_owner(*ty))
-                    .collect();
-                sig = new_sig;
-            }
-        }
-
-        check_fn_predicates(
-            &dependencies,
-            fn_def.0,
-            &resolved_generic_args,
-            self.decl_resolver.current_owner(),
-        )
-        .map_err(|msg| spanned_error(method_span, msg))?;
 
         Ok(Some((
             HirExpr {
@@ -1239,16 +1259,7 @@ impl HirCtx<'_> {
                         span: self.to_rust_span(parser_span),
                     },
                     sig,
-                    {
-                        let mut lowered_args = Vec::with_capacity(params.len());
-                        for param in params {
-                            let mut arg =
-                                self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
-                            self.array_to_pointer_decay_if_array(&mut arg);
-                            lowered_args.push(arg);
-                        }
-                        lowered_args
-                    },
+                    self.lower_call_params(params, locals, local_map)?,
                 )));
             }
             MethodResolutionKind::Trait => {
@@ -1263,12 +1274,7 @@ impl HirCtx<'_> {
             return Ok(None);
         };
 
-        let mut lowered_args = Vec::with_capacity(params.len());
-        for param in params {
-            let mut arg = self.lower_expr((param.0.clone(), param.1), locals, local_map)?;
-            self.array_to_pointer_decay_if_array(&mut arg);
-            lowered_args.push(arg);
-        }
+        let lowered_args = self.lower_call_params(params, locals, local_map)?;
 
         let dependencies = self.decl_resolver.dependency_info();
         let arg_tys: Vec<Ty> = lowered_args.iter().map(|a| a.ty).collect();
@@ -1728,12 +1734,7 @@ impl HirCtx<'_> {
                         .map(|ty| self.decl_resolver.normalize_ty_for_current_owner(ty))
                         .collect();
 
-                    let mut lowered_args = Vec::with_capacity(params.len());
-                    for param in params {
-                        let mut arg = self.lower_expr((param.0, param.1), locals, local_map)?;
-                        self.array_to_pointer_decay_if_array(&mut arg);
-                        lowered_args.push(arg);
-                    }
+                    let lowered_args = self.lower_call_params(&params, locals, local_map)?;
 
                     let dependencies = self.decl_resolver.dependency_info();
                     if let TyKind::RigidTy(RigidTy::FnDef(fn_def, GenericArgs(args))) =

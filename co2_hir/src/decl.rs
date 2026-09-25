@@ -2,7 +2,7 @@ use rustc_data_structures::fx::FxHashMap;
 
 use co2_ast::{
     Constant, Declaration, DeclarationSpecifier, Declarator, Expression, InitDeclarator,
-    Initializer, RustTy, Span, Spanned, StorageClassSpecifier, TypeName, TypeQualifier,
+    Initializer, RustTy, Spanned, StorageClassSpecifier, TypeName, TypeQualifier,
 };
 use co2_crate_sig::{
     CompressedTypeSpecifier, LocalResolver, LogicalAdtFieldKind, initializer_contains_label_address,
@@ -24,7 +24,7 @@ use rustc_public_generative::{
 
 use crate::expr::HirExpr;
 use crate::item::{HirLocal, LocalId};
-use crate::resolver::HirCtx;
+use crate::resolver::{HirCtx, invalid_span, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
     adt_field_tys, array_elem_ty, enum_payload_ty, is_array_ty, is_unsized_ty,
@@ -35,14 +35,6 @@ pub enum CTy {
     Ty(Ty),
     Function(FnSig),
     UnsizedArray(Ty),
-}
-
-fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span, String) {
-    (span, msg.into())
-}
-
-fn invalid_span() -> Span {
-    Span::from_parts(co2_ast::FileId::INVALID, 0..0)
 }
 
 fn c_ty_matches_expected(expected: &CTy, actual: &CTy) -> bool {

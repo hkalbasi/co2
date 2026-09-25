@@ -298,9 +298,7 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
     let TyKind::RigidTy(rhs) = rhs_ty.kind() else {
         return None;
     };
-    let lhs_is_void = matches!(lhs, RigidTy::Tuple(ref l) if l.is_empty());
-    let rhs_is_void = matches!(rhs, RigidTy::Tuple(ref l) if l.is_empty());
-    let one_is_void = lhs_is_void || rhs_is_void;
+    let one_is_void = is_void_ty(lhs_ty) || is_void_ty(rhs_ty);
 
     if one_is_void {
         return Some(Ty::new_tuple(&[]));
@@ -330,10 +328,8 @@ pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
             return Some(Ty::new_ptr(lhs_pointee, common_mutability));
         }
 
-        let lhs_is_void_pointee =
-            matches!(lhs_pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
-        let rhs_is_void_pointee =
-            matches!(rhs_pointee.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
+        let lhs_is_void_pointee = is_void_ty(lhs_pointee);
+        let rhs_is_void_pointee = is_void_ty(rhs_pointee);
         if lhs_is_void_pointee || rhs_is_void_pointee {
             return Some(Ty::new_ptr(Ty::new_tuple(&[]), common_mutability));
         }
@@ -711,6 +707,30 @@ pub(crate) fn variant_idx(id: usize) -> VariantIdx {
     unsafe { std::mem::transmute::<usize, VariantIdx>(id) }
 }
 
+/// Compare two generic-arg lists element-wise: nested types recurse via
+/// [`ty_matches_expected`], lifetimes always match, anything else compares by
+/// equality. Shared by the `Adt` and `FnDef` arms of [`ty_matches_expected`].
+fn generic_type_args_match(
+    exp_args: &[rustc_public_generative::rustc_public::ty::GenericArgKind],
+    act_args: &[rustc_public_generative::rustc_public::ty::GenericArgKind],
+) -> bool {
+    exp_args.len() == act_args.len()
+        && exp_args
+            .iter()
+            .zip(act_args.iter())
+            .all(|(e, a)| match (e, a) {
+                (
+                    rustc_public_generative::rustc_public::ty::GenericArgKind::Type(et),
+                    rustc_public_generative::rustc_public::ty::GenericArgKind::Type(at),
+                ) => ty_matches_expected(*et, *at),
+                (
+                    rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
+                    rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
+                ) => true,
+                _ => e == a,
+            })
+}
+
 pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
     if expected == actual {
         return true;
@@ -733,22 +753,7 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
                 return false;
             }
             let shared_len = exp_args.0.len().min(act_args.0.len());
-            exp_args
-                .0
-                .iter()
-                .take(shared_len)
-                .zip(act_args.0.iter().take(shared_len))
-                .all(|(e, a)| match (e, a) {
-                    (
-                        rustc_public_generative::rustc_public::ty::GenericArgKind::Type(et),
-                        rustc_public_generative::rustc_public::ty::GenericArgKind::Type(at),
-                    ) => ty_matches_expected(*et, *at),
-                    (
-                        rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
-                        rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
-                    ) => true,
-                    _ => e == a,
-                })
+            generic_type_args_match(&exp_args.0[..shared_len], &act_args.0[..shared_len])
                 && extra_adt_args_are_concrete(&exp_args.0[shared_len..])
                 && extra_adt_args_are_concrete(&act_args.0[shared_len..])
         }
@@ -758,25 +763,7 @@ pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
         (
             TyKind::RigidTy(RigidTy::FnDef(exp_def, exp_args)),
             TyKind::RigidTy(RigidTy::FnDef(act_def, act_args)),
-        ) => {
-            exp_def == act_def
-                && exp_args.0.len() == act_args.0.len()
-                && exp_args
-                    .0
-                    .iter()
-                    .zip(act_args.0.iter())
-                    .all(|(e, a)| match (e, a) {
-                        (
-                            rustc_public_generative::rustc_public::ty::GenericArgKind::Type(et),
-                            rustc_public_generative::rustc_public::ty::GenericArgKind::Type(at),
-                        ) => ty_matches_expected(*et, *at),
-                        (
-                            rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
-                            rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
-                        ) => true,
-                        _ => e == a,
-                    })
-        }
+        ) => exp_def == act_def && generic_type_args_match(&exp_args.0, &act_args.0),
         // Function pointer types may differ only in lifetime parameters (e.g. VaList<'erased> vs
         // VaList<'static>) because SMIR erases lifetimes inside fn ptrs. Compare structurally
         // while recursing into parameter/return types with ty_matches_expected.

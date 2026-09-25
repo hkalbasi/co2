@@ -12,7 +12,7 @@ use rustc_public_generative::rustc_public::{
     },
 };
 
-use crate::initializer_tree::{InitializerTree, eval_const_int};
+use crate::initializer_tree::{ARRAY_LEN_PROBE, InitializerTree, eval_const_int};
 use crate::resolver::{HirCtx, ResolvedValue};
 use crate::{HirExpr, HirExprKind, HirStmt};
 
@@ -46,12 +46,7 @@ pub struct HirBody {
 impl HirBody {
     pub fn new_dummy(ty: Ty, span: RustSpan) -> Self {
         let mut locals = Arena::new();
-        locals.alloc(HirLocal {
-            name: "_ret".to_owned(),
-            ty,
-            span,
-            read_only: false,
-        });
+        alloc_ret_local(&mut locals, ty, span);
         Self {
             locals,
             labels: Arena::new(),
@@ -61,6 +56,35 @@ impl HirBody {
             span,
         }
     }
+}
+
+/// Allocate the `_ret` place shared by every function/static body preamble.
+fn alloc_ret_local(locals: &mut Arena<HirLocal>, ty: Ty, span: RustSpan) {
+    locals.alloc(HirLocal {
+        name: "_ret".to_owned(),
+        ty,
+        span,
+        read_only: false,
+    });
+}
+
+/// Allocate the `__co2_c_vararg` local shared by every variadic body preamble.
+fn alloc_c_variadic_local(
+    locals: &mut Arena<HirLocal>,
+    span: RustSpan,
+    wellknown_defs: &WellknownDefs,
+) -> LocalId {
+    locals.alloc(HirLocal {
+        name: "__co2_c_vararg".to_owned(),
+        ty: Ty::from_rigid_kind(RigidTy::Adt(
+            wellknown_defs.valist,
+            GenericArgs(vec![GenericArgKind::Lifetime(Region {
+                kind: RegionKind::ReErased,
+            })]),
+        )),
+        span,
+        read_only: false,
+    })
 }
 
 pub fn lower_function_body(
@@ -88,12 +112,7 @@ pub fn lower_static_body_for_ty(
     let body_span = hir_ctx.to_rust_span(parser_span);
     let mut locals = Arena::new();
     let mut local_map: FxHashMap<usize, LocalId> = FxHashMap::default();
-    locals.alloc(HirLocal {
-        name: "_ret".to_owned(),
-        ty: target_ty,
-        span: body_span,
-        read_only: false,
-    });
+    alloc_ret_local(&mut locals, target_ty, body_span);
     let init_expr = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if let co2_ast::Initializer::Expr(expr) = &initializer
             && let Err(err) = hir_ctx.eval_const_expr_in_scope(expr, &mut locals, &mut local_map)
@@ -158,7 +177,7 @@ pub(crate) fn infer_array_len_from_initializer_in_scope(
 ) -> u64 {
     let fake_ty = Ty::from_rigid_kind(RigidTy::Array(
         elem_ty,
-        TyConst::try_from_target_usize(567_567).unwrap(),
+        TyConst::try_from_target_usize(ARRAY_LEN_PROBE).unwrap(),
     ));
     let tree = hir_ctx.lower_to_initializer_tree(
         fake_ty,
@@ -220,35 +239,12 @@ pub fn build_forwarding_fn_body(
     target: FnDef,
     param_names: &[(usize, String, RustSpan)],
     span: RustSpan,
-    wellknown_defs: &WellknownDefs,
 ) -> HirBody {
     let sig = def.fn_sig().skip_binder();
     let ret_ty = sig.output();
 
     let mut locals = Arena::new();
-    let mut c_variadic_local = None;
-
-    locals.alloc(HirLocal {
-        name: "_ret".to_owned(),
-        ty: ret_ty,
-        span,
-        read_only: false,
-    });
-
-    if sig.c_variadic {
-        let id = locals.alloc(HirLocal {
-            name: "__co2_c_vararg".to_owned(),
-            ty: Ty::from_rigid_kind(RigidTy::Adt(
-                wellknown_defs.valist,
-                GenericArgs(vec![GenericArgKind::Lifetime(Region {
-                    kind: RegionKind::ReErased,
-                })]),
-            )),
-            span,
-            read_only: false,
-        });
-        c_variadic_local = Some(id);
-    }
+    alloc_ret_local(&mut locals, ret_ty, span);
 
     let mut params = Vec::new();
     let mut arg_exprs = Vec::new();
@@ -287,7 +283,7 @@ pub fn build_forwarding_fn_body(
         locals,
         labels: Arena::new(),
         params,
-        c_variadic_local,
+        c_variadic_local: None,
         stmts: vec![HirStmt::Return(Some(call), span)],
         span,
     }
@@ -305,12 +301,7 @@ impl HirCtx<'_> {
         let mut params = Vec::new();
         let mut local_map: FxHashMap<usize, LocalId> = FxHashMap::default();
 
-        locals.alloc(HirLocal {
-            name: "_ret".to_owned(),
-            ty: sig.output(),
-            span: body_span,
-            read_only: false,
-        });
+        alloc_ret_local(&mut locals, sig.output(), body_span);
 
         for (idx, ty) in sig.inputs().iter().enumerate() {
             let name = &param_names[idx];
@@ -325,17 +316,7 @@ impl HirCtx<'_> {
             local_map.insert(name.0, id);
         }
         if sig.c_variadic {
-            let id = locals.alloc(HirLocal {
-                name: "__co2_c_vararg".to_owned(),
-                ty: Ty::from_rigid_kind(RigidTy::Adt(
-                    self.wellknown_defs.valist,
-                    GenericArgs(vec![GenericArgKind::Lifetime(Region {
-                        kind: RegionKind::ReErased,
-                    })]),
-                )),
-                span: body_span,
-                read_only: false,
-            });
+            let id = alloc_c_variadic_local(&mut locals, body_span, &self.wellknown_defs);
             params.push(id);
             self.c_variadic_local = Some(id);
         }

@@ -1,6 +1,6 @@
 use rustc_data_structures::fx::FxHashMap;
 
-use co2_ast::{Designator, Expression, Initializer, InitializerItem, Span, Spanned};
+use co2_ast::{Designator, Expression, Initializer, InitializerItem, Spanned};
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::ty::{AdtKind, RigidTy, Ty, TyKind};
@@ -8,17 +8,9 @@ use rustc_public_generative::rustc_public::ty::{AdtKind, RigidTy, Ty, TyKind};
 use crate::{
     expr::{HirExpr, HirExprKind},
     item::{HirLocal, LocalId},
-    resolver::HirCtx,
+    resolver::{HirCtx, invalid_span, spanned_error},
     ty::{adt_field_tys, array_elem_ty, is_array_ty, is_union_ty},
 };
-
-fn spanned_error(span: co2_ast::Span, msg: impl Into<String>) -> (co2_ast::Span, String) {
-    (span, msg.into())
-}
-
-fn invalid_span() -> Span {
-    Span::from_parts(co2_ast::FileId::INVALID, 0..0)
-}
 
 #[derive(Clone, Debug)]
 pub(crate) enum InitializerTree {
@@ -246,6 +238,11 @@ impl InitializerTree {
     }
 }
 
+/// Probe length used to infer unsized-array lengths: `lower_to_initializer_tree`
+/// grows a `[T; PROBE]` fake array and counts children. `children_count_of_ty`
+/// maps it back to 0 so probes never materialize as real sizes.
+pub(crate) const ARRAY_LEN_PROBE: u64 = 567_567;
+
 fn children_count_of_ty(ctx: &HirCtx<'_>, ty: Ty) -> usize {
     let count = match ty.kind() {
         TyKind::RigidTy(rigid_ty) => match rigid_ty {
@@ -261,7 +258,11 @@ fn children_count_of_ty(ctx: &HirCtx<'_>, ty: Ty) -> usize {
         },
         _ => todo!(),
     };
-    if count == 567_567 { 0 } else { count }
+    if count as u64 == ARRAY_LEN_PROBE {
+        0
+    } else {
+        count
+    }
 }
 
 pub(crate) fn eval_const_int(expr: &HirExpr) -> Option<i128> {
@@ -623,10 +624,6 @@ impl HirCtx<'_> {
                         // unsized arrays, which grow to fit) silently drop the extra
                         // elements, matching the original behavior.
                         if !grow_for_infer && is_array_ty(expected_ty) && !grow {
-                            eprintln!(
-                                "DEBUG: excess elements warning at {:?}: stack empty, ty={:?}, grow_for_infer={}, grow={}",
-                                item_span, expected_ty, grow_for_infer, grow
-                            );
                             co2_ast::emit_warnings(vec![co2_ast::Rich::custom(
                                 item_span,
                                 "excess elements in array initializer",

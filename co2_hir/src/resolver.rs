@@ -56,6 +56,17 @@ impl ResolvedValue {
 
 type ParserSpan = co2_ast::Span;
 
+pub(crate) fn spanned_error(
+    span: co2_ast::Span,
+    msg: impl Into<String>,
+) -> (co2_ast::Span, String) {
+    (span, msg.into())
+}
+
+pub(crate) fn invalid_span() -> co2_ast::Span {
+    co2_ast::Span::from_parts(co2_ast::FileId::INVALID, 0..0)
+}
+
 pub struct HirCtx<'a> {
     pub(crate) wellknown_defs: WellknownDefs,
     span_converter: &'a dyn Fn(ParserSpan) -> RustSpan,

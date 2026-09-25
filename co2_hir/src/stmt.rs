@@ -1,7 +1,8 @@
 use rustc_data_structures::fx::FxHashMap;
 
 use co2_ast::{
-    BinOp as ParsedBinOp, CompoundStatement, ForInit, Statement, StatementOrDeclaration,
+    BinOp as ParsedBinOp, CompoundStatement, Expression, ForInit, Spanned, Statement,
+    StatementOrDeclaration,
 };
 use co2_crate_sig::LocalResolver;
 use la_arena::Arena;
@@ -51,6 +52,46 @@ impl HirCtx<'_> {
         }
     }
 
+    /// Lower a `case` bound (`case expr:` or one side of `case lo ... hi:`):
+    /// const-check, lower, require integer-like, coerce to the switch
+    /// discriminant type. Terminates with a diagnostic on any failure.
+    pub(crate) fn lower_case_bound(
+        &self,
+        expr: Spanned<Expression<LocalResolver>>,
+        discr_ty: Ty,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> HirExpr {
+        let bound_span = expr.1;
+        if let Err(err) = self.eval_const_expr_in_scope(&expr, locals, local_map) {
+            self.terminate_with_spanned_error(err);
+        }
+        let bound = self
+            .lower_expr(expr, locals, local_map)
+            .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+        if !is_integer_ty(bound.ty) {
+            self.terminate_with_error(
+                bound_span,
+                &format!(
+                    "switch case expression must be integer-like, got {}",
+                    self.format_ty(bound.ty)
+                ),
+            );
+        }
+        let bound_ty = bound.ty;
+        self.coerce_expr_to_type(&bound, discr_ty)
+            .unwrap_or_else(|| {
+                self.terminate_with_error(
+                    bound_span,
+                    &format!(
+                        "switch case expression type mismatch: expected {}, got {}",
+                        self.format_ty(discr_ty),
+                        self.format_ty(bound_ty)
+                    ),
+                )
+            })
+    }
+
     pub(crate) fn lower_stmt(
         &self,
         stmt: Statement<LocalResolver>,
@@ -85,33 +126,7 @@ impl HirCtx<'_> {
                     self.terminate_with_error(expr.1, "case label outside of switch body");
                 };
                 let case_label = self.fresh_label();
-                let case_expr_span = expr.1;
-                if let Err(err) = self.eval_const_expr_in_scope(&expr, locals, local_map) {
-                    self.terminate_with_spanned_error(err);
-                }
-                let case_expr = self
-                    .lower_expr(expr, locals, local_map)
-                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                if !is_integer_ty(case_expr.ty) {
-                    self.terminate_with_error(
-                        case_expr_span,
-                        &format!(
-                            "switch case expression must be integer-like, got {}",
-                            self.format_ty(case_expr.ty)
-                        ),
-                    );
-                }
-                let case_expr_ty = case_expr.ty;
-                let Some(case_expr) = self.coerce_expr_to_type(&case_expr, discr_ty) else {
-                    self.terminate_with_error(
-                        case_expr_span,
-                        &format!(
-                            "switch case expression type mismatch: expected {}, got {}",
-                            self.format_ty(discr_ty),
-                            self.format_ty(case_expr_ty)
-                        ),
-                    );
-                };
+                let case_expr = self.lower_case_bound(expr, discr_ty, locals, local_map);
                 let discr_expr = HirExpr {
                     kind: HirExprKind::Local(discr_local),
                     ty: discr_ty,
@@ -136,60 +151,8 @@ impl HirCtx<'_> {
                     self.terminate_with_error(lo.1, "case label outside of switch body");
                 };
                 let case_label = self.fresh_label();
-                let lo_span = lo.1;
-                let hi_span = hi.1;
-                if let Err(err) = self.eval_const_expr_in_scope(&lo, locals, local_map) {
-                    self.terminate_with_spanned_error(err);
-                }
-                if let Err(err) = self.eval_const_expr_in_scope(&hi, locals, local_map) {
-                    self.terminate_with_spanned_error(err);
-                }
-                let lo_expr = self
-                    .lower_expr(lo, locals, local_map)
-                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                if !is_integer_ty(lo_expr.ty) {
-                    self.terminate_with_error(
-                        lo_span,
-                        &format!(
-                            "switch case expression must be integer-like, got {}",
-                            self.format_ty(lo_expr.ty)
-                        ),
-                    );
-                }
-                let lo_ty = lo_expr.ty;
-                let Some(lo_expr) = self.coerce_expr_to_type(&lo_expr, discr_ty) else {
-                    self.terminate_with_error(
-                        lo_span,
-                        &format!(
-                            "switch case expression type mismatch: expected {}, got {}",
-                            self.format_ty(discr_ty),
-                            self.format_ty(lo_ty)
-                        ),
-                    );
-                };
-                let hi_expr = self
-                    .lower_expr(hi, locals, local_map)
-                    .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                if !is_integer_ty(hi_expr.ty) {
-                    self.terminate_with_error(
-                        hi_span,
-                        &format!(
-                            "switch case expression must be integer-like, got {}",
-                            self.format_ty(hi_expr.ty)
-                        ),
-                    );
-                }
-                let hi_ty = hi_expr.ty;
-                let Some(hi_expr) = self.coerce_expr_to_type(&hi_expr, discr_ty) else {
-                    self.terminate_with_error(
-                        hi_span,
-                        &format!(
-                            "switch case expression type mismatch: expected {}, got {}",
-                            self.format_ty(discr_ty),
-                            self.format_ty(hi_ty)
-                        ),
-                    );
-                };
+                let lo_expr = self.lower_case_bound(lo, discr_ty, locals, local_map);
+                let hi_expr = self.lower_case_bound(hi, discr_ty, locals, local_map);
                 let ge = self
                     .lower_binop_from_lowered(
                         HirExpr {
