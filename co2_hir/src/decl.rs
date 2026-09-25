@@ -93,11 +93,22 @@ fn declarator_has_restrict_qualifier(decl: &Declarator<LocalResolver>) -> bool {
     }
 }
 
-fn is_null_pointer_constexpr_expr((expr, _): &Spanned<Expression<LocalResolver>>) -> bool {
-    match expr {
-        Expression::Constant(Constant::Int(0, _)) => true,
-        Expression::Cast { expr, .. } => is_null_pointer_constexpr_expr(expr),
-        _ => false,
+fn is_null_pointer_constexpr_expr(
+    ctx: &HirCtx<'_>,
+    expr: &Spanned<Expression<LocalResolver>>,
+    locals: &mut Arena<HirLocal>,
+    local_map: &mut FxHashMap<usize, LocalId>,
+) -> bool {
+    match &expr.0 {
+        Expression::Cast { expr: inner, .. } => {
+            is_null_pointer_constexpr_expr(ctx, inner, locals, local_map)
+        }
+        // Any other integer constant expression with value 0 (`'\0'`, `1 - 1`,
+        // a zero-valued enum constant, ...) is a null pointer constant. Reuse
+        // the constant evaluator instead of matching literal `0` only.
+        _ => ctx
+            .eval_const_expr_in_scope(expr, locals, local_map)
+            .is_ok_and(|value| value == 0),
     }
 }
 
@@ -205,6 +216,8 @@ fn validate_local_constexpr_decl(
     declarator: &Declarator<LocalResolver>,
     ty: &CTy,
     initializer: Option<&Spanned<Initializer<LocalResolver>>>,
+    locals: &mut Arena<HirLocal>,
+    local_map: &mut FxHashMap<usize, LocalId>,
 ) -> Result<(), (co2_ast::Span, String)> {
     let span = specifiers
         .first()
@@ -287,7 +300,7 @@ fn validate_local_constexpr_decl(
     }
 
     if matches!(ty, CTy::Ty(ty) if matches!(ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(_, _)))) {
-        if !is_null_pointer_constexpr_expr(expr) {
+        if !is_null_pointer_constexpr_expr(ctx, expr, locals, local_map) {
             return Err(spanned_error(
                 expr.1,
                 "`constexpr` pointer initializer must be null",
@@ -693,6 +706,8 @@ impl HirCtx<'_> {
                         &declarator_for_checks,
                         &ty,
                         raw_initializer.as_ref(),
+                        locals,
+                        local_map,
                     )
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                     let ty = match ty {
