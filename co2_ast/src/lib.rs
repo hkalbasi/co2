@@ -430,7 +430,7 @@ impl<R: TypeResolver> Display for RustPath<R> {
 
 fn rust_ty_to_pretty<R: TypeResolver>(ty: &RustTy<R>) -> String {
     match ty {
-        RustTy::Path((path, _)) => format!("{path:?}"),
+        RustTy::Path((path, _)) => R::pretty_resolved_path(path),
         RustTy::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -456,7 +456,19 @@ fn rust_ty_to_pretty<R: TypeResolver>(ty: &RustTy<R>) -> String {
         }
         RustTy::Slice(inner) => format!("[{}]", rust_ty_to_pretty(&inner.0)),
         RustTy::Array { inner, len } => {
-            format!("[{}; {:?}]", rust_ty_to_pretty(&inner.0), len.0.tokens)
+            let len = len
+                .0
+                .constant_len()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| {
+                    len.0
+                        .tokens
+                        .iter()
+                        .map(|(token, _)| token.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                });
+            format!("[{}; {len}]", rust_ty_to_pretty(&inner.0))
         }
         RustTy::BareFn { params, ret_ty } => {
             let params = params

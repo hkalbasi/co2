@@ -1,0 +1,27 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::boxed::Box;
+
+fn deref_box() {
+    Box::<i32> b = Box::new(1);
+    int x = *b;
+  //        ^^ error: cannot dereference non-pointer type: Box<i32, Global>
+    (void)x;
+}
+
+fn deref_int() {
+    int x = 1;
+    int y = *x;
+  //        ^^ error: cannot dereference non-pointer type: i32
+    (void)y;
+}
+
+fn arrow_int() {
+    int x = 1;
+    int y = x->f;
+  //        ^^^^ error: arrow base must be pointer type, got i32
+    (void)y;
+}
+
+fn main() {}

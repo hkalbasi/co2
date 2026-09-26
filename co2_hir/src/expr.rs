@@ -1937,7 +1937,7 @@ impl HirCtx<'_> {
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base.ty.kind() else {
                     return Err(spanned_error(
                         parser_span,
-                        format!("arrow base must be pointer type, got {:?}", base.ty),
+                        format!("arrow base must be pointer type, got {}", self.format_ty(base.ty)),
                     ));
                 };
                 let deref_base = HirExpr {
@@ -2581,7 +2581,7 @@ impl HirCtx<'_> {
                         else {
                             return Err(spanned_error(
                                 parser_span,
-                                format!("cannot dereference non-pointer type: {:?}", inner.ty),
+                                format!("cannot dereference non-pointer type: {}", self.format_ty(inner.ty)),
                             ));
                         };
                         Ok(HirExpr {
@@ -3285,13 +3285,13 @@ impl HirCtx<'_> {
             let Some(field_tys) = adt_field_tys(base.ty) else {
                 return Err(spanned_error(
                     invalid_span(),
-                    format!("field projection on non-adt type: {:?}", base.ty),
+                    format!("field projection on non-adt type: {}", self.format_ty(base.ty)),
                 ));
             };
             let Some(next_ty) = field_tys.get(*index).copied() else {
                 return Err(spanned_error(
                     invalid_span(),
-                    format!("field index out of bounds: {} for {:?}", index, base.ty),
+                    format!("field index out of bounds: {} for {}", index, self.format_ty(base.ty)),
                 ));
             };
             base = HirExpr {

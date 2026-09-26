@@ -10,3 +10,15 @@ fn main() {
     return missing;
         // ^^^^^^^ error: unresolved name missing
 }
+
+fn generic_without_import() {
+    Vec::<i32> v = Vec::new();
+  //^^^ error: unresolved name Vec::<i32>
+    (void)v;
+}
+
+fn generic_array_without_import() {
+    Foo::<[i32; 3]> x;
+  //^^^ error: unresolved name Foo::<[i32; 3]>
+    (void)x;
+}

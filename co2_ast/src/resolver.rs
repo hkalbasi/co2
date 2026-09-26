@@ -43,6 +43,12 @@ pub trait TypeResolver: Clone + 'static {
         subscription: Spanned<LazySubscription>,
     ) -> Self::SubscriptionIdentifier;
     fn rust_style_syntax_enabled(&self) -> bool;
+    /// Human-readable rendering of a resolved path for diagnostics.
+    /// Defaults to `Debug`; resolvers whose paths are still syntactic
+    /// (e.g. [`StatelessResolver`]) render them as written.
+    fn pretty_resolved_path(path: &Self::ResolvedRustPath) -> String {
+        format!("{path:?}")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -144,5 +150,9 @@ impl TypeResolver for StatelessResolver {
 
     fn rust_style_syntax_enabled(&self) -> bool {
         self.rust_style_enabled
+    }
+
+    fn pretty_resolved_path(path: &Self::ResolvedRustPath) -> String {
+        path.to_string()
     }
 }
