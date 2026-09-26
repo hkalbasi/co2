@@ -82,6 +82,16 @@ fn is_comparison_operand_ty(ty: Ty) -> bool {
     false
 }
 
+fn is_float_ty(ty: Ty) -> bool {
+    if let TyKind::RigidTy(RigidTy::Pat(inner, _)) = ty.kind() {
+        return is_float_ty(inner);
+    }
+    if let Some(inner) = enum_payload_ty(ty) {
+        return is_float_ty(inner);
+    }
+    matches!(ty.kind(), TyKind::RigidTy(RigidTy::Float(_)))
+}
+
 fn is_fat_or_ref_ty(ty: Ty) -> bool {
     match ty.kind() {
         TyKind::RigidTy(RigidTy::Ref(_, _, _)) => true,
@@ -4066,6 +4076,31 @@ impl HirCtx<'_> {
                     _ => {}
                 }
             }
+        }
+
+        // `%`, `&`, `|`, `^`, `<<` and `>>` require integer operands in C.
+        // Rejecting float operands here avoids miscompiles (`%` would use Rust
+        // `Rem` semantics) and backend ICEs (`invalid float op`, `is_integral`
+        // assertion) for the bitwise/shift ops.
+        if matches!(
+            op,
+            HirBinOp::Rem
+                | HirBinOp::BitAnd
+                | HirBinOp::BitOr
+                | HirBinOp::BitXor
+                | HirBinOp::Shl
+                | HirBinOp::Shr
+        ) && (is_float_ty(lhs.ty) || is_float_ty(rhs.ty))
+        {
+            return Err(spanned_error(
+                parser_span,
+                format!(
+                    "can not use `{}` on type {} and {}",
+                    op.as_str(),
+                    self.format_ty(lhs.ty),
+                    self.format_ty(rhs.ty)
+                ),
+            ));
         }
 
         if is_numeric_ty(lhs.ty)
