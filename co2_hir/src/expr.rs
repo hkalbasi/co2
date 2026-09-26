@@ -55,6 +55,44 @@ fn is_adt_overload(ty: Ty) -> bool {
     false
 }
 
+fn is_thin_ptr_ty(ty: Ty) -> bool {
+    if is_maybe_uninit_fn_ptr_ty(ty).is_some() {
+        return true;
+    }
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => !crate::ty::is_unsized_ty(&pointee),
+        TyKind::RigidTy(RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)) => true,
+        _ => false,
+    }
+}
+
+fn is_comparison_operand_ty(ty: Ty) -> bool {
+    if is_numeric_ty(ty) {
+        return true;
+    }
+    if matches!(ty.kind(), TyKind::RigidTy(RigidTy::Char)) {
+        return true;
+    }
+    if enum_payload_ty(ty).is_some() {
+        return true;
+    }
+    if is_thin_ptr_ty(ty) {
+        return true;
+    }
+    false
+}
+
+fn is_fat_or_ref_ty(ty: Ty) -> bool {
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Ref(_, _, _)) => true,
+        TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => crate::ty::is_unsized_ty(&pointee),
+        TyKind::RigidTy(
+            RigidTy::Str | RigidTy::Slice(_) | RigidTy::Dynamic(_, _) | RigidTy::Foreign(_),
+        ) => true,
+        _ => false,
+    }
+}
+
 fn first_unresolved_generic_arg_index(args: &[GenericArgKind]) -> usize {
     args.iter()
         .position(|arg| {
@@ -3894,6 +3932,20 @@ impl HirCtx<'_> {
         // Check early before other diagnostics to prefer this message over
         // generic type-mismatch errors (e.g. `s += s"foo"` where rhs is &str).
         if is_adt_overload(lhs.ty) || is_adt_overload(rhs.ty) {
+            return Err(spanned_error(
+                parser_span,
+                "operator overloading is not supported",
+            ));
+        }
+
+        if op.is_comparison()
+            && (!is_comparison_operand_ty(lhs.ty) || !is_comparison_operand_ty(rhs.ty))
+            && (lhs.ty == rhs.ty
+                || (is_fat_or_ref_ty(lhs.ty) && is_fat_or_ref_ty(rhs.ty))
+                // A fat raw pointer can never be cast to `usize` for comparison.
+                || matches!(lhs.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(p, _)) if crate::ty::is_unsized_ty(&p))
+                || matches!(rhs.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(p, _)) if crate::ty::is_unsized_ty(&p)))
+        {
             return Err(spanned_error(
                 parser_span,
                 "operator overloading is not supported",

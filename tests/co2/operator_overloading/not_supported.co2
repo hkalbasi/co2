@@ -17,7 +17,27 @@ fn f2() {
 //  ^^^^^^^^^^^ error: operator overloading is not supported
 }
 
+fn f3() {
+    bool b = s"a" == s"b";
+        //   ^^^^^^^^^^^^ error: operator overloading is not supported
+    (void)b;
+}
+
+fn f4() {
+    bool b = s"a".as_bytes() == s"a".as_bytes();
+        //   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ error: operator overloading is not supported
+    (void)b;
+}
+
+fn f5(s: *const str, t: *const str) {
+    bool b = s == t;
+        //   ^^^^^^ error: operator overloading is not supported
+    (void)b;
+}
+
 fn main() {
     f1();
     f2();
+    f3();
+    f4();
 }
