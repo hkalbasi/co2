@@ -2,6 +2,7 @@
 //@ compile-fail
 
 use std::string::String;
+use std::vec::Vec;
 
 #include <stdbool.h>
 
@@ -33,6 +34,19 @@ fn f5(s: *const str, t: *const str) {
     bool b = s == t;
         //   ^^^^^^ error: operator overloading is not supported
     (void)b;
+}
+
+fn f6(s: *const str) {
+    u8 b = s.as_bytes()[0];
+    //     ^^^^^^^^^^^^^^^ error: operator overloading is not supported
+    (void)b;
+}
+
+fn f7() {
+    Vec::<i32> v = Vec::<i32>::new();
+    i32 x = v[0];
+    //      ^^^^ error: operator overloading is not supported
+    (void)x;
 }
 
 fn main() {
