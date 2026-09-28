@@ -1,0 +1,10 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::option::Option;
+
+fn main() {
+    Option::<i32> x = Option::<i32>::None();
+  //                  ^^^^^^^^^^^^^^^^^^^ error: unit variant `None` cannot be called
+    (void)x;
+}

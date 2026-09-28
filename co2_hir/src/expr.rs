@@ -13,8 +13,8 @@ use rustc_public_generative::rustc_public::{
     abi::FieldsShape,
     mir::Mutability,
     ty::{
-        AdtDef, FloatTy, FnDef, GenericArgKind, GenericArgs, IntTy, ParamTy, Region, RegionKind,
-        RigidTy, Span as RustSpan, Ty, TyConst, TyKind, UintTy,
+        AdtDef, AdtKind, FloatTy, FnDef, GenericArgKind, GenericArgs, IntTy, ParamTy, Region,
+        RegionKind, RigidTy, Span as RustSpan, Ty, TyConst, TyKind, UintTy,
     },
 };
 
@@ -358,6 +358,8 @@ pub enum HirExprKind {
     BitNot(Box<HirExpr>),
     Aggregate {
         args: Vec<HirExpr>,
+        /// Variant index for enum aggregates (structs/unions use 0).
+        variant: usize,
     },
     Path(ResolvedValue),
     Call {
@@ -1192,6 +1194,52 @@ impl HirCtx<'_> {
         )))
     }
 
+    /// Lower `Enum::UNIT` in value position to the unit-variant value.
+    ///
+    /// Returns `None` when `method` does not name a fieldless variant
+    /// of the receiver enum (a real method, a tuple variant, ...); callers
+    /// fall back to their existing handling in that case.
+    fn try_lower_unit_variant_value(
+        &self,
+        receiver: DefId,
+        method: &str,
+        receiver_generic_args: &[Spanned<RustTy<LocalResolver>>],
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+    ) -> Option<HirExpr> {
+        let receiver_ty = if receiver_generic_args.is_empty() {
+            CrateItem(receiver).ty()
+        } else {
+            self.ty_of_resolved_path(
+                &co2_crate_sig::DefOrLocal::Def {
+                    def_id: receiver,
+                    generic_args: receiver_generic_args.to_vec(),
+                },
+                parser_span,
+            )
+        };
+        let TyKind::RigidTy(RigidTy::Adt(adt, _)) = receiver_ty.kind() else {
+            return None;
+        };
+        if !matches!(adt.kind(), AdtKind::Enum) {
+            return None;
+        }
+        // `variants_iter` yields variants in index order, so the
+        // enumerated position is the variant index.
+        let (variant, _) = adt
+            .variants_iter()
+            .enumerate()
+            .find(|(_, v)| v.name() == method && v.fields().is_empty())?;
+        Some(HirExpr {
+            kind: HirExprKind::Aggregate {
+                args: vec![],
+                variant,
+            },
+            ty: receiver_ty,
+            span,
+        })
+    }
+
     fn try_lower_assoc_method_call(
         &self,
         func: &Spanned<Expression<LocalResolver>>,
@@ -1258,7 +1306,26 @@ impl HirCtx<'_> {
         let (method_def, class, resolution_kind) =
             match resolver.resolve_method(receiver_ty, method_name, parser_span, ufcs_trait) {
                 Ok(Some(found)) => found,
-                Ok(None) => return Ok(None),
+                Ok(None) => {
+                    // `Enum::UNIT()` — a unit variant is not callable. Name
+                    // it instead of falling through to a generic error.
+                    if self
+                        .try_lower_unit_variant_value(
+                            receiver,
+                            method_name,
+                            parsed_receiver_generic_args,
+                            self.to_rust_span(parser_span),
+                            parser_span,
+                        )
+                        .is_some()
+                    {
+                        return Err(spanned_error(
+                            parser_span,
+                            format!("unit variant `{method_name}` cannot be called"),
+                        ));
+                    }
+                    return Ok(None);
+                }
                 Err(err) => return Err(err),
             };
         if class != co2_ast::TypeQueryResult::Expr {
@@ -1607,10 +1674,26 @@ impl HirCtx<'_> {
                         ))
                     }
                 }
-                co2_crate_sig::DefOrLocal::AssocMethod { .. } => self.terminate_with_error(
-                    parser_span,
-                    "associated method path is only valid in call position",
-                ),
+                co2_crate_sig::DefOrLocal::AssocMethod {
+                    receiver,
+                    method,
+                    receiver_generic_args,
+                    ..
+                } => {
+                    if let Some(unit) = self.try_lower_unit_variant_value(
+                        receiver,
+                        &method,
+                        &receiver_generic_args,
+                        span,
+                        parser_span,
+                    ) {
+                        return Ok(unit);
+                    }
+                    self.terminate_with_error(
+                        parser_span,
+                        "associated method path is only valid in call position",
+                    )
+                }
                 co2_crate_sig::DefOrLocal::Local(l) => {
                     let Some(&local) = local_map.get(&(l as usize)) else {
                         self.terminate_with_error(
@@ -4339,7 +4422,7 @@ impl HirCtx<'_> {
                         args.push(expr);
                     }
                     HirExpr {
-                        kind: HirExprKind::Aggregate { args },
+                        kind: HirExprKind::Aggregate { args, variant: 0 },
                         ty,
                         span,
                     }
@@ -4423,7 +4506,7 @@ impl HirCtx<'_> {
                             })
                             .collect();
                         return HirExpr {
-                            kind: HirExprKind::Aggregate { args },
+                            kind: HirExprKind::Aggregate { args, variant: 0 },
                             ty,
                             span,
                         };
@@ -4461,7 +4544,7 @@ impl HirCtx<'_> {
                         args.push(expr);
                     }
                     HirExpr {
-                        kind: HirExprKind::Aggregate { args },
+                        kind: HirExprKind::Aggregate { args, variant: 0 },
                         ty,
                         span,
                     }

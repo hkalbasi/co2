@@ -916,7 +916,7 @@ impl Builder<'_, '_> {
 
                 result
             }
-            HirExprKind::Aggregate { args } => match expr.ty.kind() {
+            HirExprKind::Aggregate { args, variant } => match expr.ty.kind() {
                 TyKind::RigidTy(RigidTy::Adt(adt, adt_args)) => {
                     let mut operands = Vec::with_capacity(args.len());
                     for arg in args {
@@ -927,7 +927,7 @@ impl Builder<'_, '_> {
                         MirStatementKind::Assign(
                             place(tmp),
                             Rvalue::Aggregate(
-                                AggregateKind::Adt(adt, variant_idx(0), adt_args, None, None),
+                                AggregateKind::Adt(adt, variant_idx(*variant), adt_args, None, None),
                                 operands,
                             ),
                         ),

@@ -1,0 +1,22 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::cmp::Ordering;
+
+#include <assert.h>
+#include <string.h>
+
+fn discr(o: Ordering) -> i32 {
+    unsigned char b = 0;
+    memcpy(&b, &o, 1);
+    return (int)b;
+}
+
+fn main() {
+    // `Ordering` is `repr(i8)`: Less = -1, Equal = 0, Greater = 1.
+    // Reading the first byte checks each unit variant got its own
+    // index (a hardcoded variant 0 would give 255 three times).
+    assert(discr(Ordering::Less) == 255);
+    assert(discr(Ordering::Equal) == 0);
+    assert(discr(Ordering::Greater) == 1);
+}

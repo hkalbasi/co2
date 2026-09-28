@@ -1,0 +1,27 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::option::Option;
+
+#include <assert.h>
+
+fn or_default(x: Option::<i32>) -> i32 {
+    return x.unwrap_or(42);
+}
+
+fn main() {
+    Option::<i32> n = Option::<i32>::None;
+    assert(n.is_none());
+    assert(!n.is_some());
+    assert(n.unwrap_or(7) == 7);
+    assert(or_default(n) == 42);
+
+    Option::<i32> s = Option::<i32>::Some(5);
+    assert(s.is_some());
+    assert(!s.is_none());
+    assert(s.unwrap() == 5);
+
+    Option::<bool> b = Option::<bool>::None;
+    assert(b.is_none());
+    assert(!b.unwrap_or(false));
+}
