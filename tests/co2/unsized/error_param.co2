@@ -4,4 +4,9 @@
 fn f1(x: str) {}
        //^^^ error: the size for values of type `str` cannot be known at compilation time
 
+type A = [u8];
+
+fn f2(x: A) {}
+       //^ error: the size for values of type `[u8]` cannot be known at compilation time
+
 fn main() {}

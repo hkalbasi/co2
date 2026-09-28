@@ -18,6 +18,7 @@ pub enum HirTyKind {
     Tuple(Vec<HirTy>),
     RawPtr(Mutability, Box<HirTy>),
     Array(HirTyConst, Box<HirTy>),
+    Slice(Box<HirTy>),
     Ref(Mutability, HirLifetime, Box<HirTy>),
     FnPtr(Box<FunctionSignature>),
     Never,
@@ -73,6 +74,13 @@ impl HirTy {
     pub fn new_array(inner: HirTy, len: HirTyConst, span: Span) -> Self {
         HirTy {
             kind: HirTyKind::Array(len, Box::new(inner)),
+            span,
+        }
+    }
+
+    pub fn new_slice(inner: HirTy, span: Span) -> Self {
+        HirTy {
+            kind: HirTyKind::Slice(Box::new(inner)),
             span,
         }
     }

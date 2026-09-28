@@ -21,6 +21,13 @@ int f3() {
           //^^^ error: local doesn't have a size known at compile-time
 }
 
+type A = [u8];
+
+fn f4() {
+    A a;
+    //^ error: local doesn't have a size known at compile-time
+}
+
 fn main() {
     f1();
     f2();

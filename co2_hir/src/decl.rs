@@ -1864,6 +1864,9 @@ pub(crate) fn hir_ty_to_ty(hir_ty: &HirTy) -> Ty {
         rustc_public_generative::HirTyKind::Bool => Ty::bool_ty(),
         rustc_public_generative::HirTyKind::Char => Ty::from_rigid_kind(RigidTy::Char),
         rustc_public_generative::HirTyKind::Str => Ty::from_rigid_kind(RigidTy::Str),
+        rustc_public_generative::HirTyKind::Slice(inner) => {
+            Ty::from_rigid_kind(RigidTy::Slice(hir_ty_to_ty(inner)))
+        }
         &rustc_public_generative::HirTyKind::Int(int_ty) => Ty::signed_ty(int_ty),
         &rustc_public_generative::HirTyKind::Uint(uint_ty) => Ty::unsigned_ty(uint_ty),
         &rustc_public_generative::HirTyKind::Float(float_ty) => {

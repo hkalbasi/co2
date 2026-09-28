@@ -1,0 +1,31 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::string::String;
+use std::mem::drop;
+
+#include <assert.h>
+
+type A = [u8];
+type B = str;
+
+fn foo(param: &A) -> usize {
+    return param.len();
+}
+
+fn first(param: &B) -> u8 {
+    u8 *p = param.as_ptr();
+    return p[0];
+}
+
+fn take_ptr(param: *const [u8]) {
+    (void)param;
+}
+
+fn main() {
+    assert(foo(s"hello".as_bytes()) == 5);
+    String s = String::from(s"hi");
+    assert(foo(s.as_bytes()) == 2);
+    assert(first(s"abc") == (u8)'a');
+    drop(s);
+}

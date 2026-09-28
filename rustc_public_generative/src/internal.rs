@@ -5941,6 +5941,14 @@ fn hir_ty_to_rustc(
             let pointee = leak(hir_ty_to_rustc(tcx, owner, to, item_allocator));
             make_array_ty(tcx, owner, pointee, *len, span)
         }
+        HirTyKind::Slice(to) => {
+            let elem = leak(hir_ty_to_rustc(tcx, owner, to, item_allocator));
+            hir::Ty {
+                hir_id: HirId::make_owner(owner),
+                span,
+                kind: hir::TyKind::Slice(elem),
+            }
+        }
         HirTyKind::Ref(mutability, lifetime, to) => {
             let pointee = leak(hir_ty_to_rustc(tcx, owner, to, item_allocator));
             let lifetime = make_lifetime(tcx, lifetime, item_allocator);

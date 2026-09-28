@@ -1,0 +1,24 @@
+//@ mode: co2
+//@ run-status: 0
+
+#include <assert.h>
+
+type Nums = [i32; 4];
+
+fn sum(a: *const Nums) -> i32 {
+    i32 total = 0;
+    i32 *p = (i32 *)a;
+    for (int i = 0; i < 4; i += 1) {
+        total += p[i];
+    }
+    return total;
+}
+
+fn main() {
+    Nums a = {1, 2, 3, 4};
+    assert(a[0] == 1);
+    assert(a[3] == 4);
+    assert(sizeof(Nums) == 16);
+    assert(sizeof(a) == 16);
+    assert(sum(&a) == 10);
+}

@@ -632,11 +632,58 @@ impl CrateSigCtx<'_> {
                 let elems = elems.into_iter().map(|e| self.lower_rust_ty(e)).collect();
                 HirTy::new_tuple(elems, rust_span)
             }
+            co2_ast::RustTy::Array { inner, len } => {
+                let Some(len) = len.0.constant_len() else {
+                    Self::terminate_with_spanned_error((
+                        span,
+                        "unsupported non-literal Rust array length".to_owned(),
+                    ))
+                };
+                let len =
+                    usize::try_from(len).unwrap_or_else(|_| Self::terminate_with_spanned_error((
+                        span,
+                        "unsupported non-literal Rust array length".to_owned(),
+                    )));
+                HirTy::new_array(
+                    self.lower_rust_ty(*inner),
+                    HirTyConst::Literal(len),
+                    rust_span,
+                )
+            }
+            co2_ast::RustTy::BareFn { params, ret_ty } => {
+                let inputs = params
+                    .into_iter()
+                    .map(|param| FunctionInput {
+                        name: None,
+                        ty: self.lower_rust_ty(param),
+                    })
+                    .collect();
+                let output = self.lower_rust_ty(*ret_ty);
+                HirTy {
+                    kind: HirTyKind::FnPtr(Box::new(FunctionSignature {
+                        lifetimes: vec![],
+                        inputs,
+                        output,
+                        abi: FunctionAbi::Rust,
+                        is_unsafe: false,
+                        c_variadic: false,
+                    })),
+                    span: rust_span,
+                }
+            }
             co2_ast::RustTy::Never => HirTy {
                 kind: HirTyKind::Never,
                 span: rust_span,
             },
-            _ => todo!("lower other rust types"),
+            co2_ast::RustTy::Slice(inner) => {
+                HirTy::new_slice(self.lower_rust_ty(*inner), rust_span)
+            }
+            co2_ast::RustTy::Wild | co2_ast::RustTy::Lifetime(_) => {
+                Self::terminate_with_spanned_error((
+                    span,
+                    "invalid type in this position".to_owned(),
+                ))
+            }
         }
     }
 
@@ -1009,12 +1056,14 @@ impl LocalResolverBase {
                 kind: HirTyKind::Never,
                 span: rust_span,
             },
-            co2_ast::RustTy::Slice(_) => panic!("slice generic arguments are not supported here"),
-            co2_ast::RustTy::Wild => {
-                panic!("Wild generic argument is not supported in crate signature context")
+            co2_ast::RustTy::Slice(inner) => {
+                HirTy::new_slice(self.hir_ty_of_rust_ty(*inner), rust_span)
             }
-            co2_ast::RustTy::Lifetime(_) => {
-                panic!("lifetime should be handled by hir_generic_args_of_resolved_path")
+            co2_ast::RustTy::Wild | co2_ast::RustTy::Lifetime(_) => {
+                self.terminate_with_spanned_error((
+                    span,
+                    "invalid type in this position".to_owned(),
+                ))
             }
         }
     }
