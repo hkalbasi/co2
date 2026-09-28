@@ -549,6 +549,12 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
             type_name,
             initializer,
         } => type_name_contains_local(type_name) || initializer_contains_local(&initializer.0),
+        Expression::StructInit { path, fields } => {
+            expr_contains_local(&path.0)
+                || fields
+                    .iter()
+                    .any(|field| expr_contains_local(&field.0.value.0))
+        }
         Expression::VaStart { args, .. }
         | Expression::VaArg { args, .. }
         | Expression::VaEnd { args } => expr_contains_local(&args.0),

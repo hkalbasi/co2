@@ -71,6 +71,12 @@ pub fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> boo
         Expression::CompoundLiteral { initializer, .. } => {
             initializer_contains_label_address(&initializer.0)
         }
+        Expression::StructInit { path, fields } => {
+            expr_contains_label_address(&path.0)
+                || fields
+                    .iter()
+                    .any(|field| expr_contains_label_address(&field.0.value.0))
+        }
         Expression::GenericSelection {
             controlling,
             associations,

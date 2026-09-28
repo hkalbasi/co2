@@ -1,0 +1,54 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::ffi::FromBytesWithNulError;
+use std::option::Option;
+
+typedef struct {
+    int x;
+    int y;
+} Point;
+
+fn missing_field() {
+    Point p = Point { x: 1 };
+  //          ^^^^^^^^^^^^^^ error: missing field `y` in initializer of `Point`
+    (void)p;
+}
+
+fn unknown_field() {
+    Point p = Point { x: 1, y: 2, z: 3 };
+  //                              ^ error: struct `Point` has no field named `z`
+    (void)p;
+}
+
+fn duplicate_field() {
+    Point p = Point { x: 1, x: 2, y: 3 };
+  //                        ^ error: field `x` specified more than once
+    (void)p;
+}
+
+fn tuple_variant_braces() {
+    Option::<i32> x = Option::<i32>::Some { value: 5 };
+  //                                        ^^^^^ error: variant `Option<i32>::Some` has no field named `value`
+    (void)x;
+}
+
+fn tuple_variant_missing_field() {
+    Option::<i32> x = Option::<i32>::Some {};
+  //                  ^^^^^^^^^^^^^^^^^^^^^^ error: missing field `0` in initializer of `Option<i32>`
+    (void)x;
+}
+
+fn unit_variant_fields() {
+    Option::<i32> x = Option::<i32>::None { x: 1 };
+  //                                        ^ error: variant `Option<i32>::None` has no field named `x`
+    (void)x;
+}
+
+fn struct_variant_missing_field() {
+    FromBytesWithNulError e = FromBytesWithNulError::InteriorNul {};
+  //                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ error: missing field `position` in initializer of `FromBytesWithNulError`
+    (void)e;
+}
+
+fn main() {}

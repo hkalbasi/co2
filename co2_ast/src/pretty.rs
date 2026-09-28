@@ -823,6 +823,16 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Expression<R>> {
                     initializer.pretty_print(pp);
                 });
             }
+            Expression::StructInit { path, fields } => {
+                pp.node("StructInit", &sp, |pp| {
+                    path.pretty_print(pp);
+                    for field in fields {
+                        let fsp = fmt_span(&field.1, pp.config);
+                        pp.leaf_data("Field", &fsp, format_args!("{}", field.0.name.0));
+                        field.0.value.pretty_print(pp);
+                    }
+                });
+            }
             Expression::GnuStatementExpr { body } => {
                 pp.node("GnuStatementExpr", &sp, |pp| body.pretty_print(pp));
             }

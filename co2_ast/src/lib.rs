@@ -210,6 +210,10 @@ pub enum Expression<R: TypeResolver> {
         type_name: Box<TypeName<R>>,
         initializer: Box<Spanned<Initializer<R>>>,
     },
+    StructInit {
+        path: Box<Spanned<Expression<R>>>,
+        fields: Vec<Spanned<StructInitField<R>>>,
+    },
     GnuStatementExpr {
         body: Box<Spanned<CompoundStatement<R>>>,
     },
@@ -243,6 +247,12 @@ pub enum Expression<R: TypeResolver> {
         re: Box<Spanned<Expression<R>>>,
         im: Box<Spanned<Expression<R>>>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct StructInitField<R: TypeResolver> {
+    pub name: Spanned<String>,
+    pub value: Spanned<Expression<R>>,
 }
 
 #[derive(Debug, Clone)]

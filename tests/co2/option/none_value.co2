@@ -24,4 +24,11 @@ fn main() {
     Option::<bool> b = Option::<bool>::None;
     assert(b.is_none());
     assert(!b.unwrap_or(false));
+
+    // Empty braces on a unit variant, and numeric fields on a tuple
+    // variant, work like in Rust.
+    Option::<i32> e = Option::<i32>::None {};
+    assert(e.is_none());
+    Option::<i32> t = Option::<i32>::Some { 0: 6 };
+    assert(t.unwrap() == 6);
 }

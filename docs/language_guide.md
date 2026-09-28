@@ -171,3 +171,21 @@ in that case thei are `pub(crate)`. Rust like structs are `#[repr(Rust)]` and pr
 
 Available representations are `#[repr(Rust)]`, `#[repr(C)]`, `#[repr(C, packed)]`. The only available derive is `#[derive(Copy)]` for now,
 which implements both `Clone` and `Copy` for the type.
+
+## Struct and enum variant construction
+
+You can use Rust-style syntax for initializing structs and enum variants:
+```
+Range::<i32> r = Range::<i32> { start: 1, end: 10 };
+FromBytesWithNulError e = FromBytesWithNulError::InteriorNul { position: 2 };
+```
+This syntax also works for C-style structs:
+```
+typedef struct {
+    int x;
+    int y;
+} Point;
+Point p = Point { x: 1, y: 2 }; // Rust style
+Point p = { .x = 1, .y = 2 }; // C style
+```
+The Rust style syntax is neccessary for enum variants with named fields.

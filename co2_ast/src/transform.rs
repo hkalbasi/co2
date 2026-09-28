@@ -3,8 +3,8 @@ use crate::{
     Expression, FunctionDefinitionSignature, GenericAssociation, InitDeclarator, Initializer,
     InitializerItem, ParameterList, RustFunctionParam, RustFunctionSignature, RustPath,
     RustPathSegment, RustStructField, RustTy, Spanned, SpecifierQualifier, StructDeclarator,
-    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeName, TypeResolver,
-    TypeSpecifier,
+    StructInitField, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TypeName,
+    TypeResolver, TypeSpecifier,
 };
 
 pub trait Transformable<F: TypeResolver>: TypeResolver {
@@ -388,6 +388,19 @@ impl<A: TypeResolver> DoTransform for SpecifierQualifier<A> {
     }
 }
 
+impl<A: TypeResolver> DoTransform for StructInitField<A> {
+    type Resolver = A;
+    type Target<T: TypeResolver> = StructInitField<T>;
+
+    fn transform<B: Transformable<A>>(&self, b: &B) -> StructInitField<B> {
+        let StructInitField { name, value } = self;
+        StructInitField {
+            name: name.clone(),
+            value: value.transform(b),
+        }
+    }
+}
+
 // impl<A: TypeResolver> DoTransform for FFFFFF<A> {
 //     type Resolver = A;
 //     type Target<T: TypeResolver> = FFFFFF<T>;
@@ -484,6 +497,10 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
             } => Expression::CompoundLiteral {
                 type_name: type_name.transform(b),
                 initializer: initializer.transform(b),
+            },
+            Expression::StructInit { path, fields } => Expression::StructInit {
+                path: path.transform(b),
+                fields: fields.transform(b),
             },
             Expression::GenericSelection {
                 controlling,

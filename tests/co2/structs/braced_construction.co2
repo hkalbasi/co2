@@ -1,0 +1,24 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::range::Range;
+
+#include <assert.h>
+
+typedef struct {
+    int x;
+    int y;
+} Point;
+
+fn main() {
+    Point p = Point { x: 1, y: 2 };
+    assert(p.x == 1 && p.y == 2);
+
+    // Fields out of order are matched by name.
+    Point q = Point { y: 4, x: 3 };
+    assert(q.x == 3 && q.y == 4);
+
+    // Generic Rust structs work the same way.
+    Range::<i32> r = Range::<i32> { start: 1, end: 10 };
+    assert(r.start == 1 && r.end == 10);
+}

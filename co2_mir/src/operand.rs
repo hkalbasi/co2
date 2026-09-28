@@ -927,7 +927,13 @@ impl Builder<'_, '_> {
                         MirStatementKind::Assign(
                             place(tmp),
                             Rvalue::Aggregate(
-                                AggregateKind::Adt(adt, variant_idx(*variant), adt_args, None, None),
+                                AggregateKind::Adt(
+                                    adt,
+                                    variant_idx(*variant),
+                                    adt_args,
+                                    None,
+                                    None,
+                                ),
                                 operands,
                             ),
                         ),

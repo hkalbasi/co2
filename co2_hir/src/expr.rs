@@ -1194,6 +1194,27 @@ impl HirCtx<'_> {
         )))
     }
 
+    /// Receiver type for `Receiver::<Args>::method` paths, shared by
+    /// unit-variant and struct-initialization lowering.
+    fn assoc_method_receiver_ty(
+        &self,
+        receiver: DefId,
+        receiver_generic_args: &[Spanned<RustTy<LocalResolver>>],
+        parser_span: co2_ast::Span,
+    ) -> Ty {
+        if receiver_generic_args.is_empty() {
+            CrateItem(receiver).ty()
+        } else {
+            self.ty_of_resolved_path(
+                &co2_crate_sig::DefOrLocal::Def {
+                    def_id: receiver,
+                    generic_args: receiver_generic_args.to_vec(),
+                },
+                parser_span,
+            )
+        }
+    }
+
     /// Lower `Enum::UNIT` in value position to the unit-variant value.
     ///
     /// Returns `None` when `method` does not name a fieldless variant
@@ -1207,17 +1228,8 @@ impl HirCtx<'_> {
         span: RustSpan,
         parser_span: co2_ast::Span,
     ) -> Option<HirExpr> {
-        let receiver_ty = if receiver_generic_args.is_empty() {
-            CrateItem(receiver).ty()
-        } else {
-            self.ty_of_resolved_path(
-                &co2_crate_sig::DefOrLocal::Def {
-                    def_id: receiver,
-                    generic_args: receiver_generic_args.to_vec(),
-                },
-                parser_span,
-            )
-        };
+        let receiver_ty =
+            self.assoc_method_receiver_ty(receiver, receiver_generic_args, parser_span);
         let TyKind::RigidTy(RigidTy::Adt(adt, _)) = receiver_ty.kind() else {
             return None;
         };
@@ -1236,6 +1248,283 @@ impl HirCtx<'_> {
                 variant,
             },
             ty: receiver_ty,
+            span,
+        })
+    }
+
+    /// Lower `Path { name: value, ... }` struct construction.
+    ///
+    /// Accepts enum struct variants (`Enum::Variant { ... }`) and plain
+    /// structs (`Struct { ... }`). Missing fields are an error like in
+    /// Rust (no C-style zero fill); unknown and duplicate fields are
+    /// errors too. Values are coerced to the field types like call
+    /// arguments.
+    fn lower_struct_init(
+        &self,
+        path: Spanned<Expression<LocalResolver>>,
+        fields: Vec<Spanned<co2_ast::StructInitField<LocalResolver>>>,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let (path_expr, path_span) = path;
+        let path_text = path_span
+            .source_text()
+            .unwrap_or_else(|| "<path>".to_string());
+        let Expression::Identifier((def, _)) = path_expr else {
+            return Err(spanned_error(
+                path_span,
+                format!("cannot use struct initialization syntax on `{path_text}`"),
+            ));
+        };
+        // Resolve the target: (type, variant index, fields, owner
+        // description for "has no field" errors, scope for "missing
+        // fields" errors, "struct"/"enum" kind word).
+        let (target_ty, variant, field_defs, owner_desc, missing_scope, kind_word) = match def {
+            co2_crate_sig::DefOrLocal::AssocMethod {
+                receiver,
+                method,
+                receiver_generic_args,
+                ..
+            } => {
+                let receiver_ty =
+                    self.assoc_method_receiver_ty(receiver, &receiver_generic_args, parser_span);
+                let (adt, args) = match receiver_ty.kind() {
+                    TyKind::RigidTy(RigidTy::Adt(adt, args))
+                        if matches!(adt.kind(), AdtKind::Enum) =>
+                    {
+                        (adt, args)
+                    }
+                    _ => {
+                        return Err(spanned_error(
+                            path_span,
+                            format!(
+                                "`{method}` is not a variant of {}",
+                                self.format_ty(receiver_ty)
+                            ),
+                        ));
+                    }
+                };
+                let Some((variant_idx, variant)) = adt
+                    .variants_iter()
+                    .enumerate()
+                    .find(|(_, v)| v.name() == method)
+                else {
+                    return Err(spanned_error(
+                        path_span,
+                        format!(
+                            "unknown variant `{method}` of enum `{}`",
+                            adt.trimmed_name()
+                        ),
+                    ));
+                };
+                let variant_fields = variant.fields();
+                // Full `Type::Variant` path, like rustc prints it
+                // (`Option<i32>::Some`).
+                let full_path = format!("{}::{method}", self.format_ty(receiver_ty));
+                if variant_fields.is_empty() {
+                    // Unit variant: only `{}` is accepted, like Rust; any
+                    // fields are reported like unknown fields (Rust E0559).
+                    if let Some((first, _)) = fields.first() {
+                        return Err(spanned_error(
+                            first.name.1,
+                            format!(
+                                "variant `{full_path}` has no field named `{}`",
+                                first.name.0
+                            ),
+                        ));
+                    }
+                    return Ok(HirExpr {
+                        kind: HirExprKind::Aggregate {
+                            args: vec![],
+                            variant: variant_idx,
+                        },
+                        ty: receiver_ty,
+                        span,
+                    });
+                }
+                // Tuple variants accept numeric fields (`Some { 0: v }`),
+                // like Rust; struct variants accept named fields. Both
+                // flow through the same name-based matching below.
+                let defs: Vec<_> = variant_fields
+                    .into_iter()
+                    .map(|f| (f.name.clone(), f.ty_with_args(&args), f.def_id()))
+                    .collect();
+                let missing_scope = self.format_ty(receiver_ty);
+                (
+                    receiver_ty,
+                    variant_idx,
+                    defs,
+                    format!("variant `{full_path}`"),
+                    missing_scope,
+                    "enum",
+                )
+            }
+            co2_crate_sig::DefOrLocal::Def {
+                def_id,
+                generic_args,
+            } => {
+                let ty = self.ty_of_resolved_path(
+                    &co2_crate_sig::DefOrLocal::Def {
+                        def_id,
+                        generic_args,
+                    },
+                    parser_span,
+                );
+                let TyKind::RigidTy(RigidTy::Adt(adt, args)) = ty.kind() else {
+                    return Err(spanned_error(
+                        path_span,
+                        format!(
+                            "cannot use struct initialization syntax on type {}",
+                            self.format_ty(ty)
+                        ),
+                    ));
+                };
+                match adt.kind() {
+                    AdtKind::Struct => {
+                        let Some(variant) = adt.variant(variant_idx(0)) else {
+                            return Err(spanned_error(path_span, "Can't compute adt fields"));
+                        };
+                        let defs: Vec<_> = variant
+                            .fields()
+                            .into_iter()
+                            .map(|f| (f.name.clone(), f.ty_with_args(&args), f.def_id()))
+                            .collect();
+                        let struct_name = adt.trimmed_name();
+                        let missing_scope = self.format_ty(ty);
+                        (
+                            ty,
+                            0,
+                            defs,
+                            format!("struct `{struct_name}`"),
+                            missing_scope,
+                            "struct",
+                        )
+                    }
+                    AdtKind::Union => {
+                        return Err(spanned_error(
+                            path_span,
+                            format!(
+                                "cannot use struct initialization syntax on union `{}`",
+                                adt.trimmed_name()
+                            ),
+                        ));
+                    }
+                    _ => {
+                        return Err(spanned_error(
+                            path_span,
+                            format!(
+                                "expected a struct or enum variant, found enum `{}`",
+                                adt.trimmed_name()
+                            ),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Err(spanned_error(
+                    path_span,
+                    format!("cannot use struct initialization syntax on `{path_text}`"),
+                ));
+            }
+        };
+        // Duplicate fields first (Rust E0062), keeping source order.
+        let mut provided: Vec<(String, co2_ast::Span, Spanned<Expression<LocalResolver>>)> =
+            Vec::with_capacity(fields.len());
+        for (field, _) in fields {
+            let name = field.name.0.clone();
+            if provided.iter().any(|(seen, _, _)| *seen == name) {
+                return Err(spanned_error(
+                    field.name.1,
+                    format!("field `{name}` specified more than once"),
+                ));
+            }
+            provided.push((name, field.name.1, field.value));
+        }
+        // Unknown fields (Rust E0559/E0560).
+        for (name, name_span, _) in &provided {
+            if !field_defs.iter().any(|(defined, _, _)| defined == name) {
+                return Err(spanned_error(
+                    *name_span,
+                    format!("{owner_desc} has no field named `{name}`"),
+                ));
+            }
+        }
+        // Missing fields are an error like in Rust (Rust E0063); co2 does
+        // not zero-fill struct-construction syntax (unlike C initializers).
+        let missing: Vec<&String> = field_defs
+            .iter()
+            .map(|(defined, _, _)| defined)
+            .filter(|defined| !provided.iter().any(|(name, _, _)| name == *defined))
+            .collect();
+        if !missing.is_empty() {
+            let field_word = if missing.len() == 1 {
+                "field"
+            } else {
+                "fields"
+            };
+            let missing = missing
+                .into_iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join("`, `");
+            return Err(spanned_error(
+                parser_span,
+                format!("missing {field_word} `{missing}` in initializer of `{missing_scope}`"),
+            ));
+        }
+        // Private fields cannot be constructed (same rule as C initializer
+        // lists).
+        let current_owner = self.decl_resolver.current_owner();
+        if field_defs.iter().any(|(_, _, def_id)| {
+            !self
+                .decl_resolver
+                .dependency_info()
+                .is_field_accessible(current_owner, *def_id)
+        }) {
+            return Err(spanned_error(
+                parser_span,
+                format!(
+                    "can not initialize {kind_word} with private fields using initializer list"
+                ),
+            ));
+        }
+        // Lower values in declaration order, coercing to the field types.
+        let mut args = Vec::with_capacity(field_defs.len());
+        for (defined, field_ty, _) in &field_defs {
+            let (_, _, value) = provided
+                .iter()
+                .find(|(name, _, _)| name == defined)
+                .expect("missing fields checked above");
+            let lowered = self.lower_expr(value.clone(), locals, local_map)?;
+            let coerced = self
+                .coerce_expr_to_type(&lowered, *field_ty)
+                .unwrap_or(lowered);
+            if !ty_matches_expected(*field_ty, coerced.ty) {
+                return Err(spanned_error(
+                    self.to_parser_span(coerced.span),
+                    format!(
+                        "field `{defined}` type mismatch: expected {}, got {}",
+                        self.format_ty(*field_ty),
+                        self.format_ty(coerced.ty)
+                    ),
+                ));
+            }
+            args.push(coerced);
+        }
+        let init_expr = HirExpr {
+            kind: HirExprKind::Aggregate { args, variant },
+            ty: target_ty,
+            span,
+        };
+        Ok(HirExpr {
+            kind: HirExprKind::Deref(Box::new(HirExpr {
+                kind: HirExprKind::AddrOf(Box::new(init_expr)),
+                ty: Ty::new_ptr(target_ty, Mutability::Mut),
+                span,
+            })),
+            ty: target_ty,
             span,
         })
     }
@@ -2020,7 +2309,10 @@ impl HirCtx<'_> {
                 let TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) = base.ty.kind() else {
                     return Err(spanned_error(
                         parser_span,
-                        format!("arrow base must be pointer type, got {}", self.format_ty(base.ty)),
+                        format!(
+                            "arrow base must be pointer type, got {}",
+                            self.format_ty(base.ty)
+                        ),
                     ));
                 };
                 let deref_base = HirExpr {
@@ -2466,6 +2758,9 @@ impl HirCtx<'_> {
                 }
                 Ok(init_expr)
             }
+            Expression::StructInit { path, fields } => {
+                self.lower_struct_init(*path, fields, span, parser_span, locals, local_map)
+            }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
                 let compatible = i128::from(self.type_names_compatible_in_scope(
                     *ty1,
@@ -2664,7 +2959,10 @@ impl HirCtx<'_> {
                         else {
                             return Err(spanned_error(
                                 parser_span,
-                                format!("cannot dereference non-pointer type: {}", self.format_ty(inner.ty)),
+                                format!(
+                                    "cannot dereference non-pointer type: {}",
+                                    self.format_ty(inner.ty)
+                                ),
                             ));
                         };
                         Ok(HirExpr {
@@ -3368,13 +3666,20 @@ impl HirCtx<'_> {
             let Some(field_tys) = adt_field_tys(base.ty) else {
                 return Err(spanned_error(
                     invalid_span(),
-                    format!("field projection on non-adt type: {}", self.format_ty(base.ty)),
+                    format!(
+                        "field projection on non-adt type: {}",
+                        self.format_ty(base.ty)
+                    ),
                 ));
             };
             let Some(next_ty) = field_tys.get(*index).copied() else {
                 return Err(spanned_error(
                     invalid_span(),
-                    format!("field index out of bounds: {} for {}", index, self.format_ty(base.ty)),
+                    format!(
+                        "field index out of bounds: {} for {}",
+                        index,
+                        self.format_ty(base.ty)
+                    ),
                 ));
             };
             base = HirExpr {

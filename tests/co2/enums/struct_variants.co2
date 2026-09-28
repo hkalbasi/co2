@@ -1,0 +1,19 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::ffi::{CStr, FromBytesWithNulError};
+
+#include <assert.h>
+#include <string.h>
+
+fn main() {
+    FromBytesWithNulError mine = FromBytesWithNulError::InteriorNul { position: 2 };
+    // Genuine value built by std itself: interior nul at index 2.
+    FromBytesWithNulError genuine =
+        CStr::from_bytes_with_nul(s"fo\0o".as_bytes()).unwrap_err();
+    assert(memcmp(&mine, &genuine, sizeof(FromBytesWithNulError)) == 0);
+
+    // A different position must give a different value.
+    FromBytesWithNulError other = FromBytesWithNulError::InteriorNul { position: 3 };
+    assert(memcmp(&mine, &other, sizeof(FromBytesWithNulError)) != 0);
+}

@@ -8,7 +8,8 @@ use co2_ast::TypeResolver;
 use co2_ast::{
     BinOp, CharPrefix, Constant, Designator, Expression, FloatSuffix, GenericAssociation,
     Initializer, InitializerItem, IntegerSuffix, RustPath, RustPathSegment, Span, Spanned,
-    StatelessResolver, Token, TypeQueryResult, UnaryOp, UpdateOp, parse_unsigned_integer_constant,
+    StatelessResolver, StructInitField, Token, TypeQueryResult, UnaryOp, UpdateOp,
+    parse_unsigned_integer_constant,
 };
 
 // ── Entry levels ───────────────────────────────────────────────────────
@@ -411,6 +412,32 @@ fn parse_call_args<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Vec<Spanned<Expr
     parse_comma_list(p, &Token::LParen, &Token::RParen, false, parse_assignment)
 }
 
+/// `{ name: expr, ... }` field list for `Path { ... }` construction.
+/// Rust-style only (`name: value`); C `.name = value` designators are
+/// rejected here with a parse error.
+fn parse_struct_init_fields<'a, R: TypeResolver>(
+    p: &mut P<'a, R>,
+) -> PR<Vec<Spanned<StructInitField<R>>>> {
+    parse_comma_list(p, &Token::LBrace, &Token::RBrace, true, |p| {
+        let start = p.pos;
+        // Field names are identifiers, or (for tuple variants, like Rust)
+        // bare integers: `Some { 0: value }`.
+        let name: Spanned<String> = match p.peek(0) {
+            Some(Token::Integer(text, _)) => {
+                let name = text.clone();
+                let name_span = p.peek_span(0);
+                p.pos += 1;
+                (name, name_span)
+            }
+            _ => p.parse_identifier()?,
+        };
+        p.expect(&Token::Colon, ":")?;
+        let value = parse_assignment(p)?;
+        let span = p.span_since(start);
+        Ok((StructInitField { name, value }, span))
+    })
+}
+
 fn parse_postfix<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R>>> {
     let mut node = parse_primary(p)?;
     let span = node.1;
@@ -426,6 +453,18 @@ fn parse_postfix<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression
                 Expression::Call {
                     func: Box::new(node),
                     params: args,
+                },
+                span,
+            );
+        } else if p.at(&Token::LBrace) && matches!(node.0, Expression::Identifier(_)) {
+            // `Path { name: value, ... }` — struct or enum struct-variant
+            // construction. A `{` can never follow an expression in C, so
+            // this is unambiguous.
+            let fields = parse_struct_init_fields(p)?;
+            node = (
+                Expression::StructInit {
+                    path: Box::new(node),
+                    fields,
                 },
                 span,
             );
@@ -744,7 +783,24 @@ fn parse_normal_path<'a, R: TypeResolver>(
             .map_token(|tok: Token| tok.to_string()),
         ]);
     }
-    let resolved = resolve_expr_path(p, &path, err_span)?;
+    let resolved = match p.resolver.classify_path(&path) {
+        Ok((TypeQueryResult::Type, resolved)) if p.at(&Token::LBrace) => {
+            // `Struct { name: value, ... }` — bare-struct construction.
+            // A `{` can never follow a type name in C, so this is
+            // unambiguous. Validation happens in HIR lowering.
+            let fields = parse_struct_init_fields(p)?;
+            let full_span = p.span_since(start);
+            return Ok((
+                Expression::StructInit {
+                    // Inner path keeps the path-only span for diagnostics.
+                    path: Box::new((Expression::Identifier((resolved, path_span)), span)),
+                    fields,
+                },
+                full_span,
+            ));
+        }
+        _ => resolve_expr_path(p, &path, err_span)?,
+    };
     Ok((Expression::Identifier((resolved, path_span)), span))
 }
 
