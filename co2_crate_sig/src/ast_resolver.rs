@@ -696,6 +696,7 @@ pub enum DefOrLocal {
         receiver: DefId,
         method: String,
         receiver_generic_args: Vec<Spanned<RustTy<LocalResolver>>>,
+        method_generic_args: Vec<Spanned<RustTy<LocalResolver>>>,
         ufcs_trait: Option<DefId>,
     },
     Local(u32),
@@ -703,6 +704,22 @@ pub enum DefOrLocal {
     Prim(PrimitiveTy),
     UnrepresentableType(CTy),
     InlineRustTy(Box<co2_ast::RustTy<LocalResolver>>),
+}
+
+/// Generic arguments on the method segment of an associated-function path
+/// (`Type::method::<args>`), if present. Unlike the receiver's arguments these
+/// are dropped by path stripping, so they are extracted separately.
+fn last_segment_generic_args(
+    resolver: &LocalResolver,
+    path: &RustPath<StatelessResolver>,
+) -> Vec<Spanned<RustTy<LocalResolver>>> {
+    match path.segments.last() {
+        Some((co2_ast::RustPathSegment::Generics(args), _)) => args
+            .iter()
+            .map(|arg| arg.transform(resolver))
+            .collect::<Vec<_>>(),
+        _ => vec![],
+    }
 }
 
 impl co2_ast::TypeResolver for LocalResolver {
@@ -820,6 +837,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                             receiver,
                             method: method.clone(),
                             receiver_generic_args,
+                            method_generic_args: last_segment_generic_args(self, path),
                             ufcs_trait,
                         },
                         TypeQueryResult::Expr,
@@ -866,6 +884,7 @@ impl co2_ast::TypeResolver for LocalResolver {
                         receiver,
                         method: method.clone(),
                         receiver_generic_args,
+                        method_generic_args: last_segment_generic_args(self, path),
                         ufcs_trait: None,
                     },
                     TypeQueryResult::Expr,

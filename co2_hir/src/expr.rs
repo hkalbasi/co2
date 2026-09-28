@@ -1529,6 +1529,38 @@ impl HirCtx<'_> {
         })
     }
 
+    /// Fill method-owned generic slots from an associated function's own
+    /// turbofish (`Type::method::<args>`), mirroring method-call turbofish.
+    /// `offset` is the number of leading receiver-owned slots. Errors when the
+    /// count is wrong, like `check_generic_arg_count` does for method calls.
+    fn substitute_method_turbofish(
+        &self,
+        method_def: DefId,
+        resolved_generic_args: &mut Vec<GenericArgKind>,
+        method_turbofish: &[Spanned<RustTy<LocalResolver>>],
+        offset: usize,
+        span: co2_ast::Span,
+    ) -> Result<(), (co2_ast::Span, String)> {
+        if method_turbofish.is_empty() {
+            return Ok(());
+        }
+        check_generic_arg_count(method_def, method_turbofish.len(), offset, span)?;
+        let method_ty = CrateItem(method_def).ty();
+        let method_params = match method_ty.kind() {
+            TyKind::RigidTy(RigidTy::FnDef(_, GenericArgs(params))) => params.clone(),
+            _ => vec![],
+        };
+        for (i, gt) in method_turbofish.iter().enumerate() {
+            let idx = offset + i;
+            if idx >= resolved_generic_args.len() {
+                resolved_generic_args.resize(idx + 1, GenericArgKind::Type(Ty::usize_ty()));
+            }
+            resolved_generic_args[idx] =
+                self.lower_generic_arg_with_wild(idx, gt, &method_params);
+        }
+        Ok(())
+    }
+
     fn try_lower_assoc_method_call(
         &self,
         func: &Spanned<Expression<LocalResolver>>,
@@ -1545,13 +1577,20 @@ impl HirCtx<'_> {
     > {
         let resolver = &self.decl_resolver;
 
-        let (receiver, parsed_receiver_generic_args, method_name, ufcs_trait, parser_span) =
-            match &func.0 {
+        let (
+            receiver,
+            parsed_receiver_generic_args,
+            method_name,
+            parsed_method_generic_args,
+            ufcs_trait,
+            parser_span,
+        ) = match &func.0 {
                 Expression::Identifier((
                     co2_crate_sig::DefOrLocal::AssocMethod {
                         receiver,
                         method,
                         receiver_generic_args,
+                        method_generic_args,
                         ufcs_trait,
                     },
                     _,
@@ -1559,6 +1598,7 @@ impl HirCtx<'_> {
                     *receiver,
                     receiver_generic_args,
                     method.as_str(),
+                    method_generic_args,
                     *ufcs_trait,
                     func.1,
                 ),
@@ -1646,6 +1686,13 @@ impl HirCtx<'_> {
                     receiver_args
                 };
                 generic_args_extend_to_method_total(&mut resolved_generic_args, method_def);
+                self.substitute_method_turbofish(
+                    method_def,
+                    &mut resolved_generic_args,
+                    parsed_method_generic_args,
+                    receiver_generic_args(receiver_ty).len(),
+                    parser_span,
+                )?;
                 let Some(sig) = self.specialize_fn_sig_from_receiver(
                     fn_def,
                     &resolved_generic_args,
@@ -1669,6 +1716,13 @@ impl HirCtx<'_> {
             MethodResolutionKind::Trait => {
                 let mut args = vec![GenericArgKind::Type(trait_method_self_ty(receiver_ty))];
                 generic_args_extend_to_method_total(&mut args, method_def);
+                self.substitute_method_turbofish(
+                    method_def,
+                    &mut args,
+                    parsed_method_generic_args,
+                    1,
+                    parser_span,
+                )?;
                 args
             }
         };

@@ -4,6 +4,8 @@
 use std::mem::{size_of, transmute};
 use std::collections::HashMap;
 use std::string::String;
+use std::vec::Vec;
+use std::iter::Iterator;
 
 fn f1() {
     size_of::<i32, i64>();
@@ -32,6 +34,20 @@ fn f5(x: &str) {
     x.strip_circumfix::<>(s"foo", s"bar");
     x.strip_circumfix::<&str>(s"foo", s"bar");
     //^^^^^^^^^^^^^^^ Expected 2 generic argument, found 1
+}
+
+fn f6() {
+    Vec::<i32> v = Vec::<i32>::new::<i32>();
+  //               ^^^^^^^^^^^^^^^^^^^^^^ Expected 0 generic argument, found 1
+    (void)v;
+}
+
+fn f7() {
+    Vec::<i32> v = Vec::<i32>::new();
+    Vec::<i32> w = Iterator::collect::<Vec::<i32>, i32>(v.into_iter());
+  //               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Expected 1 generic argument, found 2
+    (void)v;
+    (void)w;
 }
 
 
