@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 fn f1() {
     Cow::<str> x;
-             //^ error: missed lifetime parameter
+  //^^^^^^^^^^ error: missed lifetime parameter
 }
 
 fn f2() {

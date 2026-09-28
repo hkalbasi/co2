@@ -1,7 +1,9 @@
 //@ mode: co2
 //@ compile-fail
 
+use std::collections::HashMap;
 use std::mem::size_of;
+use std::string::String;
 
 fn f1() -> usize {
     return size_of();
@@ -13,6 +15,17 @@ fn f2() -> usize {
                   //^^^^^ error: failed to infer generic args
 }
 
+fn f3() {
+    HashMap::<String> m = HashMap::<String, i32>::new();
+  //^^^^^^^^^^^^^^^^^ error: too few generic arguments for `HashMap`: expected at least 2, found 1
+    (void)m;
+}
+
+fn f4() {
+    HashMap::<String, i32> m = HashMap::<String>::new();
+  //                           ^^^^^^^^^^^^^^^^^^^^^^ error: too few generic arguments for `HashMap`: expected at least 2, found 1
+    (void)m;
+}
 
 fn main() {
     f1();

@@ -12,7 +12,7 @@ use la_arena::Arena;
 use rustc_public_generative::{
     HirTy,
     rustc_public::{
-        CrateItem,
+        CrateDef, CrateItem,
         abi::FieldsShape,
         mir::{Mutability, Safety},
         ty::{
@@ -520,7 +520,39 @@ impl HirCtx<'_> {
                     AdtDef(*def_id),
                     GenericArgs(generic_arg_kinds),
                 ));
-                self.decl_resolver.normalize_ty_defaults(ty)
+                let ty = self.decl_resolver.normalize_ty_defaults(ty);
+                // Partial generic arguments leave real `Param` types behind
+                // (defaults only fill trailing defaulted params). Such a type
+                // is invalid — rustc rejects it with E0107 — and letting it
+                // through ICEs monomorphization downstream, so report it here,
+                // where every C-side type routes through.
+                if let TyKind::RigidTy(RigidTy::Adt(adt, GenericArgs(args))) = ty.kind() {
+                    let unresolved = args
+                        .iter()
+                        .filter(|arg| {
+                            matches!(
+                                arg,
+                                GenericArgKind::Type(ty)
+                                    if matches!(ty.kind(), TyKind::Param(_))
+                            )
+                        })
+                        .count();
+                    if unresolved > 0 {
+                        let provided = generic_args
+                            .iter()
+                            .filter(|arg| !matches!(&arg.0, RustTy::Lifetime(_)))
+                            .count();
+                        co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(
+                            span,
+                            format!(
+                                "too few generic arguments for `{}`: expected at least {}, found {provided}",
+                                adt.trimmed_name(),
+                                provided + unresolved,
+                            ),
+                        )]);
+                    }
+                }
+                ty
             }
             co2_crate_sig::DefOrLocal::Const(_) => panic!("Invalid const in type position"),
             co2_crate_sig::DefOrLocal::AssocMethod { .. } => {
@@ -1056,7 +1088,7 @@ impl HirCtx<'_> {
                     co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
                         (Self::sig_cty_to_cty(sig_ty), specifiers)
                     }
-                    _ => (CTy::Ty(self.ty_of_resolved_path(&path.0, span)), specifiers),
+                    _ => (CTy::Ty(self.ty_of_resolved_path(&path.0, path.1)), specifiers),
                 };
             }
             CompressedTypeSpecifier::TypeofType(type_name) => {
