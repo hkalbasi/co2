@@ -1088,7 +1088,10 @@ impl HirCtx<'_> {
                     co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
                         (Self::sig_cty_to_cty(sig_ty), specifiers)
                     }
-                    _ => (CTy::Ty(self.ty_of_resolved_path(&path.0, path.1)), specifiers),
+                    _ => (
+                        CTy::Ty(self.ty_of_resolved_path(&path.0, path.1)),
+                        specifiers,
+                    ),
                 };
             }
             CompressedTypeSpecifier::TypeofType(type_name) => {

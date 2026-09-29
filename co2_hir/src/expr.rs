@@ -1566,8 +1566,7 @@ impl HirCtx<'_> {
             if idx >= resolved_generic_args.len() {
                 resolved_generic_args.resize(idx + 1, GenericArgKind::Type(Ty::usize_ty()));
             }
-            resolved_generic_args[idx] =
-                self.lower_generic_arg_with_wild(idx, gt, &method_params);
+            resolved_generic_args[idx] = self.lower_generic_arg_with_wild(idx, gt, &method_params);
         }
         Ok(())
     }
@@ -1596,27 +1595,27 @@ impl HirCtx<'_> {
             ufcs_trait,
             parser_span,
         ) = match &func.0 {
-                Expression::Identifier((
-                    co2_crate_sig::DefOrLocal::AssocMethod {
-                        receiver,
-                        method,
-                        receiver_generic_args,
-                        method_generic_args,
-                        ufcs_trait,
-                    },
-                    _,
-                )) => (
-                    *receiver,
+            Expression::Identifier((
+                co2_crate_sig::DefOrLocal::AssocMethod {
+                    receiver,
+                    method,
                     receiver_generic_args,
-                    method.as_str(),
                     method_generic_args,
-                    *ufcs_trait,
-                    func.1,
-                ),
-                _ => {
-                    return Ok(None);
-                }
-            };
+                    ufcs_trait,
+                },
+                _,
+            )) => (
+                *receiver,
+                receiver_generic_args,
+                method.as_str(),
+                method_generic_args,
+                *ufcs_trait,
+                func.1,
+            ),
+            _ => {
+                return Ok(None);
+            }
+        };
         // TODO: not generic enough?
         let (receiver_ty, ufcs_trait) =
             if ufcs_trait.is_none() && resolver.dependency_info().is_trait(receiver) {

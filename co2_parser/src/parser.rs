@@ -1834,19 +1834,12 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 let r = self.resolver.clone();
                 self.resolver = r.declare_ident_as_local(&ident);
             }
-            // `= init` is optional-lookahead: on failure rewind the input
-            // (keeping the resolver, like the old `or_not`) and continue
-            // without an initializer.
+            // After `=`, an initializer is mandatory: a failure here is a
+            // genuine error (e.g. an undeclared name), so propagate it
+            // instead of rewinding and reporting a bogus error downstream.
             let init = if self.at(&Token::Assign) {
-                let init_pos = self.pos;
                 self.pos += 1; // `=`
-                match crate::exp::parse_initializer(self) {
-                    Ok(init) => Some(init),
-                    Err(_) => {
-                        self.pos = init_pos;
-                        None
-                    }
-                }
+                Some(crate::exp::parse_initializer(self)?)
             } else {
                 None
             };
@@ -1892,6 +1885,11 @@ impl<'a, R: TypeResolver> P<'a, R> {
         }
         // C declaration: specifiers first, then function or object form.
         let mut specs = vec![self.parse_decl_specifier()?];
+        // Remember the first init-declarator failure: if the declaration
+        // ultimately fails (e.g. the loop reinterprets the declarator as
+        // another specifier and dies later), that first error — like an
+        // undeclared name in an initializer — is the meaningful one.
+        let mut first_err: Option<Fail> = None;
         loop {
             // Function-definition base: declarator (function) + attrs? + `{`.
             {
@@ -1956,12 +1954,18 @@ impl<'a, R: TypeResolver> P<'a, R> {
                         }
                         self.restore(cp);
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        if first_err.is_none() {
+                            first_err = Some(e);
+                        }
                         self.restore(cp);
                     }
                 }
             }
-            specs.push(self.parse_decl_specifier()?);
+            specs.push(match self.parse_decl_specifier() {
+                Ok(s) => s,
+                Err(e) => return Err(first_err.unwrap_or(e)),
+            });
         }
     }
 

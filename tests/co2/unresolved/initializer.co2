@@ -1,0 +1,30 @@
+//@ mode: co2
+//@ compile-fail
+
+// An undeclared name in a declaration initializer must report `unresolved
+// name` at the name, not a bogus error at the `=`.
+
+fn expr_form() {
+    int y = undeclared_var + 1;
+         // ^^^^^^^^^^^^^^ error: unresolved name undeclared_var
+    (void)y;
+}
+
+fn call_form() {
+    int *p = undeclared_fn(16);
+           //^^^^^^^^^^^^^ error: unresolved name undeclared_fn
+    (void)p;
+}
+
+fn later_declarator() {
+    unsigned a = 1, b = no_such + 2;
+                      //^^^^^^^ error: unresolved name no_such
+    (void)a;
+    (void)b;
+}
+
+fn main() {
+    expr_form();
+    call_form();
+    later_declarator();
+}

@@ -639,11 +639,12 @@ impl CrateSigCtx<'_> {
                         "unsupported non-literal Rust array length".to_owned(),
                     ))
                 };
-                let len =
-                    usize::try_from(len).unwrap_or_else(|_| Self::terminate_with_spanned_error((
+                let len = usize::try_from(len).unwrap_or_else(|_| {
+                    Self::terminate_with_spanned_error((
                         span,
                         "unsupported non-literal Rust array length".to_owned(),
-                    )));
+                    ))
+                });
                 HirTy::new_array(
                     self.lower_rust_ty(*inner),
                     HirTyConst::Literal(len),
@@ -1059,12 +1060,8 @@ impl LocalResolverBase {
             co2_ast::RustTy::Slice(inner) => {
                 HirTy::new_slice(self.hir_ty_of_rust_ty(*inner), rust_span)
             }
-            co2_ast::RustTy::Wild | co2_ast::RustTy::Lifetime(_) => {
-                self.terminate_with_spanned_error((
-                    span,
-                    "invalid type in this position".to_owned(),
-                ))
-            }
+            co2_ast::RustTy::Wild | co2_ast::RustTy::Lifetime(_) => self
+                .terminate_with_spanned_error((span, "invalid type in this position".to_owned())),
         }
     }
 
