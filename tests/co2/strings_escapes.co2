@@ -1,0 +1,31 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-stdout: A42\nab\n0 49 2\nABC\né\n
+
+use libc::printf;
+
+fn print_rust_str(s: *const str) {
+    printf("%.*s", s.len(), s.as_ptr());
+}
+
+fn main() {
+    // \x takes exactly two digits, like in Rust.
+    print_rust_str(s"\x4142");
+    printf("\n");
+    // A backslash-newline continues the line.
+    print_rust_str(s"a\
+b");
+    printf("\n");
+    // \0 is just NUL; following digits are literal (no octal escapes).
+    printf(
+        "%u %u %u\n",
+        (unsigned)s"\01".as_ptr()[0],
+        (unsigned)s"\01".as_ptr()[1],
+        (unsigned)s"\01".len());
+    // \u{...} unicode escapes.
+    print_rust_str(s"\u{41}\u{42}C");
+    printf("\n");
+    // Raw UTF-8 passes through.
+    print_rust_str(s"é");
+    printf("\n");
+}

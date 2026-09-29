@@ -197,6 +197,15 @@ struct Tokenizer<'a> {
     buf: Vec<u8>,
 }
 
+fn hex_digit_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 impl<'a> Tokenizer<'a> {
     fn new(input: &'a str) -> Self {
         let bytes = input.as_bytes();
@@ -904,7 +913,10 @@ impl<'a> Tokenizer<'a> {
     ) {
         let start = self.token_start;
         let elem_size = prefix.element_size();
-        let parts = self.scan_string_literal_body(elem_size);
+        // `s"..."` is a Rust `&str` literal, so it uses Rust escape rules;
+        // every other prefix keeps C escape rules.
+        let is_rust_str = prefix == StringLiteralPrefix::Str;
+        let parts = self.scan_string_literal_body(elem_size, is_rust_str);
         let literal = if prefix.is_wide() {
             let units = wide_code_units(&parts, elem_size);
             match prefix {
@@ -915,7 +927,17 @@ impl<'a> Tokenizer<'a> {
         } else {
             let bytes = string_parts_to_bytes(&parts);
             match prefix {
-                StringLiteralPrefix::Str => StringLiteral::Str(bytes),
+                StringLiteralPrefix::Str => {
+                    // `&str` must be valid UTF-8 even when the source is not.
+                    if std::str::from_utf8(&bytes).is_err() {
+                        self.err(
+                            start,
+                            self.pos,
+                            "invalid UTF-8 in `s` string literal".to_string(),
+                        );
+                    }
+                    StringLiteral::Str(bytes)
+                }
                 StringLiteralPrefix::Utf8 => StringLiteral::Utf8(bytes),
                 _ => StringLiteral::None(bytes),
             }
@@ -925,7 +947,7 @@ impl<'a> Tokenizer<'a> {
         self.buf.clear();
     }
 
-    fn scan_string_literal_body(&mut self, elem_size: usize) -> Vec<StringPart> {
+    fn scan_string_literal_body(&mut self, elem_size: usize, is_rust_str: bool) -> Vec<StringPart> {
         let body_start = self.pos;
         let mut out = Vec::new();
         while self.pos < self.len {
@@ -939,14 +961,23 @@ impl<'a> Tokenizer<'a> {
                 self.pos += 1;
                 let escape = self.bytes[self.pos];
                 self.pos += 1;
-                self.decode_escape(
-                    escape,
-                    body_start,
-                    esc_start - body_start,
-                    &mut out,
-                    elem_size,
-                    false,
-                );
+                if is_rust_str {
+                    self.decode_rust_str_escape(
+                        escape,
+                        body_start,
+                        esc_start - body_start,
+                        &mut out,
+                    );
+                } else {
+                    self.decode_escape(
+                        escape,
+                        body_start,
+                        esc_start - body_start,
+                        &mut out,
+                        elem_size,
+                        false,
+                    );
+                }
                 continue;
             }
             out.push(StringPart::Raw(b));
@@ -1020,6 +1051,163 @@ impl<'a> Tokenizer<'a> {
             self.pos += 1;
         }
         self.finish_char_body(&out, elem_size)
+    }
+
+    /// Decode one escape in an `s"..."` literal using Rust's escape rules
+    /// (verified against rustc): `\x` takes exactly two hex digits and must
+    /// be ASCII, there are no octal escapes, `\u{...}` needs braces, and a
+    /// backslash before a newline continues the line. Anything else is an
+    /// error like in Rust. `escape` is the byte after the backslash and
+    /// `self.pos` is already past it, matching `decode_escape`.
+    fn decode_rust_str_escape(
+        &mut self,
+        escape: u8,
+        body_start: usize,
+        esc_offset: usize,
+        out: &mut Vec<StringPart>,
+    ) {
+        let esc_start = body_start + esc_offset;
+        // Note: a backslash followed by a newline rarely reaches this
+        // decoder — logical-line joining in text_processing usually consumes
+        // it first (keeping the following whitespace, unlike Rust). The
+        // newline arms below only matter for text tokenized without that
+        // preprocessing.
+        match escape {
+            b'\n' => {
+                // Line continuation: skip the newline and all leading
+                // whitespace of the following lines.
+                while self.pos < self.len
+                    && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r')
+                {
+                    self.pos += 1;
+                }
+            }
+            b'\r' => {
+                // Only `\` + `\r\n` continues the line; a lone `\` + `\r`
+                // is an unknown escape like in Rust.
+                if self.pos < self.len && self.bytes[self.pos] == b'\n' {
+                    self.pos += 1;
+                    while self.pos < self.len
+                        && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r')
+                    {
+                        self.pos += 1;
+                    }
+                } else {
+                    self.err(
+                        esc_start,
+                        self.pos,
+                        format!("unknown character escape: `{}`", escape as char),
+                    );
+                }
+            }
+            b'n' => out.push(StringPart::Byte(b'\n')),
+            b'r' => out.push(StringPart::Byte(b'\r')),
+            b't' => out.push(StringPart::Byte(b'\t')),
+            b'\\' => out.push(StringPart::Byte(b'\\')),
+            b'0' => out.push(StringPart::Byte(0)),
+            b'\'' => out.push(StringPart::Byte(b'\'')),
+            b'"' => out.push(StringPart::Byte(b'"')),
+            b'x' => {
+                let mut value = 0u32;
+                for _ in 0..2 {
+                    // A closing quote ends the literal before the escape, so
+                    // like rustc this is "too short" rather than an invalid
+                    // character.
+                    if self.pos >= self.len || self.bytes[self.pos] == b'"' {
+                        self.err(
+                            esc_start,
+                            self.pos,
+                            "numeric character escape is too short".to_string(),
+                        );
+                        return;
+                    }
+                    let b = self.bytes[self.pos];
+                    let Some(digit) = hex_digit_value(b) else {
+                        self.err(
+                            esc_start,
+                            self.pos + 1,
+                            format!(
+                                "invalid character in numeric character escape: `{}`",
+                                b as char
+                            ),
+                        );
+                        return;
+                    };
+                    value = value * 16 + u32::from(digit);
+                    self.pos += 1;
+                }
+                if value > 0x7F {
+                    self.err(esc_start, self.pos, "out of range hex escape".to_string());
+                    return;
+                }
+                out.push(StringPart::Byte(value as u8));
+            }
+            b'u' => {
+                if self.pos >= self.len || self.bytes[self.pos] != b'{' {
+                    self.err(
+                        esc_start,
+                        self.pos,
+                        "incorrect unicode escape sequence".to_string(),
+                    );
+                    return;
+                }
+                self.pos += 1;
+                let mut value = 0u32;
+                let mut digits = 0u32;
+                loop {
+                    if self.pos >= self.len || self.bytes[self.pos] == b'"' {
+                        self.err(
+                            esc_start,
+                            self.pos,
+                            "unterminated unicode escape".to_string(),
+                        );
+                        return;
+                    }
+                    let b = self.bytes[self.pos];
+                    if b == b'}' {
+                        self.pos += 1;
+                        break;
+                    }
+                    let Some(digit) = hex_digit_value(b) else {
+                        self.err(
+                            esc_start,
+                            self.pos + 1,
+                            format!("invalid character in unicode escape: `{}`", b as char),
+                        );
+                        return;
+                    };
+                    value = value * 16 + u32::from(digit);
+                    digits += 1;
+                    self.pos += 1;
+                    if digits > 6 {
+                        self.err(esc_start, self.pos, "overlong unicode escape".to_string());
+                        return;
+                    }
+                }
+                if digits == 0 {
+                    self.err(esc_start, self.pos, "empty unicode escape".to_string());
+                    return;
+                }
+                match char::from_u32(value) {
+                    Some(_) if value < 0x80 => out.push(StringPart::Byte(value as u8)),
+                    Some(_) => out.push(StringPart::CodePoint(value)),
+                    None => {
+                        self.err(
+                            esc_start,
+                            self.pos,
+                            "invalid unicode character escape".to_string(),
+                        );
+                    }
+                }
+            }
+            _ => {
+                self.err(
+                    esc_start,
+                    self.pos,
+                    format!("unknown character escape: `{}`", escape as char),
+                );
+            }
+        }
     }
 
     fn decode_escape(

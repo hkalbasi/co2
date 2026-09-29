@@ -1,0 +1,64 @@
+//@ mode: co2
+//@ compile-fail
+
+fn f1() {
+    const char *p = s"\xFF";
+  //                  ^^^^ error: out of range hex escape
+    (void)p;
+}
+
+fn f2() {
+    const char *p = s"\x4";
+  //                  ^^^ error: numeric character escape is too short
+    (void)p;
+}
+
+fn f3() {
+    const char *p = s"\xfg";
+  //                  ^^^^ error: invalid character in numeric character escape: `g`
+    (void)p;
+}
+
+fn f4() {
+    const char *p = s"\101";
+  //                  ^^ error: unknown character escape: `1`
+    (void)p;
+}
+
+fn f5() {
+    const char *p = s"\a";
+  //                  ^^ error: unknown character escape: `a`
+    (void)p;
+}
+
+fn f6() {
+    const char *p = s"\u41";
+  //                  ^^ error: incorrect unicode escape sequence
+    (void)p;
+}
+
+fn f7() {
+    const char *p = s"\u{}";
+  //                  ^^^^ error: empty unicode escape
+    (void)p;
+}
+
+fn f8() {
+    const char *p = s"\u{0000041}";
+  //                  ^^^^^^^^^^ error: overlong unicode escape
+    (void)p;
+}
+
+fn f9() {
+    const char *p = s"\u{D800}";
+  //                  ^^^^^^^^ error: invalid unicode character escape
+    (void)p;
+}
+
+fn f10() {
+    const char *p = s"\U0041";
+  //                  ^^ error: unknown character escape: `U`
+    (void)p;
+}
+
+fn main() {}
