@@ -1,6 +1,6 @@
-error: found 'int' expected ';'
-  ╭▸ src/broken.co2:1:1
+error: found '(' expected Type specifier, Type qualifier, Storage specifier, Function specifier, or something else
+  ╭▸ src/broken.co2:1:12
   │
 1 │ int version(void)
-  ╰╴━━━ found 'int' expected ';'
+  ╰╴           ━ found '(' expected Type specifier, Type qualifier, Storage specifier, Function specifier, or something else
 error: could not compile `rust_module_parse_error_span` (bin "rust_module_parse_error_span") due to 1 previous error

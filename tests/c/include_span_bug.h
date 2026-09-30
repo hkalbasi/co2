@@ -1,2 +1,2 @@
   int x = 1 < ;
-//^^^ error: found 'int' expected ';'
+            //^ error: expected expression, found ;

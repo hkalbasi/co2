@@ -1303,6 +1303,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
             ut
         };
         let spec: Spanned<EnumSpecifier<R>> = if self.at(&Token::LBrace) {
+            let lbrace = self.pos;
             self.pos += 1;
             let mut enumerators = Vec::new();
             if !self.at(&Token::RBrace) {
@@ -1329,6 +1330,12 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 }
             }
             self.expect(&Token::RBrace, "}")?;
+            if enumerators.is_empty() {
+                return Err(self.fail_at(
+                    self.span_since(lbrace),
+                    "empty enum is invalid".to_string(),
+                ));
+            }
             let span = self.span_since(inner_start);
             match ident {
                 Some(ident) => (
@@ -1493,9 +1500,16 @@ impl<'a, R: TypeResolver> P<'a, R> {
     }
 
     fn parse_decl_specifier(&mut self) -> PR<Spanned<DeclarationSpecifier<R>>> {
+        let start = self.pos;
         match self.parse_decl_specifier_inner() {
             Ok(v) => Ok(v),
             Err(e) => {
+                // A mid-specifier failure (input consumed) already names the
+                // real problem (e.g. `empty enum is invalid`); only rewrite
+                // the message when nothing was consumed at all.
+                if self.pos != start {
+                    return Err(e);
+                }
                 let found = match self.peek(0) {
                     Some(t) => format!("'{t}'"),
                     None => "end of input".to_string(),
@@ -2526,15 +2540,25 @@ fn parse_tu_item<R: TypeResolver>(
         }
     }
     let cp = p.checkpoint();
-    match p.parse_declaration() {
+    let decl_err = match p.parse_declaration() {
         Ok(decl) => {
             declarations.push(decl);
             return Ok(());
         }
-        Err(_) => p.restore(cp),
-    }
+        Err(e) => {
+            // Furthest failure wins: if the declaration attempt consumed
+            // input, its error names the real problem (e.g. `enum E {};`),
+            // so prefer it over the generic `;` fallback below.
+            let advanced = p.pos != cp.0;
+            p.restore(cp);
+            advanced.then_some(e)
+        }
+    };
     if p.eat(&Token::Semicolon).is_some() {
         return Ok(());
+    }
+    if let Some(e) = decl_err {
+        return Err(e);
     }
     // Match the old TU-final `just(Token::Semicolon)` failure wording.
     Err(p.fail_here(match p.peek(0) {
