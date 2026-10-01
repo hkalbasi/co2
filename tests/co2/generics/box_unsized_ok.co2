@@ -1,0 +1,28 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::boxed::Box;
+use std::vec::Vec;
+use std::string::String;
+use std::mem::drop;
+use std::ops::Deref;
+
+#include <assert.h>
+
+fn main() {
+    // `Box<T: ?Sized>` must accept unsized arguments (unlike `Vec<T: Sized>`).
+    Vec::<u8> v = Vec::<u8>::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    Box::<[u8]> b = v.into_boxed_slice();
+    assert(b.len() == 3);
+    ::<&[u8]> r = b.deref();
+    assert(r.len() == 3);
+    drop(b);
+
+    String s = String::from(s"hi");
+    Box::<str> bs = s.into_boxed_str();
+    assert(bs.len() == 2);
+    drop(bs);
+}

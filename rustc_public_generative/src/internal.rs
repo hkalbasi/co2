@@ -2803,6 +2803,218 @@ pub(crate) fn check_fn_predicates(
     Ok(())
 }
 
+fn format_trait_bound_error(
+    tcx: TyCtxt<'_>,
+    trait_def_id: RustcDefId,
+    args: ty::GenericArgsRef<'_>,
+) -> String {
+    let trait_name = tcx.def_path_str(trait_def_id);
+    let args: Vec<String> = args
+        .iter()
+        .map(|arg| match arg.kind() {
+            ty::GenericArgKind::Type(ty) => format!("{ty}"),
+            ty::GenericArgKind::Lifetime(lt) => format!("{lt}"),
+            ty::GenericArgKind::Const(ct) => format!("{ct}"),
+        })
+        .collect();
+    format!(
+        "a trait bound is not satisfied: `{}` for types [{}]",
+        trait_name,
+        args.join(", ")
+    )
+}
+
+fn rustc_ty_is_sized<'tcx>(tcx: TyCtxt<'tcx>, owner: RustcDefId, ty: ty::Ty<'tcx>) -> bool {
+    // Structural fallback for arrays: rustc's solver via
+    // `type_implements_trait` mis-evaluates `[(i32, str); 2]: Sized` as true
+    // (array of DST tail). Array elements must always be `Sized`, so an array
+    // is `Sized` iff its element is `Sized`.
+    // ponytail: solver-only would be shorter; structural arm stays until the
+    // solver mis-evaluation is understood.
+    if let ty::TyKind::Array(elem, _) = ty.kind() {
+        return rustc_ty_is_sized(tcx, owner, *elem);
+    }
+    if ty.walk().any(|arg| {
+        matches!(arg.kind(), ty::GenericArgKind::Type(inner) if matches!(inner.kind(), ty::TyKind::Param(_)))
+    }) {
+        return true;
+    }
+    let Some(sized_def_id) = tcx.lang_items().sized_trait() else {
+        return true;
+    };
+    let infcx = tcx.infer_ctxt().build(ty::TypingMode::non_body_analysis());
+    let param_env = tcx.param_env(owner);
+    infcx
+        .type_implements_trait(
+            sized_def_id,
+            std::iter::once(ty::GenericArg::from(ty)),
+            param_env,
+        )
+        .must_apply_modulo_regions()
+}
+
+fn sized_bound_error<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> String {
+    let Some(sized_def_id) = tcx.lang_items().sized_trait() else {
+        return "a trait bound is not satisfied: `Sized`".to_owned();
+    };
+    let args = tcx.mk_args_from_iter(std::iter::once(ty::GenericArg::from(ty)));
+    format_trait_bound_error(tcx, sized_def_id, args)
+}
+
+/// Reuses rustc's trait solver to check wellformedness of a concrete type:
+/// all nested ADT bounds (`Vec<T>: Sized`, `Cow<B>: ToOwned`, …) plus DST
+/// rules for slices/tuples (`[T]` needs `T: Sized`, tuples need all-but-last
+/// `Sized`). Returns the first bound failure in solver message format along
+/// with the failing type (for precise span mapping).
+pub(crate) fn check_ty_wellformed(
+    tcx: TyCtxt<'_>,
+    owner: DefId,
+    ty: MirTy,
+) -> Result<(), (String, MirTy)> {
+    let rustc_owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let rty = mir_ty_to_rustc(tcx, &ty);
+    check_rustc_ty_wellformed(tcx, rustc_owner, rty)
+}
+
+fn stable_of_rustc_ty(_tcx: TyCtxt<'_>, ty: ty::Ty<'_>) -> MirTy {
+    rustc_public::rustc_internal::stable(ty)
+}
+
+fn check_rustc_ty_wellformed<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: RustcDefId,
+    ty: ty::Ty<'tcx>,
+) -> Result<(), (String, MirTy)> {
+    // Generic contexts cannot be evaluated; skip them entirely.
+    if ty.walk().any(|arg| {
+        matches!(arg.kind(), ty::GenericArgKind::Type(inner) if matches!(inner.kind(), ty::TyKind::Param(_) | ty::TyKind::Infer(_) | ty::TyKind::Placeholder(_) | ty::TyKind::Error(_)))
+    }) {
+        return Ok(());
+    }
+    // Check every nested ADT's predicates via the solver. `walk()` yields the
+    // type itself plus all nested generic args, so one pass covers
+    // `Vec<Vec<[u8]>>` (outer passes, inner `Vec<[u8]>` fails on `[u8]: Sized`).
+    for arg in ty.walk() {
+        let ty::GenericArgKind::Type(inner) = arg.kind() else {
+            continue;
+        };
+        match inner.kind() {
+            ty::TyKind::Adt(def, args) => {
+                for (clause, _span) in tcx.clauses_of(def.did()).clauses {
+                    let instantiated: ty::Clause<'_> = ty::EarlyBinder::bind(tcx, *clause)
+                        .instantiate(tcx, args)
+                        .skip_normalization();
+                    let kind = instantiated.kind().skip_binder();
+                    let ty::ClauseKind::Trait(pred) = kind else {
+                        continue;
+                    };
+                    if pred.trait_ref.has_bound_vars() {
+                        continue;
+                    }
+                    if pred.trait_ref.args.iter().any(|a| {
+                        a.walk().any(|i| {
+                            matches!(i.kind(), ty::GenericArgKind::Type(t) if matches!(t.kind(), ty::TyKind::Param(_) | ty::TyKind::Infer(_) | ty::TyKind::Placeholder(_) | ty::TyKind::Error(_)))
+                        })
+                    }) {
+                        continue;
+                    }
+                    let infcx = tcx.infer_ctxt().build(ty::TypingMode::non_body_analysis());
+                    let param_env = tcx.param_env(owner);
+                    let ocx = ObligationCtxt::new(&infcx);
+                    ocx.register_obligation(PredicateObligation {
+                        cause: ObligationCause::dummy(),
+                        param_env,
+                        recursion_depth: 0,
+                        predicate: instantiated.as_predicate(),
+                    });
+                    if ocx.try_evaluate_obligations().has_errors() {
+                        let msg = format_trait_bound_error(tcx, pred.def_id(), pred.trait_ref.args);
+                        // Failing type is `Self` (first type arg) for `Sized`/`ToOwned`-style bounds.
+                        let failing_rustc = pred
+                            .trait_ref
+                            .args
+                            .iter()
+                            .find_map(|a| match a.kind() {
+                                ty::GenericArgKind::Type(t) => Some(t),
+                                _ => None,
+                            })
+                            .unwrap_or(inner);
+                        return Err((msg, stable_of_rustc_ty(tcx, failing_rustc)));
+                    }
+                }
+            }
+            ty::TyKind::Slice(elem) => {
+                let elem = *elem;
+                if !rustc_ty_is_sized(tcx, owner, elem) {
+                    return Err((sized_bound_error(tcx, elem), stable_of_rustc_ty(tcx, elem)));
+                }
+            }
+            ty::TyKind::Array(elem, _) => {
+                // Array elements must always be `Sized` (unlike tuple/struct
+                // tails which may be DST). Report the whole array to match
+                // `Vec<[(i32, str); 2]>` expectations (`Sized for [array]` at
+                // the array arg span), not the inner tuple.
+                if !rustc_ty_is_sized(tcx, owner, *elem) {
+                    return Err((
+                        sized_bound_error(tcx, inner),
+                        stable_of_rustc_ty(tcx, inner),
+                    ));
+                }
+            }
+            ty::TyKind::Tuple(elems) => {
+                // DST rule: all but the last tuple element must be `Sized`.
+                // Lets `&(i32, Unsized)` pass (tail DST) while rejecting
+                // `&(Unsized, i32)` with the inner unsized element. For
+                // `Vec<(i32, Unsized)>` the outer `Vec: Sized` bound already
+                // fails on the whole tuple first (walk order is outer-first),
+                // so the whole-tuple error is preserved there.
+                if elems.len() >= 2 {
+                    for i in 0..elems.len() - 1 {
+                        let elem = elems[i];
+                        if !rustc_ty_is_sized(tcx, owner, elem) {
+                            return Err((
+                                sized_bound_error(tcx, elem),
+                                stable_of_rustc_ty(tcx, elem),
+                            ));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Is `ty` `Sized` according to rustc's solver (concrete types only)?
+pub(crate) fn rustc_ty_is_sized_for_owner(tcx: TyCtxt<'_>, owner: DefId, ty: MirTy) -> bool {
+    let rustc_owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let rty = mir_ty_to_rustc(tcx, &ty);
+    rustc_ty_is_sized(tcx, rustc_owner, rty)
+}
+
+/// Require `ty: Sized`, returning the solver-formatted bound error for the
+/// whole type (used for locals, which must be `Sized`).
+pub(crate) fn check_ty_sized(
+    tcx: TyCtxt<'_>,
+    owner: DefId,
+    ty: MirTy,
+) -> Result<(), (String, MirTy)> {
+    let rustc_owner = my_def_id_to_rustc_def_id(tcx, owner);
+    let rty = mir_ty_to_rustc(tcx, &ty);
+    // Generic contexts cannot be evaluated; skip them.
+    if rty.walk().any(|arg| {
+        matches!(arg.kind(), ty::GenericArgKind::Type(inner) if matches!(inner.kind(), ty::TyKind::Param(_) | ty::TyKind::Infer(_) | ty::TyKind::Placeholder(_) | ty::TyKind::Error(_)))
+    }) {
+        return Ok(());
+    }
+    if rustc_ty_is_sized(tcx, rustc_owner, rty) {
+        Ok(())
+    } else {
+        Err((sized_bound_error(tcx, rty), ty))
+    }
+}
+
 pub(crate) fn resolve_inherent_method(
     tcx: TyCtxt<'_>,
     owner: DefId,

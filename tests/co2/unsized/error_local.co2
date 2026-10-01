@@ -3,12 +3,12 @@
 
 int f1() {
     str *bar, foo;
-            //^^^ error: local doesn't have a size known at compile-time
+  //^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
 }
 
 int f2() {
     struct Foreign foo;
-                 //^^^ error: local doesn't have a size known at compile-time
+  //^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [__co2_c_adt_Foreign_0__foreign]
 }
 
 pub struct Unsized {
@@ -18,14 +18,14 @@ pub struct Unsized {
 
 int f3() {
     Unsized foo;
-          //^^^ error: local doesn't have a size known at compile-time
+  //^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [Unsized]
 }
 
 type A = [u8];
 
 fn f4() {
     A a;
-    //^ error: local doesn't have a size known at compile-time
+  //^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[u8]]
 }
 
 fn main() {

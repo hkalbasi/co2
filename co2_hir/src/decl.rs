@@ -27,8 +27,8 @@ use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, invalid_span, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
-    adt_field_tys, array_elem_ty, enum_payload_ty, is_array_ty, is_unsized_ty,
-    resolve_field_path_in_adt, ty_matches_expected,
+    adt_field_tys, array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt,
+    ty_matches_expected,
 };
 
 pub enum CTy {
@@ -379,17 +379,48 @@ impl HirCtx<'_> {
             .collect()
     }
 
+    /// Rustc-based wellformedness check, reusing `clauses_of` + trait solver.
+    /// On failure reports `msg` at the failing arg's span when `failing_ty`
+    /// matches one of `arg_spans`, else at `outer_span`.
+    fn check_wf_ty(
+        &self,
+        ty: Ty,
+        outer_span: co2_ast::Span,
+        arg_spans: &[(Ty, co2_ast::Span)],
+    ) -> Ty {
+        let owner = self.decl_resolver.current_owner();
+        let deps = self.decl_resolver.dependency_info();
+        if let Err((msg, failing)) = deps.check_ty_wellformed(ty, owner) {
+            if let Some((_, span)) = arg_spans.iter().find(|(t, _)| *t == failing) {
+                self.terminate_with_error(*span, &msg);
+            }
+            // Nested failure inside one of the args (e.g. `Vec<Vec<[u8]>>`
+            // failing on inner `[u8]`)? That inner arg already reported during
+            // its own lowering (deepest-first), so reaching here means the
+            // failure is at this level but span mapping missed — fall back to
+            // outer. For alias uses (`T`/`A`/`R` with no args) outer *is* the
+            // use site, which is exactly what wrapped-typedef tests expect.
+            self.terminate_with_error(outer_span, &msg);
+        }
+        ty
+    }
+
     pub(crate) fn lower_rust_ty(&self, (ty, span): Spanned<RustTy<LocalResolver>>) -> Ty {
         match ty {
             RustTy::Path((path, path_span)) => self.ty_of_resolved_path(&path, path_span),
-            RustTy::Ptr { mutable, inner } => Ty::new_ptr(
-                self.lower_rust_ty(*inner),
-                if mutable {
-                    Mutability::Mut
-                } else {
-                    Mutability::Not
-                },
-            ),
+            RustTy::Ptr { mutable, inner } => {
+                let inner_span = inner.1;
+                let inner_ty = self.lower_rust_ty(*inner);
+                let ty = Ty::new_ptr(
+                    inner_ty,
+                    if mutable {
+                        Mutability::Mut
+                    } else {
+                        Mutability::Not
+                    },
+                );
+                self.check_wf_ty(ty, span, &[(inner_ty, inner_span)])
+            }
             RustTy::Ref {
                 lifetime,
                 mutable,
@@ -406,23 +437,39 @@ impl HirCtx<'_> {
                         self.terminate_with_error(*lt_span, &format!("unknown lifetime '{name}"))
                     }
                 };
-                Ty::new_ref(
+                let inner_span = inner.1;
+                let inner_ty = self.lower_rust_ty(*inner);
+                let ty = Ty::new_ref(
                     region,
-                    self.lower_rust_ty(*inner),
+                    inner_ty,
                     if mutable {
                         Mutability::Mut
                     } else {
                         Mutability::Not
                     },
-                )
+                );
+                self.check_wf_ty(ty, span, &[(inner_ty, inner_span)])
             }
-            RustTy::Tuple(elems) => Ty::new_tuple(
-                &elems
+            RustTy::Tuple(elems) => {
+                let lowered: Vec<(Ty, co2_ast::Span)> = elems
                     .into_iter()
-                    .map(|elem| self.lower_rust_ty(elem))
-                    .collect::<Vec<_>>(),
-            ),
-            RustTy::Slice(inner) => Ty::from_rigid_kind(RigidTy::Slice(self.lower_rust_ty(*inner))),
+                    .map(|elem| {
+                        let span = elem.1;
+                        let ty = self.lower_rust_ty(elem);
+                        (ty, span)
+                    })
+                    .collect();
+                let tys: Vec<Ty> = lowered.iter().map(|(t, _)| *t).collect();
+                let ty = Ty::new_tuple(&tys);
+                let arg_spans = lowered;
+                self.check_wf_ty(ty, span, &arg_spans)
+            }
+            RustTy::Slice(inner) => {
+                let inner_span = inner.1;
+                let inner_ty = self.lower_rust_ty(*inner);
+                let ty = Ty::from_rigid_kind(RigidTy::Slice(inner_ty));
+                self.check_wf_ty(ty, span, &[(inner_ty, inner_span)])
+            }
             RustTy::Array { inner, len } => {
                 let Some(len) = len.0.constant_len() else {
                     self.terminate_with_error(
@@ -436,13 +483,16 @@ impl HirCtx<'_> {
                         "Rust array generic argument length is too large for this target",
                     );
                 };
-                Ty::from_rigid_kind(RigidTy::Array(
-                    self.lower_rust_ty(*inner),
+                let inner_span = inner.1;
+                let inner_ty = self.lower_rust_ty(*inner);
+                let ty = Ty::from_rigid_kind(RigidTy::Array(
+                    inner_ty,
                     TyConst::try_from_target_usize(
                         len.try_into().expect("array len should fit u64"),
                     )
                     .expect("array len should fit target usize"),
-                ))
+                ));
+                self.check_wf_ty(ty, span, &[(inner_ty, inner_span)])
             }
             RustTy::BareFn { params, ret_ty } => {
                 let mut inputs_and_output = params
@@ -479,7 +529,10 @@ impl HirCtx<'_> {
             co2_crate_sig::DefOrLocal::Def {
                 def_id,
                 generic_args,
-            } if generic_args.is_empty() => CrateItem(*def_id).ty(),
+            } if generic_args.is_empty() => {
+                let ty = CrateItem(*def_id).ty();
+                self.check_wf_ty(ty, span, &[])
+            }
             co2_crate_sig::DefOrLocal::Def {
                 def_id,
                 generic_args,
@@ -514,6 +567,12 @@ impl HirCtx<'_> {
                                 "too many lifetime parameters",
                             )]);
                         }
+                    }
+                }
+                let mut arg_spans: Vec<(Ty, co2_ast::Span)> = Vec::new();
+                for (parsed, lowered) in generic_args.iter().zip(generic_arg_kinds.iter()) {
+                    if let GenericArgKind::Type(ty) = lowered {
+                        arg_spans.push((*ty, parsed.1));
                     }
                 }
                 let ty = Ty::from_rigid_kind(RigidTy::Adt(
@@ -552,7 +611,7 @@ impl HirCtx<'_> {
                         )]);
                     }
                 }
-                ty
+                self.check_wf_ty(ty, span, &arg_spans)
             }
             co2_crate_sig::DefOrLocal::Const(_) => panic!("Invalid const in type position"),
             co2_crate_sig::DefOrLocal::AssocMethod { .. } => {
@@ -789,11 +848,20 @@ impl HirCtx<'_> {
                         }
                     };
 
-                    if is_unsized_ty(&ty) {
-                        self.terminate_with_error(
-                            parser_span,
-                            "local doesn't have a size known at compile-time",
-                        );
+                    // Locals must be `Sized`.
+                    // Base lowering already reported nested `Vec<str>`-style
+                    // failures at their inner spans; this catches bare unsized
+                    // (`A a` where `A = [(i32, str); 2]`) at the base type.
+                    {
+                        let owner = self.decl_resolver.current_owner();
+                        let deps = self.decl_resolver.dependency_info();
+                        if let Err((msg, _)) = deps.check_ty_sized(ty, owner) {
+                            let base_span = declaration_specifiers
+                                .first()
+                                .map(|s| s.1)
+                                .unwrap_or(parser_span);
+                            self.terminate_with_error(base_span, &msg);
+                        }
                     }
 
                     let span = self.to_rust_span(parser_span);
@@ -1657,11 +1725,13 @@ impl HirCtx<'_> {
                         {
                             param_ty = Ty::new_ptr(elem, Mutability::Mut);
                         }
-                        if is_unsized_ty(&param_ty) {
-                            self.terminate_with_error(
-                                param_ty_span,
-                                "parameter doesn't have a size known at compile-time",
-                            );
+                        // Params must be `Sized` (same solver check as locals).
+                        {
+                            let owner = self.decl_resolver.current_owner();
+                            let deps = self.decl_resolver.dependency_info();
+                            if let Err((msg, _)) = deps.check_ty_sized(param_ty, owner) {
+                                self.terminate_with_error(param_ty_span, &msg);
+                            }
                         }
                         inputs.push(param_ty);
                     }

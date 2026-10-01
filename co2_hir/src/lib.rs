@@ -21,5 +21,5 @@ pub use item::{
 };
 pub use resolver::{HirCtx, ResolvedValue};
 pub use stmt::HirStmt;
+pub use ty::enum_payload_ty;
 pub use ty::format_ty;
-pub use ty::{enum_payload_ty, is_unsized_ty};

@@ -128,6 +128,18 @@ impl DependencyInfo<'_> {
         internal::check_fn_predicates(self.tcx, fn_def_id, fn_generic_args, owner)
     }
 
+    pub fn check_ty_wellformed(&self, ty: Ty, owner: DefId) -> Result<(), (String, Ty)> {
+        internal::check_ty_wellformed(self.tcx, owner, ty)
+    }
+
+    pub fn ty_is_sized(&self, ty: Ty, owner: DefId) -> bool {
+        internal::rustc_ty_is_sized_for_owner(self.tcx, owner, ty)
+    }
+
+    pub fn check_ty_sized(&self, ty: Ty, owner: DefId) -> Result<(), (String, Ty)> {
+        internal::check_ty_sized(self.tcx, owner, ty)
+    }
+
     pub fn resolve_inherent_method(
         &self,
         owner: DefId,

@@ -55,31 +55,53 @@ fn is_adt_overload(ty: Ty) -> bool {
     false
 }
 
-fn is_thin_ptr_ty(ty: Ty) -> bool {
-    if is_maybe_uninit_fn_ptr_ty(ty).is_some() {
-        return true;
+impl HirCtx<'_> {
+    fn is_thin_ptr_ty(&self, ty: Ty) -> bool {
+        if is_maybe_uninit_fn_ptr_ty(ty).is_some() {
+            return true;
+        }
+        match ty.kind() {
+            TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => self.is_sized_ty(pointee),
+            TyKind::RigidTy(RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)) => true,
+            _ => false,
+        }
     }
-    match ty.kind() {
-        TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => !crate::ty::is_unsized_ty(&pointee),
-        TyKind::RigidTy(RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)) => true,
-        _ => false,
-    }
-}
 
-fn is_comparison_operand_ty(ty: Ty) -> bool {
-    if is_numeric_ty(ty) {
-        return true;
+    fn is_comparison_operand_ty(&self, ty: Ty) -> bool {
+        if is_numeric_ty(ty) {
+            return true;
+        }
+        if matches!(ty.kind(), TyKind::RigidTy(RigidTy::Char)) {
+            return true;
+        }
+        if enum_payload_ty(ty).is_some() {
+            return true;
+        }
+        if self.is_thin_ptr_ty(ty) {
+            return true;
+        }
+        false
     }
-    if matches!(ty.kind(), TyKind::RigidTy(RigidTy::Char)) {
-        return true;
+
+    fn is_fat_or_ref_ty(&self, ty: Ty) -> bool {
+        match ty.kind() {
+            TyKind::RigidTy(RigidTy::Ref(_, _, _)) => true,
+            TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => !self.is_sized_ty(pointee),
+            // Bare unsized values (`str`, tuples/structs/arrays with DST tails).
+            _ => !self.is_sized_ty(ty),
+        }
     }
-    if enum_payload_ty(ty).is_some() {
-        return true;
+
+    // A pointer/reference to unsized data (slices, `str`) can never participate
+    // in C pointer arithmetic: indexing it would need the `Index` trait.
+    fn is_unsized_ptr_or_ref_ty(&self, ty: Ty) -> bool {
+        match ty.kind() {
+            TyKind::RigidTy(RigidTy::Ref(_, pointee, _)) => !self.is_sized_ty(pointee),
+            TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => !self.is_sized_ty(pointee),
+            // Bare unsized values (covers `str`/slices plus DST tuples/structs).
+            _ => !self.is_sized_ty(ty),
+        }
     }
-    if is_thin_ptr_ty(ty) {
-        return true;
-    }
-    false
 }
 
 fn is_float_ty(ty: Ty) -> bool {
@@ -90,28 +112,6 @@ fn is_float_ty(ty: Ty) -> bool {
         return is_float_ty(inner);
     }
     matches!(ty.kind(), TyKind::RigidTy(RigidTy::Float(_)))
-}
-
-fn is_fat_or_ref_ty(ty: Ty) -> bool {
-    match ty.kind() {
-        TyKind::RigidTy(RigidTy::Ref(_, _, _)) => true,
-        TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => crate::ty::is_unsized_ty(&pointee),
-        TyKind::RigidTy(
-            RigidTy::Str | RigidTy::Slice(_) | RigidTy::Dynamic(_, _) | RigidTy::Foreign(_),
-        ) => true,
-        _ => false,
-    }
-}
-
-// A pointer/reference to unsized data (slices, `str`) can never participate
-// in C pointer arithmetic: indexing it would need the `Index` trait.
-fn is_unsized_ptr_or_ref_ty(ty: Ty) -> bool {
-    match ty.kind() {
-        TyKind::RigidTy(RigidTy::Ref(_, pointee, _)) => crate::ty::is_unsized_ty(&pointee),
-        TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => crate::ty::is_unsized_ty(&pointee),
-        TyKind::RigidTy(RigidTy::Str | RigidTy::Slice(_) | RigidTy::Dynamic(_, _)) => true,
-        _ => false,
-    }
 }
 
 fn first_unresolved_generic_arg_index(args: &[GenericArgKind]) -> usize {
@@ -4401,12 +4401,12 @@ impl HirCtx<'_> {
         }
 
         if op.is_comparison()
-            && (!is_comparison_operand_ty(lhs.ty) || !is_comparison_operand_ty(rhs.ty))
+            && (!self.is_comparison_operand_ty(lhs.ty) || !self.is_comparison_operand_ty(rhs.ty))
             && (lhs.ty == rhs.ty
-                || (is_fat_or_ref_ty(lhs.ty) && is_fat_or_ref_ty(rhs.ty))
+                || (self.is_fat_or_ref_ty(lhs.ty) && self.is_fat_or_ref_ty(rhs.ty))
                 // A fat raw pointer can never be cast to `usize` for comparison.
-                || matches!(lhs.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(p, _)) if crate::ty::is_unsized_ty(&p))
-                || matches!(rhs.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(p, _)) if crate::ty::is_unsized_ty(&p)))
+                || matches!(lhs.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(p, _)) if !self.is_sized_ty(p))
+                || matches!(rhs.ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(p, _)) if !self.is_sized_ty(p)))
         {
             return Err(spanned_error(
                 parser_span,
@@ -4437,7 +4437,7 @@ impl HirCtx<'_> {
         if matches!(op, HirBinOp::Add | HirBinOp::Sub) {
             // Pointer arithmetic on a fat pointer (or indexing a slice/`str`,
             // which lowers to `+`) would need the `Index` trait.
-            if is_unsized_ptr_or_ref_ty(lhs.ty) || is_unsized_ptr_or_ref_ty(rhs.ty) {
+            if self.is_unsized_ptr_or_ref_ty(lhs.ty) || self.is_unsized_ptr_or_ref_ty(rhs.ty) {
                 return Err(spanned_error(
                     parser_span,
                     "operator overloading is not supported",

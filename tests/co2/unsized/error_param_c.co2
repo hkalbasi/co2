@@ -1,0 +1,22 @@
+//@ mode: co2
+//@ compile-fail
+
+// C declarator params must be `Sized`, with the same solver diagnostics as
+// locals (not the old `parameter doesn't have a size...` message).
+fn f3() {
+    int (*fp)(str x);
+    //        ^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+    (void)fp;
+}
+
+type B = (i32, str);
+
+// The old structural check missed tuple tails here (`(i32, str)` looked
+// `Sized`); the solver rejects it like the local/generic-arg paths do.
+fn f4() {
+    int (*fp)(B x);
+    //        ^ error: a trait bound is not satisfied: `std::marker::Sized` for types [(i32, str)]
+    (void)fp;
+}
+
+fn main() {}

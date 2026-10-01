@@ -49,6 +49,22 @@ fn f7() {
     (void)x;
 }
 
+// The old structural unsized check missed tuple/array DST tails, treating
+// `*(i32, str)` as thin. The solver knows `(i32, str): Sized` is false, so
+// comparing such fat pointers is rejected like `*const str` above.
+fn f8(p: *const (i32, str), q: *const (i32, str)) {
+    bool b = p == q;
+        //   ^^^^^^ error: operator overloading is not supported
+    (void)b;
+}
+
+// Pointer arithmetic on a fat pointer needs `Index`; `*(i32, str)` is fat.
+fn f9(p: *const (i32, str)) {
+    auto q = p + 1;
+    //       ^^^^^ error: operator overloading is not supported
+    (void)q;
+}
+
 fn main() {
     f1();
     f2();

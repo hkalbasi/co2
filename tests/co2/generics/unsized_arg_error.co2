@@ -1,0 +1,87 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::vec::Vec;
+use std::collections::HashMap;
+use std::mem::{size_of, drop};
+
+fn f1() {
+    Vec::<str> v = Vec::<str>::new();
+    //    ^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+    (void)v;
+}
+
+fn f2() {
+    Vec::<[u8]> v = Vec::<[u8]>::new();
+    //    ^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[u8]]
+    (void)v;
+}
+
+pub struct MyUnsized {
+    f1: i32,
+    f2: str,
+}
+
+fn f3() {
+    Vec::<MyUnsized> v = Vec::<MyUnsized>::new();
+    //    ^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [MyUnsized]
+    (void)v;
+}
+
+
+fn f4() {
+    HashMap::<i32, str> v = HashMap::<i32, str>::new();
+            //     ^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+    (void)v;
+}
+
+fn f5() {
+    Vec::<Vec<[u8]>> v = Vec::<Vec<[u8]>>::new();
+        //    ^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[u8]]
+    (void)v;
+}
+
+fn f6() {
+    Vec::<(i32, MyUnsized)> v = Vec::<(i32, MyUnsized)>::new();
+    //    ^^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [(i32, MyUnsized)]
+    (void)v;
+}
+
+fn f7() {
+    size_of::<Vec::<(i32, MyUnsized)>>();
+                //  ^^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [(i32, MyUnsized)]
+}
+
+fn f8() {
+    Vec::<[(i32, str); 2]> v = Vec::<[(i32, str); 2]>::new();
+    //    ^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[(i32, str); 2]]
+    drop(v);
+}
+
+type A = [(i32, str); 2];
+
+fn f9() {
+    A a;
+  //^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[(i32, str); 2]]
+    (void)a;
+}
+
+fn f10() {
+    Vec::<A> v = Vec::<A>::new();
+    //    ^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[(i32, str); 2]]
+    drop(v);
+}
+
+fn f11() {
+    ::<&[MyUnsized]> v;
+    //   ^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [MyUnsized]
+    (void)v;
+}
+
+fn f12() {
+    ::<&(i32, MyUnsized)> good;
+    ::<&(MyUnsized, i32)> bad;
+    //   ^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [MyUnsized]
+}
+
+fn main() {}

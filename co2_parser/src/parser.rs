@@ -1331,10 +1331,9 @@ impl<'a, R: TypeResolver> P<'a, R> {
             }
             self.expect(&Token::RBrace, "}")?;
             if enumerators.is_empty() {
-                return Err(self.fail_at(
-                    self.span_since(lbrace),
-                    "empty enum is invalid".to_string(),
-                ));
+                return Err(
+                    self.fail_at(self.span_since(lbrace), "empty enum is invalid".to_string())
+                );
             }
             let span = self.span_since(inner_start);
             match ident {

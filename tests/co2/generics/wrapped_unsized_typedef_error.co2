@@ -1,0 +1,30 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::vec::Vec;
+
+// An invalid instantiation hidden behind a tuple/array/ref alias must still
+// be rejected when the alias is used (not just for top-level `Vec<...>`).
+type T = (Vec<str>, i32);
+type A = [Vec<str>; 2];
+type R = &Vec<str>;
+
+fn f1() {
+    T t;
+  //^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+    (void)t;
+}
+
+fn f2() {
+    A a;
+  //^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+    (void)a;
+}
+
+fn f3() {
+    R r;
+  //^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+    (void)r;
+}
+
+fn main() {}

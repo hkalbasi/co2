@@ -1,0 +1,40 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::vec::Vec;
+use std::collections::HashMap;
+use std::mem::{drop, size_of};
+use std::borrow::Cow;
+
+pub struct UnHash {
+    f1: i32,
+    f2: Vec<i32>,
+}
+
+fn p1(a: HashMap<i32, UnHash>, b: i32) {
+    a.get(&b);
+    drop(a);
+}
+
+fn f1(a: HashMap<UnHash, i32>, b: UnHash) {
+    a.get(&b);
+//  ^ error: unknown field `get` on type HashMap<UnHash, i32, RandomState, Global>
+    drop(a);
+}
+
+pub struct UnClone {
+    f1: i32,
+    f2: Vec<i32>,
+}
+
+fn f2() {
+    Cow::<'static, UnClone> x;
+                // ^^^^^^^ error: a trait bound is not satisfied: `std::borrow::ToOwned` for types [UnClone]
+}
+
+fn f3() {
+    size_of::<Cow::<'static, UnClone>>();
+                        //   ^^^^^^^ error: a trait bound is not satisfied: `std::borrow::ToOwned` for types [UnClone]
+}
+
+fn main() {}
