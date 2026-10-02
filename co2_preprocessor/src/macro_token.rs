@@ -4,7 +4,7 @@
 //! in `MacroDef` and used during expansion for `#` (stringification) and `##` (paste)
 //! operations instead of re-scanning the raw body text at each expansion.
 
-use super::utils::{ident_cont_len, ident_start_len, is_ident_start_byte};
+use super::utils::{ident_cont_len, ident_start_len, is_ident_start_byte, is_lifetime_start};
 
 /// A token within a macro definition body.
 ///
@@ -65,7 +65,7 @@ pub(crate) fn tokenize_macro_body(text: &str) -> Vec<MacroBodyToken> {
             continue;
         }
 
-        if b == b'\'' {
+        if b == b'\'' && !is_lifetime_start(bytes, i) {
             let start = i;
             i += 1;
             while i < len && bytes[i] != b'\'' {

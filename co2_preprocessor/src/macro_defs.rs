@@ -19,7 +19,7 @@ use std::cell::Cell;
 use super::macro_token::{MacroBodyToken, resolve_params, tokenize_macro_body};
 use super::utils::{
     bytes_to_str, copy_literal_bytes_to_string, is_ident_cont_byte, is_ident_start_byte,
-    skip_literal_bytes,
+    is_lifetime_start, skip_literal_bytes,
 };
 
 /// Check if two adjacent bytes would form an unintended multi-character token
@@ -1533,8 +1533,8 @@ fn stringify_arg(arg: &str) -> String {
             continue;
         }
 
-        // Handle char literals
-        if bytes[i] == b'\'' {
+        // Handle char literals (but not Co2 lifetimes like `'static`)
+        if bytes[i] == b'\'' && !is_lifetime_start(bytes, i) {
             result.push('\'');
             i += 1;
             while i < len && bytes[i] != b'\'' {

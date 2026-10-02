@@ -188,10 +188,35 @@ pub fn literal_prefix_len(bytes: &[u8], start: usize) -> usize {
     }
 }
 
+/// Whether `'` at `pos` starts a Co2 lifetime (`'static`, `'a`, `'_`) rather
+/// than a C character literal. Matches the tokenizer: `'` + ident not
+/// followed by a closing `'` is a lifetime.
+#[inline(always)]
+pub fn is_lifetime_start(bytes: &[u8], pos: usize) -> bool {
+    if bytes.get(pos) != Some(&b'\'') {
+        return false;
+    }
+    let Some(&next) = bytes.get(pos + 1) else {
+        return true;
+    };
+    if !is_ident_start_byte(next) {
+        return false;
+    }
+    let mut j = pos + 1;
+    while j < bytes.len() && is_ident_cont_byte(bytes[j]) {
+        j += 1;
+    }
+    // `'a'` (ident + closing quote) is a char literal; otherwise a lifetime.
+    !(j < bytes.len() && bytes[j] == b'\'')
+}
+
 /// Skip past a string or character literal in a byte slice, starting at position `i`.
 /// Returns the position after the closing quote. Handles backslash escapes.
 /// Byte-oriented version for code that processes `&[u8]` directly.
 pub fn skip_literal_bytes(bytes: &[u8], start: usize, quote: u8) -> usize {
+    if quote == b'\'' && is_lifetime_start(bytes, start) {
+        return start + 1;
+    }
     let len = bytes.len();
     let mut i = start + 1; // skip opening quote
     while i < len {
@@ -215,6 +240,10 @@ pub fn copy_literal_bytes_raw(
     quote: u8,
     result: &mut Vec<u8>,
 ) -> usize {
+    if quote == b'\'' && is_lifetime_start(bytes, start) {
+        result.push(bytes[start]);
+        return start + 1;
+    }
     let len = bytes.len();
     result.push(bytes[start]); // opening quote
     let mut i = start + 1;
@@ -270,6 +299,10 @@ pub fn copy_literal_bytes_to_string(
     quote: u8,
     result: &mut String,
 ) -> usize {
+    if quote == b'\'' && is_lifetime_start(bytes, start) {
+        result.push('\'');
+        return start + 1;
+    }
     let len = bytes.len();
     // Find the end of the literal first, then copy as a single &str slice
     // (the common case), avoiding per-byte push.

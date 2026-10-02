@@ -1,0 +1,48 @@
+//@ mode: co2
+//@ run-status: 0
+
+#include <assert.h>
+#include <string.h>
+
+#define LIFETY &'static str
+#define ID(x) x
+#define STR(x) #x
+#define FLAG 1
+
+fn early(x: &'static str) -> i32 {
+    return 1;
+}
+
+#if FLAG == 1
+fn in_cond(a: i32) -> i32 {
+    return a;
+}
+#endif
+
+#define AFTER 42
+
+#if FLAG == 1
+fn mid(x: &'static str) -> i32 {
+    return 2;
+}
+#endif
+
+fn takes(x: LIFETY) -> i32 {
+    return AFTER;
+}
+
+fn ident(x: ID(&'static str)) -> i32 {
+    return 1;
+}
+
+fn main() {
+    assert(early(s"hi") == 1);
+    assert(in_cond(1) == 1);
+    assert(mid(s"hi") == 2);
+    assert(takes(s"hi") == 42);
+    assert(ident(s"hi") == 1);
+    const char *p = STR(&'static x);
+    assert(strlen(p) == 10);
+    assert(p[0] == '&');
+    assert('a' == 97);
+}

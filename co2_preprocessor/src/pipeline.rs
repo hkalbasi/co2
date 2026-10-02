@@ -22,7 +22,7 @@ use super::macro_defs::{MacroDef, MacroTable, macro_def_from_parts, parse_define
 use super::macro_token::{resolve_params, tokenize_macro_body};
 use super::text_processing::{LogicalSlice, split_first_word, strip_line_comment};
 use super::tokenizer;
-use super::utils::{is_ident_cont, is_ident_start};
+use super::utils::{is_ident_cont, is_ident_start, is_lifetime_start};
 
 use crate::SourceFile;
 
@@ -487,8 +487,8 @@ impl Preprocessor {
         let mut out = String::with_capacity(text.len() + 16);
         let mut i = 0usize;
         while i < len {
-            // Skip string/char literals verbatim
-            if bytes[i] == b'"' || bytes[i] == b'\'' {
+            // Skip string/char literals verbatim (but not Co2 lifetimes like `'static`)
+            if bytes[i] == b'"' || (bytes[i] == b'\'' && !is_lifetime_start(bytes, i)) {
                 let quote = bytes[i];
                 out.push(quote as char);
                 i += 1;

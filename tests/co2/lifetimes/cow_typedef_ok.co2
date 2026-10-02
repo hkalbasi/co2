@@ -5,15 +5,13 @@ use std::borrow::Cow;
 use std::string::String;
 use std::mem::drop;
 
+#include <assert.h>
+
 type W = Cow<'static, str>;
 
 fn main() {
     W w = W::Borrowed(s"hi");
     String s = w.into_owned();
-    // NOTE: `assert(...)` cannot be used here: any explicit lifetime
-    // annotation breaks later function-like macro calls (separate bug).
-    if (s.len() != 2) {
-        std::process::exit(1);
-    }
+    assert(s.len() == 2);
     drop(s);
 }
