@@ -1,0 +1,9 @@
+//@ mode: co2
+//@ compile-fail
+
+fn f() -> str {
+//        ^^^ error: the size for values of type `str` cannot be known at compilation time
+    return s"hi";
+}
+
+fn main() {}

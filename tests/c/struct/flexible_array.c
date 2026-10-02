@@ -27,6 +27,14 @@ int main() {
         return 2;
     }
 
+    if (alignof(struct S) != 4) {
+        return 5;
+    }
+
+    if (alignof(struct T) != 4) {
+        return 6;
+    }
+
     struct S s1 = {1, 2};
 
     if (s1.x != 1 || s1.y != 2) {

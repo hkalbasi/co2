@@ -2679,6 +2679,15 @@ impl HirCtx<'_> {
                 let size = if let HirExprKind::ConstStr(s) = &inner.kind {
                     s.storage_size() as u64
                 } else {
+                    // Operands must be `Sized` (same solver check as locals);
+                    // unsized layouts would otherwise silently yield 0.
+                    {
+                        let owner = self.decl_resolver.current_owner();
+                        let deps = self.decl_resolver.dependency_info();
+                        if let Err((msg, _)) = deps.check_ty_sized(inner.ty, owner) {
+                            return Err(spanned_error(parser_span, msg));
+                        }
+                    }
                     inner
                         .ty
                         .layout()
@@ -2875,6 +2884,15 @@ impl HirCtx<'_> {
             Expression::SizeofType(type_name) => {
                 let ty =
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
+                // Operands must be `Sized` (same solver check as locals);
+                // unsized layouts would otherwise silently yield 0.
+                {
+                    let owner = self.decl_resolver.current_owner();
+                    let deps = self.decl_resolver.dependency_info();
+                    if let Err((msg, _)) = deps.check_ty_sized(ty, owner) {
+                        return Err(spanned_error(parser_span, msg));
+                    }
+                }
                 let size = ty
                     .layout()
                     .map_err(|e| {
@@ -2895,6 +2913,14 @@ impl HirCtx<'_> {
             Expression::AlignofType(type_name) => {
                 let ty =
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
+                // Operands must be `Sized` (same solver check as sizeof).
+                {
+                    let owner = self.decl_resolver.current_owner();
+                    let deps = self.decl_resolver.dependency_info();
+                    if let Err((msg, _)) = deps.check_ty_sized(ty, owner) {
+                        return Err(spanned_error(parser_span, msg));
+                    }
+                }
                 let align = ty
                     .layout()
                     .map_err(|e| {
@@ -2913,6 +2939,14 @@ impl HirCtx<'_> {
             }
             Expression::Alignof(expr) => {
                 let inner = self.lower_expr(*expr, locals, local_map)?;
+                // Operands must be `Sized` (same solver check as sizeof).
+                {
+                    let owner = self.decl_resolver.current_owner();
+                    let deps = self.decl_resolver.dependency_info();
+                    if let Err((msg, _)) = deps.check_ty_sized(inner.ty, owner) {
+                        return Err(spanned_error(parser_span, msg));
+                    }
+                }
                 let align = inner
                     .ty
                     .layout()

@@ -1484,6 +1484,15 @@ impl HirCtx<'_> {
     }
 
     fn sizeof_ty(&self, ty: Ty) -> Result<u64, (co2_ast::Span, String)> {
+        // Operands must be `Sized` (same solver check as locals and runtime
+        // sizeof); unsized layouts would otherwise silently yield 0.
+        {
+            let owner = self.decl_resolver.current_owner();
+            let deps = self.decl_resolver.dependency_info();
+            if let Err((msg, _)) = deps.check_ty_sized(ty, owner) {
+                return Err(spanned_error(invalid_span(), msg));
+            }
+        }
         ty.layout()
             .map_err(|e| {
                 spanned_error(
@@ -1495,6 +1504,14 @@ impl HirCtx<'_> {
     }
 
     fn alignof_ty(&self, ty: Ty) -> Result<u64, (co2_ast::Span, String)> {
+        // Operands must be `Sized` (same solver check as sizeof).
+        {
+            let owner = self.decl_resolver.current_owner();
+            let deps = self.decl_resolver.dependency_info();
+            if let Err((msg, _)) = deps.check_ty_sized(ty, owner) {
+                return Err(spanned_error(invalid_span(), msg));
+            }
+        }
         ty.layout()
             .map_err(|e| {
                 spanned_error(

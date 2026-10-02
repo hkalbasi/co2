@@ -1,0 +1,45 @@
+//@ mode: co2
+//@ compile-fail
+
+fn f1() {
+    int a = sizeof(str);
+  //        ^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+}
+
+type B = [u8];
+
+fn f2() {
+    int a = sizeof(B);
+  //        ^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[u8]]
+}
+
+pub struct MyUnsized {
+    f1: i32,
+    f2: str,
+}
+
+fn f3() {
+    int a = sizeof(MyUnsized);
+  //        ^^^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [MyUnsized]
+}
+
+type A = [(i32, str); 2];
+
+fn f4() {
+    int a = sizeof(A);
+  //               ^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[(i32, str); 2]]
+}
+
+use std::vec::Vec;
+
+fn f5() {
+    int a = sizeof(Vec::<[u8]>);
+  //                     ^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[u8]]
+}
+
+fn f6() {
+    int a = sizeof(::<[u8]>);
+          //^^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[u8]]
+}
+
+fn main() {}

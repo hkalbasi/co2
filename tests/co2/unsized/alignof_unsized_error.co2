@@ -1,0 +1,55 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::mem::align_of;
+
+fn f1() {
+    int a = alignof(str);
+  //        ^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+}
+
+fn f2() {
+    usize b = align_of::<str>();
+  //          ^^^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [str]
+}
+
+type B = [u8];
+
+fn f3() {
+    int a = alignof(B);
+  //        ^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[u8]]
+}
+
+fn f4() {
+    usize b = align_of::<[u8]>();
+  //          ^^^^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[u8]]
+}
+
+pub struct MyUnsized {
+    f1: i32,
+    f2: str,
+}
+
+fn f5() {
+    int a = alignof(MyUnsized);
+  //        ^^^^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [MyUnsized]
+}
+
+fn f6() {
+    usize b = align_of::<MyUnsized>();
+  //          ^^^^^^^^^^^^^^^^^^^^^^^ error: a trait bound is not satisfied: `std::marker::Sized` for types [MyUnsized]
+}
+
+type A = [(i32, str); 2];
+
+fn f7() {
+    int a = alignof(A);
+  //                ^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[(i32, str); 2]]
+}
+
+fn f8() {
+    usize b = align_of::<A>();
+  //                     ^ error: a trait bound is not satisfied: `std::marker::Sized` for types [[(i32, str); 2]]
+}
+
+fn main() {}
