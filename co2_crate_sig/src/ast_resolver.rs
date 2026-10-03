@@ -706,6 +706,47 @@ pub enum DefOrLocal {
     InlineRustTy(Box<co2_ast::RustTy<LocalResolver>>),
 }
 
+/// Rust E0659: a name provided by multiple distinct glob imports with no
+/// explicit or local binding is an error when used. Returns the diagnostic to
+/// emit for `stripped` (an all-identifier path), if any.
+fn ambiguous_use_error(
+    resolver: &mut Resolver,
+    module_path: &[String],
+    stripped: &co2_ast::RustPath<StatelessResolver>,
+) -> Option<(String, co2_ast::Span)> {
+    use co2_ast::RustPathSegment::Ident;
+    let mut names: Vec<(&str, co2_ast::Span)> = Vec::new();
+    for (segment, span) in &stripped.segments {
+        match segment {
+            Ident(name) => names.push((name.as_str(), *span)),
+            _ => return None,
+        }
+    }
+    let (first, _) = names.first().copied()?;
+    if names.len() == 1 {
+        if resolver.ambiguous_in_scope(module_path, first) {
+            return Some((format!("`{first}` is ambiguous"), names[0].1));
+        }
+        return None;
+    }
+    let (anchor, supers) = match first {
+        "crate" => ("crate", 0),
+        "super" => {
+            let mut supers = 0;
+            while supers < names.len() && names[supers].0 == "super" {
+                supers += 1;
+            }
+            ("super", supers)
+        }
+        _ => return None,
+    };
+    let (last, span) = names.last().copied()?;
+    if resolver.ambiguous_at_anchor(module_path, anchor, supers, last) {
+        return Some((format!("`{last}` is ambiguous"), span));
+    }
+    None
+}
+
 /// Generic arguments on the method segment of an associated-function path
 /// (`Type::method::<args>`), if present. Unlike the receiver's arguments these
 /// are dropped by path stripping, so they are extracted separately.
@@ -774,7 +815,16 @@ impl co2_ast::TypeResolver for LocalResolver {
             .borrow_mut()
             .resolver
             .resolve_relative_expr_path(&self.module_path, &path_pretty);
-        let expr_path_result = base_resolve.map(|res| match res {
+        // A glob-ambiguous name resolves to nothing here so that locals still
+        // shadow it below while any other use reports the ambiguity error.
+        let ambiguous_error = ambiguous_use_error(
+            &mut self.base.borrow_mut().resolver,
+            &self.module_path,
+            &stripped_path,
+        );
+        let expr_path_result = base_resolve
+            .filter(|_| ambiguous_error.is_none())
+            .map(|res| match res {
             ResolvedExprPath::Def(def_id, class) => (
                 DefOrLocal::Def {
                     def_id,
@@ -909,6 +959,9 @@ impl co2_ast::TypeResolver for LocalResolver {
                 None
             })
         else {
+            if let Some(err) = ambiguous_error {
+                return Err(err);
+            }
             let span = path.segments.first().unwrap().1;
             return Err((format!("unresolved name {path}"), span));
         };

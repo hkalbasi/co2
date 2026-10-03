@@ -1,0 +1,65 @@
+//@ mode: co2
+//@ run-status: 0
+
+// Rust import priority rules: an explicit single import shadows glob imports
+// regardless of order, repeating the identical glob is harmless, an explicit
+// import resolves a glob ambiguity, and a glob conflict that is never used
+// is not an error.
+
+#include <assert.h>
+
+mod m1 {
+    pub fn pick() -> i32 { return 1; }
+    pub fn dup() -> i32 { return 1; }
+    pub fn only1() -> i32 { return 10; }
+}
+
+mod m2 {
+    pub fn pick() -> i32 { return 2; }
+    pub fn dup() -> i32 { return 2; }
+    pub fn only2() -> i32 { return 20; }
+}
+
+mod glob_first {
+    use super::m1::*;
+    use super::m2::pick;
+
+    pub fn get() -> i32 { return pick(); }
+}
+
+mod explicit_first {
+    use super::m2::pick;
+    use super::m1::*;
+
+    pub fn get() -> i32 { return pick(); }
+}
+
+mod repeat_glob {
+    use super::m1::*;
+    use super::m1::*;
+
+    pub fn get() -> i32 { return pick(); }
+}
+
+mod explicit_resolves {
+    use super::m1::*;
+    use super::m2::*;
+    use super::m1::dup;
+
+    pub fn get() -> i32 { return dup(); }
+}
+
+mod unused_ambiguous {
+    use super::m1::*;
+    use super::m2::*;
+
+    pub fn get() -> i32 { return only1() + only2(); }
+}
+
+fn main() {
+    assert(glob_first::get() == 2);
+    assert(explicit_first::get() == 2);
+    assert(repeat_glob::get() == 1);
+    assert(explicit_resolves::get() == 1);
+    assert(unused_ambiguous::get() == 30);
+}

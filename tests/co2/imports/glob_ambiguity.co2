@@ -1,0 +1,21 @@
+//@ mode: co2
+//@ compile-fail
+
+// Rust rule (E0659): a name imported by multiple globs is ambiguous when used.
+
+mod m1 {
+    pub fn dup() -> i32 { return 1; }
+}
+
+mod m2 {
+    pub fn dup() -> i32 { return 2; }
+}
+
+use m1::*;
+use m2::*;
+
+fn main() {
+    int x = dup();
+          //^^^ error: `dup` is ambiguous
+    (void)x;
+}

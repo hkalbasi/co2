@@ -1,0 +1,18 @@
+//@ mode: co2
+//@ compile-fail
+
+// Rust rule (E0252): two explicit imports of the same name conflict at import time.
+
+mod m1 {
+    pub fn dup() -> i32 { return 1; }
+}
+
+mod m2 {
+    pub fn dup() -> i32 { return 2; }
+}
+
+use m1::dup;
+use m2::dup;
+      //^^^ error: the name `dup` is defined multiple times
+
+fn main() {}

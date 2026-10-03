@@ -6,6 +6,8 @@ use co2_ast::{
     StatelessResolver, TranslationUnit, TypeQueryResult, TypeSpecifier, co2_test_symbol_name,
 };
 
+use crate::imports::{ImportTracker, SingleDecision};
+
 #[derive(Debug, Clone)]
 pub struct ResolveError; // TODO: add reason of failure.
 
@@ -82,7 +84,7 @@ fn type_query_result(kind: &DependencyChildKind) -> TypeQueryResult {
 }
 
 impl ModuleData {
-    fn as_content_mut(&mut self) -> &mut ModuleContent {
+    pub(crate) fn as_content_mut(&mut self) -> &mut ModuleContent {
         match self {
             Self::Expanded(c) => c,
             Self::Unexpanded(_) => panic!("ModuleData not expanded"),
@@ -166,7 +168,7 @@ impl ModuleData {
         part.insert_path(path, def);
     }
 
-    fn resolve_path<'a>(
+    pub(crate) fn resolve_path<'a>(
         &'a mut self,
         path: impl Iterator<Item = &'a str>,
         dep_info: &'a DependencyInfo<'_>,
@@ -414,6 +416,7 @@ pub struct Resolver {
     current: ModuleData,
     scoped_traits: Vec<ScopedTrait>,
     hir_ctx: &'static HirStructureCtx<'static>,
+    imports: ImportTracker,
 }
 
 fn normalize_crate_name(name: &mut &str) {
@@ -437,6 +440,7 @@ impl Resolver {
             current: ModuleData::default(),
             scoped_traits: Vec::new(),
             hir_ctx,
+            imports: ImportTracker::default(),
         };
 
         for (krate, root_def_id) in deps.roots() {
@@ -622,6 +626,7 @@ impl Resolver {
     ) {
         let mut errors: Vec<co2_ast::Rich<'static, String, co2_ast::Span>> = Vec::new();
         let info = self.dep_info();
+        let mod_key = module_path.join("::");
         for (use_item, _) in &p.rust_use_items {
             let Some((last_segment, _)) = use_item.path.last() else {
                 continue;
@@ -642,12 +647,43 @@ impl Resolver {
                     continue;
                 };
 
+                // Identify the glob source so that repeating the identical glob
+                // import is harmless while distinct sources conflict (E0659).
+                let source = match &item {
+                    ModuleData::Expanded(content) => content.id.map_or_else(
+                        || {
+                            use_item.path[..use_item.path.len() - 1]
+                                .iter()
+                                .map(|(segment, _)| segment.as_str())
+                                .collect::<Vec<_>>()
+                                .join("::")
+                        },
+                        |(def_id, _)| format!("{def_id:?}"),
+                    ),
+                    ModuleData::Unexpanded(def_id) => format!("{def_id:?}"),
+                };
+
                 if let ModuleData::Expanded(ref content) = item {
-                    for (name, child_item) in &content.items {
+                    let names: Vec<(String, ModuleData)> = content
+                        .items
+                        .iter()
+                        .map(|(name, child)| (name.clone(), child.clone()))
+                        .collect();
+                    for (name, child_item) in names {
+                        let bound = {
+                            let target = self.module_mut(module_path);
+                            match target {
+                                ModuleData::Expanded(c) => c.items.contains_key(&name),
+                                ModuleData::Unexpanded(_) => unreachable!(),
+                            }
+                        };
+                        if !self.imports.note_glob(&mod_key, &name, &source, bound) {
+                            continue;
+                        }
                         let target = self.module_mut(module_path);
                         match target {
                             ModuleData::Expanded(c) => {
-                                c.items.entry(name.clone()).or_insert(child_item.clone());
+                                c.items.entry(name).or_insert(child_item);
                             }
                             ModuleData::Unexpanded(_) => unreachable!(),
                         }
@@ -656,14 +692,25 @@ impl Resolver {
                 continue;
             }
 
-            let alias = if let Some((alias_name, _)) = &use_item.alias {
-                alias_name.as_str()
+            let (alias, alias_span) = if let Some((alias_name, span)) = &use_item.alias {
+                (alias_name.as_str(), *span)
             } else {
-                last_segment.as_str()
+                (
+                    last_segment.as_str(),
+                    use_item.path.last().expect("non-empty use path").1,
+                )
             };
-            let module = self.module_mut(module_path);
-            if module.resolve_path([alias].into_iter(), &info).is_some() {
-                continue;
+            let bound = {
+                let module = self.module_mut(module_path);
+                module.resolve_path([alias].into_iter(), &info).is_some()
+            };
+            match self.imports.check_single(&mod_key, alias, bound) {
+                SingleDecision::Duplicate(message) => {
+                    errors.push(co2_ast::Rich::custom(alias_span, message));
+                    continue;
+                }
+                SingleDecision::KeepLocal => continue,
+                SingleDecision::Proceed => {}
             }
 
             let full_path = use_item
@@ -707,6 +754,7 @@ impl Resolver {
                 item
             };
             self.module_mut(module_path).insert_alias(alias, item);
+            self.imports.commit_single(&mod_key, alias);
         }
         if !errors.is_empty() {
             co2_ast::emit_errors(errors);
@@ -829,8 +877,29 @@ impl Resolver {
         module.insert_alias(alias, item);
     }
 
-    pub(crate) fn resolve_in_deps<'a>(
-        &mut self,
+    /// Whether `name` is unusable in `module_path` because multiple distinct
+    /// glob imports provide it with no explicit or local binding (Rust E0659).
+    /// See [`ImportTracker::ambiguous_in_scope`].
+    pub(crate) fn ambiguous_in_scope(&mut self, module_path: &[String], name: &str) -> bool {
+        let info = self.dep_info();
+        self.imports
+            .ambiguous_in_scope(&mut self.current, module_path, name, &info)
+    }
+
+    /// Whether the last segment of an anchored (`crate::`/`super::`) path is
+    /// an ambiguous glob import in the module the anchor points at.
+    pub(crate) fn ambiguous_at_anchor(
+        &self,
+        module_path: &[String],
+        anchor: &str,
+        supers: usize,
+        name: &str,
+    ) -> bool {
+        self.imports
+            .ambiguous_at_anchor(module_path, anchor, supers, name)
+    }
+
+    pub(crate) fn resolve_in_deps<'a>(        &mut self,
         crate_name: &str,
         path: impl IntoIterator<Item = &'a str>,
     ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
