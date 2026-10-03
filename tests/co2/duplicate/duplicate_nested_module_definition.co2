@@ -1,0 +1,13 @@
+//@ mode: co2
+//@ compile-fail
+
+// Duplicate modules nested inside another module must also be a clean error,
+// not an ICE. (Same check as top-level duplicates, applied per scope.)
+
+mod outer {
+    mod inner { int x; }
+    mod inner { int y; }
+    //  ^^^^^ error: the name `inner` is defined multiple times
+}
+
+fn main() {}

@@ -825,14 +825,14 @@ impl co2_ast::TypeResolver for LocalResolver {
         let expr_path_result = base_resolve
             .filter(|_| ambiguous_error.is_none())
             .map(|res| match res {
-            ResolvedExprPath::Def(def_id, class) => (
-                DefOrLocal::Def {
-                    def_id,
-                    generic_args: generic_args.clone(),
-                },
-                class,
-            ),
-        });
+                ResolvedExprPath::Def(def_id, class) => (
+                    DefOrLocal::Def {
+                        def_id,
+                        generic_args: generic_args.clone(),
+                    },
+                    class,
+                ),
+            });
         let has_direct_expr_path = expr_path_result.is_some();
         let Some((def, class)) = self
             .locals

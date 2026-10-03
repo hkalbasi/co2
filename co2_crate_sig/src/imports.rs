@@ -39,12 +39,7 @@ pub(crate) struct ImportTracker {
 }
 
 impl ImportTracker {
-    pub(crate) fn check_single(
-        &self,
-        mod_key: &str,
-        alias: &str,
-        bound: bool,
-    ) -> SingleDecision {
+    pub(crate) fn check_single(&self, mod_key: &str, alias: &str, bound: bool) -> SingleDecision {
         if self
             .singles
             .get(mod_key)

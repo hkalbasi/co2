@@ -6,7 +6,7 @@
 
 #[derive(Copy)]
 //^^^^^^ error: `derive` is not applicable to modules
-mod foo {
+mod foo_mod {
     #[repr(Clone)]
          //^^^^^ error: unrecognized representation hint `Clone`
     pub struct Foo2 {}

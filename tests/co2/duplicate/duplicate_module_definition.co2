@@ -1,0 +1,15 @@
+//@ mode: co2
+//@ compile-fail
+
+// Duplicate modules at the same level must be a clean error, not an ICE.
+// (Ported from Rust's duplicate-definition checks: `mod a` twice is E0260.)
+
+mod a { int x; }
+mod a { int y; }
+//  ^ error: the name `a` is defined multiple times
+
+mod clash { int x; }
+//  ^^^^^ error: the name `clash` is defined multiple times
+int clash;
+
+fn main() {}

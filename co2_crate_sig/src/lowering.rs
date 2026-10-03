@@ -723,6 +723,21 @@ fn deduplicate_tu_items(
     }
 
     let mut errors: Vec<co2_ast::Rich<'_, String, co2_ast::Span>> = Vec::new();
+    // Duplicate inline/file modules at the same level (`mod a {...} mod a {...}`)
+    // would otherwise allocate two DefIds for one name: the module data tree
+    // overwrites the first alias and `resolve_in_module` ICEs on `.unwrap()`.
+    // Report it like other duplicate definitions instead.
+    {
+        let mut seen_mods = FxHashSet::<&str>::default();
+        for (mod_item, _) in &tu.rust_mod_items {
+            if !seen_mods.insert(mod_item.name.0.as_str()) {
+                errors.push(co2_ast::Rich::custom(
+                    mod_item.name.1,
+                    format!("the name `{}` is defined multiple times", mod_item.name.0),
+                ));
+            }
+        }
+    }
     let mut tu_item_id: usize = 0;
     let mut name_to_important_def = FxHashMap::<String, (usize, TuItemKind)>::default();
     // Functions with a file-scope declaration that is not `inline` without
@@ -864,6 +879,22 @@ fn deduplicate_tu_items(
             Declaration::PragmaPack { .. }
             | Declaration::BreakCo2
             | Declaration::StaticAssert { .. } => {}
+        }
+    }
+    // A module and a file-scope item with the same name (`mod a {} int a;`)
+    // collide the same way: the item lookup in `resolve_in_module` would miss
+    // and ICE. Report it like other duplicate definitions.
+    {
+        let mut seen_mods = FxHashSet::<&str>::default();
+        for (mod_item, _) in &tu.rust_mod_items {
+            if seen_mods.insert(mod_item.name.0.as_str())
+                && name_to_important_def.contains_key(&mod_item.name.0)
+            {
+                errors.push(co2_ast::Rich::custom(
+                    mod_item.name.1,
+                    format!("the name `{}` is defined multiple times", mod_item.name.0),
+                ));
+            }
         }
     }
 

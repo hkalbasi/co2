@@ -899,7 +899,8 @@ impl Resolver {
             .ambiguous_at_anchor(module_path, anchor, supers, name)
     }
 
-    pub(crate) fn resolve_in_deps<'a>(        &mut self,
+    pub(crate) fn resolve_in_deps<'a>(
+        &mut self,
         crate_name: &str,
         path: impl IntoIterator<Item = &'a str>,
     ) -> Option<(DefId, co2_ast::TypeQueryResult)> {
