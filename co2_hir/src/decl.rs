@@ -27,8 +27,7 @@ use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, invalid_span, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
-    adt_field_tys, array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt,
-    ty_matches_expected,
+    array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt, ty_matches_expected,
 };
 
 pub enum CTy {
@@ -1692,7 +1691,8 @@ impl HirCtx<'_> {
                 }
             };
             offset_bytes += field_offset;
-            cur_ty = adt_field_tys(cur_ty)
+            cur_ty = self
+                .adt_field_tys(cur_ty)
                 .and_then(|tys| tys.into_iter().nth(field_idx))
                 .ok_or_else(|| {
                     spanned_error(

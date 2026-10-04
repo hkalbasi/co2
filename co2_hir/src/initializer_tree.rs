@@ -9,7 +9,7 @@ use crate::{
     expr::{HirExpr, HirExprKind},
     item::{HirLocal, LocalId},
     resolver::{HirCtx, invalid_span, spanned_error},
-    ty::{adt_field_tys, array_elem_ty, is_array_ty, is_union_ty},
+    ty::{array_elem_ty, is_array_ty, is_union_ty},
 };
 
 #[derive(Clone, Debug)]
@@ -250,7 +250,7 @@ fn children_count_of_ty(ctx: &HirCtx<'_>, ty: Ty) -> usize {
             RigidTy::Adt(def, _) => match def.kind() {
                 AdtKind::Struct => ctx
                     .adt_logical_field_tys(ty)
-                    .unwrap_or_else(|| adt_field_tys(ty).unwrap())
+                    .unwrap_or_else(|| ctx.adt_field_tys(ty).unwrap())
                     .len(),
                 _ => 1,
             },

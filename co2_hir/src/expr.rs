@@ -23,12 +23,11 @@ use crate::resolver::invalid_span;
 use crate::resolver::{HirCtx, ResolvedValue, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
-    adt_field_tys, array_elem_ty, callable_sig, common_numeric_ty, enum_payload_ty,
-    integer_promote_ty, is_array_ty, is_integer_ty, is_maybe_uninit_fn_ptr_ty, is_numeric_ty,
-    is_void_ptr_ty, needs_implicit_cast, resolve_field_path_in_adt, ty_matches_expected,
+    array_elem_ty, common_numeric_ty, enum_payload_ty, integer_promote_ty, is_array_ty,
+    is_integer_ty, is_numeric_ty, is_void_ptr_ty, resolve_field_path_in_adt, ty_matches_expected,
     variant_idx,
 };
-use crate::{decl::CTy, decl::hir_ty_to_ty, ty::is_condition_ty};
+use crate::{decl::CTy, decl::hir_ty_to_ty};
 use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
 fn countof_ty_len(ty: Ty) -> Option<u64> {
@@ -39,25 +38,25 @@ fn countof_ty_len(ty: Ty) -> Option<u64> {
     }
 }
 
-fn is_adt_overload(ty: Ty) -> bool {
-    if is_maybe_uninit_fn_ptr_ty(ty).is_some() {
-        return false;
-    }
-    if let rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
-        rustc_public_generative::rustc_public::ty::RigidTy::Adt(_, _),
-    ) = ty.kind()
-    {
-        if enum_payload_ty(ty).is_some() {
+impl HirCtx<'_> {
+    fn is_adt_overload(&self, ty: Ty) -> bool {
+        if self.is_maybe_uninit_fn_ptr_ty(ty).is_some() {
             return false;
         }
-        return true;
+        if let rustc_public_generative::rustc_public::ty::TyKind::RigidTy(
+            rustc_public_generative::rustc_public::ty::RigidTy::Adt(_, _),
+        ) = ty.kind()
+        {
+            if enum_payload_ty(ty).is_some() {
+                return false;
+            }
+            return true;
+        }
+        false
     }
-    false
-}
 
-impl HirCtx<'_> {
     fn is_thin_ptr_ty(&self, ty: Ty) -> bool {
-        if is_maybe_uninit_fn_ptr_ty(ty).is_some() {
+        if self.is_maybe_uninit_fn_ptr_ty(ty).is_some() {
             return true;
         }
         match ty.kind() {
@@ -301,12 +300,14 @@ impl HirExpr {
     }
 }
 
-fn is_pointer_like(ty: Ty) -> bool {
-    is_maybe_uninit_fn_ptr_ty(ty).is_some()
-        || matches!(
-            ty.kind(),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
-        )
+impl HirCtx<'_> {
+    fn is_pointer_like(&self, ty: Ty) -> bool {
+        self.is_maybe_uninit_fn_ptr_ty(ty).is_some()
+            || matches!(
+                ty.kind(),
+                TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
+            )
+    }
 }
 
 impl std::fmt::Debug for HirExpr {
@@ -498,67 +499,81 @@ pub enum HirLogicalOp {
     And,
 }
 
-fn collect_sig_bindings_for_receiver(expected: &[Ty], actual: &[Ty], out: &mut BTreeMap<u32, Ty>) {
-    for (expected_ty, actual_ty) in expected.iter().zip(actual.iter()) {
-        collect_param_bindings_for_receiver(*expected_ty, *actual_ty, out);
+impl HirCtx<'_> {
+    fn collect_sig_bindings_for_receiver(
+        &self,
+        expected: &[Ty],
+        actual: &[Ty],
+        out: &mut BTreeMap<u32, Ty>,
+    ) {
+        for (expected_ty, actual_ty) in expected.iter().zip(actual.iter()) {
+            self.collect_param_bindings_for_receiver(*expected_ty, *actual_ty, out);
+        }
     }
-}
 
-fn collect_param_bindings_for_receiver(expected: Ty, actual: Ty, out: &mut BTreeMap<u32, Ty>) {
-    match (expected.kind(), actual.kind()) {
-        (TyKind::Param(param), _) => {
-            out.entry(param.index).or_insert(actual);
-        }
-        (TyKind::RigidTy(RigidTy::Ref(_, expected_inner, _)), _) => {
-            collect_param_bindings_for_receiver(expected_inner, actual, out);
-        }
-        (_, TyKind::RigidTy(RigidTy::Ref(_, actual_inner, _))) => {
-            collect_param_bindings_for_receiver(expected, actual_inner, out);
-        }
-        (
-            TyKind::RigidTy(RigidTy::RawPtr(expected_inner, _)),
-            TyKind::RigidTy(RigidTy::RawPtr(actual_inner, _)),
-        ) => {
-            collect_param_bindings_for_receiver(expected_inner, actual_inner, out);
-        }
-        (
-            TyKind::RigidTy(RigidTy::FnPtr(expected_sig)),
-            TyKind::RigidTy(RigidTy::FnDef(def, args)),
-        ) => {
-            let actual = Ty::from_rigid_kind(RigidTy::FnDef(def, args.clone()));
-            if let Some(sig) = callable_sig(actual) {
-                collect_sig_bindings_for_receiver(
+    fn collect_param_bindings_for_receiver(
+        &self,
+        expected: Ty,
+        actual: Ty,
+        out: &mut BTreeMap<u32, Ty>,
+    ) {
+        match (expected.kind(), actual.kind()) {
+            (TyKind::Param(param), _) => {
+                out.entry(param.index).or_insert(actual);
+            }
+            (TyKind::RigidTy(RigidTy::Ref(_, expected_inner, _)), _) => {
+                self.collect_param_bindings_for_receiver(expected_inner, actual, out);
+            }
+            (_, TyKind::RigidTy(RigidTy::Ref(_, actual_inner, _))) => {
+                self.collect_param_bindings_for_receiver(expected, actual_inner, out);
+            }
+            (
+                TyKind::RigidTy(RigidTy::RawPtr(expected_inner, _)),
+                TyKind::RigidTy(RigidTy::RawPtr(actual_inner, _)),
+            ) => {
+                self.collect_param_bindings_for_receiver(expected_inner, actual_inner, out);
+            }
+            (
+                TyKind::RigidTy(RigidTy::FnPtr(expected_sig)),
+                TyKind::RigidTy(RigidTy::FnDef(def, args)),
+            ) => {
+                let actual = Ty::from_rigid_kind(RigidTy::FnDef(def, args.clone()));
+                if let Some(sig) = self.callable_sig(actual) {
+                    self.collect_sig_bindings_for_receiver(
+                        &expected_sig.value.inputs_and_output,
+                        &sig.value.inputs_and_output,
+                        out,
+                    );
+                }
+            }
+            (
+                TyKind::RigidTy(RigidTy::FnPtr(expected_sig)),
+                TyKind::RigidTy(RigidTy::FnPtr(actual_sig)),
+            ) => {
+                self.collect_sig_bindings_for_receiver(
                     &expected_sig.value.inputs_and_output,
-                    &sig.value.inputs_and_output,
+                    &actual_sig.value.inputs_and_output,
                     out,
                 );
             }
-        }
-        (
-            TyKind::RigidTy(RigidTy::FnPtr(expected_sig)),
-            TyKind::RigidTy(RigidTy::FnPtr(actual_sig)),
-        ) => {
-            collect_sig_bindings_for_receiver(
-                &expected_sig.value.inputs_and_output,
-                &actual_sig.value.inputs_and_output,
-                out,
-            );
-        }
-        (
-            TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
-            TyKind::RigidTy(RigidTy::Adt(actual_adt, actual_args)),
-        ) if expected_adt == actual_adt && actual_args.0.len() <= expected_args.0.len() => {
-            for (expected_arg, actual_arg) in expected_args.0.iter().zip(actual_args.0.iter()) {
-                if let (
-                    rustc_public_generative::rustc_public::ty::GenericArgKind::Type(expected_ty),
-                    rustc_public_generative::rustc_public::ty::GenericArgKind::Type(actual_ty),
-                ) = (expected_arg, actual_arg)
-                {
-                    collect_param_bindings_for_receiver(*expected_ty, *actual_ty, out);
+            (
+                TyKind::RigidTy(RigidTy::Adt(expected_adt, expected_args)),
+                TyKind::RigidTy(RigidTy::Adt(actual_adt, actual_args)),
+            ) if expected_adt == actual_adt && actual_args.0.len() <= expected_args.0.len() => {
+                for (expected_arg, actual_arg) in expected_args.0.iter().zip(actual_args.0.iter()) {
+                    if let (
+                        rustc_public_generative::rustc_public::ty::GenericArgKind::Type(
+                            expected_ty,
+                        ),
+                        rustc_public_generative::rustc_public::ty::GenericArgKind::Type(actual_ty),
+                    ) = (expected_arg, actual_arg)
+                    {
+                        self.collect_param_bindings_for_receiver(*expected_ty, *actual_ty, out);
+                    }
                 }
             }
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -849,7 +864,7 @@ impl HirCtx<'_> {
         let mut sig = prev_sig;
         let resolved = ResolvedValue::Fn(fn_def, resolved_generic_args.clone());
         let func_ty = resolved.ty();
-        if let Some(new_sig) = callable_sig(func_ty) {
+        if let Some(new_sig) = self.callable_sig(func_ty) {
             let mut new_sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(new_sig);
             if new_sig.inputs().len() == sig.inputs().len() {
                 new_sig.inputs_and_output = new_sig
@@ -982,16 +997,20 @@ impl HirCtx<'_> {
                 GenericArgs(fn_generic_args.to_vec()),
             ))
         };
-        let sig = callable_sig(fn_ty)?;
+        let sig = self.callable_sig(fn_ty)?;
         let mut sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
         let mut by_index = BTreeMap::new();
         if let Some(first_input) = sig.inputs().first() {
-            collect_param_bindings_for_receiver(*first_input, receiver_ty, &mut by_index);
+            self.collect_param_bindings_for_receiver(*first_input, receiver_ty, &mut by_index);
         }
         let receiver_param_count = receiver_generic_args(receiver_ty).len();
         {
             let mut output_bindings = BTreeMap::new();
-            collect_param_bindings_for_receiver(sig.output(), receiver_ty, &mut output_bindings);
+            self.collect_param_bindings_for_receiver(
+                sig.output(),
+                receiver_ty,
+                &mut output_bindings,
+            );
             by_index.extend(
                 output_bindings
                     .into_iter()
@@ -1070,7 +1089,7 @@ impl HirCtx<'_> {
         if !self.decl_resolver.is_transparent_union_def(adt.0) {
             return None;
         }
-        let field_tys = adt_field_tys(expected)?;
+        let field_tys = self.adt_field_tys(expected)?;
         field_tys
             .iter()
             .position(|field_ty| ty_matches_expected(*field_ty, actual.ty))
@@ -1101,7 +1120,7 @@ impl HirCtx<'_> {
                         matches!(
                             (field_ty.kind(), actual.ty.kind()),
                             (TyKind::RigidTy(RigidTy::RawPtr(_, _)), TyKind::RigidTy(RigidTy::RawPtr(_, _)))
-                        ) && needs_implicit_cast(*field_ty, actual.ty)
+                        ) && self.needs_implicit_cast(*field_ty, actual.ty)
                     })
                     .map(&wrap)
                     .or_else(|| {
@@ -1115,7 +1134,8 @@ impl HirCtx<'_> {
                                 TyKind::RigidTy(RigidTy::RawPtr(_, _))
                                     | TyKind::RigidTy(RigidTy::FnPtr(_))
                                     | TyKind::RigidTy(RigidTy::FnDef(_, _))
-                            ) || is_maybe_uninit_fn_ptr_ty(*field_ty).is_some()
+                            ) || self.is_maybe_uninit_fn_ptr_ty(*field_ty)
+                                .is_some()
                         }).map(&wrap)
                     })
             })
@@ -2221,7 +2241,7 @@ impl HirCtx<'_> {
                     lowered
                 } else {
                     let mut func_expr = self.lower_expr((func.0, func.1), locals, local_map)?;
-                    let Some(sig) = callable_sig(func_expr.ty) else {
+                    let Some(sig) = self.callable_sig(func_expr.ty) else {
                         self.terminate_with_error(parser_span, "Type is not callable");
                     };
 
@@ -2761,11 +2781,11 @@ impl HirCtx<'_> {
                 let src_is_ptr_like = matches!(
                     inner.ty.kind(),
                     TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
-                ) || is_maybe_uninit_fn_ptr_ty(inner.ty).is_some();
+                ) || self.is_maybe_uninit_fn_ptr_ty(inner.ty).is_some();
                 let dst_is_ptr_like = matches!(
                     target_ty.kind(),
                     TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_))
-                ) || is_maybe_uninit_fn_ptr_ty(target_ty).is_some();
+                ) || self.is_maybe_uninit_fn_ptr_ty(target_ty).is_some();
                 let src_is_fn_item =
                     matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
                 let dst_is_void =
@@ -2782,7 +2802,7 @@ impl HirCtx<'_> {
                     || (src_is_fn_item && dst_is_int)
                     || (src_is_fn_item
                         && (matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
-                            || is_maybe_uninit_fn_ptr_ty(target_ty).is_some()))
+                            || self.is_maybe_uninit_fn_ptr_ty(target_ty).is_some()))
                     || (src_is_fn_item && dst_is_void_ptr))
                     && !ty_matches_expected(target_ty, inner.ty)
                 {
@@ -3062,7 +3082,7 @@ impl HirCtx<'_> {
                     ParsedUnaryOp::Deref => {
                         let mut inner = inner;
                         self.array_to_pointer_decay_if_array(&mut inner);
-                        if is_maybe_uninit_fn_ptr_ty(inner.ty).is_some() {
+                        if self.is_maybe_uninit_fn_ptr_ty(inner.ty).is_some() {
                             return Ok(inner);
                         }
                         let TyKind::RigidTy(
@@ -3361,7 +3381,7 @@ impl HirCtx<'_> {
                     Some(then_expr)
                 } else {
                     // elvis: validate cond is scalar-like using cond's own span
-                    if !is_condition_ty(cond_val.ty) {
+                    if !self.is_condition_ty(cond_val.ty) {
                         self.terminate_with_error(
                             cond_span,
                             &format!(
@@ -3421,7 +3441,7 @@ impl HirCtx<'_> {
                     .map(|field| hir_ty_to_ty(&field.ty))
                     .collect(),
             ),
-            None => adt_field_tys(ty),
+            None => self.adt_field_tys(ty),
         }
     }
 
@@ -3733,7 +3753,8 @@ impl HirCtx<'_> {
             };
             offset_bytes += field_offset as u64;
             // Descend into the field type for next iteration.
-            cur_ty = adt_field_tys(cur_ty)
+            cur_ty = self
+                .adt_field_tys(cur_ty)
                 .and_then(|tys| tys.into_iter().nth(field_idx))
                 .unwrap_or_else(|| {
                     self.terminate_with_error(
@@ -3751,7 +3772,7 @@ impl HirCtx<'_> {
         path: &[usize],
     ) -> Result<Ty, (co2_ast::Span, String)> {
         for index in path {
-            let Some(field_tys) = adt_field_tys(base_ty) else {
+            let Some(field_tys) = self.adt_field_tys(base_ty) else {
                 return Err(spanned_error(
                     invalid_span(),
                     format!("field projection on non-adt type: {base_ty:?}"),
@@ -3775,7 +3796,7 @@ impl HirCtx<'_> {
         span: RustSpan,
     ) -> Result<HirExpr, (co2_ast::Span, String)> {
         for index in path {
-            let Some(field_tys) = adt_field_tys(base.ty) else {
+            let Some(field_tys) = self.adt_field_tys(base.ty) else {
                 return Err(spanned_error(
                     invalid_span(),
                     format!(
@@ -3864,10 +3885,10 @@ impl HirCtx<'_> {
 
     fn ternary_common_ty(&self, lhs: &HirExpr, rhs: &HirExpr) -> Option<Ty> {
         // Null pointer constant converts to the other side's pointer type.
-        if lhs.is_null_pointer_constant() && is_pointer_like(rhs.ty) {
+        if lhs.is_null_pointer_constant() && self.is_pointer_like(rhs.ty) {
             return Some(rhs.ty);
         }
-        if rhs.is_null_pointer_constant() && is_pointer_like(lhs.ty) {
+        if rhs.is_null_pointer_constant() && self.is_pointer_like(lhs.ty) {
             return Some(lhs.ty);
         }
         if is_numeric_ty(lhs.ty) && is_numeric_ty(rhs.ty) {
@@ -3928,7 +3949,7 @@ impl HirCtx<'_> {
     ) -> HirExpr {
         let resolved = ResolvedValue::Fn(func, generic_args);
         let func_ty = resolved.ty();
-        let Some(sig) = callable_sig(func_ty) else {
+        let Some(sig) = self.callable_sig(func_ty) else {
             self.terminate_with_error(invalid_span(), "well-known function is not callable");
         };
         let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
@@ -4060,7 +4081,7 @@ impl HirCtx<'_> {
                 span: expr.span,
             });
         }
-        if needs_implicit_cast(expected_ty, expr.ty) {
+        if self.needs_implicit_cast(expected_ty, expr.ty) {
             return Some(HirExpr {
                 kind: HirExprKind::Cast(Box::new(expr.clone())),
                 ty: expected_ty,
@@ -4441,7 +4462,7 @@ impl HirCtx<'_> {
         // Operator overloading is not supported for ADT types like `String`.
         // Check early before other diagnostics to prefer this message over
         // generic type-mismatch errors (e.g. `s += s"foo"` where rhs is &str).
-        if is_adt_overload(lhs.ty) || is_adt_overload(rhs.ty) {
+        if self.is_adt_overload(lhs.ty) || self.is_adt_overload(rhs.ty) {
             return Err(spanned_error(
                 parser_span,
                 "operator overloading is not supported",
@@ -4640,8 +4661,8 @@ impl HirCtx<'_> {
 
         if op.is_comparison()
             && lhs.ty != rhs.ty
-            && is_condition_ty(lhs.ty)
-            && is_condition_ty(rhs.ty)
+            && self.is_condition_ty(lhs.ty)
+            && self.is_condition_ty(rhs.ty)
         {
             let common_ty = Ty::usize_ty();
             lhs = HirExpr {
@@ -4858,7 +4879,7 @@ impl HirCtx<'_> {
                             .iter()
                             .any(|field| matches!(field.kind, LogicalAdtFieldKind::Bitfield { .. }))
                     {
-                        let Some(physical_field_tys) = adt_field_tys(ty) else {
+                        let Some(physical_field_tys) = self.adt_field_tys(ty) else {
                             self.terminate_with_error(parser_span, "Can't compute adt fields");
                         };
                         let mut physical_args = vec![None::<HirExpr>; physical_field_tys.len()];
@@ -4936,7 +4957,7 @@ impl HirCtx<'_> {
                             span,
                         };
                     }
-                    let Some(field_tys) = adt_field_tys(ty) else {
+                    let Some(field_tys) = self.adt_field_tys(ty) else {
                         self.terminate_with_error(parser_span, "Can't compute adt fields");
                     };
                     if matches!(ty.kind(), TyKind::RigidTy(RigidTy::Adt(adt, _)) if adt.kind().is_union())
@@ -4994,7 +5015,7 @@ impl HirCtx<'_> {
             expr
         } else {
             let span = expr.span;
-            if !is_condition_ty(expr.ty) {
+            if !self.is_condition_ty(expr.ty) {
                 self.terminate_with_error(
                     parser_span,
                     &format!(

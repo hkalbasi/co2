@@ -1,0 +1,11 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::option::Option;
+
+fn run(cb: Option::<fn()>) {
+    cb();
+  //^^^^ error: Type is not callable
+}
+
+fn main() {}

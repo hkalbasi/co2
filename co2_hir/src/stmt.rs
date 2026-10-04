@@ -12,7 +12,7 @@ use crate::HirDecl;
 use crate::expr::{HirExpr, HirExprKind};
 use crate::item::{HirLocal, LabelId, LocalId};
 use crate::resolver::HirCtx;
-use crate::ty::{integer_promote_ty, is_condition_ty, is_integer_ty, ty_matches_expected};
+use crate::ty::{integer_promote_ty, is_integer_ty, ty_matches_expected};
 
 #[derive(Clone, Debug)]
 pub enum HirStmt {
@@ -207,7 +207,7 @@ impl HirCtx<'_> {
                 let expr = self
                     .lower_expr(expr, locals, local_map)
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                if !is_condition_ty(expr.ty) {
+                if !self.is_condition_ty(expr.ty) {
                     self.terminate_with_error(
                         parser_span,
                         &format!(

@@ -114,8 +114,10 @@ fn format_rigid_ty(resolver: Option<&LocalResolver>, ty: RigidTy) -> String {
         RigidTy::FnPtr(sig) => {
             let sig = sig.value;
             let abi = match sig.abi {
-                Abi::Rust => "",
-                _ => "extern \"C\" ",
+                Abi::Rust => String::new(),
+                Abi::C { unwind: false } => "extern \"C\" ".to_owned(),
+                Abi::C { unwind: true } => "extern \"C-unwind\" ".to_owned(),
+                ref abi => format!("extern {abi:?} "),
             };
             let params = sig
                 .inputs()
@@ -427,129 +429,158 @@ pub(crate) fn is_array_ty(ty: Ty) -> bool {
     matches!(ty.kind(), TyKind::RigidTy(RigidTy::Array(_, _)))
 }
 
-pub(crate) fn is_condition_ty(ty: Ty) -> bool {
-    if enum_payload_ty(ty).is_some() {
-        return true;
+impl HirCtx<'_> {
+    pub(crate) fn is_condition_ty(&self, ty: Ty) -> bool {
+        if enum_payload_ty(ty).is_some() {
+            return true;
+        }
+        matches!(
+            ty.kind(),
+            TyKind::RigidTy(
+                RigidTy::Bool
+                    | RigidTy::Int(_)
+                    | RigidTy::Uint(_)
+                    | RigidTy::Float(_)
+                    | RigidTy::RawPtr(_, _)
+                    | RigidTy::FnPtr(_)
+                    | RigidTy::FnDef(_, _)
+            )
+        ) || self.is_maybe_uninit_fn_ptr_ty(ty).is_some()
     }
-    matches!(
-        ty.kind(),
-        TyKind::RigidTy(
-            RigidTy::Bool
-                | RigidTy::Int(_)
-                | RigidTy::Uint(_)
-                | RigidTy::Float(_)
-                | RigidTy::RawPtr(_, _)
-                | RigidTy::FnPtr(_)
-                | RigidTy::FnDef(_, _)
+
+    pub(crate) fn is_maybe_uninit_fn_ptr_ty(&self, ty: Ty) -> Option<Binder<FnSig>> {
+        let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind() else {
+            return None;
+        };
+        if def != self.wellknown_defs.maybe_uninit {
+            return None;
+        }
+        if args.0.len() != 1 {
+            return None;
+        }
+        let GenericArgKind::Type(inner) = args.0[0] else {
+            return None;
+        };
+        let TyKind::RigidTy(RigidTy::FnPtr(sig)) = inner.kind() else {
+            return None;
+        };
+        Some(sig)
+    }
+
+    pub(crate) fn callable_sig(&self, ty: Ty) -> Option<Binder<FnSig>> {
+        ty.kind()
+            .fn_sig()
+            .or_else(|| self.is_maybe_uninit_fn_ptr_ty(ty))
+    }
+
+    pub(crate) fn adt_field_tys(&self, base: Ty) -> Option<Vec<Ty>> {
+        if self.is_maybe_uninit_fn_ptr_ty(base).is_some() {
+            return None;
+        }
+        let TyKind::RigidTy(RigidTy::Adt(adt, args)) = base.kind() else {
+            return None;
+        };
+        let variant = adt.variant(variant_idx(0))?;
+        Some(
+            variant
+                .fields()
+                .into_iter()
+                .map(|f| f.ty_with_args(&args))
+                .collect(),
         )
-    ) || is_maybe_uninit_fn_ptr_ty(ty).is_some()
-}
-
-pub(crate) fn is_maybe_uninit_fn_ptr_ty(ty: Ty) -> Option<Binder<FnSig>> {
-    let TyKind::RigidTy(RigidTy::Adt(_, args)) = ty.kind() else {
-        return None;
-    };
-    if args.0.len() != 1 {
-        return None;
-    }
-    let GenericArgKind::Type(inner) = args.0[0] else {
-        return None;
-    };
-    let TyKind::RigidTy(RigidTy::FnPtr(sig)) = inner.kind() else {
-        return None;
-    };
-    Some(sig)
-}
-
-pub(crate) fn callable_sig(ty: Ty) -> Option<Binder<FnSig>> {
-    ty.kind().fn_sig().or_else(|| is_maybe_uninit_fn_ptr_ty(ty))
-}
-
-pub(crate) fn needs_implicit_cast(dst: Ty, src: Ty) -> bool {
-    if dst == src {
-        return false;
-    }
-    // `!` coerces to any type (never coercion).
-    if matches!(src.kind(), TyKind::RigidTy(RigidTy::Never)) {
-        return true;
     }
 
-    let src_is_mu_fn_ptr = is_maybe_uninit_fn_ptr_ty(src).is_some();
-    let dst_is_mu_fn_ptr = is_maybe_uninit_fn_ptr_ty(dst).is_some();
-    matches!(
-        (dst.kind(), src.kind()),
-        (TyKind::RigidTy(RigidTy::Bool), _) if is_condition_ty(src)
-    ) || matches!(
-        (dst.kind(), src.kind()),
-        (
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_)),
-            TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
-        ) | (
-            TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_)),
-            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
-        )
-    ) || (matches!(dst.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
-        && matches!(
-            src.kind(),
-            TyKind::RigidTy(RigidTy::FnDef(..) | RigidTy::FnPtr(_))
-        )
-        && fn_ptr_implicit_cast_allowed(dst, src))
-        || fn_pointer_void_pointer_cast_allowed(dst, src)
-        || pointer_implicit_cast_allowed(dst, src)
-        || (dst_is_mu_fn_ptr
-            && match src.kind() {
-                TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..)) => true,
-                TyKind::RigidTy(RigidTy::FnDef(..) | RigidTy::FnPtr(_)) => {
-                    fn_ptr_implicit_cast_allowed(dst, src)
-                }
-                _ if is_maybe_uninit_fn_ptr_ty(src).is_some() => {
-                    fn_ptr_implicit_cast_allowed(dst, src)
-                }
-                _ => false,
-            })
-        || (src_is_mu_fn_ptr
+    pub(crate) fn needs_implicit_cast(&self, dst: Ty, src: Ty) -> bool {
+        if dst == src {
+            return false;
+        }
+        // `!` coerces to any type (never coercion).
+        if matches!(src.kind(), TyKind::RigidTy(RigidTy::Never)) {
+            return true;
+        }
+
+        let src_is_mu_fn_ptr = self.is_maybe_uninit_fn_ptr_ty(src).is_some();
+        let dst_is_mu_fn_ptr = self.is_maybe_uninit_fn_ptr_ty(dst).is_some();
+        matches!(
+            (dst.kind(), src.kind()),
+            (TyKind::RigidTy(RigidTy::Bool), _) if self.is_condition_ty(src)
+        ) || matches!(
+            (dst.kind(), src.kind()),
+            (
+                TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_)),
+                TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_))
+            ) | (
+                TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_)),
+                TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
+            )
+        ) || (matches!(dst.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
             && matches!(
-                dst.kind(),
-                TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..))
-            ))
-        || (is_numeric_ty(dst) && is_numeric_ty(src))
-}
+                src.kind(),
+                TyKind::RigidTy(RigidTy::FnDef(..) | RigidTy::FnPtr(_))
+            )
+            && self.fn_ptr_implicit_cast_allowed(dst, src))
+            || fn_pointer_void_pointer_cast_allowed(dst, src)
+            || pointer_implicit_cast_allowed(dst, src)
+            || (dst_is_mu_fn_ptr
+                && match src.kind() {
+                    TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..)) => {
+                        true
+                    }
+                    TyKind::RigidTy(RigidTy::FnDef(..) | RigidTy::FnPtr(_)) => {
+                        self.fn_ptr_implicit_cast_allowed(dst, src)
+                    }
+                    _ if self.is_maybe_uninit_fn_ptr_ty(src).is_some() => {
+                        self.fn_ptr_implicit_cast_allowed(dst, src)
+                    }
+                    _ => false,
+                })
+            || (src_is_mu_fn_ptr
+                && matches!(
+                    dst.kind(),
+                    TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..))
+                ))
+            || (is_numeric_ty(dst) && is_numeric_ty(src))
+    }
 
-/// Check if implicit cast is allowed between function pointer types. Returns true only
-/// when the function signatures are structurally compatible.
-fn fn_ptr_implicit_cast_allowed(dst: Ty, src: Ty) -> bool {
-    let Some(dst_sig) = is_maybe_uninit_fn_ptr_ty(dst).or_else(|| callable_sig(dst)) else {
-        return false;
-    };
-    let Some(src_sig) = callable_sig(src) else {
-        return false;
-    };
-    let dst_sig = dst_sig.value;
-    let src_sig = src_sig.value;
-    if dst_sig.safety != src_sig.safety || dst_sig.abi != src_sig.abi {
-        return false;
+    /// Check if implicit cast is allowed between function pointer types. Returns true only
+    /// when the function signatures are structurally compatible.
+    fn fn_ptr_implicit_cast_allowed(&self, dst: Ty, src: Ty) -> bool {
+        let Some(dst_sig) = self
+            .is_maybe_uninit_fn_ptr_ty(dst)
+            .or_else(|| self.callable_sig(dst))
+        else {
+            return false;
+        };
+        let Some(src_sig) = self.callable_sig(src) else {
+            return false;
+        };
+        let dst_sig = dst_sig.value;
+        let src_sig = src_sig.value;
+        if dst_sig.safety != src_sig.safety || dst_sig.abi != src_sig.abi {
+            return false;
+        }
+        if !ty_matches_expected(
+            *dst_sig.inputs_and_output.last().unwrap(),
+            *src_sig.inputs_and_output.last().unwrap(),
+        ) {
+            return false;
+        }
+        // Function pointers with no args and only variadics (fn(...) -> _) accept any
+        // function pointer implicitly, and any function pointer can be implicitly cast from
+        // fn(...) -> _.
+        if (dst_sig.c_variadic && dst_sig.inputs().is_empty())
+            || (src_sig.c_variadic && src_sig.inputs().is_empty())
+        {
+            return true;
+        }
+        dst_sig.c_variadic == src_sig.c_variadic
+            && dst_sig.inputs_and_output.len() == src_sig.inputs_and_output.len()
+            && dst_sig
+                .inputs_and_output
+                .iter()
+                .zip(src_sig.inputs_and_output.iter())
+                .all(|(et, at)| ty_matches_expected(*et, *at))
     }
-    if !ty_matches_expected(
-        *dst_sig.inputs_and_output.last().unwrap(),
-        *src_sig.inputs_and_output.last().unwrap(),
-    ) {
-        return false;
-    }
-    // Function pointers with no args and only variadics (fn(...) -> _) accept any
-    // function pointer implicitly, and any function pointer can be implicitly cast from
-    // fn(...) -> _.
-    if (dst_sig.c_variadic && dst_sig.inputs().is_empty())
-        || (src_sig.c_variadic && src_sig.inputs().is_empty())
-    {
-        return true;
-    }
-    dst_sig.c_variadic == src_sig.c_variadic
-        && dst_sig.inputs_and_output.len() == src_sig.inputs_and_output.len()
-        && dst_sig
-            .inputs_and_output
-            .iter()
-            .zip(src_sig.inputs_and_output.iter())
-            .all(|(et, at)| ty_matches_expected(*et, *at))
 }
 
 fn fn_pointer_void_pointer_cast_allowed(dst: Ty, src: Ty) -> bool {
@@ -681,23 +712,6 @@ pub(crate) fn is_union_ty(ty: Ty) -> bool {
         return false;
     };
     adt.kind().is_union()
-}
-
-pub(crate) fn adt_field_tys(base: Ty) -> Option<Vec<Ty>> {
-    if is_maybe_uninit_fn_ptr_ty(base).is_some() {
-        return None;
-    }
-    let TyKind::RigidTy(RigidTy::Adt(adt, args)) = base.kind() else {
-        return None;
-    };
-    let variant = adt.variant(variant_idx(0))?;
-    Some(
-        variant
-            .fields()
-            .into_iter()
-            .map(|f| f.ty_with_args(&args))
-            .collect(),
-    )
 }
 
 pub(crate) fn variant_idx(id: usize) -> VariantIdx {
