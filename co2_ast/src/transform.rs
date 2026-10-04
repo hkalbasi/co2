@@ -643,9 +643,14 @@ impl<A: TypeResolver> DoTransform for RustTy<A> {
                 inner: inner.transform(b),
                 len: len.clone(),
             },
-            RustTy::BareFn { params, ret_ty } => RustTy::BareFn {
+            RustTy::BareFn {
+                params,
+                ret_ty,
+                abi,
+            } => RustTy::BareFn {
                 params: params.transform(b),
                 ret_ty: ret_ty.transform(b),
+                abi: *abi,
             },
             RustTy::Never => RustTy::Never,
             RustTy::Wild => RustTy::Wild,

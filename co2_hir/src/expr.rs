@@ -1797,6 +1797,20 @@ impl HirCtx<'_> {
         *expr = self.fn_def_to_c_fn_ptr_decay(expr.clone());
     }
 
+    /// Decay a function item for a position expecting `expected`.
+    /// Prefers decaying directly to `expected` (so a `fn` item fills a
+    /// bare Rust-ABI `fn(..)` type); falls back to the legacy C decay
+    /// (MaybeUninit-wrapped) when that does not apply.
+    pub(crate) fn fn_def_to_fn_ptr_decay_for_expected(&self, expr: &mut HirExpr, expected: Ty) {
+        if matches!(expr.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(..)))
+            && let Some(coerced) = self.coerce_expr_to_type(expr, expected)
+        {
+            *expr = coerced;
+        } else {
+            self.fn_def_to_c_fn_ptr_decay_if_fn_def(expr);
+        }
+    }
+
     fn fn_def_to_c_fn_ptr_decay(&self, expr: HirExpr) -> HirExpr {
         let sig = expr
             .ty

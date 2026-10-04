@@ -670,7 +670,8 @@ impl HirCtx<'_> {
                         } else {
                             let mut expr = self.lower_expr(expr, locals, local_map)?;
                             self.array_to_pointer_decay_if_array(&mut expr);
-                            self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
+                            let expected = value_cursor.ty();
+                            self.fn_def_to_fn_ptr_decay_for_expected(&mut expr, expected);
                             loop {
                                 if let Some(coerced) =
                                     self.coerce_expr_to_type(&expr, value_cursor.ty())

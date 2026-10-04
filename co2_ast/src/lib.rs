@@ -480,13 +480,21 @@ fn rust_ty_to_pretty<R: TypeResolver>(ty: &RustTy<R>) -> String {
                 });
             format!("[{}; {len}]", rust_ty_to_pretty(&inner.0))
         }
-        RustTy::BareFn { params, ret_ty } => {
+        RustTy::BareFn {
+            params,
+            ret_ty,
+            abi,
+        } => {
             let params = params
                 .iter()
                 .map(|param| rust_ty_to_pretty(&param.0))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("fn({params}) -> {}", rust_ty_to_pretty(&ret_ty.0))
+            let abi = match abi {
+                RustFnAbi::Rust => "",
+                RustFnAbi::C => "extern \"C\" ",
+            };
+            format!("{abi}fn({params}) -> {}", rust_ty_to_pretty(&ret_ty.0))
         }
         RustTy::Never => "!".to_owned(),
         RustTy::Wild => "_".to_owned(),
@@ -1307,6 +1315,12 @@ pub struct RustStructField<R: TypeResolver> {
     pub ty: Spanned<RustTy<R>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RustFnAbi {
+    Rust,
+    C,
+}
+
 #[derive(Debug, Clone)]
 pub enum RustTy<R: TypeResolver> {
     Path(Spanned<R::ResolvedRustPath>),
@@ -1328,6 +1342,7 @@ pub enum RustTy<R: TypeResolver> {
     BareFn {
         params: Vec<Spanned<RustTy<R>>>,
         ret_ty: Box<Spanned<RustTy<R>>>,
+        abi: RustFnAbi,
     },
     Never,
     Wild,

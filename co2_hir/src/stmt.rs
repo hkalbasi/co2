@@ -229,7 +229,7 @@ impl HirCtx<'_> {
                         .lower_expr((expr.0, expr.1), locals, local_map)
                         .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                     self.array_to_pointer_decay_if_array(&mut expr);
-                    self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
+                    self.fn_def_to_fn_ptr_decay_for_expected(&mut expr, self.ret_ty);
                     if let Some(coerced) = self.coerce_expr_to_type(&expr, self.ret_ty) {
                         expr = coerced;
                     }

@@ -15,11 +15,12 @@ use co2_ast::{
     CompoundStatement, Declaration, DeclarationSpecifier, Declarator, EnumSpecifier, Enumerator,
     Expression, FileId, ForInit, FunctionDefinitionSignature, FunctionSpecifier, InitDeclarator,
     LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
-    RustAttribute, RustAttributeStyle, RustFunctionParam, RustFunctionSignature, RustPath,
-    RustPathSegment, RustStructField, RustTy, Span, Spanned, SpecifierQualifier, StatelessResolver,
-    Statement, StatementOrDeclaration, StorageClassSpecifier, StringLiteral, StringLiteralPrefix,
-    StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token,
-    TranslationUnit, TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UseItem, Visibility,
+    RustAttribute, RustAttributeStyle, RustFnAbi, RustFunctionParam, RustFunctionSignature,
+    RustPath, RustPathSegment, RustStructField, RustTy, Span, Spanned, SpecifierQualifier,
+    StatelessResolver, Statement, StatementOrDeclaration, StorageClassSpecifier, StringLiteral,
+    StringLiteralPrefix, StructDeclarator, StructOrUnionField, StructOrUnionKind,
+    StructOrUnionSpecifier, Token, TranslationUnit, TypeName, TypeQualifier, TypeQueryResult,
+    TypeSpecifier, UseItem, Visibility,
 };
 
 // ── Errors (cold path only) ────────────────────────────────────────────
@@ -710,6 +711,42 @@ impl<'a, R: TypeResolver> P<'a, R> {
 
 // Concrete Rust-type parsing lives in free functions so the stateless and
 // resolving variants stay independent.
+///
+/// Optional `extern "C"` prefix of a bare `fn` type. Only the C ABI is
+/// supported, and the ABI string is mandatory: bare `extern fn` is rejected
+/// just like modern Rust rejects it.
+///
+/// Rejections are non-fatal diagnostics (like C types in Rust position):
+/// parsing continues with the C ABI so one compile reports every bad
+/// function pointer type instead of stopping at the first.
+fn parse_bare_fn_abi<R: TypeResolver>(p: &mut P<'_, R>) -> RustFnAbi {
+    if !matches!(p.peek(0), Some(Token::Extern)) {
+        return RustFnAbi::Rust;
+    }
+    let extern_span = p.peek_span(0);
+    p.pos += 1;
+    let Some(Token::StringLit(lit)) = p.peek(0) else {
+        co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+            extern_span,
+            "bare `extern fn` is deprecated, use `extern \"C\" fn`",
+        )]);
+        return RustFnAbi::C;
+    };
+    let is_c = matches!(
+        lit,
+        StringLiteral::None(bytes) | StringLiteral::Str(bytes) | StringLiteral::Utf8(bytes)
+            if bytes.as_slice() == b"C"
+    );
+    if !is_c {
+        co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+            p.peek_span(0),
+            "only extern \"C\" is supported in function pointer types",
+        )]);
+    }
+    p.pos += 1;
+    RustFnAbi::C
+}
+
 fn parse_ptr_mut<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<bool> {
     if p.at(&Token::Const) {
         p.pos += 1;
@@ -745,10 +782,46 @@ fn parse_array_len<'a, R: TypeResolver>(p: &mut P<'a, R>) -> Option<(LazyRustCon
     Some((LazyRustConstExpr { tokens }, span))
 }
 
+fn is_bare_fn_ty<R: TypeResolver>(p: &P<'_, R>) -> bool {
+    (matches!(p.peek(0), Some(Token::Ident(s)) if s == "fn")
+        && matches!(p.peek(1), Some(Token::LParen)))
+        || matches!(p.peek(0), Some(Token::Extern))
+}
+
+fn parse_bare_fn_ty<S: TypeResolver, R: TypeResolver>(
+    p: &mut P<'_, R>,
+    start: usize,
+    inner: fn(&mut P<'_, R>) -> PR<Spanned<RustTy<S>>>,
+) -> PR<Spanned<RustTy<S>>> {
+    let abi = parse_bare_fn_abi(p);
+    if !matches!(p.peek(0), Some(Token::Ident(s)) if s == "fn") {
+        return Err(p.fail_here(format!("expected fn, found {}", p.describe())));
+    }
+    p.pos += 1;
+    let params = parse_comma_list(p, &Token::LParen, &Token::RParen, true, inner)?;
+    let ret_ty = if p.eat(&Token::Arrow).is_some() {
+        inner(p)?
+    } else {
+        (RustTy::Tuple(vec![]), p.cur_span())
+    };
+    let span = p.span_since(start);
+    Ok((
+        RustTy::BareFn {
+            params,
+            ret_ty: Box::new(ret_ty),
+            abi,
+        },
+        span,
+    ))
+}
+
 pub(crate) fn parse_rust_ty_resolving<'a, R: TypeResolver>(
     p: &mut P<'a, R>,
 ) -> PR<Spanned<RustTy<R>>> {
     let start = p.pos;
+    if is_bare_fn_ty(p) {
+        return parse_bare_fn_ty(p, start, parse_rust_ty_resolving);
+    }
     match p.peek(0) {
         Some(Token::Star) => {
             p.pos += 1;
@@ -866,6 +939,9 @@ pub(crate) fn parse_rust_ty_stateless_inner<'a, R: TypeResolver>(
     p: &mut P<'a, R>,
 ) -> PR<Spanned<RustTy<StatelessResolver>>> {
     let start = p.pos;
+    if is_bare_fn_ty(p) {
+        return parse_bare_fn_ty(p, start, parse_rust_ty_stateless_inner);
+    }
     match p.peek(0) {
         Some(Token::Ident(s)) if s == "_" => {
             p.pos += 1;

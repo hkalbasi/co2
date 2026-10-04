@@ -7,7 +7,7 @@ use rustc_public_generative::rustc_public::{
     ty::{RigidTy, Span as RustSpan, TyKind},
 };
 
-use crate::{build::Builder, operand::ptr_like_to_usize_expr, place::place};
+use crate::{build::Builder, place::place};
 
 impl Builder<'_, '_> {
     pub(crate) fn lower_stmt(&mut self, stmt: &HirStmt) {
@@ -38,7 +38,7 @@ impl Builder<'_, '_> {
                 self.pending_gotos.push((bb, *label));
             }
             HirStmt::IndirectGoto(expr, span) => {
-                let discr_expr = ptr_like_to_usize_expr(expr);
+                let discr_expr = self.ptr_like_to_usize_expr(expr);
                 let discr = self.lower_expr_to_operand(&discr_expr);
                 let bb = self.push_terminator(
                     TerminatorKind::SwitchInt {

@@ -95,6 +95,9 @@ The exact details of the Rust type grammar accepted by CO2 is defined in the ref
 * Pointer: `T *decl` == `*mut T`
 * Array: `T decl[10]` == `[T; 10]`
 * Tuples: `(T1, T2)` which are unrepresentable as C declarators.
+* Function pointers: `fn(i32) -> i32` (a missing return type defaults to `()`).
+  `extern "C" fn(i32) -> i32` gives the C ABI,
+  e.g. for pointers to C functions. Only the C ABI is supported.
 * C type specifiers like `int` and `unsigned int` are not accepted. You need to use `i32` or `std::ffi::c_int`.
 
 Paths do not need `::<` in a Rust type (but it is accepted so you can use turbofish everywhere). So this is valid:

@@ -52,55 +52,57 @@ fn ptr_offset_generic_args(func_ty: Ty, pointee_ty: Ty) -> Vec<GenericArgKind> {
     }
 }
 
-pub(crate) fn maybe_uninit_fn_ptr_inner(ty: Ty) -> Option<Ty> {
-    let TyKind::RigidTy(RigidTy::Adt(_, args)) = ty.kind() else {
-        return None;
-    };
-    if args.0.len() != 1 {
-        return None;
-    }
-    let GenericArgKind::Type(inner) = args.0[0] else {
-        return None;
-    };
-    if matches!(inner.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))) {
-        Some(inner)
-    } else {
-        None
-    }
-}
-
-/// Cast pointer-like values (raw/fn pointers, fn items, and C function
-/// pointers which allow null) to `usize` so they can be compared or used
-/// as a `SwitchInt` discriminant. Other types pass through unchanged.
-pub(crate) fn ptr_like_to_usize_expr(expr: &HirExpr) -> HirExpr {
-    if matches!(
-        expr.ty.kind(),
-        TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
-    ) || maybe_uninit_fn_ptr_inner(expr.ty).is_some()
-    {
-        HirExpr {
-            kind: HirExprKind::Cast(Box::new(expr.clone())),
-            ty: Ty::usize_ty(),
-            span: expr.span,
-        }
-    } else {
-        expr.clone()
-    }
-}
-
-fn callable_sig(
-    ty: Ty,
-) -> Option<
-    rustc_public_generative::rustc_public::ty::Binder<
-        rustc_public_generative::rustc_public::ty::FnSig,
-    >,
-> {
-    ty.kind()
-        .fn_sig()
-        .or_else(|| maybe_uninit_fn_ptr_inner(ty).and_then(|inner| inner.kind().fn_sig()))
-}
-
 impl Builder<'_, '_> {
+    pub(crate) fn maybe_uninit_fn_ptr_inner(&self, ty: Ty) -> Option<Ty> {
+        let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind() else {
+            return None;
+        };
+        if def != self.wellknown_defs.maybe_uninit {
+            return None;
+        }
+        let GenericArgKind::Type(inner) = args.0[0] else {
+            return None;
+        };
+        if matches!(inner.kind(), TyKind::RigidTy(RigidTy::FnPtr(_))) {
+            Some(inner)
+        } else {
+            None
+        }
+    }
+
+    /// Cast pointer-like values (raw/fn pointers, fn items, and C function
+    /// pointers which allow null) to `usize` so they can be compared or used
+    /// as a `SwitchInt` discriminant. Other types pass through unchanged.
+    pub(crate) fn ptr_like_to_usize_expr(&self, expr: &HirExpr) -> HirExpr {
+        if matches!(
+            expr.ty.kind(),
+            TyKind::RigidTy(RigidTy::RawPtr(_, _) | RigidTy::FnPtr(_) | RigidTy::FnDef(_, _))
+        ) || self.maybe_uninit_fn_ptr_inner(expr.ty).is_some()
+        {
+            HirExpr {
+                kind: HirExprKind::Cast(Box::new(expr.clone())),
+                ty: Ty::usize_ty(),
+                span: expr.span,
+            }
+        } else {
+            expr.clone()
+        }
+    }
+
+    fn callable_sig(
+        &self,
+        ty: Ty,
+    ) -> Option<
+        rustc_public_generative::rustc_public::ty::Binder<
+            rustc_public_generative::rustc_public::ty::FnSig,
+        >,
+    > {
+        ty.kind().fn_sig().or_else(|| {
+            self.maybe_uninit_fn_ptr_inner(ty)
+                .and_then(|inner| inner.kind().fn_sig())
+        })
+    }
+
     fn place_operand_for_ty(
         &self,
         place: rustc_public_generative::rustc_public::mir::Place,
@@ -828,8 +830,8 @@ impl Builder<'_, '_> {
                         | co2_hir::HirBinOp::Ge
                         | co2_hir::HirBinOp::Gt
                 ) {
-                    let lhs = self.lower_expr_to_operand(&ptr_like_to_usize_expr(lhs));
-                    let rhs = self.lower_expr_to_operand(&ptr_like_to_usize_expr(rhs));
+                    let lhs = self.lower_expr_to_operand(&self.ptr_like_to_usize_expr(lhs));
+                    let rhs = self.lower_expr_to_operand(&self.ptr_like_to_usize_expr(rhs));
                     let bool_local = self.new_temp(Ty::bool_ty(), Mutability::Mut, expr.span);
                     self.push_statement(
                         MirStatementKind::Assign(
@@ -1266,8 +1268,8 @@ impl Builder<'_, '_> {
         let src_is_fn_ptr = matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)));
         let dst_is_fn_ptr = matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)));
         let src_is_fn_def = matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
-        let src_mu_fn_ptr = maybe_uninit_fn_ptr_inner(src_ty);
-        let dst_mu_fn_ptr = maybe_uninit_fn_ptr_inner(dst_ty);
+        let src_mu_fn_ptr = self.maybe_uninit_fn_ptr_inner(src_ty);
+        let dst_mu_fn_ptr = self.maybe_uninit_fn_ptr_inner(dst_ty);
         let dst_is_void =
             matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
         if dst_is_void {
@@ -1823,7 +1825,8 @@ impl Builder<'_, '_> {
         destination: rustc_public_generative::rustc_public::mir::Place,
         ret_ty: Ty,
     ) {
-        let sig = callable_sig(self.ctx.normalize_ty_defaults(func.ty))
+        let sig = self
+            .callable_sig(self.ctx.normalize_ty_defaults(func.ty))
             .expect("call target has no fn signature");
         let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
 
@@ -1855,7 +1858,7 @@ impl Builder<'_, '_> {
                 ret_ty,
             );
         } else {
-            let func_op = if let Some(inner_fn_ptr) = maybe_uninit_fn_ptr_inner(func.ty) {
+            let func_op = if let Some(inner_fn_ptr) = self.maybe_uninit_fn_ptr_inner(func.ty) {
                 let op = self.lower_expr_to_operand(func);
                 self.read_maybe_uninit_as(op, func.ty, inner_fn_ptr, span)
             } else {

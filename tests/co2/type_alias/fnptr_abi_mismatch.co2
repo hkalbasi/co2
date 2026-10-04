@@ -1,0 +1,36 @@
+//@ mode: co2
+//@ compile-fail
+
+type Cb = fn(i32) -> i32;
+type Cbk = extern "C" fn(i32) -> i32;
+
+fn inc(x: i32) -> i32 {
+    return x + 1;
+}
+
+int cdouble(int x) {
+    return x * 2;
+}
+
+fn apply(cb: Cb, x: i32) -> i32 {
+    return cb(x);
+}
+
+fn apply_c(cb: Cbk, x: i32) -> i32 {
+    return cb(x);
+}
+
+fn f1() {
+    apply_c(inc, 41);
+          //^^^ error: call `apply_c` type mismatch at arg 0: expected extern "C" fn(i32) -> i32, got inc
+}
+
+fn f2() {
+    apply(cdouble, 41);
+        //^^^^^^^ error: call `apply` type mismatch at arg 0: expected fn(i32) -> i32, got cdouble
+}
+
+fn main() {
+    f1();
+    f2();
+}

@@ -1,0 +1,10 @@
+//@ mode: co2
+//@ compile-fail
+
+type A = extern fn(i32) -> i32;
+       //^^^^^^ error: bare `extern fn` is deprecated, use `extern "C" fn`
+
+type B = extern "Invalid-ABI" fn(i32) -> i32;
+              //^^^^^^^^^^^^^ error: only extern "C" is supported in function pointer types
+
+fn main() {}

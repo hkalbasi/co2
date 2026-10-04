@@ -1,0 +1,170 @@
+//@ mode: co2
+//@ run-status: 0
+
+use std::option::Option;
+use std::vec::Vec;
+use std::mem::drop;
+
+#include <assert.h>
+
+type Cb = fn(i32) -> i32;
+type NoRet = fn(i32);
+type UnitFn = fn();
+type Higher = fn(fn(i32) -> i32) -> i32;
+type BinOp = fn(i32, i32) -> i32;
+type CbPair = [Cb; 2];
+type Cbk = extern "C" fn(i32) -> i32;
+type CBinOp = extern "C" fn(i32, i32) -> i32;
+
+pub struct Handler {
+    cb: Cb,
+    base: i32,
+}
+
+int calls = 0;
+
+fn inc(x: i32) -> i32 {
+    return x + 1;
+}
+
+fn dbl(x: i32) -> i32 {
+    return x * 2;
+}
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+int cdouble(int x) {
+    return x * 2;
+}
+
+int cadd(int a, int b) {
+    return a + b;
+}
+
+fn apply_c(cb: Cbk, x: i32) -> i32 {
+    return cb(x);
+}
+
+int apply_c_c(Cbk cb, int x) {
+    return cb(x);
+}
+
+fn get_cdouble() -> Cbk {
+    return cdouble;
+}
+
+fn apply(cb: Cb, x: i32) -> i32 {
+    return cb(x);
+}
+
+fn apply_inline(cb: fn(i32) -> i32, x: i32) -> i32 {
+    return cb(x);
+}
+
+fn apply_ref(cb: &Cb, x: i32) -> i32 {
+    return (*cb)(x);
+}
+
+fn apply_ptr(cb: *const Cb, x: i32) -> i32 {
+    return (*cb)(x);
+}
+
+fn wrap(f: fn(i32) -> i32) -> i32 {
+    return f(10);
+}
+
+fn call_higher(f: Higher, cb: Cb) -> i32 {
+    return f(cb);
+}
+
+fn get_inc() -> Cb {
+    return inc;
+}
+
+fn get_inc_inline() -> fn(i32) -> i32 {
+    return dbl;
+}
+
+fn get_wrap() -> Higher {
+    return wrap;
+}
+
+fn record(x: i32) {
+    calls += x;
+}
+
+fn tick() {
+    calls += 1;
+}
+
+fn main() {
+    Cb cb = inc;
+    assert(cb(41) == 42);
+    assert(apply(cb, 41) == 42);
+    assert(apply_inline(inc, 41) == 42);
+    assert(apply_ref(&cb, 41) == 42);
+    assert(apply_ptr(&cb, 41) == 42);
+    assert(call_higher(wrap, inc) == 11);
+
+    // Function pointers in return position.
+    assert(get_inc()(41) == 42);
+    assert(get_inc_inline()(21) == 42);
+    assert(get_wrap()(dbl) == 20);
+
+    // Multi-parameter function pointer.
+    BinOp op = add;
+    assert(op(40, 2) == 42);
+
+    // extern "C" function pointers interop with C functions.
+    Cbk c = cdouble;
+    assert(c(21) == 42);
+    assert(apply_c(cdouble, 21) == 42);
+    assert(apply_c_c(c, 21) == 42);
+    assert(get_cdouble()(21) == 42);
+
+    // Multi-parameter `extern "C"` function pointer.
+    CBinOp cop = cadd;
+    assert(cop(40, 2) == 42);
+
+    Vec::<Cbk> cv = Vec::<Cbk>::new();
+    cv.push(cdouble);
+    Cbk cgot = *cv.get(0_usize).unwrap();
+    assert(cgot(21) == 42);
+    drop(cv);
+
+    // Function pointer behind a raw pointer.
+    Cb *pp = &cb;
+    assert((*pp)(41) == 42);
+
+    // Function pointer as a struct field.
+    Handler h = Handler { cb: inc, base: 40 };
+    assert(h.cb(h.base + 1) == 42);
+
+    // Function pointer inside an array type.
+    CbPair pair = {inc, dbl};
+    assert(pair[0](41) == 42);
+    assert(pair[1](21) == 42);
+
+    NoRet nr = record;
+    nr(5);
+    UnitFn uf = tick;
+    uf();
+    assert(calls == 6);
+
+    // Function pointers in generic arguments.
+    Vec::<fn(i32) -> i32> v = Vec::<fn(i32) -> i32>::new();
+    v.push(inc);
+    Cb got = *v.get(0_usize).unwrap();
+    assert(got(7) == 8);
+    drop(v);
+
+    // Function pointer inside Option.
+    Option::<Cb> some = Option::<Cb>::Some(inc);
+    assert(some.is_some());
+    assert(some.unwrap()(41) == 42);
+    Option::<Cb> none = Option::<Cb>::None;
+    assert(none.is_none());
+    assert(sizeof(some) == sizeof(Cb));
+}

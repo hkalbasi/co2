@@ -4,7 +4,7 @@ use rustc_public_generative::rustc_public::{
     ty::{Span as RustSpan, Ty},
 };
 
-use crate::{build::Builder, operand::maybe_uninit_fn_ptr_inner, place::place};
+use crate::{build::Builder, place::place};
 
 impl Builder<'_, '_> {
     pub(crate) fn new_temp(&mut self, ty: Ty, mutability: Mutability, span: RustSpan) -> usize {
@@ -15,7 +15,7 @@ impl Builder<'_, '_> {
             span,
             mutability,
         });
-        if maybe_uninit_fn_ptr_inner(ty).is_some() {
+        if self.maybe_uninit_fn_ptr_inner(ty).is_some() {
             self.emit_nullary_call(
                 self.wellknown_defs.maybe_uninit_uninit,
                 ty,

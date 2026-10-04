@@ -9,8 +9,8 @@ use crate::{
     EnumSpecifier, Expression, FileId, FloatSuffix, ForInit, FunctionDefinitionSignature,
     FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
     IntegerSuffix, LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, PackAction,
-    ParameterList, RustAttribute, RustFunctionParam, RustFunctionSignature, RustStructField,
-    RustTy, Span, Spanned, SpecifierQualifier, Statement, StatementOrDeclaration,
+    ParameterList, RustAttribute, RustFnAbi, RustFunctionParam, RustFunctionSignature,
+    RustStructField, RustTy, Span, Spanned, SpecifierQualifier, Statement, StatementOrDeclaration,
     StorageClassSpecifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
     StructOrUnionSpecifier, TranslationUnit, TypeName, TypeQualifier, TypeSpecifier, UnaryOp,
     UpdateOp, UseItem, Visibility,
@@ -1195,8 +1195,16 @@ impl<R: TypeResolver> PrettyPrint for Spanned<RustTy<R>> {
                     len.pretty_print(pp);
                 });
             }
-            RustTy::BareFn { params, ret_ty } => {
-                pp.node("BareFn", &sp, |pp| {
+            RustTy::BareFn {
+                params,
+                ret_ty,
+                abi,
+            } => {
+                let label = match abi {
+                    RustFnAbi::Rust => "BareFn",
+                    RustFnAbi::C => "BareFnExternC",
+                };
+                pp.node(label, &sp, |pp| {
                     for p in params {
                         p.pretty_print(pp);
                     }

@@ -2,8 +2,9 @@ use rustc_data_structures::fx::FxHashSet;
 
 use co2_ast::{
     BinOp, CharPrefix, Constant, DeclarationSpecifier, Declarator, Expression, GenericAssociation,
-    Initializer, IntegerSuffix, Span, Spanned, StorageClassSpecifier, StringLiteralPrefix,
-    StructOrUnionKind, TypeName, TypeQualifier, TypeResolver, TypeSpecifier, UnaryOp,
+    Initializer, IntegerSuffix, RustFnAbi, Span, Spanned, StorageClassSpecifier,
+    StringLiteralPrefix, StructOrUnionKind, TypeName, TypeQualifier, TypeResolver, TypeSpecifier,
+    UnaryOp,
 };
 use rustc_public_generative::{
     FunctionAbi, FunctionInput, FunctionSignature, HirTy, HirTyConst, HirTyKind,
@@ -18,6 +19,13 @@ use rustc_public_generative::{
 };
 
 use crate::{CrateSigCtx, LocalResolver, LocalResolverBase, LogicalAdtFieldKind};
+
+fn function_abi(abi: RustFnAbi) -> FunctionAbi {
+    match abi {
+        RustFnAbi::Rust => FunctionAbi::Rust,
+        RustFnAbi::C => FunctionAbi::C,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum CTy {
@@ -651,7 +659,11 @@ impl CrateSigCtx<'_> {
                     rust_span,
                 )
             }
-            co2_ast::RustTy::BareFn { params, ret_ty } => {
+            co2_ast::RustTy::BareFn {
+                params,
+                ret_ty,
+                abi,
+            } => {
                 let inputs = params
                     .into_iter()
                     .map(|param| FunctionInput {
@@ -665,7 +677,7 @@ impl CrateSigCtx<'_> {
                         lifetimes: vec![],
                         inputs,
                         output,
-                        abi: FunctionAbi::Rust,
+                        abi: function_abi(abi),
                         is_unsafe: false,
                         c_variadic: false,
                     })),
@@ -1032,7 +1044,11 @@ impl LocalResolverBase {
                     rust_span,
                 )
             }
-            co2_ast::RustTy::BareFn { params, ret_ty } => {
+            co2_ast::RustTy::BareFn {
+                params,
+                ret_ty,
+                abi,
+            } => {
                 let inputs = params
                     .into_iter()
                     .map(|param| FunctionInput {
@@ -1046,7 +1062,7 @@ impl LocalResolverBase {
                         lifetimes: vec![],
                         inputs,
                         output,
-                        abi: FunctionAbi::Rust,
+                        abi: function_abi(abi),
                         is_unsafe: false,
                         c_variadic: false,
                     })),

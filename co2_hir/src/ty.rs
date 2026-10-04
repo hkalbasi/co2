@@ -3,7 +3,9 @@ use co2_crate_sig::LocalResolver;
 use rustc_public_generative::rustc_public::{
     CrateDef, CrateDefType,
     mir::Mutability,
-    ty::{Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx},
+    ty::{
+        Abi, Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx,
+    },
 };
 
 use crate::resolver::HirCtx;
@@ -111,6 +113,10 @@ fn format_rigid_ty(resolver: Option<&LocalResolver>, ty: RigidTy) -> String {
         }
         RigidTy::FnPtr(sig) => {
             let sig = sig.value;
+            let abi = match sig.abi {
+                Abi::Rust => "",
+                _ => "extern \"C\" ",
+            };
             let params = sig
                 .inputs()
                 .iter()
@@ -118,7 +124,7 @@ fn format_rigid_ty(resolver: Option<&LocalResolver>, ty: RigidTy) -> String {
                 .chain(sig.c_variadic.then(|| "...".to_owned()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("fn({params}) -> {}", format_ty(resolver, sig.output()))
+            format!("{abi}fn({params}) -> {}", format_ty(resolver, sig.output()))
         }
         RigidTy::Never => "!".to_owned(),
         RigidTy::Tuple(items) => {

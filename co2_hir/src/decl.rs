@@ -494,17 +494,25 @@ impl HirCtx<'_> {
                 ));
                 self.check_wf_ty(ty, span, &[(inner_ty, inner_span)])
             }
-            RustTy::BareFn { params, ret_ty } => {
+            RustTy::BareFn {
+                params,
+                ret_ty,
+                abi,
+            } => {
                 let mut inputs_and_output = params
                     .into_iter()
                     .map(|param| self.lower_rust_ty(param))
                     .collect::<Vec<_>>();
                 inputs_and_output.push(self.lower_rust_ty(*ret_ty));
+                let abi = match abi {
+                    co2_ast::RustFnAbi::Rust => Abi::Rust,
+                    co2_ast::RustFnAbi::C => Abi::C { unwind: false },
+                };
                 Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(FnSig {
                     inputs_and_output,
                     c_variadic: false,
                     safety: Safety::Safe,
-                    abi: Abi::Rust,
+                    abi,
                 })))
             }
             RustTy::Never => Ty::from_rigid_kind(RigidTy::Never),
