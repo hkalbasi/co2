@@ -2083,7 +2083,11 @@ impl<'a, R: TypeResolver> P<'a, R> {
     }
 
     fn peek_rust_fn(&self) -> bool {
-        matches!(self.peek(self.peek_after_pub()), Some(Token::Ident(s)) if s == "fn")
+        let mut i = self.peek_after_pub();
+        if matches!(self.peek(i), Some(Token::Ident(s)) if s == "unsafe") {
+            i += 1;
+        }
+        matches!(self.peek(i), Some(Token::Ident(s)) if s == "fn")
     }
 
     fn peek_rust_type_alias(&self) -> bool {
@@ -2097,6 +2101,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
         if let Some(span) = err_span {
             co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, "invalid pub specifier")]);
         }
+        let is_unsafe = self.eat_ident("unsafe").is_some();
         if self.eat_ident("fn").is_none() {
             return Err(self.fail_here(format!("expected fn, found {}", self.describe())));
         }
@@ -2116,6 +2121,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 params,
                 ret_ty,
                 visibility,
+                is_unsafe,
             }),
             body,
         })

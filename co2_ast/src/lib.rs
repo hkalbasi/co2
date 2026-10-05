@@ -1292,6 +1292,7 @@ pub struct RustFunctionSignature<R: TypeResolver> {
     pub params: Vec<RustFunctionParam<R>>,
     pub ret_ty: Spanned<RustTy<R>>,
     pub visibility: Visibility,
+    pub is_unsafe: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

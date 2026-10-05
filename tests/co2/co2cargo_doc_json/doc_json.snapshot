@@ -137,7 +137,7 @@
       },
       "header": {
         "is_const": false,
-        "is_unsafe": false,
+        "is_unsafe": true,
         "is_async": false,
         "abi": {
           "C": {
@@ -179,7 +179,7 @@
       },
       "header": {
         "is_const": false,
-        "is_unsafe": false,
+        "is_unsafe": true,
         "is_async": false,
         "abi": {
           "C": {
@@ -226,7 +226,7 @@
       },
       "header": {
         "is_const": false,
-        "is_unsafe": false,
+        "is_unsafe": true,
         "is_async": false,
         "abi": {
           "C": {
@@ -278,7 +278,7 @@
       },
       "header": {
         "is_const": false,
-        "is_unsafe": false,
+        "is_unsafe": true,
         "is_async": false,
         "abi": {
           "C": {

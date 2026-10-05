@@ -961,6 +961,9 @@ impl<R: TypeResolver> PrettyPrint for RustFunctionSignature<R> {
             if self.visibility == Visibility::Public {
                 pp.data("pub");
             }
+            if self.is_unsafe {
+                pp.data("unsafe");
+            }
         });
     }
 }

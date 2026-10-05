@@ -115,3 +115,11 @@ pub type TypeAliasToPoint = Point;
 typedef struct TaggedInt TaggedAlias1;
 typedef struct TaggedInt { int x; } TaggedAlias2;
 typedef struct TaggedInt TaggedAlias3;
+
+pub fn safe_add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+pub unsafe fn unsafe_read(p: *const i32) -> i32 {
+    return *p;
+}

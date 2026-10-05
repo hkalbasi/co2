@@ -27,6 +27,13 @@ fn function_abi(abi: RustFnAbi) -> FunctionAbi {
     }
 }
 
+/// In CO2, `extern "C" fn` pointer types are unsafe: they exist to name C
+/// functions, which are always unsafe. Plain `fn` types follow Rust and stay
+/// safe.
+fn bare_fn_is_unsafe(abi: RustFnAbi) -> bool {
+    matches!(abi, RustFnAbi::C)
+}
+
 #[derive(Debug, Clone)]
 pub enum CTy {
     Ty(HirTy),
@@ -457,7 +464,7 @@ impl CrateSigCtx<'_> {
                         inputs,
                         output: ret,
                         abi: FunctionAbi::C,
-                        is_unsafe: false,
+                        is_unsafe: true,
                         c_variadic,
                     }),
                     CTy::Function(_) => {
@@ -581,7 +588,7 @@ impl CrateSigCtx<'_> {
                 inputs,
                 output,
                 abi: FunctionAbi::Rust,
-                is_unsafe: false,
+                is_unsafe: sig.is_unsafe,
                 c_variadic: false,
             },
         )
@@ -678,7 +685,7 @@ impl CrateSigCtx<'_> {
                         inputs,
                         output,
                         abi: function_abi(abi),
-                        is_unsafe: false,
+                        is_unsafe: bare_fn_is_unsafe(abi),
                         c_variadic: false,
                     })),
                     span: rust_span,
@@ -1063,7 +1070,7 @@ impl LocalResolverBase {
                         inputs,
                         output,
                         abi: function_abi(abi),
-                        is_unsafe: false,
+                        is_unsafe: bare_fn_is_unsafe(abi),
                         c_variadic: false,
                     })),
                     span: rust_span,
@@ -2598,7 +2605,7 @@ impl LocalResolverBase {
                         inputs,
                         output: ret,
                         abi: FunctionAbi::C,
-                        is_unsafe: false,
+                        is_unsafe: true,
                         c_variadic,
                     }),
                     CTy::Function(_) => {

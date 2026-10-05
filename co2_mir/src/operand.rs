@@ -9,7 +9,7 @@ use rustc_public_generative::{
         mir::{
             AggregateKind, BorrowKind, CastKind, ConstOperand, MutBorrowKind, Mutability,
             Operand as MirOperand, PointerCoercion, ProjectionElem as MirProjection, RawPtrKind,
-            Rvalue, Safety, SourceInfo, StatementKind as MirStatementKind, SwitchTargets,
+            Rvalue, SourceInfo, StatementKind as MirStatementKind, SwitchTargets,
             Terminator as MirTerminator, TerminatorKind, WithRetag,
         },
         ty::{
@@ -1009,7 +1009,7 @@ impl Builder<'_, '_> {
                         .kind()
                         .fn_sig()
                         .expect("failed to get fn ptr signature");
-                    let fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(fn_sig));
+                    let fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(fn_sig.clone()));
                     let fn_const =
                         MirConst::try_new_zero_sized(fn_ty).expect("failed to build fn const");
                     let fn_operand = MirOperand::Constant(ConstOperand {
@@ -1023,7 +1023,7 @@ impl Builder<'_, '_> {
                             place(tmp),
                             Rvalue::Cast(
                                 CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
-                                    Safety::Safe,
+                                    fn_sig.skip_binder().safety,
                                 )),
                                 fn_operand,
                                 fn_ptr_ty,
@@ -1387,7 +1387,7 @@ impl Builder<'_, '_> {
                 .kind()
                 .fn_sig()
                 .expect("fn def should have signature");
-            let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig));
+            let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig.clone()));
             if !ty_matches_expected(dst_ty, src_fn_ptr_ty) {
                 let fn_ptr_local = self.new_temp(src_fn_ptr_ty, Mutability::Mut, span);
                 self.push_statement(
@@ -1395,7 +1395,7 @@ impl Builder<'_, '_> {
                         place(fn_ptr_local),
                         Rvalue::Cast(
                             CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
-                                Safety::Safe,
+                                src_sig.skip_binder().safety,
                             )),
                             inner_op,
                             src_fn_ptr_ty,
@@ -1418,12 +1418,18 @@ impl Builder<'_, '_> {
             }
         }
         if src_is_fn_def && dst_is_fn_ptr {
+            let src_safety = src_ty
+                .kind()
+                .fn_sig()
+                .expect("fn def should have signature")
+                .skip_binder()
+                .safety;
             let tmp = self.new_temp(dst_ty, Mutability::Mut, span);
             self.push_statement(
                 MirStatementKind::Assign(
                     place(tmp),
                     Rvalue::Cast(
-                        CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
+                        CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(src_safety)),
                         inner_op,
                         dst_ty,
                     ),
@@ -1437,13 +1443,15 @@ impl Builder<'_, '_> {
                 .kind()
                 .fn_sig()
                 .expect("fn def should have signature");
-            let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig));
+            let src_fn_ptr_ty = Ty::from_rigid_kind(RigidTy::FnPtr(src_sig.clone()));
             let src_fn_ptr_local = self.new_temp(src_fn_ptr_ty, Mutability::Mut, span);
             self.push_statement(
                 MirStatementKind::Assign(
                     place(src_fn_ptr_local),
                     Rvalue::Cast(
-                        CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(Safety::Safe)),
+                        CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(
+                            src_sig.skip_binder().safety,
+                        )),
                         inner_op,
                         src_fn_ptr_ty,
                     ),

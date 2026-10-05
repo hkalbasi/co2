@@ -503,6 +503,8 @@ impl HirCtx<'_> {
                     .map(|param| self.lower_rust_ty(param))
                     .collect::<Vec<_>>();
                 inputs_and_output.push(self.lower_rust_ty(*ret_ty));
+                // `extern "C" fn` types are unsafe: they name C functions.
+                let is_unsafe = matches!(abi, co2_ast::RustFnAbi::C);
                 let abi = match abi {
                     co2_ast::RustFnAbi::Rust => Abi::Rust,
                     co2_ast::RustFnAbi::C => Abi::C { unwind: false },
@@ -510,7 +512,11 @@ impl HirCtx<'_> {
                 Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(FnSig {
                     inputs_and_output,
                     c_variadic: false,
-                    safety: Safety::Safe,
+                    safety: if is_unsafe {
+                        Safety::Unsafe
+                    } else {
+                        Safety::Safe
+                    },
                     abi,
                 })))
             }
@@ -1768,7 +1774,7 @@ impl HirCtx<'_> {
                         CTy::Function(FnSig {
                             inputs_and_output,
                             c_variadic,
-                            safety: Safety::Safe,
+                            safety: Safety::Unsafe,
                             abi: Abi::C { unwind: false },
                         })
                     }

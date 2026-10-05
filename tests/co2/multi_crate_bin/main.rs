@@ -1,3 +1,4 @@
+#![deny(unused_unsafe)]
 #![feature(const_cmp)]
 #![feature(const_trait_impl)]
 #![feature(complex_numbers)]
@@ -134,10 +135,13 @@ fn main() {
 
     let p_ptr: PointPtr = &raw mut p;
     assert_ne!(p_ptr, std::ptr::null_mut());
-    assert_eq!(add(4, -1), 3);
-    assert_eq!(hypot(p), 17);
-    assert_eq!(support_lib::foo_user(3), 2 * support_lib2::foo(3));
-    assert_eq!(support_lib::name_len(), support_lib2::NAME.len());
+    assert_eq!(unsafe { add(4, -1) }, 3);
+    assert_eq!(support_lib::safe_add(2, 3), 5);
+    let val = 42;
+    assert_eq!(unsafe { support_lib::unsafe_read(&val) }, 42);
+    assert_eq!(unsafe { hypot(p) }, 17);
+    assert_eq!(unsafe { support_lib::foo_user(3) }, 2 * support_lib2::foo(3));
+    assert_eq!(unsafe { support_lib::name_len() }, support_lib2::NAME.len());
 
     let u = Union1 { b: 12 };
     unsafe {
