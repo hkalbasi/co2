@@ -1293,6 +1293,7 @@ pub struct RustFunctionSignature<R: TypeResolver> {
     pub ret_ty: Spanned<RustTy<R>>,
     pub visibility: Visibility,
     pub is_unsafe: bool,
+    pub abi: RustFnAbi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

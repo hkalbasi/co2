@@ -123,3 +123,11 @@ pub fn safe_add(a: i32, b: i32) -> i32 {
 pub unsafe fn unsafe_read(p: *const i32) -> i32 {
     return *p;
 }
+
+pub unsafe extern "C" fn c_double(x: i32) -> i32 {
+    return x * 2;
+}
+
+pub extern "C" fn c_safe_add(a: i32, b: i32) -> i32 {
+    return a + b;
+}

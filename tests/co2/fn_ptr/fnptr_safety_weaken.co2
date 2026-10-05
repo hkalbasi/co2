@@ -1,0 +1,50 @@
+//@ mode: co2
+//@ run-status: 0
+
+#include <assert.h>
+
+type Cb = fn(i32) -> i32;
+type Cbk = extern "C" fn(i32) -> i32;
+
+fn safe_rust(x: i32) -> i32 {
+    return x + 1;
+}
+
+extern "C" fn safe_c(x: i32) -> i32 {
+    return x + 1;
+}
+
+unsafe extern "C" fn unsafe_c(x: i32) -> i32 {
+    return x * 2;
+}
+
+int c_func(int x) {
+    return x * 3;
+}
+
+fn call_cbk(cb: Cbk, x: i32) -> i32 {
+    return cb(x);
+}
+
+fn main() {
+    // Weakening: a safe `extern "C" fn` item coerces to an unsafe pointer.
+    Cbk a = safe_c;
+    assert(a(41) == 42);
+    assert(call_cbk(safe_c, 41) == 42);
+    // Exact safety: unsafe items coerce to unsafe pointers.
+    Cbk b = unsafe_c;
+    assert(b(21) == 42);
+    // C definitions are `unsafe extern "C"` and coerce the same way.
+    Cbk c = c_func;
+    assert(c(14) == 42);
+    assert(call_cbk(c_func, 14) == 42);
+    // C function pointers are `MaybeUninit<unsafe extern "C" fn>`: the same
+    // coercions apply, including weakening from safe items.
+    int (*pc)(int) = c_func;
+    assert(pc(14) == 42);
+    int (*ps)(int) = safe_c;
+    assert(ps(41) == 42);
+    // Safe Rust items coerce to safe Rust pointers (no weakening needed).
+    Cb d = safe_rust;
+    assert(d(41) == 42);
+}

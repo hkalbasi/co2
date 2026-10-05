@@ -2,7 +2,7 @@ use co2_ast::StructOrUnionKind;
 use co2_crate_sig::LocalResolver;
 use rustc_public_generative::rustc_public::{
     CrateDef, CrateDefType,
-    mir::Mutability,
+    mir::{Mutability, Safety},
     ty::{
         Abi, Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx,
     },
@@ -556,7 +556,12 @@ impl HirCtx<'_> {
         };
         let dst_sig = dst_sig.value;
         let src_sig = src_sig.value;
-        if dst_sig.safety != src_sig.safety || dst_sig.abi != src_sig.abi {
+        if dst_sig.abi != src_sig.abi {
+            return false;
+        }
+        // Safety weakens: a safe function coerces to an unsafe function
+        // pointer, but an unsafe function never coerces to a safe one.
+        if matches!(src_sig.safety, Safety::Unsafe) && matches!(dst_sig.safety, Safety::Safe) {
             return false;
         }
         if !ty_matches_expected(

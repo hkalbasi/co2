@@ -1,0 +1,53 @@
+//@ mode: co2
+//@ compile-fail
+
+type Cb = fn(i32) -> i32;
+type Cbk = extern "C" fn(i32) -> i32;
+
+fn safe_rust(x: i32) -> i32 {
+    return x + 1;
+}
+
+unsafe fn unsafe_rust(x: i32) -> i32 {
+    return x * 2;
+}
+
+unsafe extern "C" fn unsafe_c(x: i32) -> i32 {
+    return x * 2;
+}
+
+int c_func(int x) {
+    return x * 3;
+}
+
+fn f1() {
+    // ABI mismatch: a Rust-ABI function never coerces to a C-ABI pointer,
+    // even when safety would weaken.
+    Cbk a = safe_rust;
+          //^^^^^^^^^ error: initializer type mismatch: expected extern "C" fn(i32) -> i32, got safe_rust
+}
+
+fn f2() {
+    // ABI mismatch the other way: C functions never coerce to Rust-ABI pointers.
+    Cb b = c_func;
+         //^^^^^^ error: initializer type mismatch: expected fn(i32) -> i32, got c_func
+}
+
+fn f3() {
+    // Strengthening: an unsafe function never coerces to a safe pointer.
+    Cb c = unsafe_rust;
+         //^^^^^^^^^^^ error: initializer type mismatch: expected fn(i32) -> i32, got unsafe_rust
+}
+
+fn f4() {
+    // ABI mismatch and strengthening combined.
+    Cb d = unsafe_c;
+         //^^^^^^^^ error: initializer type mismatch: expected fn(i32) -> i32, got unsafe_c
+}
+
+fn main() {
+    f1();
+    f2();
+    f3();
+    f4();
+}

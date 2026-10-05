@@ -964,6 +964,12 @@ impl<R: TypeResolver> PrettyPrint for RustFunctionSignature<R> {
             if self.is_unsafe {
                 pp.data("unsafe");
             }
+            match self.abi {
+                RustFnAbi::Rust => {}
+                RustFnAbi::C => {
+                    pp.data("extern \"C\"");
+                }
+            }
         });
     }
 }

@@ -2087,6 +2087,12 @@ impl<'a, R: TypeResolver> P<'a, R> {
         if matches!(self.peek(i), Some(Token::Ident(s)) if s == "unsafe") {
             i += 1;
         }
+        if matches!(self.peek(i), Some(Token::Extern)) {
+            i += 1;
+            if matches!(self.peek(i), Some(Token::StringLit(_))) {
+                i += 1;
+            }
+        }
         matches!(self.peek(i), Some(Token::Ident(s)) if s == "fn")
     }
 
@@ -2102,6 +2108,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
             co2_ast::emit_errors(vec![co2_ast::Rich::custom(span, "invalid pub specifier")]);
         }
         let is_unsafe = self.eat_ident("unsafe").is_some();
+        let abi = self.parse_rust_fn_item_abi();
         if self.eat_ident("fn").is_none() {
             return Err(self.fail_here(format!("expected fn, found {}", self.describe())));
         }
@@ -2122,9 +2129,41 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 ret_ty,
                 visibility,
                 is_unsafe,
+                abi,
             }),
             body,
         })
+    }
+
+    /// Optional `extern "C"` prefix of a Rust-style `fn` item. Only the C ABI
+    /// is supported; diagnostics are non-fatal so one compile reports every
+    /// bad item.
+    fn parse_rust_fn_item_abi(&mut self) -> RustFnAbi {
+        if !matches!(self.peek(0), Some(Token::Extern)) {
+            return RustFnAbi::Rust;
+        }
+        let extern_span = self.peek_span(0);
+        self.pos += 1;
+        let Some(Token::StringLit(lit)) = self.peek(0) else {
+            co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                extern_span,
+                "bare `extern fn` is deprecated, use `extern \"C\" fn`",
+            )]);
+            return RustFnAbi::C;
+        };
+        let is_c = matches!(
+            lit,
+            StringLiteral::None(bytes) | StringLiteral::Str(bytes) | StringLiteral::Utf8(bytes)
+                if bytes.as_slice() == b"C"
+        );
+        if !is_c {
+            co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                self.peek_span(0),
+                "only extern \"C\" is supported in function items",
+            )]);
+        }
+        self.pos += 1;
+        RustFnAbi::C
     }
 
     fn parse_rust_params(&mut self) -> PR<Vec<RustFunctionParam<R>>> {

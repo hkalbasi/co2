@@ -559,6 +559,7 @@ impl<A: TypeResolver> DoTransform for RustFunctionSignature<A> {
             ret_ty: self.ret_ty.transform(b),
             visibility: self.visibility,
             is_unsafe: self.is_unsafe,
+            abi: self.abi,
         }
     }
 }

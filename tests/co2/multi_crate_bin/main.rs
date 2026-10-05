@@ -5,7 +5,7 @@
 #![feature(f16)]
 
 use support_lib::{
-    add, hypot,
+    add, c_double, c_safe_add, hypot,
     inner_mod::{inner_mod_fn, RustStructInModule, TypedefedStructInModule},
     BitFieldReprCStruct, ComplexStruct, CopyReprRustStruct, ExternType1, ExternType1Again,
     ExternType2, NormalReprCStruct, Point, PointPtr, ReprRustStruct, RustStructHoldingVector,
@@ -139,6 +139,14 @@ fn main() {
     assert_eq!(support_lib::safe_add(2, 3), 5);
     let val = 42;
     assert_eq!(unsafe { support_lib::unsafe_read(&val) }, 42);
+    assert_eq!(unsafe { c_double(21) }, 42);
+    // Safe `extern "C" fn` needs no unsafe block (`#![deny(unused_unsafe)]`).
+    assert_eq!(c_safe_add(40, 2), 42);
+    // `extern "C" fn` items keep their C ABI across the crate boundary.
+    let f: unsafe extern "C" fn(i32) -> i32 = c_double;
+    assert_eq!(unsafe { f(21) }, 42);
+    let g: extern "C" fn(i32, i32) -> i32 = c_safe_add;
+    assert_eq!(g(40, 2), 42);
     assert_eq!(unsafe { hypot(p) }, 17);
     assert_eq!(unsafe { support_lib::foo_user(3) }, 2 * support_lib2::foo(3));
     assert_eq!(unsafe { support_lib::name_len() }, support_lib2::NAME.len());

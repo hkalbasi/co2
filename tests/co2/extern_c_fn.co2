@@ -1,0 +1,39 @@
+//@ mode: co2
+//@ run-status: 0
+
+#include <assert.h>
+
+type Cbk = extern "C" fn(i32) -> i32;
+
+pub unsafe extern "C" fn add_c(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+extern "C" fn safe_c(x: i32) -> i32 {
+    return x + 1;
+}
+
+unsafe extern "C" fn unsafe_private(x: i32) -> i32 {
+    return x * 2;
+}
+
+fn call_cbk(cb: Cbk, x: i32) -> i32 {
+    return cb(x);
+}
+
+int c_id(int x) {
+    return x + 1;
+}
+
+fn main() {
+    assert(add_c(40, 2) == 42);
+    assert(unsafe_private(21) == 42);
+    // Safe `extern "C" fn` is callable without an unsafe context.
+    assert(safe_c(41) == 42);
+    // `unsafe extern "C" fn` items coerce to `extern "C" fn` pointers and
+    // interoperate with C functions through the same pointer type.
+    Cbk cb = unsafe_private;
+    assert(cb(21) == 42);
+    assert(call_cbk(unsafe_private, 21) == 42);
+    assert(call_cbk(c_id, 41) == 42);
+}

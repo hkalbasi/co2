@@ -587,7 +587,7 @@ impl CrateSigCtx<'_> {
                 lifetimes: vec![],
                 inputs,
                 output,
-                abi: FunctionAbi::Rust,
+                abi: function_abi(sig.abi),
                 is_unsafe: sig.is_unsafe,
                 c_variadic: false,
             },

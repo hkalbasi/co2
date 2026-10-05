@@ -7,4 +7,14 @@ type A = extern fn(i32) -> i32;
 type B = extern "Invalid-ABI" fn(i32) -> i32;
               //^^^^^^^^^^^^^ error: only extern "C" is supported in function pointer types
 
+  extern fn bad_bare(x: i32) -> i32 {
+//^^^^^^ error: bare `extern fn` is deprecated, use `extern "C" fn`
+      return x;
+  }
+
+  extern "Invalid-ABI" fn bad_abi(x: i32) -> i32 {
+//       ^^^^^^^^^^^^^ error: only extern "C" is supported in function items
+      return x;
+  }
+
 fn main() {}
