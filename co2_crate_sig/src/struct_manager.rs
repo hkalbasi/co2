@@ -198,12 +198,13 @@ impl LocalResolver {
                 underlying_type,
                 enumerators,
             } => {
-                let has_fixed_underlying = underlying_type.is_some();
-                let def =
-                    self.def_id_of_enum(&ident.0, rust_span, true, underlying_ty(underlying_type));
+                let underlying_hir = underlying_ty(underlying_type);
+                let def = self.def_id_of_enum(&ident.0, rust_span, true, underlying_hir.clone());
                 let mut prev = None;
                 let mut const_defs = Vec::new();
-                for ((def_id, fake_name, value), _) in enumerators {
+                let mut check_infos = Vec::new();
+                for ((def_id, fake_name, value), espan) in enumerators {
+                    let explicit = value.is_some();
                     let mut base = self.base.borrow_mut();
                     base.enum_const_defs.insert(def_id, def);
                     let mir_info = match value {
@@ -225,9 +226,12 @@ impl LocalResolver {
                         mir_info,
                     });
                     const_defs.push(def_id);
+                    check_infos.push((def_id, explicit, espan));
                     prev = Some(def_id);
                 }
-                if !has_fixed_underlying {
+                if let Some(hir) = &underlying_hir {
+                    self.check_fixed_enum_range(hir, &check_infos, span);
+                } else {
                     self.base.borrow_mut().set_plain_enum_payload_ty_from_range(
                         def,
                         &const_defs,
@@ -241,14 +245,15 @@ impl LocalResolver {
                 enumerators,
             } => {
                 let underlying_ty = underlying_ty(underlying_type);
-                let has_fixed_underlying = underlying_ty.is_some();
-                let def = self
-                    .base
-                    .borrow_mut()
-                    .allocate_enum(rust_span, "", underlying_ty);
+                let def =
+                    self.base
+                        .borrow_mut()
+                        .allocate_enum(rust_span, "", underlying_ty.clone());
                 let mut prev = None;
                 let mut const_defs = Vec::new();
-                for ((def_id, fake_name, value), _) in enumerators {
+                let mut check_infos = Vec::new();
+                for ((def_id, fake_name, value), espan) in enumerators {
+                    let explicit = value.is_some();
                     let mut base = self.base.borrow_mut();
                     base.enum_const_defs.insert(def_id, def);
                     let mir_info = match value {
@@ -270,9 +275,12 @@ impl LocalResolver {
                         mir_info,
                     });
                     const_defs.push(def_id);
+                    check_infos.push((def_id, explicit, espan));
                     prev = Some(def_id);
                 }
-                if !has_fixed_underlying {
+                if let Some(hir) = &underlying_ty {
+                    self.check_fixed_enum_range(hir, &check_infos, span);
+                } else {
                     self.base.borrow_mut().set_plain_enum_payload_ty_from_range(
                         def,
                         &const_defs,
@@ -281,6 +289,58 @@ impl LocalResolver {
                 }
                 def
             }
+        }
+    }
+
+    /// For enums with a C23 fixed underlying type, every enumerator value must
+    /// be representable in that type (C23 6.7.2.2p2). GCC rejects violations
+    /// (`overflow in enumeration values` for implicit `prev + 1` overflow,
+    /// `enumerator value outside the range of underlying type` for explicit
+    /// initializers); previously CO2 silently wrapped via truncation.
+    fn check_fixed_enum_range(
+        &self,
+        underlying: &HirTy,
+        consts: &[(DefId, bool, co2_ast::Span)],
+        scope_span: co2_ast::Span,
+    ) {
+        let Some((min, max)) = Self::int_range_of_hir_ty(underlying) else {
+            return;
+        };
+        let mut errors = Vec::new();
+        for (def_id, explicit, espan) in consts {
+            let Ok(value) = self.base.borrow_mut().eval_local_const(*def_id, scope_span) else {
+                continue;
+            };
+            if value < min || value > max {
+                let msg = if *explicit {
+                    "enumerator value outside the range of underlying type"
+                } else {
+                    "overflow in enumeration values"
+                };
+                errors.push(co2_ast::Rich::custom(*espan, msg.to_owned()));
+            }
+        }
+        if !errors.is_empty() {
+            co2_ast::emit_errors(errors);
+        }
+    }
+
+    fn int_range_of_hir_ty(ty: &HirTy) -> Option<(i128, i128)> {
+        match ty.kind {
+            HirTyKind::Int(IntTy::I8) => Some((i8::MIN as i128, i8::MAX as i128)),
+            HirTyKind::Int(IntTy::I16) => Some((i16::MIN as i128, i16::MAX as i128)),
+            HirTyKind::Int(IntTy::I32) => Some((i32::MIN as i128, i32::MAX as i128)),
+            HirTyKind::Int(IntTy::I64) => Some((i64::MIN as i128, i64::MAX as i128)),
+            HirTyKind::Int(IntTy::I128) => Some((i128::MIN, i128::MAX)),
+            HirTyKind::Int(IntTy::Isize) => Some((isize::MIN as i128, isize::MAX as i128)),
+            HirTyKind::Uint(UintTy::U8) => Some((0, u8::MAX as i128)),
+            HirTyKind::Uint(UintTy::U16) => Some((0, u16::MAX as i128)),
+            HirTyKind::Uint(UintTy::U32) => Some((0, u32::MAX as i128)),
+            HirTyKind::Uint(UintTy::U64) => Some((0, u64::MAX as i128)),
+            HirTyKind::Uint(UintTy::U128) => Some((0, i128::MAX)),
+            HirTyKind::Uint(UintTy::Usize) => Some((0, usize::MAX as i128)),
+            HirTyKind::Bool => Some((0, 1)),
+            _ => None,
         }
     }
 
