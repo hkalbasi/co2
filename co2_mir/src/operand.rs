@@ -1382,6 +1382,19 @@ impl Builder<'_, '_> {
         if src_is_float && dst_is_float {
             return self.emit_cast_copy(CastKind::FloatToFloat, inner_op, dst_ty, span);
         }
+        // Intrinsics have no body and cannot be reified to a pointer;
+        // rustc rejects this as E0308 ("cannot coerce intrinsics to function
+        // pointers") while the monomorphizer ICEs on it, so report the same
+        // error here. This is the single funnel: every HIR path that
+        // materializes a function address (coercions, decays, address-of)
+        // lowers through `lower_cast`.
+        if src_is_fn_def
+            && (dst_is_fn_ptr || dst_mu_fn_ptr.is_some())
+            && let TyKind::RigidTy(RigidTy::FnDef(fn_def, _)) = src_ty.kind()
+            && self.ctx.dependencies().is_intrinsic(fn_def.0)
+        {
+            self.terminate_with_error(span, "cannot coerce intrinsics to function pointers");
+        }
         if src_is_fn_def && dst_is_fn_ptr {
             let src_sig = src_ty
                 .kind()

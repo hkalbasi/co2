@@ -2600,6 +2600,17 @@ pub fn dependency_is_trait(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     matches!(tcx.def_kind(rustc_def_id), DefKind::Trait)
 }
 
+pub fn dependency_is_intrinsic(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    let rustc_def_id = my_def_id_to_rustc_def_id(tcx, def_id);
+    // Same guard as `dependency_is_trait`: querying a local synthetic def
+    // at resolver time is not supported. CO2 cannot define intrinsics, so
+    // locals are never intrinsics.
+    if rustc_def_id.is_local() {
+        return false;
+    }
+    tcx.intrinsic(rustc_def_id).is_some()
+}
+
 fn is_dependency_const_value(tcx: TyCtxt<'_>, def_id: RustcDefId) -> bool {
     let kind = tcx.def_kind(def_id);
     matches!(kind, DefKind::Const { is_type_const: _ }) && !def_id.is_local()

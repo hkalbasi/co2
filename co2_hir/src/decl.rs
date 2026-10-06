@@ -27,7 +27,8 @@ use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, invalid_span, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
-    array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt, ty_matches_expected,
+    array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt,
+    ty_has_unsubstituted_param, ty_matches_expected,
 };
 
 pub enum CTy {
@@ -764,6 +765,13 @@ impl HirCtx<'_> {
                                 );
                             }
                         };
+                        if ty_has_unsubstituted_param(ty) {
+                            self.terminate_with_error(
+                                init_expr.1,
+                                "cannot deduce type for `auto`: generic arguments are missing, \
+                                 provide them with turbofish (e.g. `swap::<i32>`)",
+                            );
+                        }
 
                         let span = self.to_rust_span(parser_span);
                         let local = locals.alloc(HirLocal {
@@ -1097,11 +1105,11 @@ impl HirCtx<'_> {
         let ty = self.type_of_expr_for_sizeof(expr, locals, local_map)?;
         match ty.kind() {
             TyKind::RigidTy(RigidTy::FnDef(_, _)) => {
-                let sig = ty
-                    .kind()
-                    .fn_sig()
-                    .expect("FnDef should have fn signature")
-                    .skip_binder();
+                let sig = ty.kind().fn_sig().expect("FnDef should have fn signature");
+                // Erase rather than skip the binder: it may carry late-bound
+                // regions that would otherwise go free (e.g. `String::len`)
+                // and ICE downstream when the decayed pointer type is named.
+                let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
                 Ok(CTy::Function(sig))
             }
             _ => Ok(CTy::Ty(ty)),

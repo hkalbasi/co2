@@ -3,6 +3,10 @@
 
 use std::option::Option;
 use std::string::String;
+use std::vec::Vec;
+use std::mem::drop;
+use std::mem::transmute_copy;
+use std::ptr::swap;
 
 #include <assert.h>
 
@@ -10,8 +14,69 @@ fn f(x: Option<String>) -> Option<usize> {
     return x.as_ref().map(String::len);
 }
 
+// A method path bound to a local must not ICE: late-bound regions in its
+// signature are erased at decay, so the value calls like one instantiation.
+fn f_let_bound() {
+    String s = s"hello".to_owned();
+    auto f = String::len;
+    assert(f(&s) == 5);
+    drop(s);
+}
+
+// A generic fn value with explicit turbofish works: all type params are
+// substituted, so the value calls like a direct call.
+fn f_turbofish() {
+    i32 a = 1, b = 2;
+    auto s = swap::<i32>;
+    s(&a, &b);
+    assert(a == 2 && b == 1);
+}
+
+// A non-generic associated function as a callback.
+fn f_from_utf8() {
+    Vec::<u8> v = Vec::<u8>::new();
+    v.push(65);
+    Option::<Vec<u8>> x = Option::<Vec<u8>>::Some(v);
+    auto y = x.map(String::from_utf8);
+    String s = y.unwrap().unwrap();
+    assert(s.len() == 1);
+    drop(s);
+}
+
+// A method as a FnMut callback.
+fn f_sort_by_key() {
+    Vec::<String> v = Vec::<String>::new();
+    v.push(s"bbb".to_owned());
+    v.push(s"a".to_owned());
+    v.sort_by_key(String::len);
+    assert(v.get(0_usize).unwrap().len() == 1);
+    assert(v.get(1_usize).unwrap().len() == 3);
+    drop(v);
+}
+
+// A generic function with all arguments provided, used as a callback.
+fn f_drop_turbofish() {
+    Option::<i32> x = Option::<i32>::Some(5);
+    x.map(drop::<i32>);
+}
+
+// A non-intrinsic function with two generic arguments, bound to a local
+// and called through the value.
+fn f_two_generic_args() {
+    i32 x = 65;
+    auto t = transmute_copy::<i32, u32>;
+    u32 y = t(&x);
+    assert(y == 65);
+}
+
 fn main() {
     if (f(Option::<String>::Some(s"hello".to_owned())).unwrap() != 5) {
         assert(0);
     }
+    f_let_bound();
+    f_turbofish();
+    f_from_utf8();
+    f_sort_by_key();
+    f_drop_turbofish();
+    f_two_generic_args();
 }

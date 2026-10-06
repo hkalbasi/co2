@@ -13,8 +13,8 @@ use rustc_public_generative::rustc_public::{
     abi::FieldsShape,
     mir::Mutability,
     ty::{
-        AdtDef, AdtKind, FloatTy, FnDef, GenericArgKind, GenericArgs, IntTy, ParamTy, Region,
-        RegionKind, RigidTy, Span as RustSpan, Ty, TyConst, TyKind, UintTy,
+        AdtDef, AdtKind, Binder, FloatTy, FnDef, GenericArgKind, GenericArgs, IntTy, ParamTy,
+        Region, RegionKind, RigidTy, Span as RustSpan, Ty, TyConst, TyKind, UintTy,
     },
 };
 
@@ -1837,7 +1837,11 @@ impl HirCtx<'_> {
             .kind()
             .fn_sig()
             .expect("FnDef should have fn signature");
-        let ty = Ty::from_rigid_kind(RigidTy::FnPtr(sig));
+        // Erase late-bound regions: a raw binder would leave free regions in
+        // the decayed pointer type (e.g. `auto f = String::len`), ICEing in
+        // codegen when the type is named.
+        let sig = rustc_public_generative::erase_late_bound_regions_in_fn_sig(sig);
+        let ty = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
         let ty = self.maybe_uninit_of(ty);
         HirExpr {
             span: expr.span,

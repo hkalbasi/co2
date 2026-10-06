@@ -4,7 +4,8 @@ use rustc_public_generative::rustc_public::{
     CrateDef, CrateDefType,
     mir::{Mutability, Safety},
     ty::{
-        Abi, Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyKind, UintTy, VariantIdx,
+        Abi, Binder, FloatTy, FnSig, GenericArgKind, IntTy, RigidTy, Ty, TyConstKind, TyKind,
+        UintTy, VariantIdx,
     },
 };
 
@@ -57,7 +58,62 @@ impl HirCtx<'_> {
 pub fn format_ty(resolver: Option<&LocalResolver>, ty: Ty) -> String {
     match ty.kind() {
         TyKind::RigidTy(rigid) => format_rigid_ty(resolver, rigid),
-        TyKind::Alias(_, _) | TyKind::Param(_) | TyKind::Bound(_, _) => format!("{ty:?}"),
+        TyKind::Param(param) => param.name.clone(),
+        TyKind::Alias(_, _) | TyKind::Bound(_, _) => format!("{ty:?}"),
+    }
+}
+
+/// Whether a type still mentions unsubstituted generic parameters (e.g. a
+/// bare generic fn value like `swap` with no turbofish). Such types cannot be
+/// deduced for `auto` and ICE downstream if named, so callers must reject
+/// them with a proper diagnostic.
+pub(crate) fn ty_has_unsubstituted_param(ty: Ty) -> bool {
+    match ty.kind() {
+        TyKind::Param(_) => true,
+        TyKind::Alias(_, _) | TyKind::Bound(_, _) => false,
+        TyKind::RigidTy(rigid) => match rigid {
+            RigidTy::Adt(_, args)
+            | RigidTy::FnDef(_, args)
+            | RigidTy::Closure(_, args)
+            | RigidTy::Coroutine(_, args)
+            | RigidTy::CoroutineClosure(_, args)
+            | RigidTy::CoroutineWitness(_, args) => args.0.iter().any(generic_arg_has_param),
+            RigidTy::Ref(_, inner, _)
+            | RigidTy::RawPtr(inner, _)
+            | RigidTy::Slice(inner)
+            | RigidTy::Pat(inner, _)
+            | RigidTy::Array(inner, _) => ty_has_unsubstituted_param(inner),
+            RigidTy::Tuple(items) => items.iter().any(|item| ty_has_unsubstituted_param(*item)),
+            RigidTy::FnPtr(sig) => sig
+                .value
+                .inputs_and_output
+                .iter()
+                .any(|item| ty_has_unsubstituted_param(*item)),
+            RigidTy::Dynamic(_, _) => false,
+            RigidTy::Foreign(_)
+            | RigidTy::Str
+            | RigidTy::Char
+            | RigidTy::Bool
+            | RigidTy::Int(_)
+            | RigidTy::Uint(_)
+            | RigidTy::Float(_)
+            | RigidTy::Never => false,
+        },
+    }
+}
+
+fn generic_arg_has_param(arg: &GenericArgKind) -> bool {
+    match arg {
+        GenericArgKind::Type(ty) => ty_has_unsubstituted_param(*ty),
+        GenericArgKind::Const(c) => match c.kind() {
+            TyConstKind::Param(_) => true,
+            TyConstKind::Bound(_, _) => false,
+            TyConstKind::Unevaluated(_, args) => args.0.iter().any(generic_arg_has_param),
+            TyConstKind::Value(ty, _) | TyConstKind::ZSTValue(ty) => {
+                ty_has_unsubstituted_param(*ty)
+            }
+        },
+        GenericArgKind::Lifetime(_) => false,
     }
 }
 

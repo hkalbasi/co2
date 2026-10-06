@@ -1,0 +1,9 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::ptr::swap;
+
+fn main() {
+    auto s = swap;
+//           ^^^^ error: cannot deduce type for `auto`: generic arguments are missing, provide them with turbofish (e.g. `swap::<i32>`)
+}

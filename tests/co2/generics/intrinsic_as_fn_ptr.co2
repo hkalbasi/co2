@@ -1,0 +1,33 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::mem::transmute;
+
+type F = fn(i32) -> u32;
+
+// Intrinsics have no addressable body: any position that materializes a
+// function address for one is rejected like rustc's E0308, instead of
+// ICEing in codegen. Positions that fail earlier on safety/ABI report
+// their usual mismatch error.
+fn addr_of() {
+    auto f = &transmute::<i32, u32>;
+//            ^^^^^^^^^^^^^^^^^^^^^ error: cannot coerce intrinsics to function pointers
+}
+
+fn c_cast() {
+    F f = (F)transmute::<i32, u32>;
+//        ^^^^^^^^^^^^^^^^^^^^^^^^ error: cannot coerce intrinsics to function pointers
+}
+
+fn auto_value() {
+    auto t = transmute::<i32, u32>;
+//           ^^^^^^^^^^^^^^^^^^^^^ error: cannot coerce intrinsics to function pointers
+}
+
+fn implicit_cast() {
+    F f = transmute::<i32, u32>;
+//        ^^^^^^^^^^^^^^^^^^^^^ error: initializer type mismatch: expected fn(i32) -> u32, got transmute<i32, u32>
+}
+
+fn main() {
+}

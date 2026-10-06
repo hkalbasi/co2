@@ -115,6 +115,10 @@ impl DependencyInfo<'_> {
         internal::dependency_is_trait(self.tcx, def_id)
     }
 
+    pub fn is_intrinsic(&self, def_id: DefId) -> bool {
+        internal::dependency_is_intrinsic(self.tcx, def_id)
+    }
+
     pub fn fn_once_output_params(&self, fn_def_id: DefId) -> Vec<(u32, u32)> {
         internal::fn_once_output_params(self.tcx, fn_def_id)
     }

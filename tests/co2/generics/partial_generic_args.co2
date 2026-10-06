@@ -1,0 +1,29 @@
+//@ mode: co2
+//@ compile-fail
+
+use std::mem::transmute;
+use std::mem::drop;
+use std::option::Option;
+
+// Partial turbofish matches Rust: providing fewer arguments than
+// parameters is rejected, both as a value and as a direct call.
+fn partial_value() {
+    auto t = transmute::<u32>;
+//           ^^^^^^^^^^^^^^^^ error: Expected 2 generic argument, found 1
+}
+
+fn partial_call() {
+    i32 x = 1;
+    u32 y = transmute::<u32>(x);
+//          ^^^^^^^^^^^^^^^^ error: Expected 2 generic argument, found 1
+}
+
+// A bare generic function cannot be inferred as a callback argument.
+fn bare_callback() {
+    Option::<i32> x = Option::<i32>::Some(5);
+    x.map(drop);
+//    ^^^ error: cannot resolve generic arguments.
+}
+
+fn main() {
+}
