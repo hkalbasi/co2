@@ -1193,23 +1193,51 @@ impl<'a, R: TypeResolver> P<'a, R> {
             _ => StructOrUnionKind::Union,
         };
         self.pos += 1;
+        // `__attribute__((packed))` between the keyword and the tag/brace.
+        let leading_packed = self.eat(&Token::PackedAttr).is_some();
         // Inner span excludes the `struct`/`union` keyword (matches old).
         let inner_start = self.pos;
-        let specifier: Spanned<StructOrUnionSpecifier<R>> = if self.at(&Token::LBrace) {
+        let mut specifier: Spanned<StructOrUnionSpecifier<R>> = if self.at(&Token::LBrace) {
             let fields = self.parse_struct_fields()?;
             let span = self.span_since(inner_start);
-            (StructOrUnionSpecifier::Anonymous { fields }, span)
+            (
+                StructOrUnionSpecifier::Anonymous {
+                    fields,
+                    is_packed: leading_packed,
+                },
+                span,
+            )
         } else {
             let ident = self.parse_identifier()?;
             if self.at(&Token::LBrace) {
                 let fields = self.parse_struct_fields()?;
                 let span = self.span_since(inner_start);
-                (StructOrUnionSpecifier::Defined { ident, fields }, span)
+                (
+                    StructOrUnionSpecifier::Defined {
+                        ident,
+                        fields,
+                        is_packed: leading_packed,
+                    },
+                    span,
+                )
             } else {
+                // `struct S packed` (attribute on a mere reference, no
+                // definition): not a packed struct, drop the marker.
+                let _ = self.eat(&Token::PackedAttr);
                 let span = self.span_since(inner_start);
                 (StructOrUnionSpecifier::Declared { ident }, span)
             }
         };
+        // `__attribute__((packed))` right after the closing brace packs the
+        // struct/union just defined (`struct S {...} packed x`). Only valid
+        // on definitions; for references it was already dropped above.
+        if !matches!(specifier.0, StructOrUnionSpecifier::Declared { .. })
+            && self.eat(&Token::PackedAttr).is_some()
+            && let StructOrUnionSpecifier::Defined { is_packed, .. }
+            | StructOrUnionSpecifier::Anonymous { is_packed, .. } = &mut specifier.0
+        {
+            *is_packed = true;
+        }
         let span = specifier.1;
         let registered = self
             .resolver
@@ -1281,6 +1309,8 @@ impl<'a, R: TypeResolver> P<'a, R> {
 
     fn parse_struct_field(&mut self) -> PR<Spanned<StructOrUnionField<R>>> {
         let start = self.pos;
+        // Leading `packed` on members is not modeled; drop it.
+        while self.eat(&Token::PackedAttr).is_some() {}
         let mut specs = vec![self.parse_spec_qualifier()?];
         loop {
             let cp = self.checkpoint();
@@ -1299,6 +1329,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                     self.restore(cp);
                 }
             }
+            while self.eat(&Token::PackedAttr).is_some() {}
             specs.push(self.parse_spec_qualifier()?);
         }
     }
@@ -1313,6 +1344,9 @@ impl<'a, R: TypeResolver> P<'a, R> {
             } else {
                 None
             };
+            // `int x packed;` / `int x packed : 3;`: member-level packing is
+            // not modeled; drop the marker like other attributes.
+            while self.eat(&Token::PackedAttr).is_some() {}
             let span = self.span_since(start);
             out.push((StructDeclarator { declarator, bits }, span));
             if self.eat(&Token::Comma).is_none() {
@@ -1446,6 +1480,8 @@ impl<'a, R: TypeResolver> P<'a, R> {
             )
         };
         let span = spec.1;
+        // `enum E {...} packed x;`: packed enums are not modeled; drop it.
+        let _ = self.eat(&Token::PackedAttr);
         let reg = self.resolver.register_enum_specifier(spec);
         Ok((TypeSpecifier::Enum((reg, span)), self.span_since(start)))
     }
@@ -1653,6 +1689,10 @@ impl<'a, R: TypeResolver> P<'a, R> {
 
     pub fn parse_declarator(&mut self) -> PR<Spanned<Declarator<R>>> {
         let start = self.pos;
+        // `__attribute__((packed))` on declarators that do not define a
+        // struct/union (fields, variables, functions, abstract declarators)
+        // carries no layout meaning here; drop it like other attributes.
+        while self.eat(&Token::PackedAttr).is_some() {}
         let mut pointers: Vec<(Vec<Spanned<TypeQualifier>>, Span)> = Vec::new();
         while self.at(&Token::Star) {
             let star = self.peek_span(0);
@@ -1923,6 +1963,8 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 let r = self.resolver.clone();
                 self.resolver = r.declare_ident_as_local(&ident);
             }
+            // `int x packed = 5`: attribute between declarator and initializer.
+            while self.eat(&Token::PackedAttr).is_some() {}
             // After `=`, an initializer is mandatory: a failure here is a
             // genuine error (e.g. an undeclared name), so propagate it
             // instead of rewinding and reporting a bogus error downstream.
@@ -1933,6 +1975,8 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 None
             };
             let is_transparent_union = self.eat(&Token::TransparentUnionAttr).is_some();
+            // `int x packed;`: trailing attribute on variables.
+            while self.eat(&Token::PackedAttr).is_some() {}
             let span = self.span_since(item_start);
             result.push((
                 InitDeclarator {
@@ -1973,6 +2017,10 @@ impl<'a, R: TypeResolver> P<'a, R> {
             return Ok((d, span));
         }
         // C declaration: specifiers first, then function or object form.
+        // `__attribute__((packed))` outside struct/union definitions (e.g.
+        // leading a declaration, or a stray after a function body) carries
+        // no meaning here; drop it.
+        while self.eat(&Token::PackedAttr).is_some() {}
         let mut specs = vec![self.parse_decl_specifier()?];
         // Remember the first init-declarator failure: if the declaration
         // ultimately fails (e.g. the loop reinterprets the declarator as
@@ -1990,6 +2038,9 @@ impl<'a, R: TypeResolver> P<'a, R> {
                             && function_decl_direct_inner_is_not_function(&decl.0)
                         {
                             let attrs = self.parse_attr_list().unwrap_or_default();
+                            // `void f() packed { ... }`: packed functions are
+                            // not modeled; drop the marker.
+                            while self.eat(&Token::PackedAttr).is_some() {}
                             if self.at(&Token::LBrace) {
                                 let body = self.parse_lazy_compound()?;
                                 let span = self.span_since(start);
@@ -2053,7 +2104,14 @@ impl<'a, R: TypeResolver> P<'a, R> {
             }
             specs.push(match self.parse_decl_specifier() {
                 Ok(s) => s,
-                Err(e) => return Err(first_err.unwrap_or(e)),
+                Err(e) => {
+                    // A stray `packed` between specifiers (`static packed int
+                    // x`) is not a specifier; drop it and keep going.
+                    if self.eat(&Token::PackedAttr).is_some() {
+                        continue;
+                    }
+                    return Err(first_err.unwrap_or(e));
+                }
             });
         }
     }

@@ -263,16 +263,24 @@ impl<A: TypeResolver> DoTransform for StructOrUnionSpecifier<A> {
 
     fn transform<B: Transformable<A>>(&self, b: &B) -> StructOrUnionSpecifier<B> {
         match self {
-            StructOrUnionSpecifier::Defined { ident, fields } => StructOrUnionSpecifier::Defined {
+            StructOrUnionSpecifier::Defined {
+                ident,
+                fields,
+                is_packed,
+            } => StructOrUnionSpecifier::Defined {
                 ident: ident.clone(),
                 fields: fields.transform(b),
+                is_packed: *is_packed,
             },
             StructOrUnionSpecifier::Declared { ident } => StructOrUnionSpecifier::Declared {
                 ident: ident.clone(),
             },
-            StructOrUnionSpecifier::Anonymous { fields } => StructOrUnionSpecifier::Anonymous {
-                fields: fields.transform(b),
-            },
+            StructOrUnionSpecifier::Anonymous { fields, is_packed } => {
+                StructOrUnionSpecifier::Anonymous {
+                    fields: fields.transform(b),
+                    is_packed: *is_packed,
+                }
+            }
         }
     }
 }

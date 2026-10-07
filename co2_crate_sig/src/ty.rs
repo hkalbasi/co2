@@ -2346,12 +2346,22 @@ impl LocalResolverBase {
             }
             HirTyKind::Adt(def, args) => {
                 if let Some((kind, fields)) = self.adt_layout_info(*def) {
+                    let pack_align = self
+                        .struct_manager
+                        .definitions
+                        .get(def)
+                        .and_then(|data| data.pack_align)
+                        .map(|n| n as usize);
+                    let capped = |field_align: usize| {
+                        pack_align.map_or(field_align, |pack| field_align.min(pack))
+                    };
                     let mut size = 0usize;
                     let mut align = 1usize;
                     match kind {
                         co2_ast::StructOrUnionKind::Struct => {
                             for field in fields {
                                 let (field_size, field_align) = self.sizeof_hir_ty(&field, span)?;
+                                let field_align = capped(field_align);
                                 align = align.max(field_align);
                                 size = round_up(size, field_align);
                                 size += field_size;
@@ -2360,6 +2370,7 @@ impl LocalResolverBase {
                         co2_ast::StructOrUnionKind::Union => {
                             for field in fields {
                                 let (field_size, field_align) = self.sizeof_hir_ty(&field, span)?;
+                                let field_align = capped(field_align);
                                 align = align.max(field_align);
                                 size = size.max(field_size);
                             }

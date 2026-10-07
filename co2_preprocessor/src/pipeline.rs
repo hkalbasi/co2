@@ -1345,6 +1345,14 @@ impl Preprocessor {
                             tokens[i] = (Token::TransparentUnionAttr, start, end);
                             let _ = tokens.drain(i + 1..body_end);
                             i += 1;
+                        } else if Self::attribute_body_has_packed(&tokens[i + 1..body_end]) {
+                            // Preserve `__attribute__((packed))` as a marker for
+                            // the parser; it lowers struct/union definitions to
+                            // `#[repr(C, packed(1))]`. Anywhere else the parser
+                            // eats and ignores the marker.
+                            tokens[i] = (Token::PackedAttr, start, end);
+                            let _ = tokens.drain(i + 1..body_end);
+                            i += 1;
                         } else if Self::attribute_is_weak_or_alias(&tokens[i + 1..body_end]) {
                             // Convert `__attribute__((weak))` and
                             // `__attribute__((weak, alias("x")))` (and friends)
@@ -1462,6 +1470,11 @@ impl Preprocessor {
             i += 1;
         }
         None // unbalanced
+    }
+
+    fn attribute_body_has_packed(body: &[(Token, usize, usize)]) -> bool {
+        body.iter()
+            .any(|(t, _, _)| matches!(t, Token::Ident(n) if n == "packed" || n == "__packed__"))
     }
 
     /// Find the end of a C23 attribute specifier `[[ ... ]]`.

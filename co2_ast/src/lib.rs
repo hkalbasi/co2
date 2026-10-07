@@ -555,12 +555,14 @@ pub enum StructOrUnionSpecifier<R: TypeResolver> {
     Defined {
         ident: Spanned<String>,
         fields: Vec<Spanned<StructOrUnionField<R>>>,
+        is_packed: bool,
     },
     Declared {
         ident: Spanned<String>,
     },
     Anonymous {
         fields: Vec<Spanned<StructOrUnionField<R>>>,
+        is_packed: bool,
     },
 }
 
@@ -799,6 +801,7 @@ pub enum Token {
 
     // GCC attributes
     TransparentUnionAttr,
+    PackedAttr,
 
     // Special
     Ellipsis, // ...
@@ -1069,6 +1072,7 @@ impl Display for Token {
             Token::BuiltinTypesCompatibleP => write!(f, "__builtin_types_compatible_p"),
             Token::BuiltinComplex => write!(f, "__builtin_complex"),
             Token::TransparentUnionAttr => write!(f, "__attribute__((__transparent_union__))"),
+            Token::PackedAttr => write!(f, "__attribute__((packed))"),
 
             Token::Ident(s) => write!(f, "{s}"),
             Token::DocComment { inner, text } => {

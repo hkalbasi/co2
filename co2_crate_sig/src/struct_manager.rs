@@ -147,18 +147,24 @@ impl LocalResolver {
     ) -> DefId {
         let span = self.base.borrow_mut().co2_span_to_rustc(parser_span);
         match specifier {
-            StructOrUnionSpecifier::Defined { ident, fields } => {
+            StructOrUnionSpecifier::Defined {
+                ident,
+                fields,
+                is_packed,
+            } => {
                 let def = self.def_id_of_named(&ident.0, kind, span, true);
-                self.base.borrow_mut().define_def(def, &fields, span);
+                self.base
+                    .borrow_mut()
+                    .define_def_with_pack(def, &fields, span, is_packed);
                 def
             }
             StructOrUnionSpecifier::Declared { ident } => {
                 self.def_id_of_named(&ident.0, kind, span, false)
             }
-            StructOrUnionSpecifier::Anonymous { fields } => {
+            StructOrUnionSpecifier::Anonymous { fields, is_packed } => {
                 let mut base = self.base.borrow_mut();
                 let def = base.allocate_undef(kind, span, "");
-                base.define_def(def, &fields, span);
+                base.define_def_with_pack(def, &fields, span, is_packed);
                 def
             }
         }
@@ -573,6 +579,28 @@ impl LocalResolverBase {
             .get(&def)?
             .logical_fields
             .clone()
+    }
+
+    /// Run `define_def` with `current_pack` forced to 1 when the struct was
+    /// declared `__attribute__((packed))`. The definition snapshots
+    /// `current_pack` into `pack_align` (which lowers to `repr(C, packed)`)
+    /// and uses it for the max-alignment phantom, so scoping it here applies
+    /// packing to exactly this definition.
+    pub(crate) fn define_def_with_pack(
+        &mut self,
+        def: DefId,
+        fields: &[co2_ast::Spanned<StructOrUnionField<LocalResolver>>],
+        span: Span,
+        is_packed: bool,
+    ) {
+        if !is_packed {
+            self.define_def(def, fields, span);
+            return;
+        }
+        let prev = self.struct_manager.current_pack;
+        self.struct_manager.current_pack = Some(1);
+        self.define_def(def, fields, span);
+        self.struct_manager.current_pack = prev;
     }
 
     pub(crate) fn define_def(

@@ -1266,7 +1266,7 @@ fn lower_translation_unit_items(
                     _,
                 ),
             ] = declaration_specifiers.as_slice()
-            && let StructOrUnionSpecifier::Anonymous { fields } = &specifier.0
+            && let StructOrUnionSpecifier::Anonymous { fields, is_packed } = &specifier.0
             && let [
                 (
                     InitDeclarator {
@@ -1300,7 +1300,7 @@ fn lower_translation_unit_items(
                     fixed_underlying: false,
                 },
             );
-            base.define_def(type_def, &transformed_fields, span);
+            base.define_def_with_pack(type_def, &transformed_fields, span, *is_packed);
             let fields = base.struct_manager.definitions[&type_def]
                 .emitted_fields
                 .clone()

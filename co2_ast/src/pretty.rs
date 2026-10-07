@@ -441,9 +441,16 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
 impl PrettyPrint for StructOrUnionSpecifier<crate::StatelessResolver> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         match self {
-            StructOrUnionSpecifier::Defined { ident, fields } => {
+            StructOrUnionSpecifier::Defined {
+                ident,
+                fields,
+                is_packed,
+            } => {
                 pp.node("Defined", "", |pp| {
                     pp.leaf_data("Ident", &fmt_span(&ident.1, pp.config), &ident.0);
+                    if *is_packed {
+                        pp.leaf("Packed", "");
+                    }
                     for f in fields {
                         f.pretty_print(pp);
                     }
@@ -454,8 +461,11 @@ impl PrettyPrint for StructOrUnionSpecifier<crate::StatelessResolver> {
                     pp.leaf_data("Ident", &fmt_span(&ident.1, pp.config), &ident.0);
                 });
             }
-            StructOrUnionSpecifier::Anonymous { fields } => {
+            StructOrUnionSpecifier::Anonymous { fields, is_packed } => {
                 pp.node("Anonymous", "", |pp| {
+                    if *is_packed {
+                        pp.leaf("Packed", "");
+                    }
                     for f in fields {
                         f.pretty_print(pp);
                     }
@@ -1391,9 +1401,16 @@ impl<R: TypeResolver> PrettyPrint for Spanned<StructOrUnionSpecifier<R>> {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         let sp = fmt_span(&self.1, pp.config);
         match &self.0 {
-            StructOrUnionSpecifier::Defined { ident, fields } => {
+            StructOrUnionSpecifier::Defined {
+                ident,
+                fields,
+                is_packed,
+            } => {
                 pp.node("Defined", &sp, |pp| {
                     pp.leaf_data("Ident", &fmt_span(&ident.1, pp.config), &ident.0);
+                    if *is_packed {
+                        pp.leaf("Packed", &sp);
+                    }
                     for f in fields {
                         f.pretty_print(pp);
                     }
@@ -1404,8 +1421,11 @@ impl<R: TypeResolver> PrettyPrint for Spanned<StructOrUnionSpecifier<R>> {
                     pp.leaf_data("Ident", &fmt_span(&ident.1, pp.config), &ident.0);
                 });
             }
-            StructOrUnionSpecifier::Anonymous { fields } => {
+            StructOrUnionSpecifier::Anonymous { fields, is_packed } => {
                 pp.node("Anonymous", &sp, |pp| {
+                    if *is_packed {
+                        pp.leaf("Packed", &sp);
+                    }
                     for f in fields {
                         f.pretty_print(pp);
                     }
