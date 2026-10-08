@@ -2883,7 +2883,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 self.expect(&Token::LParen, "(")?;
                 let expr = crate::exp::parse_expression(self)?;
                 self.expect(&Token::RParen, ")")?;
-                let body = self.parse_statement()?;
+                let body = self.parse_body_statement()?;
                 Statement::Switch {
                     expr,
                     body: Box::new(body),
@@ -2895,29 +2895,18 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 if self.eat(&Token::Ellipsis).is_some() {
                     let hi = crate::exp::parse_expression(self)?;
                     self.expect(&Token::Colon, ":")?;
-                    let statement = self.parse_statement()?;
-                    Statement::CaseRange {
-                        lo,
-                        hi,
-                        statement: Box::new(statement),
-                    }
+                    Statement::CaseRange { lo, hi }
                 } else {
                     self.expect(&Token::Colon, ":")?;
-                    let statement = self.parse_statement()?;
-                    Statement::Case {
-                        expr: lo,
-                        statement: Box::new(statement),
-                    }
+                    Statement::Case { expr: lo }
                 }
             }
             Some(Token::Default) => {
                 let kw_span = self.peek_span(0);
                 self.pos += 1;
                 self.expect(&Token::Colon, ":")?;
-                let statement = self.parse_statement()?;
                 Statement::Default {
                     keyword_span: kw_span,
-                    statement: Box::new(statement),
                 }
             }
             Some(Token::Goto) => {
@@ -2970,11 +2959,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 {
                     let name = self.parse_identifier()?;
                     self.expect(&Token::Colon, ":")?;
-                    let statement = self.parse_statement()?;
-                    Statement::Label {
-                        name,
-                        statement: Box::new(statement),
-                    }
+                    Statement::Label { name }
                 } else {
                     let exp = crate::exp::parse_expression(self)?;
                     self.expect(&Token::Semicolon, ";")?;
@@ -2985,15 +2970,48 @@ impl<'a, R: TypeResolver> P<'a, R> {
         Ok((stmt, self.span_since(start)))
     }
 
+    /// Parse a statement in single-body position (`if`/`while`/`do`/`for`
+    /// branch or `switch` body). Labels (`ident:`/`case`/`default`) are
+    /// standalone items, so leading labels plus the one following statement
+    /// are wrapped into a `Compound` to keep the body attached to them
+    /// (e.g. `switch (E) case 0: return 1;`).
+    fn parse_body_statement(&mut self) -> PR<Spanned<Statement<R>>> {
+        let start = self.pos;
+        if !self.at_label_start() {
+            return self.parse_statement();
+        }
+        let mut items = Vec::new();
+        while self.at_label_start() {
+            let s = self.parse_statement()?;
+            let span = s.1;
+            items.push((StatementOrDeclaration::Statement(s), span));
+        }
+        let s = self.parse_statement()?;
+        let span = s.1;
+        items.push((StatementOrDeclaration::Statement(s), span));
+        let span = self.span_since(start);
+        Ok((
+            Statement::Compound((CompoundStatement { statements: items }, span)),
+            span,
+        ))
+    }
+
+    fn at_label_start(&self) -> bool {
+        if matches!(self.peek(0), Some(Token::Case) | Some(Token::Default)) {
+            return true;
+        }
+        matches!(self.peek(0), Some(Token::Ident(_))) && matches!(self.peek(1), Some(Token::Colon))
+    }
+
     fn parse_if(&mut self) -> PR<Statement<R>> {
         self.expect(&Token::If, "if")?;
         self.expect(&Token::LParen, "(")?;
         let cond = crate::exp::parse_expression(self)?;
         self.expect(&Token::RParen, ")")?;
-        let then_branch = self.parse_statement()?;
+        let then_branch = self.parse_body_statement()?;
         let else_branch = if self.at(&Token::Else) {
             self.pos += 1;
-            Some(self.parse_statement()?)
+            Some(self.parse_body_statement()?)
         } else {
             None
         };
@@ -3009,7 +3027,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
         self.expect(&Token::LParen, "(")?;
         let cond = crate::exp::parse_expression(self)?;
         self.expect(&Token::RParen, ")")?;
-        let body = self.parse_statement()?;
+        let body = self.parse_body_statement()?;
         Ok(Statement::While {
             cond,
             body: Box::new(body),
@@ -3018,7 +3036,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
 
     fn parse_do_while(&mut self) -> PR<Statement<R>> {
         self.expect(&Token::Do, "do")?;
-        let body = self.parse_statement()?;
+        let body = self.parse_body_statement()?;
         self.expect(&Token::While, "while")?;
         self.expect(&Token::LParen, "(")?;
         let cond = crate::exp::parse_expression(self)?;
@@ -3066,7 +3084,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
         };
         self.expect(&Token::RParen, ")")?;
         self.resolver = loop_resolver;
-        let body = self.parse_statement();
+        let body = self.parse_body_statement();
         self.resolver = outer;
         Ok(Statement::For {
             init,

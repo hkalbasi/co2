@@ -196,16 +196,18 @@ TranslationUnit
                   Int 1
                 Compound@src/stmt_exprs.co2:414..444
                   CompoundStatement@src/stmt_exprs.co2:414..444
-                    Statement@src/stmt_exprs.co2:416..430
-                      Case@src/stmt_exprs.co2:416..430
+                    Statement@src/stmt_exprs.co2:416..423
+                      Case@src/stmt_exprs.co2:416..423
                         Constant@src/stmt_exprs.co2:421..422
                           Int 0
-                        Break@src/stmt_exprs.co2:424..430
-                    Statement@src/stmt_exprs.co2:431..442
-                      Default@src/stmt_exprs.co2:431..442
-                        Expression@src/stmt_exprs.co2:440..442
-                          Constant@src/stmt_exprs.co2:440..441
-                            Int 2
+                    Statement@src/stmt_exprs.co2:424..430
+                      Break@src/stmt_exprs.co2:424..430
+                    Statement@src/stmt_exprs.co2:431..439
+                      Default@src/stmt_exprs.co2:431..439
+                    Statement@src/stmt_exprs.co2:440..442
+                      Expression@src/stmt_exprs.co2:440..442
+                        Constant@src/stmt_exprs.co2:440..441
+                          Int 2
             Statement@src/stmt_exprs.co2:445..447
               Expression@src/stmt_exprs.co2:445..447
                 Constant@src/stmt_exprs.co2:445..446

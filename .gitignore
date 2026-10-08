@@ -16,3 +16,4 @@ a.out
 *.profraw
 *.vsix
 fail_list*.txt
+.freebuff

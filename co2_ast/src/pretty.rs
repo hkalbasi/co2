@@ -517,29 +517,23 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Statement<R>> {
                     body.pretty_print(pp);
                 });
             }
-            Statement::Case { expr, statement } => {
+            Statement::Case { expr } => {
                 pp.node("Case", &sp, |pp| {
                     expr.pretty_print(pp);
-                    statement.pretty_print(pp);
                 });
             }
-            Statement::CaseRange { lo, hi, statement } => {
+            Statement::CaseRange { lo, hi } => {
                 pp.node("CaseRange", &sp, |pp| {
                     lo.pretty_print(pp);
                     hi.pretty_print(pp);
-                    statement.pretty_print(pp);
                 });
             }
-            Statement::Default {
-                keyword_span: _,
-                statement,
-            } => {
-                pp.node("Default", &sp, |pp| statement.pretty_print(pp));
+            Statement::Default { keyword_span: _ } => {
+                pp.node("Default", &sp, |_| {});
             }
-            Statement::Label { name, statement } => {
+            Statement::Label { name } => {
                 pp.node("Label", &sp, |pp| {
                     pp.leaf_data("Name", &fmt_span(&name.1, pp.config), &name.0);
-                    statement.pretty_print(pp);
                 });
             }
             Statement::Return(expr) => {

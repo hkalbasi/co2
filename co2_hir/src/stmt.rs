@@ -121,7 +121,7 @@ impl HirCtx<'_> {
                 };
                 out.push(HirStmt::Goto(label, span));
             }
-            Statement::Case { expr, statement } => {
+            Statement::Case { expr } => {
                 let Some((discr_local, discr_ty)) = self.current_switch_discr() else {
                     self.terminate_with_error(expr.1, "case label outside of switch body");
                 };
@@ -144,9 +144,8 @@ impl HirCtx<'_> {
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                 self.register_case(cond, case_label);
                 out.push(HirStmt::Label(case_label, span));
-                self.lower_stmt(statement.0, statement.1, out, locals, local_map);
             }
-            Statement::CaseRange { lo, hi, statement } => {
+            Statement::CaseRange { lo, hi } => {
                 let Some((discr_local, discr_ty)) = self.current_switch_discr() else {
                     self.terminate_with_error(lo.1, "case label outside of switch body");
                 };
@@ -186,19 +185,14 @@ impl HirCtx<'_> {
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                 self.register_case(cond, case_label);
                 out.push(HirStmt::Label(case_label, span));
-                self.lower_stmt(statement.0, statement.1, out, locals, local_map);
             }
-            Statement::Default {
-                keyword_span,
-                statement,
-            } => {
+            Statement::Default { keyword_span } => {
                 if !self.in_switch() {
                     self.terminate_with_error(keyword_span, "default label outside of switch body");
                 }
                 let label = self.fresh_label();
                 self.register_default(label, keyword_span);
                 out.push(HirStmt::Label(label, span));
-                self.lower_stmt(statement.0, statement.1, out, locals, local_map);
             }
             Statement::Goto(name) => {
                 out.push(HirStmt::Goto(self.resolve_or_insert_label(name.0), span));
@@ -218,9 +212,8 @@ impl HirCtx<'_> {
                 }
                 out.push(HirStmt::IndirectGoto(expr, span));
             }
-            Statement::Label { name, statement } => {
+            Statement::Label { name } => {
                 out.push(HirStmt::Label(self.resolve_or_insert_label(name.0), span));
-                self.lower_stmt(statement.0, statement.1, out, locals, local_map);
             }
             Statement::Return(expr) => {
                 if let Some(expr) = expr {
