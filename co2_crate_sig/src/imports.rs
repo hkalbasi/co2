@@ -5,7 +5,8 @@
 //! - A name provided by multiple distinct glob sources with no other binding
 //!   is ambiguous and only errors when used (E0659).
 //! - Two explicit imports of the same name conflict at import time (E0252).
-//! - A local item already binding a name wins silently over any import.
+//! - An explicit import colliding with a local item or child module is an
+//!   error (E0255); only glob imports lose silently to locals.
 //!
 //! The tracker owns only this policy state; the module tree stays in
 //! [`crate::resolver`]. [`ImportTracker::ambiguous_in_scope`] walks scopes
@@ -21,8 +22,6 @@ use rustc_public_generative::DependencyInfo;
 pub(crate) enum SingleDecision {
     /// Insert it, overwriting any glob entry.
     Proceed,
-    /// A local item already binds the name; keep it and ignore the import.
-    KeepLocal,
     /// A previous explicit import binds the name; carries the E0252 message.
     Duplicate(String),
 }
@@ -55,7 +54,9 @@ impl ImportTracker {
                 .get(mod_key)
                 .is_some_and(|names| names.contains_key(alias))
         {
-            return SingleDecision::KeepLocal;
+            return SingleDecision::Duplicate(format!(
+                "the name `{alias}` is defined multiple times"
+            ));
         }
         SingleDecision::Proceed
     }

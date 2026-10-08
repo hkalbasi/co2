@@ -702,14 +702,20 @@ impl Resolver {
             };
             let bound = {
                 let module = self.module_mut(module_path);
-                module.resolve_path([alias].into_iter(), &info).is_some()
+                match module {
+                    // `resolve_path` misses child modules (their content `id`
+                    // is `None`), and an import must not overwrite them:
+                    // that orphans the module contents and ICEs later in
+                    // `resolve_in_module`. Any existing entry counts.
+                    ModuleData::Expanded(c) => c.items.contains_key(alias),
+                    ModuleData::Unexpanded(_) => false,
+                }
             };
             match self.imports.check_single(&mod_key, alias, bound) {
                 SingleDecision::Duplicate(message) => {
                     errors.push(co2_ast::Rich::custom(alias_span, message));
                     continue;
                 }
-                SingleDecision::KeepLocal => continue,
                 SingleDecision::Proceed => {}
             }
 

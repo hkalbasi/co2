@@ -1,0 +1,18 @@
+//@ mode: co2
+//@ compile-fail
+
+// An explicit import colliding with a same-scope item must be an error,
+// matching the local-vs-local and import-vs-import cases. The import used
+// to be silently ignored with the local definition winning.
+mod m {
+    pub fn f() -> i32 { return 1; }
+    typedef int T;
+}
+use m::f;
+     //^ error: the name `f` is defined multiple times
+use m::T;
+     //^ error: the name `T` is defined multiple times
+fn f() -> i32 { return 2; }
+typedef long T;
+
+fn main() {}

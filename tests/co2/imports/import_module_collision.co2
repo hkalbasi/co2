@@ -1,0 +1,17 @@
+//@ mode: co2
+//@ compile-fail
+
+// Importing a name that collides with a child module must be a clean
+// "defined multiple times" error. It used to overwrite the module entry,
+// orphaning the module contents and ICEing later in lowering
+// (`resolve_in_module` unwrapping `None`).
+mod m {
+    typedef int T;
+}
+use m::T;
+     //^ error: the name `T` is defined multiple times
+mod T {
+    int x;
+}
+
+fn main() {}
