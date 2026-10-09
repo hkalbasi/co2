@@ -1,0 +1,8 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+support_lib = { path = "../support_lib" }
+support_lib2 = { path = "../support_lib2" }

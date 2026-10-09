@@ -2,6 +2,7 @@
 
 extern crate rustc_driver;
 extern crate rustc_hir;
+extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
 
@@ -92,7 +93,14 @@ fn be_rustc_mode(args: Vec<String>, target_crate: bool) -> std::process::ExitCod
 
     match detect_co2(&args) {
         DetectResult::Continue(exit_code) => exit_code,
-        DetectResult::Co2(co2_file) => run_co2_compile(&co2_file, args),
+        DetectResult::Co2(co2_file) => {
+            // Eagerly load --extern crates (as co2rustc does): co2's resolver
+            // reads the already-loaded extern set, so lazily-loaded deps would
+            // resolve as "unresolved item".
+            let mut args = args;
+            force_extern_crates(&mut args);
+            run_co2_compile(&co2_file, args)
+        }
     }
 }
 
@@ -105,6 +113,13 @@ fn interpreter_mode(args: Vec<String>) -> std::process::ExitCode {
     let (miri_config, rustc_args) = parse_miri_config(rustc_args, program_args, env_snapshot);
 
     co2_ast::set_force_json_diagnostics(rustc_requests_json_diagnostics(&rustc_args));
+
+    // Plain Rust files have no co2 source to preprocess: interpret them directly.
+    // (detect_co2 would natively compile them, which cannot link against the
+    // miri sysroot whose rlibs reference miri intrinsics.)
+    if !crate_root_looks_like_co2(&rustc_args) {
+        return interpret_rust_file(rustc_args, miri_config);
+    }
 
     // Detect whether this is a co2 source file.
     // detect_co2 runs rustc up to after_crate_root_parsing; for co2 files it stops early
@@ -142,6 +157,63 @@ fn interpreter_mode(args: Vec<String>) -> std::process::ExitCode {
     }
 
     std::process::ExitCode::SUCCESS
+}
+
+/// Best-effort crate-root lookup: last `.rs` input file in the rustc args.
+/// Only used to pick co2 vs plain-Rust interpretation; unknown files fall
+/// back to the co2 path so detect_co2 decides as before.
+fn crate_root_file(rustc_args: &[String]) -> Option<&str> {
+    rustc_args
+        .iter()
+        .filter(|a| {
+            let a = a.as_str();
+            !a.starts_with('-') && (a.ends_with(".rs") || a.ends_with(".co2"))
+        })
+        .next_back()
+        .map(String::as_str)
+}
+
+/// Valid co2 host files contain exactly `#![language(co2)]`; anything else is
+/// plain Rust. Whitespace-insensitive text check, no parsing needed.
+fn crate_root_looks_like_co2(rustc_args: &[String]) -> bool {
+    let Some(path) = crate_root_file(rustc_args) else {
+        return true;
+    };
+    let Ok(src) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    let compact: String = src.split_whitespace().collect();
+    compact.contains("language(co2)")
+}
+
+/// Interpreter mode for plain Rust files: skip the co2 pipeline and run miri
+/// on the crate directly, like stock miri does.
+fn interpret_rust_file(rustc_args: Vec<String>, miri_config: MiriConfig) -> std::process::ExitCode {
+    let mut miri_args = splice_miri_default_args(rustc_args);
+    force_extern_crates(&mut miri_args);
+
+    struct InterpretCallbacks {
+        config: Option<MiriConfig>,
+    }
+    impl rustc_driver::Callbacks for InterpretCallbacks {
+        fn after_analysis<'tcx>(
+            &mut self,
+            _compiler: &rustc_interface::interface::Compiler,
+            tcx: TyCtxt<'tcx>,
+        ) -> Compilation {
+            interpret_with_miri(
+                tcx,
+                self.config.take().expect("miri after_analysis ran twice"),
+            )
+        }
+    }
+
+    let mut callbacks = InterpretCallbacks {
+        config: Some(miri_config),
+    };
+    // interpret_with_miri exits the process on success; falling through here
+    // means the program failed to compile.
+    rustc_driver::catch_with_exit_code(|| rustc_driver::run_compiler(&miri_args, &mut callbacks))
 }
 
 /// Parse `-Zmiri-*` flags from `args`, configure `MiriConfig`, and return the

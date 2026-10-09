@@ -1,13 +1,12 @@
 #@ run-status: 0
 
 let test_dir = $env.CO2_TEST_DIR
+let src = ($test_dir | path join "workspace")
 let lib_rlib = ($test_dir | path join "libsupport_lib.rlib")
 let lib2_rlib = ($test_dir | path join "libsupport_lib2.rlib")
 let app = ($test_dir | path join "app")
-let lib_shim = ($test_dir | path join "support_lib.rs")
-let lib2_shim = ($test_dir | path join "support_lib2.rs")
-
-'#![language(co2)]' | save -f $lib_shim
+let lib_shim = ($src | path join "support_lib" "src" "lib.rs")
+let lib2_shim = ($src | path join "support_lib2" "src" "lib.rs")
 
 let compile_lib2 = (do {
     ^co2rustc $lib2_shim --crate-type=lib --crate-name support_lib2 --edition=2024 -o $lib2_rlib
@@ -26,7 +25,7 @@ if $compile_lib.exit_code != 0 {
 }
 
 let compile_bin = (do {
-    ^rustc --edition=2024 ($test_dir | path join "main.rs") -o $app -L $test_dir --extern support_lib --extern support_lib2
+    ^rustc --edition=2024 ($src | path join "app" "src" "main.rs") -o $app -L $test_dir --extern support_lib --extern support_lib2
 } | complete)
 if $compile_bin.exit_code != 0 {
     print $"main compile failed: ($compile_bin.stderr)"
@@ -38,5 +37,35 @@ if $run.exit_code != 0 {
     print $"app failed: ($run.stderr)"
     exit 4
 }
+
+print "plain rustc multi-crate OK"
+
+# Same crates through cargo: plain Rust bin (app) calling the co2 lib
+# (support_lib), which itself calls the plain Rust lib (support_lib2).
+let ws = ($test_dir | path join "workspace")
+
+cd $ws
+
+let cargo_build = (do { ^co2cargo build } | complete)
+if $cargo_build.exit_code != 0 {
+    print $"co2cargo build failed: ($cargo_build.stderr)"
+    exit 5
+}
+
+let cargo_run = (do { ^co2cargo run } | complete)
+if $cargo_run.exit_code != 0 {
+    print $"co2cargo run failed: ($cargo_run.stdout) ($cargo_run.stderr)"
+    exit 6
+}
+
+print "cargo multi-crate OK"
+
+let miri_run = (do { ^co2cargo miri run } | complete)
+if $miri_run.exit_code != 0 {
+    print $"co2cargo miri run failed: ($miri_run.stdout) ($miri_run.stderr)"
+    exit 7
+}
+
+print "miri multi-crate OK"
 
 exit 0
