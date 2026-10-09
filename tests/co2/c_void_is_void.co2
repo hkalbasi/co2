@@ -1,0 +1,48 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-stdout: 65 66 65 66 67 67 2\ndone\n
+
+use core::ffi::c_void;
+use libc::printf;
+
+// Reading through a `*const c_void` parameter exercises the implicit
+// `*mut u8`/`*mut i8` -> `*const c_void` conversion (the use_libc bug)
+// plus the conversion back out of void.
+fn first(p: *const c_void) -> u8 {
+    u8* q = p;
+    return q[0];
+}
+
+fn main() {
+    u8 ar[4] = {};
+    ar[0] = 65;
+    ar[1] = 66;
+    ar[2] = 67;
+    printf("%d ", first(ar));
+    printf("%d ", first("B"));
+
+    // Implicit conversions both ways between `*mut u8` and `*mut c_void`.
+    u8* up = ar;
+    c_void* vp = up;
+    u8* back = vp;
+    printf("%d ", back[0]);
+
+    // `?:` over `*mut c_void` and `*mut u8` shares the void common type.
+    c_void* chosen = (1 == 1) ? vp : up;
+    u8* ch = (u8*)chosen;
+    printf("%d ", ch[1]);
+
+    // Explicit casts both ways.
+    u8* e1 = (u8*)vp;
+    c_void* e2 = (c_void*)up;
+    printf("%d ", e1[2]);
+
+    // Pointer arithmetic and difference over `c_void *` are byte-wise.
+    c_void* adv = e2 + 2;
+    u8* ab = (u8*)adv;
+    printf("%d ", ab[0]);
+    i32 dd = adv - vp;
+    printf("%d\n", dd);
+
+    printf("done\n");
+}

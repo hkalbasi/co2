@@ -29,7 +29,7 @@ impl HirCtx<'_> {
     /// C `_Generic` type matching (C23 6.5.1.1): a fixed-underlying enum type is
     /// compatible with its underlying type in addition to matching itself.
     pub(crate) fn c_generic_ty_matches(&self, assoc_ty: Ty, controlling_ty: Ty) -> bool {
-        if ty_matches_expected_for_c_generic(assoc_ty, controlling_ty) {
+        if self.ty_matches_expected_for_c_generic(assoc_ty, controlling_ty) {
             return true;
         }
         let fixed_enum_underlying = |ty: Ty| -> Option<Ty> {
@@ -52,6 +52,15 @@ impl HirCtx<'_> {
             (None, Some(act)) => act == assoc_ty,
             (None, None) => false,
         }
+    }
+
+    pub(crate) fn is_void_ty(&self, ty: Ty) -> bool {
+        matches!(ty.kind(), TyKind::RigidTy(RigidTy::Tuple(items)) if items.is_empty())
+            || matches!(ty.kind(), TyKind::RigidTy(RigidTy::Adt(adt, _)) if adt == self.wellknown_defs.c_void)
+    }
+
+    pub(crate) fn is_void_ptr_ty(&self, ty: Ty) -> bool {
+        matches!(ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) if self.is_void_ty(pointee))
     }
 }
 
@@ -351,75 +360,77 @@ fn numeric_rank(ty: Ty) -> Option<(u8, bool)> {
     }
 }
 
-pub(crate) fn common_ternary_ty(lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
-    if lhs_ty == rhs_ty {
-        return Some(lhs_ty);
-    }
-    // `!` coerces to the other side; don't cast it.
-    if matches!(lhs_ty.kind(), TyKind::RigidTy(RigidTy::Never)) {
-        return Some(rhs_ty);
-    }
-    if matches!(rhs_ty.kind(), TyKind::RigidTy(RigidTy::Never)) {
-        return Some(lhs_ty);
-    }
-    // Numeric pairs are handled with integer promotion by the caller.
-    let TyKind::RigidTy(lhs) = lhs_ty.kind() else {
-        return None;
-    };
-    let TyKind::RigidTy(rhs) = rhs_ty.kind() else {
-        return None;
-    };
-    let one_is_void = is_void_ty(lhs_ty) || is_void_ty(rhs_ty);
-
-    if one_is_void {
-        return Some(Ty::new_tuple(&[]));
-    }
-
-    if let (
-        RigidTy::RawPtr(lhs_pointee, lhs_mutability),
-        RigidTy::RawPtr(rhs_pointee, rhs_mutability),
-    ) = (lhs, rhs)
-    {
-        let common_mutability = if matches!(
-            (lhs_mutability, rhs_mutability),
-            (
-                rustc_public_generative::rustc_public::mir::Mutability::Not,
-                _
-            ) | (
-                _,
-                rustc_public_generative::rustc_public::mir::Mutability::Not
-            )
-        ) {
-            rustc_public_generative::rustc_public::mir::Mutability::Not
-        } else {
-            rustc_public_generative::rustc_public::mir::Mutability::Mut
+impl HirCtx<'_> {
+    pub(crate) fn common_ternary_ty(&self, lhs_ty: Ty, rhs_ty: Ty) -> Option<Ty> {
+        if lhs_ty == rhs_ty {
+            return Some(lhs_ty);
+        }
+        // `!` coerces to the other side; don't cast it.
+        if matches!(lhs_ty.kind(), TyKind::RigidTy(RigidTy::Never)) {
+            return Some(rhs_ty);
+        }
+        if matches!(rhs_ty.kind(), TyKind::RigidTy(RigidTy::Never)) {
+            return Some(lhs_ty);
+        }
+        // Numeric pairs are handled with integer promotion by the caller.
+        let TyKind::RigidTy(lhs) = lhs_ty.kind() else {
+            return None;
         };
+        let TyKind::RigidTy(rhs) = rhs_ty.kind() else {
+            return None;
+        };
+        let one_is_void = self.is_void_ty(lhs_ty) || self.is_void_ty(rhs_ty);
 
-        if lhs_pointee == rhs_pointee {
-            return Some(Ty::new_ptr(lhs_pointee, common_mutability));
+        if one_is_void {
+            return Some(Ty::new_tuple(&[]));
         }
 
-        let lhs_is_void_pointee = is_void_ty(lhs_pointee);
-        let rhs_is_void_pointee = is_void_ty(rhs_pointee);
-        if lhs_is_void_pointee || rhs_is_void_pointee {
-            return Some(Ty::new_ptr(Ty::new_tuple(&[]), common_mutability));
-        }
+        if let (
+            RigidTy::RawPtr(lhs_pointee, lhs_mutability),
+            RigidTy::RawPtr(rhs_pointee, rhs_mutability),
+        ) = (lhs, rhs)
+        {
+            let common_mutability = if matches!(
+                (lhs_mutability, rhs_mutability),
+                (
+                    rustc_public_generative::rustc_public::mir::Mutability::Not,
+                    _
+                ) | (
+                    _,
+                    rustc_public_generative::rustc_public::mir::Mutability::Not
+                )
+            ) {
+                rustc_public_generative::rustc_public::mir::Mutability::Not
+            } else {
+                rustc_public_generative::rustc_public::mir::Mutability::Mut
+            };
 
-        let lhs_stripped = strip_pat_ty(lhs_pointee);
-        let rhs_stripped = strip_pat_ty(rhs_pointee);
+            if lhs_pointee == rhs_pointee {
+                return Some(Ty::new_ptr(lhs_pointee, common_mutability));
+            }
 
-        if let Some(underlying) = enum_payload_ty(lhs_stripped) {
-            if underlying == rhs_stripped {
-                return Some(Ty::new_ptr(rhs_stripped, common_mutability));
+            let lhs_is_void_pointee = self.is_void_ty(lhs_pointee);
+            let rhs_is_void_pointee = self.is_void_ty(rhs_pointee);
+            if lhs_is_void_pointee || rhs_is_void_pointee {
+                return Some(Ty::new_ptr(Ty::new_tuple(&[]), common_mutability));
+            }
+
+            let lhs_stripped = strip_pat_ty(lhs_pointee);
+            let rhs_stripped = strip_pat_ty(rhs_pointee);
+
+            if let Some(underlying) = enum_payload_ty(lhs_stripped) {
+                if underlying == rhs_stripped {
+                    return Some(Ty::new_ptr(rhs_stripped, common_mutability));
+                }
+            }
+            if let Some(underlying) = enum_payload_ty(rhs_stripped) {
+                if underlying == lhs_stripped {
+                    return Some(Ty::new_ptr(lhs_stripped, common_mutability));
+                }
             }
         }
-        if let Some(underlying) = enum_payload_ty(rhs_stripped) {
-            if underlying == lhs_stripped {
-                return Some(Ty::new_ptr(lhs_stripped, common_mutability));
-            }
-        }
+        None
     }
-    None
 }
 
 pub(crate) fn common_numeric_ty(lhs: Ty, rhs: Ty) -> Option<Ty> {
@@ -575,8 +586,8 @@ impl HirCtx<'_> {
                 TyKind::RigidTy(RigidTy::FnDef(..) | RigidTy::FnPtr(_))
             )
             && self.fn_ptr_implicit_cast_allowed(dst, src))
-            || fn_pointer_void_pointer_cast_allowed(dst, src)
-            || pointer_implicit_cast_allowed(dst, src)
+            || self.fn_pointer_void_pointer_cast_allowed(dst, src)
+            || self.pointer_implicit_cast_allowed(dst, src)
             || (dst_is_mu_fn_ptr
                 && match src.kind() {
                     TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::RawPtr(..)) => {
@@ -620,7 +631,7 @@ impl HirCtx<'_> {
         if matches!(src_sig.safety, Safety::Unsafe) && matches!(dst_sig.safety, Safety::Safe) {
             return false;
         }
-        if !ty_matches_expected(
+        if !self.ty_matches_expected(
             *dst_sig.inputs_and_output.last().unwrap(),
             *src_sig.inputs_and_output.last().unwrap(),
         ) {
@@ -640,33 +651,38 @@ impl HirCtx<'_> {
                 .inputs_and_output
                 .iter()
                 .zip(src_sig.inputs_and_output.iter())
-                .all(|(et, at)| ty_matches_expected(*et, *at))
+                .all(|(et, at)| self.ty_matches_expected(*et, *at))
     }
 }
 
-fn fn_pointer_void_pointer_cast_allowed(dst: Ty, src: Ty) -> bool {
-    match (dst.kind(), src.kind()) {
-        (
-            TyKind::RigidTy(RigidTy::RawPtr(dst_pointee, _)),
-            TyKind::RigidTy(RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)),
-        ) => is_void_ty(dst_pointee),
-        (TyKind::RigidTy(RigidTy::FnPtr(_)), TyKind::RigidTy(RigidTy::RawPtr(src_pointee, _))) => {
-            is_void_ty(src_pointee)
+impl HirCtx<'_> {
+    fn fn_pointer_void_pointer_cast_allowed(&self, dst: Ty, src: Ty) -> bool {
+        match (dst.kind(), src.kind()) {
+            (
+                TyKind::RigidTy(RigidTy::RawPtr(dst_pointee, _)),
+                TyKind::RigidTy(RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)),
+            ) => self.is_void_ty(dst_pointee),
+            (
+                TyKind::RigidTy(RigidTy::FnPtr(_)),
+                TyKind::RigidTy(RigidTy::RawPtr(src_pointee, _)),
+            ) => self.is_void_ty(src_pointee),
+            _ => false,
         }
-        _ => false,
     }
 }
 
-fn pointer_implicit_cast_allowed(dst: Ty, src: Ty) -> bool {
-    let Some(dst_pointee) = pointer_pointee_ty(dst) else {
-        return false;
-    };
-    let Some(src_pointee) = pointer_pointee_ty(src) else {
-        return false;
-    };
-    is_void_ty(dst_pointee)
-        || is_void_ty(src_pointee)
-        || pointer_pointees_compatible(dst_pointee, src_pointee)
+impl HirCtx<'_> {
+    fn pointer_implicit_cast_allowed(&self, dst: Ty, src: Ty) -> bool {
+        let Some(dst_pointee) = pointer_pointee_ty(dst) else {
+            return false;
+        };
+        let Some(src_pointee) = pointer_pointee_ty(src) else {
+            return false;
+        };
+        self.is_void_ty(dst_pointee)
+            || self.is_void_ty(src_pointee)
+            || self.pointer_pointees_compatible(dst_pointee, src_pointee)
+    }
 }
 
 fn pointer_pointee_ty(ty: Ty) -> Option<Ty> {
@@ -676,34 +692,28 @@ fn pointer_pointee_ty(ty: Ty) -> Option<Ty> {
     }
 }
 
-pub(crate) fn is_void_ty(ty: Ty) -> bool {
-    matches!(ty.kind(), TyKind::RigidTy(RigidTy::Tuple(items)) if items.is_empty())
-}
+impl HirCtx<'_> {
+    fn pointer_pointees_compatible(&self, expected: Ty, actual: Ty) -> bool {
+        let expected = strip_pat_ty(expected);
+        let actual = strip_pat_ty(actual);
 
-pub(crate) fn is_void_ptr_ty(ty: Ty) -> bool {
-    matches!(ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) if is_void_ty(pointee))
-}
+        if self.ty_matches_expected(expected, actual) {
+            return true;
+        }
 
-fn pointer_pointees_compatible(expected: Ty, actual: Ty) -> bool {
-    let expected = strip_pat_ty(expected);
-    let actual = strip_pat_ty(actual);
+        let expected_inner = enum_payload_ty(expected).unwrap_or(expected);
+        let actual_inner = enum_payload_ty(actual).unwrap_or(actual);
+        let expected_is_enum = expected_inner != expected;
+        let actual_is_enum = actual_inner != actual;
 
-    if ty_matches_expected(expected, actual) {
-        return true;
+        ((expected_inner != expected || actual_inner != actual)
+            && self.ty_matches_expected(expected_inner, actual_inner))
+            || ((expected_is_enum || actual_is_enum)
+                && integer_bit_width(expected_inner)
+                    .zip(integer_bit_width(actual_inner))
+                    .is_some_and(|(expected_bits, actual_bits)| expected_bits == actual_bits))
+            || (is_byte_pointer_pointee(expected_inner) && is_byte_pointer_pointee(actual_inner))
     }
-
-    let expected_inner = enum_payload_ty(expected).unwrap_or(expected);
-    let actual_inner = enum_payload_ty(actual).unwrap_or(actual);
-    let expected_is_enum = expected_inner != expected;
-    let actual_is_enum = actual_inner != actual;
-
-    ((expected_inner != expected || actual_inner != actual)
-        && ty_matches_expected(expected_inner, actual_inner))
-        || ((expected_is_enum || actual_is_enum)
-            && integer_bit_width(expected_inner)
-                .zip(integer_bit_width(actual_inner))
-                .is_some_and(|(expected_bits, actual_bits)| expected_bits == actual_bits))
-        || (is_byte_pointer_pointee(expected_inner) && is_byte_pointer_pointee(actual_inner))
 }
 
 fn is_byte_pointer_pointee(ty: Ty) -> bool {
@@ -780,101 +790,107 @@ pub(crate) fn variant_idx(id: usize) -> VariantIdx {
 }
 
 /// Compare two generic-arg lists element-wise: nested types recurse via
-/// [`ty_matches_expected`], lifetimes always match, anything else compares by
-/// equality. Shared by the `Adt` and `FnDef` arms of [`ty_matches_expected`].
-fn generic_type_args_match(
-    exp_args: &[rustc_public_generative::rustc_public::ty::GenericArgKind],
-    act_args: &[rustc_public_generative::rustc_public::ty::GenericArgKind],
-) -> bool {
-    exp_args.len() == act_args.len()
-        && exp_args
-            .iter()
-            .zip(act_args.iter())
-            .all(|(e, a)| match (e, a) {
-                (
-                    rustc_public_generative::rustc_public::ty::GenericArgKind::Type(et),
-                    rustc_public_generative::rustc_public::ty::GenericArgKind::Type(at),
-                ) => ty_matches_expected(*et, *at),
-                (
-                    rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
-                    rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
-                ) => true,
-                _ => e == a,
-            })
-}
-
-pub(crate) fn ty_matches_expected(expected: Ty, actual: Ty) -> bool {
-    if expected == actual {
-        return true;
+/// [`HirCtx::ty_matches_expected`], lifetimes always match, anything else compares by
+/// equality. Shared by the `Adt` and `FnDef` arms of [`HirCtx::ty_matches_expected`].
+impl HirCtx<'_> {
+    fn generic_type_args_match(
+        &self,
+        exp_args: &[rustc_public_generative::rustc_public::ty::GenericArgKind],
+        act_args: &[rustc_public_generative::rustc_public::ty::GenericArgKind],
+    ) -> bool {
+        exp_args.len() == act_args.len()
+            && exp_args
+                .iter()
+                .zip(act_args.iter())
+                .all(|(e, a)| match (e, a) {
+                    (
+                        rustc_public_generative::rustc_public::ty::GenericArgKind::Type(et),
+                        rustc_public_generative::rustc_public::ty::GenericArgKind::Type(at),
+                    ) => self.ty_matches_expected(*et, *at),
+                    (
+                        rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
+                        rustc_public_generative::rustc_public::ty::GenericArgKind::Lifetime(_),
+                    ) => true,
+                    _ => e == a,
+                })
     }
-    match (expected.kind(), actual.kind()) {
-        // TODO: Wait what? this was intended to catch maybe_uninit, but it is catching everything!
-        (TyKind::RigidTy(RigidTy::Adt(_, exp_args)), TyKind::RigidTy(RigidTy::FnDef(_, _)))
-            if exp_args.0.len() == 1 =>
-        {
-            if let GenericArgKind::Type(exp_inner) = exp_args.0[0] {
-                return ty_matches_expected(exp_inner, actual);
+
+    pub(crate) fn ty_matches_expected(&self, expected: Ty, actual: Ty) -> bool {
+        if expected == actual {
+            return true;
+        }
+        if self.is_void_ty(expected) && self.is_void_ty(actual) {
+            return true;
+        }
+        match (expected.kind(), actual.kind()) {
+            // TODO: Wait what? this was intended to catch maybe_uninit, but it is catching everything!
+            (TyKind::RigidTy(RigidTy::Adt(_, exp_args)), TyKind::RigidTy(RigidTy::FnDef(_, _)))
+                if exp_args.0.len() == 1 =>
+            {
+                if let GenericArgKind::Type(exp_inner) = exp_args.0[0] {
+                    return self.ty_matches_expected(exp_inner, actual);
+                }
+                false
             }
-            false
-        }
-        (
-            TyKind::RigidTy(RigidTy::Adt(exp_adt, exp_args)),
-            TyKind::RigidTy(RigidTy::Adt(act_adt, act_args)),
-        ) => {
-            if exp_adt != act_adt {
-                return false;
+            (
+                TyKind::RigidTy(RigidTy::Adt(exp_adt, exp_args)),
+                TyKind::RigidTy(RigidTy::Adt(act_adt, act_args)),
+            ) => {
+                if exp_adt != act_adt {
+                    return false;
+                }
+                let shared_len = exp_args.0.len().min(act_args.0.len());
+                self.generic_type_args_match(&exp_args.0[..shared_len], &act_args.0[..shared_len])
+                    && extra_adt_args_are_concrete(&exp_args.0[shared_len..])
+                    && extra_adt_args_are_concrete(&act_args.0[shared_len..])
             }
-            let shared_len = exp_args.0.len().min(act_args.0.len());
-            generic_type_args_match(&exp_args.0[..shared_len], &act_args.0[..shared_len])
-                && extra_adt_args_are_concrete(&exp_args.0[shared_len..])
-                && extra_adt_args_are_concrete(&act_args.0[shared_len..])
+            // Function item types may be internally identical yet interned under
+            // different ids (e.g. one built from `tcx.type_of` and one re-created
+            // during generic-arg inference). Compare defs and args structurally.
+            (
+                TyKind::RigidTy(RigidTy::FnDef(exp_def, exp_args)),
+                TyKind::RigidTy(RigidTy::FnDef(act_def, act_args)),
+            ) => exp_def == act_def && self.generic_type_args_match(&exp_args.0, &act_args.0),
+            // Function pointer types may differ only in lifetime parameters (e.g. VaList<'erased> vs
+            // VaList<'static>) because SMIR erases lifetimes inside fn ptrs. Compare structurally
+            // while recursing into parameter/return types with ty_matches_expected.
+            (
+                TyKind::RigidTy(RigidTy::FnPtr(exp_binder)),
+                TyKind::RigidTy(RigidTy::FnPtr(act_binder)),
+            ) => {
+                let exp_sig = exp_binder.value;
+                let act_sig = act_binder.value;
+                exp_sig.c_variadic == act_sig.c_variadic
+                    && exp_sig.safety == act_sig.safety
+                    && exp_sig.abi == act_sig.abi
+                    && exp_sig.inputs_and_output.len() == act_sig.inputs_and_output.len()
+                    && exp_sig
+                        .inputs_and_output
+                        .iter()
+                        .zip(act_sig.inputs_and_output.iter())
+                        .all(|(et, at)| self.ty_matches_expected(*et, *at))
+            }
+            _ => false,
         }
-        // Function item types may be internally identical yet interned under
-        // different ids (e.g. one built from `tcx.type_of` and one re-created
-        // during generic-arg inference). Compare defs and args structurally.
-        (
-            TyKind::RigidTy(RigidTy::FnDef(exp_def, exp_args)),
-            TyKind::RigidTy(RigidTy::FnDef(act_def, act_args)),
-        ) => exp_def == act_def && generic_type_args_match(&exp_args.0, &act_args.0),
-        // Function pointer types may differ only in lifetime parameters (e.g. VaList<'erased> vs
-        // VaList<'static>) because SMIR erases lifetimes inside fn ptrs. Compare structurally
-        // while recursing into parameter/return types with ty_matches_expected.
-        (
-            TyKind::RigidTy(RigidTy::FnPtr(exp_binder)),
-            TyKind::RigidTy(RigidTy::FnPtr(act_binder)),
-        ) => {
-            let exp_sig = exp_binder.value;
-            let act_sig = act_binder.value;
-            exp_sig.c_variadic == act_sig.c_variadic
-                && exp_sig.safety == act_sig.safety
-                && exp_sig.abi == act_sig.abi
-                && exp_sig.inputs_and_output.len() == act_sig.inputs_and_output.len()
-                && exp_sig
-                    .inputs_and_output
-                    .iter()
-                    .zip(act_sig.inputs_and_output.iter())
-                    .all(|(et, at)| ty_matches_expected(*et, *at))
+    }
+
+    pub(crate) fn ty_matches_expected_for_c_generic(&self, expected: Ty, actual: Ty) -> bool {
+        if self.ty_matches_expected(expected, actual) {
+            return true;
         }
-        _ => false,
-    }
-}
+        match (expected.kind(), actual.kind()) {
+            // For C _Generic proposes, usize and u64 are the same type (in our currently supported targets)
+            (
+                TyKind::RigidTy(RigidTy::Uint(UintTy::U64 | UintTy::Usize)),
+                TyKind::RigidTy(RigidTy::Uint(UintTy::U64 | UintTy::Usize)),
+            ) => true,
+            (
+                TyKind::RigidTy(RigidTy::Int(IntTy::I64 | IntTy::Isize)),
+                TyKind::RigidTy(RigidTy::Int(IntTy::I64 | IntTy::Isize)),
+            ) => true,
 
-pub(crate) fn ty_matches_expected_for_c_generic(expected: Ty, actual: Ty) -> bool {
-    if ty_matches_expected(expected, actual) {
-        return true;
-    }
-    match (expected.kind(), actual.kind()) {
-        // For C _Generic proposes, usize and u64 are the same type (in our currently supported targets)
-        (
-            TyKind::RigidTy(RigidTy::Uint(UintTy::U64 | UintTy::Usize)),
-            TyKind::RigidTy(RigidTy::Uint(UintTy::U64 | UintTy::Usize)),
-        ) => true,
-        (
-            TyKind::RigidTy(RigidTy::Int(IntTy::I64 | IntTy::Isize)),
-            TyKind::RigidTy(RigidTy::Int(IntTy::I64 | IntTy::Isize)),
-        ) => true,
-
-        _ => false,
+            _ => false,
+        }
     }
 }
 

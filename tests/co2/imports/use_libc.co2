@@ -1,13 +1,15 @@
 //@ mode: co2
 //@ run-status: 0
-//@ run-stdout: co2\nok 2 4.0\nPI is 3.14\n
+//@ run-stdout: co2\nsays hello\nok 2 4.0\nPI is 3.14\n
 
-use libc::{puts, c_int};
+use libc::{puts, c_int, fflush};
 
 fn main() {
     puts("co2");
     c_int x = 2;
     libc::c_double y = x + 2;
+    fflush(std::ptr::null_mut::<()>());
+    libc::write(1, "says hello\n", 11);
     libc::printf("ok %d %.1f\n", x, y);
     libc::printf("PI is %.2f\n", std::f64::consts::PI);
 }

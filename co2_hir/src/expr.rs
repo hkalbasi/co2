@@ -18,17 +18,16 @@ use rustc_public_generative::rustc_public::{
     },
 };
 
+use crate::initializer_tree::InitializerTree;
 use crate::item::{HirLocal, LocalId};
 use crate::resolver::invalid_span;
 use crate::resolver::{HirCtx, ResolvedValue, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
     array_elem_ty, common_numeric_ty, enum_payload_ty, integer_promote_ty, is_array_ty,
-    is_integer_ty, is_numeric_ty, is_void_ptr_ty, resolve_field_path_in_adt, ty_matches_expected,
-    variant_idx,
+    is_integer_ty, is_numeric_ty, resolve_field_path_in_adt, variant_idx,
 };
 use crate::{decl::CTy, decl::hir_ty_to_ty};
-use crate::{initializer_tree::InitializerTree, ty::common_ternary_ty};
 
 fn countof_ty_len(ty: Ty) -> Option<u64> {
     if let TyKind::RigidTy(RigidTy::Array(_, len)) = ty.kind() {
@@ -294,9 +293,9 @@ impl HirExpr {
     /// cast of a pointer (e.g. `(void *)(void *)0`) is not one, so it takes
     /// the `void *` composite-pointer path instead of adopting the other
     /// side's type.
-    fn is_null_pointer_constant(&self) -> bool {
+    fn is_null_pointer_constant(&self, ctx: &HirCtx<'_>) -> bool {
         self.is_integer_zero()
-            || matches!(&self.kind, HirExprKind::Cast(inner) if is_void_ptr_ty(self.ty) && inner.is_integer_zero())
+            || matches!(&self.kind, HirExprKind::Cast(inner) if ctx.is_void_ptr_ty(self.ty) && inner.is_integer_zero())
     }
 }
 
@@ -1063,12 +1062,12 @@ impl HirCtx<'_> {
             if let Some(coerced) = self.coerce_expr_to_type(actual, expected) {
                 *actual = coerced;
             }
-            if !ty_matches_expected(expected, actual.ty)
+            if !self.ty_matches_expected(expected, actual.ty)
                 && let Some(coerced) = self.coerce_transparent_union_arg(expected, actual)
             {
                 *actual = coerced;
             }
-            if !ty_matches_expected(expected, actual.ty) {
+            if !self.ty_matches_expected(expected, actual.ty) {
                 self.terminate_with_error(
                     self.to_parser_span(actual.span),
                     &format!(
@@ -1092,7 +1091,7 @@ impl HirCtx<'_> {
         let field_tys = self.adt_field_tys(expected)?;
         field_tys
             .iter()
-            .position(|field_ty| ty_matches_expected(*field_ty, actual.ty))
+            .position(|field_ty| self.ty_matches_expected(*field_ty, actual.ty))
             .map(|active_field| HirExpr {
                 kind: HirExprKind::UnionAggregate {
                     active_field,
@@ -1532,7 +1531,7 @@ impl HirCtx<'_> {
             let coerced = self
                 .coerce_expr_to_type(&lowered, *field_ty)
                 .unwrap_or(lowered);
-            if !ty_matches_expected(*field_ty, coerced.ty) {
+            if !self.ty_matches_expected(*field_ty, coerced.ty) {
                 return Err(spanned_error(
                     self.to_parser_span(coerced.span),
                     format!(
@@ -2533,7 +2532,7 @@ impl HirCtx<'_> {
                     if let Some(coerced) = self.coerce_expr_to_type(&rhs, lhs.ty) {
                         rhs = coerced;
                     }
-                    if !ty_matches_expected(lhs.ty, rhs.ty) {
+                    if !self.ty_matches_expected(lhs.ty, rhs.ty) {
                         return Err(spanned_error(
                             parser_span,
                             format!(
@@ -2794,7 +2793,7 @@ impl HirCtx<'_> {
                     matches!(inner.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
                 let dst_is_void =
                     matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
-                let dst_is_void_ptr = is_void_ptr_ty(target_ty);
+                let dst_is_void_ptr = self.is_void_ptr_ty(target_ty);
                 if !dst_is_void
                     && (self.complex_inner_ty_of(inner.ty).is_some()
                         || self.complex_inner_ty_of(target_ty).is_some())
@@ -2808,7 +2807,7 @@ impl HirCtx<'_> {
                         && (matches!(target_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
                             || self.is_maybe_uninit_fn_ptr_ty(target_ty).is_some()))
                     || (src_is_fn_item && dst_is_void_ptr))
-                    && !ty_matches_expected(target_ty, inner.ty)
+                    && !self.ty_matches_expected(target_ty, inner.ty)
                 {
                     return Err(spanned_error(
                         parser_span,
@@ -3828,7 +3827,7 @@ impl HirCtx<'_> {
                 span,
             };
         }
-        if !ty_matches_expected(field_ty, base.ty) {
+        if !self.ty_matches_expected(field_ty, base.ty) {
             return Err(spanned_error(
                 invalid_span(),
                 format!(
@@ -3889,10 +3888,10 @@ impl HirCtx<'_> {
 
     fn ternary_common_ty(&self, lhs: &HirExpr, rhs: &HirExpr) -> Option<Ty> {
         // Null pointer constant converts to the other side's pointer type.
-        if lhs.is_null_pointer_constant() && self.is_pointer_like(rhs.ty) {
+        if lhs.is_null_pointer_constant(self) && self.is_pointer_like(rhs.ty) {
             return Some(rhs.ty);
         }
-        if rhs.is_null_pointer_constant() && self.is_pointer_like(lhs.ty) {
+        if rhs.is_null_pointer_constant(self) && self.is_pointer_like(lhs.ty) {
             return Some(lhs.ty);
         }
         if is_numeric_ty(lhs.ty) && is_numeric_ty(rhs.ty) {
@@ -3903,7 +3902,7 @@ impl HirCtx<'_> {
                 return Some(self.promote_integer_ty(r));
             }
         }
-        common_ternary_ty(lhs.ty, rhs.ty)
+        self.common_ternary_ty(lhs.ty, rhs.ty)
     }
 
     /// Applies C integer promotion (C11 6.3.1.1p2) to a single operand before
@@ -4048,7 +4047,7 @@ impl HirCtx<'_> {
     ///
     /// Borrows `expr` so callers retain it on `None` for diagnostics.
     pub(crate) fn coerce_expr_to_type(&self, expr: &HirExpr, expected_ty: Ty) -> Option<HirExpr> {
-        if ty_matches_expected(expected_ty, expr.ty) {
+        if self.ty_matches_expected(expected_ty, expr.ty) {
             return Some(expr.clone());
         }
         if let Some(converted) = self.coerce_to_complex_ty(expr, expected_ty) {

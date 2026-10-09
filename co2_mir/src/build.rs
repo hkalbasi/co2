@@ -209,6 +209,14 @@ impl Builder<'_, '_> {
         co2_ast::emit_errors_and_terminate(vec![co2_ast::Rich::custom(co2_span, msg.to_owned())]);
     }
 
+    /// `()` or `core::ffi::c_void` (which `libc` re-exports): the MIR
+    /// counterpart of `HirCtx::is_void_ty`, for pointer arithmetic and
+    /// casts over `void *`/`c_void *`.
+    pub(crate) fn is_void_ty(&self, ty: Ty) -> bool {
+        matches!(ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty())
+            || matches!(ty.kind(), TyKind::RigidTy(RigidTy::Adt(adt, _)) if adt == self.wellknown_defs.c_void)
+    }
+
     pub(crate) fn current_scope(&self) -> u32 {
         *self.scope_stack.last().unwrap_or(&0)
     }

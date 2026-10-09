@@ -28,7 +28,7 @@ use crate::resolver::{HirCtx, invalid_span, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
     array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt,
-    ty_has_unsubstituted_param, ty_matches_expected,
+    ty_has_unsubstituted_param,
 };
 
 pub enum CTy {
@@ -37,33 +37,34 @@ pub enum CTy {
     UnsizedArray(Ty),
 }
 
-fn c_ty_matches_expected(expected: &CTy, actual: &CTy) -> bool {
-    match (expected, actual) {
-        (CTy::Ty(expected), CTy::Ty(actual)) => ty_matches_expected(*expected, *actual),
-        (CTy::UnsizedArray(expected), CTy::UnsizedArray(actual)) => {
-            ty_matches_expected(*expected, *actual)
+impl HirCtx<'_> {
+    fn c_ty_matches_expected(&self, expected: &CTy, actual: &CTy) -> bool {
+        match (expected, actual) {
+            (CTy::Ty(expected), CTy::Ty(actual)) => self.ty_matches_expected(*expected, *actual),
+            (CTy::UnsizedArray(expected), CTy::UnsizedArray(actual)) => {
+                self.ty_matches_expected(*expected, *actual)
+            }
+            (CTy::UnsizedArray(expected), CTy::Ty(actual))
+            | (CTy::Ty(actual), CTy::UnsizedArray(expected)) => array_elem_ty(*actual)
+                .is_some_and(|actual| self.ty_matches_expected(*expected, actual)),
+            (CTy::Function(expected), CTy::Function(actual)) => {
+                self.fn_sig_matches_expected(expected, actual)
+            }
+            _ => false,
         }
-        (CTy::UnsizedArray(expected), CTy::Ty(actual))
-        | (CTy::Ty(actual), CTy::UnsizedArray(expected)) => {
-            array_elem_ty(*actual).is_some_and(|actual| ty_matches_expected(*expected, actual))
-        }
-        (CTy::Function(expected), CTy::Function(actual)) => {
-            fn_sig_matches_expected(expected, actual)
-        }
-        _ => false,
     }
-}
 
-fn fn_sig_matches_expected(expected: &FnSig, actual: &FnSig) -> bool {
-    expected.c_variadic == actual.c_variadic
-        && expected.safety == actual.safety
-        && expected.abi == actual.abi
-        && expected.inputs_and_output.len() == actual.inputs_and_output.len()
-        && expected
-            .inputs_and_output
-            .iter()
-            .zip(actual.inputs_and_output.iter())
-            .all(|(expected, actual)| ty_matches_expected(*expected, *actual))
+    fn fn_sig_matches_expected(&self, expected: &FnSig, actual: &FnSig) -> bool {
+        expected.c_variadic == actual.c_variadic
+            && expected.safety == actual.safety
+            && expected.abi == actual.abi
+            && expected.inputs_and_output.len() == actual.inputs_and_output.len()
+            && expected
+                .inputs_and_output
+                .iter()
+                .zip(actual.inputs_and_output.iter())
+                .all(|(expected, actual)| self.ty_matches_expected(*expected, *actual))
+    }
 }
 
 fn declarator_has_restrict_qualifier(decl: &Declarator<LocalResolver>) -> bool {
@@ -913,7 +914,7 @@ impl HirCtx<'_> {
                                     expr = self.array_to_pointer_decay(&expr);
                                 }
                                 // TODO: This code is very wrong. We should not touch local types beside their declared type.
-                                let local_ty = if ty_matches_expected(ty, expr.ty) {
+                                let local_ty = if self.ty_matches_expected(ty, expr.ty) {
                                     expr.ty
                                 } else {
                                     ty
@@ -1047,7 +1048,7 @@ impl HirCtx<'_> {
         let ty1 =
             self.lower_type_name_cty_with_scope(ty1, span, Some((&mut *locals, &mut *local_map)))?;
         let ty2 = self.lower_type_name_cty_with_scope(ty2, span, Some((locals, local_map)))?;
-        Ok(c_ty_matches_expected(&ty1, &ty2))
+        Ok(self.c_ty_matches_expected(&ty1, &ty2))
     }
 
     pub(crate) fn lower_type_name_cty_with_scope(

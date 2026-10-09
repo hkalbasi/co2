@@ -434,10 +434,7 @@ impl Builder<'_, '_> {
         out_ty: Ty,
         span: RustSpan,
     ) -> MirOperand {
-        let is_void = matches!(
-            pointee_ty.kind(),
-            TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty()
-        );
+        let is_void = self.is_void_ty(pointee_ty);
         let mut base_op = base_op;
         let mut pointee_ty = pointee_ty;
         let mut out_ty_inner = out_ty;
@@ -774,10 +771,7 @@ impl Builder<'_, '_> {
                 let TyKind::RigidTy(RigidTy::RawPtr(mut pointee_ty, _)) = lhs.ty.kind() else {
                     panic!("ptr diff lhs must be raw pointer, got {:?}", lhs.ty);
                 };
-                if matches!(
-                    pointee_ty.kind(),
-                    TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty()
-                ) {
+                if self.is_void_ty(pointee_ty) {
                     pointee_ty = Ty::from_rigid_kind(RigidTy::Uint(UintTy::U8));
                 }
                 let isize_ty = Ty::signed_ty(IntTy::Isize);
@@ -1270,8 +1264,7 @@ impl Builder<'_, '_> {
         let src_is_fn_def = matches!(src_ty.kind(), TyKind::RigidTy(RigidTy::FnDef(_, _)));
         let src_mu_fn_ptr = self.maybe_uninit_fn_ptr_inner(src_ty);
         let dst_mu_fn_ptr = self.maybe_uninit_fn_ptr_inner(dst_ty);
-        let dst_is_void =
-            matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::Tuple(l)) if l.is_empty());
+        let dst_is_void = self.is_void_ty(dst_ty);
         if dst_is_void {
             return self.zeroed_operand(dst_ty, span);
         }
