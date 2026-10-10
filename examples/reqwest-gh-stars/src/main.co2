@@ -1,5 +1,6 @@
 use reqwest::blocking::Client;
 use serde_json::Value;
+use std::mem::drop;
 use std::string::String;
 
 #include <stdio.h>
@@ -35,4 +36,7 @@ fn main() {
         .unwrap_or(0);
 
     printf("%.*s has %lu stars\n", name.len(), name.as_str().as_ptr(), stars);
+    drop(client);
+    drop(resp);
+    drop(name);
 }

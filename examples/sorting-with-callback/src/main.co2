@@ -1,5 +1,7 @@
+use std::mem::drop;
 use std::range::Range;
 use std::vec::Vec;
+use std::ops::Deref;
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,7 +10,7 @@ fn negate(x: &i32) -> i32 {
     return -*x;
 }
 
-fn print_all(values: Vec<i32>) {
+fn print_all(values: &[i32]) {
     i32 *data = values.as_ptr();
     for (int i = 0; i < values.len(); i += 1) {
         printf("%d ", data[i]);
@@ -36,15 +38,16 @@ fn main() {
     Vec::<i32> values = r.into_iter().collect::<Vec<i32>>();
 
     printf("ascending:  ");
-    print_all(values);
+    print_all(values.deref());
 
     values.sort_by_key(negate);
 
     printf("descending: ");
-    print_all(values);
+    print_all(values.deref());
 
     qsort(values.as_ptr(), values.len(), sizeof(i32), c_sort_callback);
 
     printf("Using libc qsort: ");
-    print_all(values);
+    print_all(values.deref());
+    drop(values);
 }

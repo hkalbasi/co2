@@ -1,3 +1,4 @@
+use std::mem::drop;
 use std::string::String;
 
 #include <stdio.h>
@@ -15,6 +16,7 @@ int square(int x) {
 fn main() {
     String msg = greeting(s"Hello");
     printf("%.*s", msg.len(), msg.as_str().as_ptr());
+    drop(msg);
 
     int n = 7;
     printf("%d squared is %d\n", n, square(n));

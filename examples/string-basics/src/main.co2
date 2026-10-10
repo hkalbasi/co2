@@ -1,3 +1,4 @@
+use std::mem::drop;
 use std::string::String;
 use std::ffi::{CStr, c_char, CString};
 
@@ -27,4 +28,5 @@ fn main() {
     printf("message length according to C: %zu bytes\n", len);
     char *pos_of_2 = strchr(greeting_c.as_ptr(), '2');
     printf("2 is the %dth character\n", pos_of_2 - greeting_c.as_ptr());
+    drop(greeting_c);
 }

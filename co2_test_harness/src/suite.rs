@@ -413,6 +413,19 @@ fn run_example_test(
     let snapshot_path = example_dir.join("expected_output.txt");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
+    if let Some(warning) = first_warning_line(&String::from_utf8_lossy(&output.stderr)) {
+        return Err(TestError {
+            source: test.source.clone(),
+            span: None,
+            message: format!(
+                "example emitted warnings (warnings are denied in examples):\n{}\n{}",
+                warning,
+                format_named_output("stderr", &String::from_utf8_lossy(&output.stderr)),
+            ),
+        }
+        .into());
+    }
+
     if update_snapshots {
         std::fs::write(&snapshot_path, &stdout)
             .with_context(|| format!("failed to write snapshot to {}", snapshot_path.display()))?;
@@ -856,6 +869,40 @@ fn source_span_line_columns(
         expected.byte_start - line_start + 1,
         expected.byte_end - line_start + 1,
     ))
+}
+
+/// First stderr line that reports a compiler warning, if any. co2 renders
+/// its own warnings with ANSI styling even when piped, so escape codes are
+/// stripped before matching. Example programs never write to stderr, so any
+/// `warning` line comes from the build.
+fn first_warning_line(stderr: &str) -> Option<String> {
+    stderr.lines().find_map(|line| {
+        let stripped = strip_ansi_codes(line);
+        stripped
+            .trim_start()
+            .starts_with("warning")
+            .then(|| stripped.trim().to_owned())
+    })
+}
+
+fn strip_ansi_codes(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        // Skip CSI sequences (`ESC [` ... final byte in `@`..=`~`).
+        if chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if ('\x40'..='\x7e').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }
 
 fn output_expectation(test: &TestCase, key: &str) -> Result<Option<String>> {

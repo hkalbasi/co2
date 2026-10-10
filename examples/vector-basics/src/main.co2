@@ -1,3 +1,4 @@
+use std::mem::drop;
 use std::vec::Vec;
 
 #include <stdio.h>
@@ -26,4 +27,5 @@ fn main() {
         printf("%d ", data[i]);
     }
     printf("\n");
+    drop(v);
 }

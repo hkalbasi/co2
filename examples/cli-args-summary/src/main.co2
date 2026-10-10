@@ -1,4 +1,5 @@
 use std::env::Args;
+use std::mem::drop;
 use std::option::Option;
 use std::string::String;
 
@@ -18,6 +19,7 @@ fn main() {
 
         String arg = next.unwrap();
         printf("arg[%d] (%zu bytes): %.*s\n", index, arg.len(), arg.len(), arg.as_ptr());
+        drop(arg);
         index += 1;
     }
 

@@ -1,3 +1,4 @@
+use std::mem::drop;
 use std::option::Option;
 use std::result::Result;
 use std::string::String;
@@ -36,5 +37,6 @@ fn main() {
     if (err_result.is_err()) {
         String msg = err_result.unwrap_err();
         printf("error: %.*s\n", msg.len(), msg.as_str().as_ptr());
+        drop(msg);
     }
 }
