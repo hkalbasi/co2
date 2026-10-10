@@ -1,0 +1,7 @@
+#include <stdio.h>
+
+int add_from_c(int a, int b);
+
+fn main() {
+    printf("sum=%d\n", add_from_c(40, 2));
+}
