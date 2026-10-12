@@ -50,6 +50,13 @@ struct CcArgs {
     /// Original `-march=`/`-mtune=`/`-m<feat>` spellings, forwarded to
     /// sub-`co2cc` invocations and the assembler driver.
     arch_flags: Vec<String>,
+    /// `-fsanitize=` entries, forwarded to rustc as `-Zsanitizer=`.
+    sanitizers: Vec<String>,
+    /// `-flto`/`-flto=full` (`-fno-lto` clears it), forwarded to rustc as
+    /// `-C lto=fat` and to sub-`co2cc`/system-cc invocations as `-flto`.
+    /// Only full LTO is supported: rustc's ThinLTO emits multiple objects
+    /// per input, which co2cc's single-object pipeline cannot represent.
+    lto: bool,
 }
 
 #[derive(Debug)]
@@ -105,6 +112,10 @@ Options:
   -O<level>            Optimization level
   -g                   Generate debug information
   -fPIC                Generate position-independent code
+  -flto[=full]           Enable link-time optimization (full LTO only);
+                         maps to rustc -C lto=fat (required for
+                         -fsanitize=cfi, like clang)
+  -fno-lto               Disable link-time optimization
   -l <lib>             Link against library
   -L <dir>             Add library search path
   -Wl,<option>         Pass option to linker
@@ -116,6 +127,9 @@ Options:
   -m<feature>          Enable x86 target feature (e.g. -mavx2, -mfma, -msse4.2);
                        maps to rustc -C target-feature=+<feature>
   -mno-<feature>       Disable x86 target feature
+  -fsanitize=<list>      Enable sanitizers (e.g. address); maps to
+                         rustc -Zsanitizer=<list>
+  -fno-sanitize=<list>   Disable previously enabled sanitizers
   -ftime-report        Print timing report
   -MD                  Generate make dependency file
   -MMD                 Like -MD but ignore system headers
@@ -460,6 +474,8 @@ fn run_co2c(args: &CcArgs) {
             args.time_report,
             &args.dep_args,
             &args.arch_flags,
+            &args.sanitizers,
+            args.lto,
         );
         object_paths.push(object_path);
     }
@@ -471,6 +487,8 @@ fn run_co2c(args: &CcArgs) {
         args.opt_level.as_deref(),
         args.debuginfo,
         args.link_kind,
+        &args.sanitizers,
+        args.lto,
     );
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -497,6 +515,8 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     let mut target_cpu = None;
     let mut target_features = Vec::new();
     let mut arch_flags: Vec<String> = Vec::new();
+    let mut sanitizers: Vec<String> = Vec::new();
+    let mut lto = false;
     let mut dep_args = DepFileArgs {
         generate: false,
         exclude_system: false,
@@ -602,6 +622,13 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
                     }
                 }
             }
+            f if f.starts_with("-fsanitize=") || f.starts_with("-fno-sanitize=") => {
+                let (flag, list) = match f.split_once('=') {
+                    Some((flag, list)) => (flag, list),
+                    None => return Err(ParseArgsError::InvalidArgument(format!("'{f}'"))),
+                };
+                apply_sanitize_list(&mut sanitizers, flag, list)?;
+            }
             f if f.starts_with("-march=") => {
                 let cpu = f.strip_prefix("-march=").unwrap().to_owned();
                 if cpu.is_empty() {
@@ -625,6 +652,27 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
                 // matching the historical behavior for unknown dash flags.
             }
             "-fPIC" | "-fpic" => pic = true,
+            "-flto" => lto = true,
+            f if f.starts_with("-flto=") => {
+                let mode = f.strip_prefix("-flto=").unwrap();
+                match mode {
+                    "full" => lto = true,
+                    _ => {
+                        return Err(ParseArgsError::InvalidArgument(format!(
+                            "'-flto={mode}'; only full LTO is supported ('-flto', '-flto=full')"
+                        )));
+                    }
+                }
+            }
+            "-fno-lto" => lto = false,
+            "-fsanitize" | "-fno-sanitize" => {
+                let flag = arg.clone();
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or_else(|| ParseArgsError::MissingArgumentAfter(flag.clone()))?;
+                apply_sanitize_list(&mut sanitizers, &flag, val)?;
+            }
             "-ftime-report" => time_report = true,
             "-g0" => debuginfo = Some(0),
             "-g1" => debuginfo = Some(1),
@@ -670,6 +718,13 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
     if inputs.is_empty() && linker_args.is_empty() {
         return Err(ParseArgsError::MissingInputFile);
     }
+    // Like clang, `-fsanitize=cfi` is only allowed with `-flto`; rustc
+    // would reject it later with a backend error, so fail fast here.
+    if sanitizers.iter().any(|s| s == "cfi") && !lto {
+        return Err(ParseArgsError::InvalidArgument(
+            "'-fsanitize=cfi' only allowed with '-flto'".to_owned(),
+        ));
+    }
     if emit_obj_only || emit_asm_only || emit_preprocess_only {
         let c_count = inputs
             .iter()
@@ -703,6 +758,8 @@ fn parse_args(args: &[String]) -> Result<CcArgs, ParseArgsError> {
         target_cpu,
         target_features,
         arch_flags,
+        sanitizers,
+        lto,
     })
 }
 
@@ -767,14 +824,102 @@ fn push_target_feature(features: &mut Vec<String>, feature: String) {
 }
 
 /// cpp_args plus the original `-march=`/`-m<feat>` spellings so the
-/// preprocessor can derive predefined feature macros (`__AVX__`, ...).
+/// preprocessor can derive predefined feature macros (`__AVX__`, ...),
+/// plus the canonical `-fsanitize=` spelling for `__SANITIZE_*__` macros.
 fn preprocess_args(args: &CcArgs, cpp_args: &[String]) -> Vec<String> {
     cpp_args
         .iter()
         .cloned()
         .chain(args.arch_flags.iter().cloned())
+        .chain(
+            (!args.sanitizers.is_empty())
+                .then(|| format!("-fsanitize={}", args.sanitizers.join(","))),
+        )
         .collect()
 }
+
+/// Append rustc codegen args for `-fsanitize=` flags.
+fn push_sanitizer_rustc_args(rustc_args: &mut Vec<String>, args: &CcArgs) {
+    if args.sanitizers.is_empty() {
+        return;
+    }
+    rustc_args.push("-Z".to_owned());
+    rustc_args.push(format!("sanitizer={}", args.sanitizers.join(",")));
+    // Every sanitizer except `address` changes the Rust ABI, so compiling
+    // against prebuilt (uninstrumented) std needs this allowance. It is a
+    // no-op for `address`, so it is pushed unconditionally to keep the
+    // wiring to a single branch.
+    rustc_args.push("-C".to_owned());
+    rustc_args.push("unsafe-allow-abi-mismatch=sanitizer".to_owned());
+    if args.sanitizers.iter().any(|s| s == "cfi") {
+        // `-Zsanitizer=cfi` requires a single codegen unit. (The LTO it
+        // also requires comes from explicit `-flto`, like clang.)
+        rustc_args.push("-C".to_owned());
+        rustc_args.push("codegen-units=1".to_owned());
+    }
+}
+
+/// Append rustc `-C lto=fat` for `-flto`/`-flto=full`.
+fn push_lto_rustc_args(rustc_args: &mut Vec<String>, args: &CcArgs) {
+    if args.lto {
+        rustc_args.push("-C".to_owned());
+        rustc_args.push("lto=fat".to_owned());
+    }
+}
+
+/// Record (`-fsanitize=`) or remove (`-fno-sanitize=`) a comma-separated
+/// sanitizer list, passed through verbatim to rustc `-Zsanitizer=`.
+/// Names are validated against rustc's accepted set so typos and
+/// unsupported sanitizers (e.g. `undefined`, which has no rustc
+/// equivalent) fail fast instead of surfacing as cryptic rustc errors.
+fn apply_sanitize_list(
+    sanitizers: &mut Vec<String>,
+    flag: &str,
+    list: &str,
+) -> Result<(), ParseArgsError> {
+    let negated = flag == "-fno-sanitize";
+    let mut any = false;
+    for name in list.split(',') {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        any = true;
+        if !VALID_SANITIZERS.contains(&name) {
+            return Err(ParseArgsError::InvalidArgument(format!(
+                "'{flag}={name}'; valid values: {}",
+                VALID_SANITIZERS.join(", ")
+            )));
+        }
+        if negated {
+            sanitizers.retain(|existing| existing != name);
+        } else if !sanitizers.iter().any(|existing| existing == name) {
+            sanitizers.push(name.to_owned());
+        }
+    }
+    if !any {
+        return Err(ParseArgsError::InvalidArgument(format!("'{flag}={list}'")));
+    }
+    Ok(())
+}
+
+/// Sanitizer names accepted by `-fsanitize=` (mirrors rustc `-Zsanitizer=`).
+const VALID_SANITIZERS: &[&str] = &[
+    "address",
+    "cfi",
+    "dataflow",
+    "hwaddress",
+    "kcfi",
+    "kernel-address",
+    "kernel-hwaddress",
+    "leak",
+    "memory",
+    "memtag",
+    "safestack",
+    "shadow-call-stack",
+    "thread",
+    "realtime",
+];
 
 /// Append rustc codegen args for `-march=`/`-m<feature>` flags.
 fn push_arch_rustc_args(rustc_args: &mut Vec<String>, args: &CcArgs) {
@@ -871,6 +1016,10 @@ fn build_rustc_object_args(
 
     push_arch_rustc_args(&mut rustc_args, arch);
 
+    push_sanitizer_rustc_args(&mut rustc_args, arch);
+
+    push_lto_rustc_args(&mut rustc_args, arch);
+
     rustc_args.extend(shared_rust_flags());
 
     rustc_args
@@ -938,6 +1087,10 @@ fn build_rustc_asm_args(
 
     push_arch_rustc_args(&mut rustc_args, arch);
 
+    push_sanitizer_rustc_args(&mut rustc_args, arch);
+
+    push_lto_rustc_args(&mut rustc_args, arch);
+
     rustc_args.extend(shared_rust_flags());
 
     rustc_args
@@ -986,6 +1139,7 @@ fn build_link_rustc_args(
     output: Option<&Path>,
     opt_level: Option<&str>,
     debuginfo: Option<u8>,
+    sanitizers: &[String],
 ) -> Vec<String> {
     let mut rustc_args = vec![
         "--crate-name".to_owned(),
@@ -1021,6 +1175,31 @@ fn build_link_rustc_args(
 
     rustc_args.push("-C".to_owned());
     rustc_args.push("panic=abort".to_owned());
+
+    // CFI is call-site instrumentation with no link-time runtime: forwarding
+    // it would only force LTO onto the link stub, so it is dropped here.
+    // (`-flto` is likewise compile-only: the link inputs are prebuilt
+    // objects, so LTO cannot reach into them.)
+    let link_sanitizers: Vec<&str> = sanitizers
+        .iter()
+        .filter(|s| s.as_str() != "cfi")
+        .map(String::as_str)
+        .collect();
+    if !link_sanitizers.is_empty() {
+        rustc_args.push("-Z".to_owned());
+        rustc_args.push(format!("sanitizer={}", link_sanitizers.join(",")));
+        // As on the compile path, non-`address` sanitizers need the ABI
+        // mismatch allowance against prebuilt std.
+        rustc_args.push("-C".to_owned());
+        rustc_args.push("unsafe-allow-abi-mismatch=sanitizer".to_owned());
+        // The sanitizer runtimes reference libgcc (unwinding), libm, libdl
+        // and libpthread, which the no_std link would otherwise omit
+        // (`-nodefaultlibs` + only `-lc`).
+        for lib in ["-lm", "-lgcc_s", "-lgcc", "-ldl", "-lpthread"] {
+            rustc_args.push("-C".to_owned());
+            rustc_args.push(format!("link-arg={lib}"));
+        }
+    }
 
     rustc_args.extend(shared_rust_flags());
     rustc_args.push(link_stub.to_string_lossy().into_owned());
@@ -1094,6 +1273,8 @@ fn compile_c_to_object(
     time_report: bool,
     dep_args: &DepFileArgs,
     arch_flags: &[String],
+    sanitizers: &[String],
+    lto: bool,
 ) {
     let exe = current_invocation_path()
         .or_else(|| std::env::current_exe().ok())
@@ -1102,6 +1283,12 @@ fn compile_c_to_object(
     cmd.arg("-c").arg(input).arg("-o").arg(output);
     for flag in arch_flags {
         cmd.arg(flag);
+    }
+    if !sanitizers.is_empty() {
+        cmd.arg(format!("-fsanitize={}", sanitizers.join(",")));
+    }
+    if lto {
+        cmd.arg("-flto");
     }
     if let Some(level) = opt_level {
         cmd.arg(format!("-O{level}"));
@@ -1172,9 +1359,11 @@ fn link_objects(
     opt_level: Option<&str>,
     debuginfo: Option<u8>,
     link_kind: LinkOutputKind,
+    sanitizers: &[String],
+    lto: bool,
 ) {
     if matches!(link_kind, LinkOutputKind::SharedLib) {
-        link_shared_objects(objects, linker_args, output);
+        link_shared_objects(objects, linker_args, output, sanitizers, lto);
         return;
     }
 
@@ -1196,6 +1385,7 @@ fn link_objects(
                 output,
                 opt_level,
                 debuginfo,
+                sanitizers,
             );
             let mut cmd = Command::new(&exe);
             cmd.args(&rustc_link_args);
@@ -1265,6 +1455,12 @@ fn link_objects(
     }
 
     let mut link_cmd = Command::new(resolve_c_compiler());
+    if !sanitizers.is_empty() {
+        link_cmd.arg(format!("-fsanitize={}", sanitizers.join(",")));
+    }
+    if lto {
+        link_cmd.arg("-flto");
+    }
     for object in objects {
         link_cmd.arg(object);
     }
@@ -1322,6 +1518,7 @@ fn link_objects(
         output,
         opt_level,
         debuginfo,
+        sanitizers,
     );
     let mut rustc_link_cmd = Command::new(&exe);
     rustc_link_cmd.args(&rustc_link_args);
@@ -1433,9 +1630,21 @@ pub extern "C" fn rust_eh_personality() {}
 const CO2C_LINK_STD_STUB: &str = r#"#![no_main]
 "#;
 
-fn link_shared_objects(objects: &[PathBuf], linker_args: &[String], output: Option<&Path>) {
+fn link_shared_objects(
+    objects: &[PathBuf],
+    linker_args: &[String],
+    output: Option<&Path>,
+    sanitizers: &[String],
+    lto: bool,
+) {
     let mut cmd = Command::new(resolve_c_compiler());
     cmd.arg("-shared");
+    if !sanitizers.is_empty() {
+        cmd.arg(format!("-fsanitize={}", sanitizers.join(",")));
+    }
+    if lto {
+        cmd.arg("-flto");
+    }
 
     for object in objects {
         cmd.arg(object);

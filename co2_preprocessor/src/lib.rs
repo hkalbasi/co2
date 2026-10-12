@@ -296,6 +296,8 @@ fn configure_preprocessor(preprocessor: &mut Preprocessor, input: &Path, cpp_arg
     // -m/-march flags select predefined SIMD feature macros (__AVX__, ...);
     // applied before -D/-U so explicit defines/undefines still win.
     preprocessor.apply_arch_flags(cpp_args);
+    // -fsanitize=address/thread/leak likewise select __SANITIZE_*__ macros.
+    preprocessor.apply_sanitizer_flags(cpp_args);
 
     let nostdinc = cpp_args.iter().any(|arg| arg == "-nostdinc");
     if !nostdinc {

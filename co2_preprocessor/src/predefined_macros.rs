@@ -1187,6 +1187,29 @@ impl Preprocessor {
         }
     }
 
+    /// Define sanitizer macros from `-fsanitize=` flags in `args`
+    /// (forwarded by co2cc alongside the usual cpp args): `address` defines
+    /// `__SANITIZE_ADDRESS__`, `thread` defines `__SANITIZE_THREAD__` and
+    /// `leak` defines `__SANITIZE_LEAK__`, matching GCC. Other sanitizers
+    /// define no macro, also matching GCC. Must be called before -D/-U
+    /// processing so explicit defines/undefines still win.
+    pub fn apply_sanitizer_flags(&mut self, args: &[String]) {
+        for arg in args {
+            let Some(list) = arg.strip_prefix("-fsanitize=") else {
+                continue;
+            };
+            for name in list.split(',') {
+                let macro_name = match name.trim() {
+                    "address" => "__SANITIZE_ADDRESS__",
+                    "thread" => "__SANITIZE_THREAD__",
+                    "leak" => "__SANITIZE_LEAK__",
+                    _ => continue,
+                };
+                self.define_simple_macro(macro_name, "1");
+            }
+        }
+    }
+
     /// Set the target architecture, updating predefined macros and include paths.
     pub fn set_target(&mut self, target: &str) {
         match target {
