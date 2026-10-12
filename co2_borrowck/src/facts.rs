@@ -254,7 +254,10 @@ fn apply_assign_points_to(body: &Body, points_to: &mut PointsTo, place: &Place, 
 fn compute_points_to(body: &Body) -> Vec<PointsTo> {
     let empty = vec![BTreeSet::new(); local_count(body)];
     let mut entry = vec![empty.clone(); body.blocks.len()];
-    let mut worklist = vec![0usize];
+    // Seed with every block: predecessors that contribute nothing must not
+    // prevent a block's own statements from being processed (e.g. pointer
+    // setup in a later block after calls split the entry block).
+    let mut worklist: Vec<usize> = (0..body.blocks.len()).collect();
     while let Some(block) = worklist.pop() {
         let mut out = entry[block].clone();
         for stmt in &body.blocks[block].statements {

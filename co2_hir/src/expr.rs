@@ -27,7 +27,7 @@ use crate::ty::{
     array_elem_ty, common_numeric_ty, enum_payload_ty, integer_promote_ty, is_array_ty,
     is_integer_ty, is_numeric_ty, resolve_field_path_in_adt, variant_idx,
 };
-use crate::{decl::CTy, decl::hir_ty_to_ty};
+use crate::{decl::CTy, decl::HirDecl, decl::hir_ty_to_ty};
 
 fn countof_ty_len(ty: Ty) -> Option<u64> {
     if let TyKind::RigidTy(RigidTy::Array(_, len)) = ty.kind() {
@@ -2918,6 +2918,9 @@ impl HirCtx<'_> {
                     span,
                 ))
             }
+            Expression::Atomic { op, args } => {
+                self.lower_atomic(op, args, parser_span, span, locals, local_map)
+            }
             Expression::SizeofType(type_name) => {
                 let ty =
                     self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
@@ -3980,6 +3983,628 @@ impl HirCtx<'_> {
             vec![re, im],
             span,
         )
+    }
+
+    /// `Ordering::SeqCst` value (all C orders strengthened to SeqCst).
+    fn atomic_seqcst(&self, span: RustSpan) -> HirExpr {
+        let ty = Ty::from_rigid_kind(RigidTy::Adt(
+            self.wellknown_defs.atomic_ordering,
+            GenericArgs(vec![]),
+        ));
+        HirExpr {
+            kind: HirExprKind::Aggregate {
+                args: vec![],
+                variant: self.wellknown_defs.atomic_ordering_seqcst,
+            },
+            ty,
+            span,
+        }
+    }
+
+    /// Pointee of a raw-pointer/reference atomic operand.
+    fn atomic_pointee_ty(ty: Ty) -> Option<Ty> {
+        match ty.kind() {
+            TyKind::RigidTy(RigidTy::RawPtr(inner, _) | RigidTy::Ref(_, inner, _)) => Some(inner),
+            _ => None,
+        }
+    }
+
+    /// `core::sync::atomic::Atomic<T>` for pointee `T` (peeling enums to
+    /// their payload, which is what the atomic width is).
+    fn atomic_ty_for(&self, pointee: Ty) -> Ty {
+        let inner = enum_payload_ty(pointee).unwrap_or(pointee);
+        Ty::from_rigid_kind(RigidTy::Adt(
+            self.wellknown_defs.atomic_adt,
+            GenericArgs(vec![GenericArgKind::Type(inner)]),
+        ))
+    }
+
+    /// Reinterpret `*mut T` as an `Atomic<T>` place (`ptr as *const Atomic<T>`, deref).
+    fn atomic_place(&self, ptr: HirExpr, atomic_ty: Ty) -> HirExpr {
+        let span = ptr.span;
+        let atomic_ptr_ty = Ty::new_ptr(atomic_ty, Mutability::Not);
+        let casted = HirExpr {
+            kind: HirExprKind::Cast(Box::new(ptr)),
+            ty: atomic_ptr_ty,
+            span,
+        };
+        HirExpr {
+            kind: HirExprKind::Deref(Box::new(casted)),
+            ty: atomic_ty,
+            span,
+        }
+    }
+
+    /// Call an inherent `Atomic<T>` method on an `Atomic<T>` place.
+    fn atomic_method(
+        &self,
+        place: HirExpr,
+        method: &str,
+        args: Vec<HirExpr>,
+        parser_span: co2_ast::Span,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let span = place.span;
+        let arg_tys: Vec<Ty> = args.iter().map(|a| a.ty).collect();
+        let Some(resolved) =
+            self.resolve_method_for_call(place.ty, method, parser_span, &arg_tys)?
+        else {
+            return Err(spanned_error(
+                parser_span,
+                format!("unknown atomic method `{method}` on type {}", self.format_ty(place.ty)),
+            ));
+        };
+        let receiver =
+            self.apply_resolved_receiver_adjustment(place, &resolved.receiver_adjustment, parser_span, span);
+        let mut all_args = vec![receiver];
+        all_args.extend(args);
+        let (generic_args, sig) = self.finalize_method_sig(
+            FnDef(resolved.def_id),
+            resolved.generic_args.0,
+            resolved.sig,
+            &all_args,
+            1,
+            parser_span,
+        )?;
+        self.lower_call_args(parser_span, &sig, &mut all_args, method);
+        let resolved_value = ResolvedValue::Fn(FnDef(resolved.def_id), generic_args);
+        let func_ty = resolved_value.ty();
+        Ok(HirExpr {
+            kind: HirExprKind::Call {
+                func: Box::new(HirExpr {
+                    kind: HirExprKind::Path(resolved_value),
+                    ty: func_ty,
+                    span,
+                }),
+                args: all_args,
+            },
+            ty: sig.output(),
+            span,
+        })
+    }
+
+    /// Lower `*p` where `p: *mut T` (for `__atomic_store`'s by-pointer value).
+    fn atomic_deref_ptr(&self, ptr: HirExpr) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let span = ptr.span;
+        let Some(pointee) = Self::atomic_pointee_ty(ptr.ty) else {
+            return Err(spanned_error(
+                self.to_parser_span(span),
+                format!("atomic value pointer must be a pointer, got {}", self.format_ty(ptr.ty)),
+            ));
+        };
+        Ok(HirExpr {
+            kind: HirExprKind::Deref(Box::new(ptr)),
+            ty: pointee,
+            span,
+        })
+    }
+
+    fn lower_atomic(
+        &self,
+        op: Spanned<String>,
+        args: Vec<Spanned<Expression<LocalResolver>>>,
+        parser_span: co2_ast::Span,
+        span: RustSpan,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let err = |msg: String| spanned_error(parser_span, msg);
+        // Lower every arg (order args become plain ints); ops pick what they need.
+        let mut lowered = Vec::with_capacity(args.len());
+        for arg in args {
+            let mut e = self.lower_expr((arg.0, arg.1), locals, local_map)?;
+            self.array_to_pointer_decay_if_array(&mut e);
+            self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut e);
+            lowered.push(e);
+        }
+        let need = |n: usize| {
+            if lowered.len() < n {
+                Err(err(format!(
+                    "`{}` expects at least {n} argument(s), got {}",
+                    op.0,
+                    lowered.len()
+                )))
+            } else {
+                Ok(())
+            }
+        };
+        let ptr_at = |i: usize| -> Result<HirExpr, (co2_ast::Span, String)> {
+            let ptr = lowered[i].clone();
+            if Self::atomic_pointee_ty(ptr.ty).is_none() {
+                return Err(err(format!(
+                    "atomic pointer must be a pointer, got {}",
+                    self.format_ty(ptr.ty)
+                )));
+            }
+            Ok(ptr)
+        };
+        // (atomic_place, pointee) for ops whose first arg is `*mut T`.
+        let place_at = |i: usize| -> Result<(HirExpr, Ty), (co2_ast::Span, String)> {
+            let ptr = ptr_at(i)?;
+            let pointee = Self::atomic_pointee_ty(ptr.ty).expect("checked");
+            Ok((self.atomic_place(ptr, self.atomic_ty_for(pointee)), pointee))
+        };
+        let seqcst = || self.atomic_seqcst(span);
+        // ponytail: every memory order strengthened to SeqCst; per-ordering only if measurable.
+        // ponytail: CAS failure refreshes *expected via a second atomic load (exact
+        //   single-threaded; a fresh race-free read under contention); payload reuse when checked.
+        // ponytail: val-CAS is load-check-store (single-threaded exact, race-free
+        //   under contention but not one intrinsic); single-intrinsic when checked.
+        // ponytail: fetch op value args reused by reference (double evaluation if side-effecting); bind to temp when checked.
+        match op.0.as_str() {
+            "__atomic_fetch_add" | "__sync_fetch_and_add" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "fetch_add", vec![lowered[1].clone(), seqcst()], parser_span)
+            }
+            "__atomic_fetch_sub" | "__sync_fetch_and_sub" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "fetch_sub", vec![lowered[1].clone(), seqcst()], parser_span)
+            }
+            "__atomic_fetch_or" | "__sync_fetch_and_or" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "fetch_or", vec![lowered[1].clone(), seqcst()], parser_span)
+            }
+            "__atomic_fetch_and" | "__sync_fetch_and_and" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "fetch_and", vec![lowered[1].clone(), seqcst()], parser_span)
+            }
+            "__atomic_fetch_xor" | "__sync_fetch_and_xor" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "fetch_xor", vec![lowered[1].clone(), seqcst()], parser_span)
+            }
+            "__atomic_fetch_nand" | "__sync_fetch_and_nand" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "fetch_nand", vec![lowered[1].clone(), seqcst()], parser_span)
+            }
+            "__atomic_add_fetch" | "__sync_add_and_fetch" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                let old = self.atomic_method(place, "fetch_add", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let ty = old.ty;
+                Ok(HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: HirBinOp::Add,
+                        lhs: Box::new(old),
+                        rhs: Box::new(self.emit_cast(lowered[1].clone(), ty)),
+                    },
+                    ty,
+                    span,
+                })
+            }
+            "__atomic_sub_fetch" | "__sync_sub_and_fetch" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                let old = self.atomic_method(place, "fetch_sub", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let ty = old.ty;
+                Ok(HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: HirBinOp::Sub,
+                        lhs: Box::new(old),
+                        rhs: Box::new(self.emit_cast(lowered[1].clone(), ty)),
+                    },
+                    ty,
+                    span,
+                })
+            }
+            "__atomic_or_fetch" | "__sync_or_and_fetch" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                let old = self.atomic_method(place, "fetch_or", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let ty = old.ty;
+                Ok(HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: HirBinOp::BitOr,
+                        lhs: Box::new(old),
+                        rhs: Box::new(self.emit_cast(lowered[1].clone(), ty)),
+                    },
+                    ty,
+                    span,
+                })
+            }
+            "__atomic_and_fetch" | "__sync_and_and_fetch" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                let old = self.atomic_method(place, "fetch_and", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let ty = old.ty;
+                Ok(HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: HirBinOp::BitAnd,
+                        lhs: Box::new(old),
+                        rhs: Box::new(self.emit_cast(lowered[1].clone(), ty)),
+                    },
+                    ty,
+                    span,
+                })
+            }
+            "__atomic_xor_fetch" | "__sync_xor_and_fetch" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                let old = self.atomic_method(place, "fetch_xor", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let ty = old.ty;
+                Ok(HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: HirBinOp::BitXor,
+                        lhs: Box::new(old),
+                        rhs: Box::new(self.emit_cast(lowered[1].clone(), ty)),
+                    },
+                    ty,
+                    span,
+                })
+            }
+            "__atomic_nand_fetch" | "__sync_nand_and_fetch" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                let old = self.atomic_method(place, "fetch_nand", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let ty = old.ty;
+                let anded = HirExpr {
+                    kind: HirExprKind::Binary {
+                        op: HirBinOp::BitAnd,
+                        lhs: Box::new(old),
+                        rhs: Box::new(self.emit_cast(lowered[1].clone(), ty)),
+                    },
+                    ty,
+                    span,
+                };
+                Ok(HirExpr {
+                    kind: HirExprKind::BitNot(Box::new(anded.clone())),
+                    ty,
+                    span,
+                })
+            }
+            "__atomic_load_n" => {
+                need(1)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "load", vec![seqcst()], parser_span)
+            }
+            "__atomic_store_n" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "store", vec![lowered[1].clone(), seqcst()], parser_span)
+            }
+            "__atomic_load" => {
+                need(1)?;
+                if lowered.len() == 1 || lowered.len() == 2 {
+                    // C11 `atomic_load(ptr[, order])` returns the value.
+                    let (place, _) = place_at(0)?;
+                    return self.atomic_method(place, "load", vec![seqcst()], parser_span);
+                }
+                // GCC `__atomic_load(ptr, ret, order)`: `*ret = load()`.
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                let loaded = self.atomic_method(place, "load", vec![seqcst()], parser_span)?;
+                let ret_ptr = ptr_at(1)?;
+                let Some(ret_pointee) = Self::atomic_pointee_ty(ret_ptr.ty) else {
+                    return Err(err(format!(
+                        "atomic load destination must be a pointer, got {}",
+                        self.format_ty(ret_ptr.ty)
+                    )));
+                };
+                let lhs = HirExpr {
+                    kind: HirExprKind::Deref(Box::new(ret_ptr)),
+                    ty: ret_pointee,
+                    span,
+                };
+                Ok(HirExpr {
+                    kind: HirExprKind::Assign {
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(self.emit_cast(loaded, ret_pointee)),
+                    },
+                    ty: Ty::new_tuple(&[]),
+                    span,
+                })
+            }
+            "__atomic_store" => {
+                need(2)?;
+                // Second arg is a value (C11) or a pointer to it (GCC); deref pointers.
+                let val = if Self::atomic_pointee_ty(lowered[1].ty).is_some() {
+                    self.atomic_deref_ptr(lowered[1].clone())?
+                } else {
+                    lowered[1].clone()
+                };
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "store", vec![val, seqcst()], parser_span)
+            }
+            "__atomic_exchange_n" => {
+                need(2)?;
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "swap", vec![lowered[1].clone(), seqcst()], parser_span)
+            }
+            "__atomic_exchange" => {
+                if lowered.len() <= 3 {
+                    // C11 `atomic_exchange(ptr, val[, order])` returns old.
+                    need(2)?;
+                    let val = if Self::atomic_pointee_ty(lowered[1].ty).is_some() {
+                        self.atomic_deref_ptr(lowered[1].clone())?
+                    } else {
+                        lowered[1].clone()
+                    };
+                    let (place, _) = place_at(0)?;
+                    return self.atomic_method(place, "swap", vec![val, seqcst()], parser_span);
+                }
+                // GCC `__atomic_exchange(ptr, val_ptr, ret_ptr, order)`: `*ret = swap(*val)`.
+                need(3)?;
+                let val = self.atomic_deref_ptr(lowered[1].clone())?;
+                let (place, _) = place_at(0)?;
+                let old = self.atomic_method(place, "swap", vec![val, seqcst()], parser_span)?;
+                let ret_ptr = ptr_at(2)?;
+                let Some(ret_pointee) = Self::atomic_pointee_ty(ret_ptr.ty) else {
+                    return Err(err(format!(
+                        "atomic exchange destination must be a pointer, got {}",
+                        self.format_ty(ret_ptr.ty)
+                    )));
+                };
+                let lhs = HirExpr {
+                    kind: HirExprKind::Deref(Box::new(ret_ptr)),
+                    ty: ret_pointee,
+                    span,
+                };
+                Ok(HirExpr {
+                    kind: HirExprKind::Assign {
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(self.emit_cast(old, ret_pointee)),
+                    },
+                    ty: Ty::new_tuple(&[]),
+                    span,
+                })
+            }
+            "__atomic_compare_exchange" | "__atomic_compare_exchange_n" => {
+                // GCC 6-arg (desired by value for _n, by pointer otherwise),
+                // C11 3/5-arg (desired by value).
+                // True single-intrinsic CAS via `compare_exchange`, plus a
+                // write-back of `*expected` on failure for C11/GCC semantics.
+                // Returns `i32` 0/1 (`int` converts to `_Bool` implicitly,
+                // while `_Bool` does not convert back).
+                let desired_idx = if lowered.len() >= 6 {
+                    need(6)?;
+                    2
+                } else if lowered.len() >= 3 {
+                    need(3)?;
+                    2
+                } else {
+                    return Err(err(format!(
+                        "`{}` expects 3 or 6 arguments, got {}",
+                        op.0,
+                        lowered.len()
+                    )));
+                };
+                let exp_ptr = ptr_at(1)?;
+                let current = self.atomic_deref_ptr(exp_ptr.clone())?;
+                let desired = if Self::atomic_pointee_ty(lowered[desired_idx].ty).is_some()
+                    && lowered.len() >= 6
+                    && op.0 == "__atomic_compare_exchange"
+                {
+                    self.atomic_deref_ptr(lowered[desired_idx].clone())?
+                } else if Self::atomic_pointee_ty(lowered[desired_idx].ty).is_some()
+                    && op.0 == "__atomic_compare_exchange"
+                    && lowered.len() < 6
+                {
+                    // C11 spelling shares the canonical op but passes desired by value;
+                    // a pointer here would be a user error, still try deref.
+                    self.atomic_deref_ptr(lowered[desired_idx].clone())?
+                } else {
+                    lowered[desired_idx].clone()
+                };
+                let (place, _) = place_at(0)?;
+                let result = self.atomic_method(
+                    place.clone(),
+                    "compare_exchange",
+                    vec![current, desired, seqcst(), seqcst()],
+                    parser_span,
+                )?;
+                let ok_bool = self.atomic_method(result, "is_ok", vec![], parser_span)?;
+                let bool_ty = Ty::bool_ty();
+                let ok_local = locals.alloc(HirLocal {
+                    name: "__co2_atomic_ok".to_string(),
+                    ty: bool_ty,
+                    span,
+                    read_only: false,
+                });
+                let ok_place = || HirExpr {
+                    kind: HirExprKind::Local(ok_local),
+                    ty: bool_ty,
+                    span,
+                };
+                // On failure refresh `*expected` with an atomic load (the
+                // single-threaded value is exact; under contention it is a
+                // fresh atomic read, still race-free).
+                let loaded = self.atomic_method(place, "load", vec![seqcst()], parser_span)?;
+                let Some(exp_pointee) = Self::atomic_pointee_ty(exp_ptr.ty) else {
+                    return Err(err(format!(
+                        "atomic expected pointer must be a pointer, got {}",
+                        self.format_ty(exp_ptr.ty)
+                    )));
+                };
+                let writeback = HirExpr {
+                    kind: HirExprKind::Assign {
+                        lhs: Box::new(HirExpr {
+                            kind: HirExprKind::Deref(Box::new(exp_ptr)),
+                            ty: exp_pointee,
+                            span,
+                        }),
+                        rhs: Box::new(self.emit_cast(loaded, exp_pointee)),
+                    },
+                    ty: exp_pointee,
+                    span,
+                };
+                let int_ty = Ty::signed_ty(IntTy::I32);
+                Ok(HirExpr {
+                    kind: HirExprKind::StatementExpr {
+                        statements: vec![
+                            HirStmt::Decl(HirDecl {
+                                local: ok_local,
+                                initializer: Some(ok_bool),
+                                span,
+                            }),
+                            HirStmt::If {
+                                cond: HirExpr {
+                                    kind: HirExprKind::LogicalNot(Box::new(ok_place())),
+                                    ty: bool_ty,
+                                    span,
+                                },
+                                then_stmts: vec![HirStmt::Expr(writeback)],
+                                else_stmts: vec![],
+                                span,
+                            },
+                        ],
+                        tail: Box::new(HirExpr {
+                            kind: HirExprKind::Cast(Box::new(ok_place())),
+                            ty: int_ty,
+                            span,
+                        }),
+                    },
+                    ty: int_ty,
+                    span,
+                })
+            }
+            "__sync_bool_compare_and_swap" => {
+                need(3)?;
+                let (place, _) = place_at(0)?;
+                let result = self.atomic_method(
+                    place,
+                    "compare_exchange",
+                    vec![lowered[1].clone(), lowered[2].clone(), seqcst(), seqcst()],
+                    parser_span,
+                )?;
+                let ok = self.atomic_method(result, "is_ok", vec![], parser_span)?;
+                Ok(self.emit_cast(ok, Ty::signed_ty(IntTy::I32)))
+            }
+            "__sync_val_compare_and_swap" => {
+                need(3)?;
+                // Single-threaded exact (load-check-store; under contention a
+                // fresh race-free sequence, not one intrinsic): return previous.
+                let (place, pointee) = place_at(0)?;
+                let actual = self.atomic_method(place.clone(), "load", vec![seqcst()], parser_span)?;
+                let actual_local = locals.alloc(HirLocal {
+                    name: "__co2_atomic_prev".to_string(),
+                    ty: pointee,
+                    span,
+                    read_only: false,
+                });
+                let actual_place = || HirExpr {
+                    kind: HirExprKind::Local(actual_local),
+                    ty: pointee,
+                    span,
+                };
+                let cmp = self.lower_binop_from_lowered(
+                    actual_place(),
+                    lowered[1].clone(),
+                    ParsedBinOp::Eq,
+                    span,
+                    parser_span,
+                    false,
+                )?;
+                let store = self.atomic_method(
+                    place,
+                    "store",
+                    vec![lowered[2].clone(), seqcst()],
+                    parser_span,
+                )?;
+                Ok(HirExpr {
+                    kind: HirExprKind::StatementExpr {
+                        statements: vec![
+                            HirStmt::Decl(HirDecl {
+                                local: actual_local,
+                                initializer: Some(actual),
+                                span,
+                            }),
+                            HirStmt::If {
+                                cond: self.condition_to_bool(cmp, parser_span),
+                                then_stmts: vec![HirStmt::Expr(store)],
+                                else_stmts: vec![],
+                                span,
+                            },
+                        ],
+                        tail: Box::new(actual_place()),
+                    },
+                    ty: pointee,
+                    span,
+                })
+            }
+            "__sync_lock_test_and_set" | "__atomic_test_and_set" => {
+                need(1)?;
+                let val = if lowered.len() >= 2 {
+                    if Self::atomic_pointee_ty(lowered[1].ty).is_some() {
+                        self.atomic_deref_ptr(lowered[1].clone())?
+                    } else {
+                        lowered[1].clone()
+                    }
+                } else {
+                    // `atomic_flag_test_and_set(ptr)` with no value: set to 1/true.
+                    let (_, pointee) = place_at(0)?;
+                    if matches!(pointee.kind(), TyKind::RigidTy(RigidTy::Bool)) {
+                        HirExpr {
+                            kind: HirExprKind::ConstInt(1),
+                            ty: Ty::bool_ty(),
+                            span,
+                        }
+                    } else {
+                        HirExpr {
+                            kind: HirExprKind::ConstInt(1),
+                            ty: pointee,
+                            span,
+                        }
+                    }
+                };
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "swap", vec![val, seqcst()], parser_span)
+            }
+            "__sync_lock_release" | "__atomic_clear" => {
+                need(1)?;
+                let (place, pointee) = place_at(0)?;
+                let zero = if matches!(pointee.kind(), TyKind::RigidTy(RigidTy::Bool)) {
+                    HirExpr {
+                        kind: HirExprKind::ConstInt(0),
+                        ty: Ty::bool_ty(),
+                        span,
+                    }
+                } else {
+                    HirExpr {
+                        kind: HirExprKind::Zeroed,
+                        ty: pointee,
+                        span,
+                    }
+                };
+                self.atomic_method(place, "store", vec![zero, seqcst()], parser_span)
+            }
+            "__atomic_thread_fence" | "__sync_synchronize" => Ok(self.wellknown_call(
+                self.wellknown_defs.atomic_fence,
+                vec![],
+                vec![seqcst()],
+                span,
+            )),
+            "__atomic_signal_fence" => Ok(self.wellknown_call(
+                self.wellknown_defs.atomic_compiler_fence,
+                vec![],
+                vec![seqcst()],
+                span,
+            )),
+            _ => Err(err(format!("unsupported atomic operation `{}`", op.0))),
+        }
     }
 
     /// Project the `re` (`is_re == true`) or `im` part of a complex expression.

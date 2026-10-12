@@ -551,6 +551,10 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
                 re: re.transform(b),
                 im: im.transform(b),
             },
+            Expression::Atomic { op, args } => Expression::Atomic {
+                op: op.clone(),
+                args: args.transform(b),
+            },
         }
     }
 }

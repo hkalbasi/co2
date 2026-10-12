@@ -43,6 +43,9 @@ pub fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> boo
                     .iter()
                     .any(|param| expr_contains_label_address(&param.0))
         }
+        Expression::Atomic { args, .. } => args
+            .iter()
+            .any(|param| expr_contains_label_address(&param.0)),
         Expression::MethodCall {
             receiver, params, ..
         } => {

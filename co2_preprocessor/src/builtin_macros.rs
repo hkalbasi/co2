@@ -30,7 +30,6 @@ pub fn define_builtin_macros(macros: &mut MacroTable) {
     // <assert.h> will correctly get a compilation error.
     define_type_traits_macros(macros);
     define_builtin_expect_macros(macros);
-    define_sync_macros(macros);
 }
 
 /// <limits.h> macros for LP64 (x86-64 Linux)
@@ -212,40 +211,6 @@ fn define_stdatomic_macros(macros: &mut MacroTable) {
     // when stdatomic.h is not skipped, the header's own enum defines them.
     // Defining them as macros would break `typedef enum { memory_order_relaxed = ... }`.
     // They are provided by the header itself (or via fallback when skipped).
-
-    // ponytail: provide __atomic_load for system header's atomic_load macro (3-arg)
-    macros.define(macro_def_from_parts(
-        "__atomic_load".to_string(),
-        true,
-        vec!["ptr".to_string(), "ret".to_string(), "order".to_string()],
-        false,
-        false,
-        "(*(ret) = *(ptr))".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_store".to_string(),
-        true,
-        vec!["ptr".to_string(), "val".to_string(), "order".to_string()],
-        false,
-        false,
-        "(*(ptr) = *(val))".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_thread_fence".to_string(),
-        true,
-        vec!["order".to_string()],
-        false,
-        false,
-        "((void)0)".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_signal_fence".to_string(),
-        true,
-        vec!["order".to_string()],
-        false,
-        false,
-        "((void)0)".to_string(),
-    ));
 }
 
 /// <float.h> macros
@@ -419,9 +384,6 @@ fn define_type_traits_macros(macros: &mut MacroTable) {
     // C11/C17 feature test macros
     def(macros, "__STDC_UTF_16__", "1");
     def(macros, "__STDC_UTF_32__", "1");
-    def(macros, "__STDC_NO_ATOMICS__", "1");
-    // Note: We support _Complex types, so __STDC_NO_COMPLEX__ is NOT defined.
-    // __STDC_NO_THREADS__ is NOT defined because we link against glibc which provides <threads.h>
     def(macros, "__STDC_NO_VLA__", "1");
 
     // EXIT_SUCCESS and EXIT_FAILURE from <stdlib.h>
@@ -481,200 +443,5 @@ fn define_builtin_expect_macros(macros: &mut MacroTable) {
         false,
         // Return just the first argument, ignoring the hint
         "x".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_fetch_add".to_string(),
-        true,
-        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        false,
-        false,
-        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) += (arg); __co2_old; })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_fetch_sub".to_string(),
-        true,
-        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        false,
-        false,
-        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) -= (arg); __co2_old; })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_fetch_or".to_string(),
-        true,
-        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        false,
-        false,
-        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) |= (arg); __co2_old; })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_fetch_xor".to_string(),
-        true,
-        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        false,
-        false,
-        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) ^= (arg); __co2_old; })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_fetch_and".to_string(),
-        true,
-        vec!["obj".to_string(), "arg".to_string(), "order".to_string()],
-        false,
-        false,
-        "({ __typeof__(*(obj)) __co2_old = *(obj); *(obj) &= (arg); __co2_old; })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_load_n".to_string(),
-        true,
-        vec!["obj".to_string(), "order".to_string()],
-        false,
-        false,
-        "(*(obj))".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_store_n".to_string(),
-        true,
-        vec![
-            "obj".to_string(),
-            "desired".to_string(),
-            "order".to_string(),
-        ],
-        false,
-        false,
-        "((*(obj)) = (desired))".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_compare_exchange_n".to_string(),
-        true,
-        vec![
-            "obj".to_string(),
-            "expected".to_string(),
-            "desired".to_string(),
-            "weak".to_string(),
-            "success".to_string(),
-            "failure".to_string(),
-        ],
-        false,
-        false,
-        "({ int __co2_ok = (*(obj)) == (*(expected)); if (__co2_ok) { *(obj) = (desired); } else { *(expected) = *(obj); } __co2_ok; })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__atomic_compare_exchange".to_string(),
-        true,
-        vec![
-            "obj".to_string(),
-            "expected".to_string(),
-            "desired".to_string(),
-            "weak".to_string(),
-            "success".to_string(),
-            "failure".to_string(),
-        ],
-        false,
-        false,
-        "({ int __co2_ok = (*(obj)) == (*(expected)); if (__co2_ok) { *(obj) = (*(desired)); } else { *(expected) = *(obj); } __co2_ok; })".to_string(),
-    ));
-}
-
-/// Legacy GCC `__sync_*` atomic builtins (full barrier; orders don't apply).
-/// Same lowering strategy as the `__atomic_*` family above.
-fn define_sync_macros(macros: &mut MacroTable) {
-    const FETCH_OPS: &[(&str, &str)] = &[
-        ("__sync_fetch_and_add", "+="),
-        ("__sync_fetch_and_sub", "-="),
-        ("__sync_fetch_and_or", "|="),
-        ("__sync_fetch_and_and", "&="),
-        ("__sync_fetch_and_xor", "^="),
-    ];
-    for (name, op) in FETCH_OPS {
-        macros.define(macro_def_from_parts(
-            name.to_string(),
-            true,
-            vec!["ptr".to_string(), "val".to_string()],
-            false,
-            false,
-            format!("({{ __typeof__(*(ptr)) __co2_old = *(ptr); *(ptr) {op} (val); __co2_old; }})"),
-        ));
-    }
-    macros.define(macro_def_from_parts(
-        "__sync_fetch_and_nand".to_string(),
-        true,
-        vec!["ptr".to_string(), "val".to_string()],
-        false,
-        false,
-        "({ __typeof__(*(ptr)) __co2_old = *(ptr); *(ptr) = ~(*(ptr) & (val)); __co2_old; })"
-            .to_string(),
-    ));
-    const FETCH_AFTER_OPS: &[(&str, &str)] = &[
-        ("__sync_add_and_fetch", "+="),
-        ("__sync_sub_and_fetch", "-="),
-        ("__sync_or_and_fetch", "|="),
-        ("__sync_and_and_fetch", "&="),
-        ("__sync_xor_and_fetch", "^="),
-    ];
-    for (name, op) in FETCH_AFTER_OPS {
-        macros.define(macro_def_from_parts(
-            name.to_string(),
-            true,
-            vec!["ptr".to_string(), "val".to_string()],
-            false,
-            false,
-            format!("({{ *(ptr) {op} (val); *(ptr); }})"),
-        ));
-    }
-    macros.define(macro_def_from_parts(
-        "__sync_nand_and_fetch".to_string(),
-        true,
-        vec!["ptr".to_string(), "val".to_string()],
-        false,
-        false,
-        "({ *(ptr) = ~(*(ptr) & (val)); *(ptr); })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__sync_bool_compare_and_swap".to_string(),
-        true,
-        vec![
-            "ptr".to_string(),
-            "oldval".to_string(),
-            "newval".to_string(),
-        ],
-        false,
-        false,
-        "({ int __co2_ok = (*(ptr)) == (oldval); if (__co2_ok) { *(ptr) = (newval); } __co2_ok; })"
-            .to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__sync_val_compare_and_swap".to_string(),
-        true,
-        vec![
-            "ptr".to_string(),
-            "oldval".to_string(),
-            "newval".to_string(),
-        ],
-        false,
-        false,
-        "({ __typeof__(*(ptr)) __co2_old = *(ptr); if (__co2_old == (oldval)) { *(ptr) = (newval); } __co2_old; })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__sync_lock_test_and_set".to_string(),
-        true,
-        vec!["ptr".to_string(), "val".to_string()],
-        false,
-        false,
-        "({ __typeof__(*(ptr)) __co2_old = *(ptr); *(ptr) = (val); __co2_old; })".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__sync_lock_release".to_string(),
-        true,
-        vec!["ptr".to_string()],
-        false,
-        false,
-        "((*(ptr) = 0))".to_string(),
-    ));
-    macros.define(macro_def_from_parts(
-        "__sync_synchronize".to_string(),
-        true,
-        Vec::new(),
-        false,
-        false,
-        "((void)0)".to_string(),
     ));
 }

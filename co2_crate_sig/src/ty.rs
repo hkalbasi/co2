@@ -1449,7 +1449,9 @@ impl LocalResolverBase {
                     ))
                 }
             }
-            Expression::Call { .. } => Err(spanned_error(*span, "cannot call non-const function")),
+            Expression::Call { .. } | Expression::Atomic { .. } => {
+                Err(spanned_error(*span, "cannot call non-const function"))
+            }
             _ => Err(spanned_error(*span, "unsupported constant expression")),
         }
     }

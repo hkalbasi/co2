@@ -1,0 +1,74 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-miri
+
+// C11 and GNU atomics lower to real `core::sync::atomic` operations
+// (always at SeqCst), so every cross-thread op below is race-free under
+// Miri. `join` synchronizes the end of the worker.
+//
+// Uses `std::thread::spawn` instead of `pthread_create`: passing a C function
+// pointer to `pthread_create` currently ICEs Miri (MaybeUninit fn pointer
+// read in the pthread shim), while Rust thread spawning works.
+
+use std::thread;
+
+#include <stdatomic.h>
+
+_Atomic int counter = 0;
+int sync_word = 0;
+int cas_word = 0;
+int lock_word = 0;
+
+fn worker() -> i32 {
+    (void)__atomic_fetch_add(&counter, 1, __ATOMIC_SEQ_CST);
+    (void)__atomic_fetch_sub(&counter, 1, __ATOMIC_SEQ_CST);
+    (void)__atomic_fetch_or(&counter, 1, __ATOMIC_SEQ_CST);
+    (void)__atomic_fetch_and(&counter, 1, __ATOMIC_SEQ_CST);
+    (void)__atomic_fetch_xor(&counter, 1, __ATOMIC_SEQ_CST);
+    int snapshot = __atomic_load_n(&counter, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&counter, snapshot, __ATOMIC_SEQ_CST);
+    int slot = 0;
+    __atomic_load(&counter, &slot, __ATOMIC_SEQ_CST);
+    __atomic_store(&counter, &slot, __ATOMIC_SEQ_CST);
+    int expected = slot;
+    (void)__atomic_compare_exchange_n(&counter, &expected, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    int desired = 2;
+    (void)__atomic_compare_exchange(&counter, &expected, &desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    (void)__sync_fetch_and_add(&sync_word, 1);
+    (void)__sync_fetch_and_sub(&sync_word, 1);
+    (void)__sync_fetch_and_or(&sync_word, 1);
+    (void)__sync_fetch_and_and(&sync_word, 1);
+    (void)__sync_fetch_and_xor(&sync_word, 1);
+    (void)__sync_fetch_and_nand(&sync_word, 1);
+    (void)__sync_add_and_fetch(&sync_word, 1);
+    (void)__sync_sub_and_fetch(&sync_word, 1);
+    (void)__sync_or_and_fetch(&sync_word, 1);
+    (void)__sync_and_and_fetch(&sync_word, 1);
+    (void)__sync_xor_and_fetch(&sync_word, 1);
+    (void)__sync_nand_and_fetch(&sync_word, 1);
+    (void)__sync_bool_compare_and_swap(&cas_word, 0, 1);
+    (void)__sync_val_compare_and_swap(&cas_word, 1, 2);
+    (void)__sync_lock_test_and_set(&lock_word, 1);
+    __sync_lock_release(&lock_word);
+    (void)atomic_fetch_add(&counter, 1);
+    (void)atomic_fetch_sub(&counter, 1);
+    (void)atomic_fetch_or(&counter, 1);
+    (void)atomic_fetch_and(&counter, 1);
+    (void)atomic_fetch_xor(&counter, 1);
+    (void)atomic_load(&counter);
+    atomic_store(&counter, 0);
+    int exp = 0;
+    (void)atomic_compare_exchange_strong(&counter, &exp, 1);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    __sync_synchronize();
+    return 0;
+}
+
+fn main() {
+    std::thread::JoinHandle::<i32> h = std::thread::spawn(worker);
+    (void)__atomic_fetch_add(&counter, 1, __ATOMIC_SEQ_CST);
+    (void)__sync_fetch_and_add(&sync_word, 1);
+    (void)atomic_fetch_add(&counter, 1);
+    (void)h.join().unwrap();
+}

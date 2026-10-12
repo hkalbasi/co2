@@ -1477,7 +1477,9 @@ impl HirCtx<'_> {
                 )?;
                 self.eval_const_expr_in_scope(&expr, locals, local_map)
             }
-            Expression::Call { .. } => Err(spanned_error(*span, "cannot call non-const function")),
+            Expression::Call { .. } | Expression::Atomic { .. } => {
+                Err(spanned_error(*span, "cannot call non-const function"))
+            }
             _ => Err(spanned_error(*span, "unsupported constant expression")),
         }
     }

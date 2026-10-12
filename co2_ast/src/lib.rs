@@ -243,6 +243,10 @@ pub enum Expression<R: TypeResolver> {
         re: Box<Spanned<Expression<R>>>,
         im: Box<Spanned<Expression<R>>>,
     },
+    Atomic {
+        op: Spanned<String>,
+        args: Vec<Spanned<Expression<R>>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1717,4 +1721,72 @@ pub fn parse_unsigned_integer_constant(text: &str) -> Option<u128> {
     }
 
     text.parse::<u128>().ok()
+}
+
+/// Map an atomic builtin spelling to its canonical `__atomic_*`/`__sync_*`
+/// operation. Direct builtins map to themselves; `<stdatomic.h>` generics
+/// map to the `__atomic_*` op they expand to. `None` for anything else, so
+/// the parser only forms an [`Expression::Atomic`] node for real builtins
+/// (bypassing path resolution entirely — no resolver seeding needed).
+pub fn atomic_builtin_inner(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "__atomic_fetch_add" => "__atomic_fetch_add",
+        "__atomic_fetch_sub" => "__atomic_fetch_sub",
+        "__atomic_fetch_or" => "__atomic_fetch_or",
+        "__atomic_fetch_and" => "__atomic_fetch_and",
+        "__atomic_fetch_xor" => "__atomic_fetch_xor",
+        "__atomic_fetch_nand" => "__atomic_fetch_nand",
+        "__atomic_add_fetch" => "__atomic_add_fetch",
+        "__atomic_sub_fetch" => "__atomic_sub_fetch",
+        "__atomic_or_fetch" => "__atomic_or_fetch",
+        "__atomic_and_fetch" => "__atomic_and_fetch",
+        "__atomic_xor_fetch" => "__atomic_xor_fetch",
+        "__atomic_nand_fetch" => "__atomic_nand_fetch",
+        "__atomic_load_n" => "__atomic_load_n",
+        "__atomic_store_n" => "__atomic_store_n",
+        "__atomic_load" => "__atomic_load",
+        "__atomic_store" => "__atomic_store",
+        "__atomic_exchange" => "__atomic_exchange",
+        "__atomic_exchange_n" => "__atomic_exchange_n",
+        "__atomic_compare_exchange" => "__atomic_compare_exchange",
+        "__atomic_compare_exchange_n" => "__atomic_compare_exchange_n",
+        "__atomic_test_and_set" => "__atomic_test_and_set",
+        "__atomic_clear" => "__atomic_clear",
+        "__atomic_thread_fence" => "__atomic_thread_fence",
+        "__atomic_signal_fence" => "__atomic_signal_fence",
+        "__sync_fetch_and_add" => "__sync_fetch_and_add",
+        "__sync_fetch_and_sub" => "__sync_fetch_and_sub",
+        "__sync_fetch_and_or" => "__sync_fetch_and_or",
+        "__sync_fetch_and_and" => "__sync_fetch_and_and",
+        "__sync_fetch_and_xor" => "__sync_fetch_and_xor",
+        "__sync_fetch_and_nand" => "__sync_fetch_and_nand",
+        "__sync_add_and_fetch" => "__sync_add_and_fetch",
+        "__sync_sub_and_fetch" => "__sync_sub_and_fetch",
+        "__sync_or_and_fetch" => "__sync_or_and_fetch",
+        "__sync_and_and_fetch" => "__sync_and_and_fetch",
+        "__sync_xor_and_fetch" => "__sync_xor_and_fetch",
+        "__sync_nand_and_fetch" => "__sync_nand_and_fetch",
+        "__sync_bool_compare_and_swap" => "__sync_bool_compare_and_swap",
+        "__sync_val_compare_and_swap" => "__sync_val_compare_and_swap",
+        "__sync_lock_test_and_set" => "__sync_lock_test_and_set",
+        "__sync_lock_release" => "__sync_lock_release",
+        "__sync_synchronize" => "__sync_synchronize",
+        "atomic_fetch_add_explicit" | "atomic_fetch_add" => "__atomic_fetch_add",
+        "atomic_fetch_sub_explicit" | "atomic_fetch_sub" => "__atomic_fetch_sub",
+        "atomic_fetch_or_explicit" | "atomic_fetch_or" => "__atomic_fetch_or",
+        "atomic_fetch_and_explicit" | "atomic_fetch_and" => "__atomic_fetch_and",
+        "atomic_fetch_xor_explicit" | "atomic_fetch_xor" => "__atomic_fetch_xor",
+        "atomic_load_explicit" | "atomic_load" => "__atomic_load",
+        "atomic_store_explicit" | "atomic_init" | "atomic_store" => "__atomic_store",
+        "atomic_exchange_explicit" | "atomic_exchange" => "__atomic_exchange",
+        "atomic_compare_exchange_strong_explicit"
+        | "atomic_compare_exchange_strong"
+        | "atomic_compare_exchange_weak_explicit"
+        | "atomic_compare_exchange_weak" => "__atomic_compare_exchange",
+        "atomic_thread_fence" => "__atomic_thread_fence",
+        "atomic_signal_fence" => "__atomic_signal_fence",
+        "atomic_flag_test_and_set_explicit" | "atomic_flag_test_and_set" => "__atomic_test_and_set",
+        "atomic_flag_clear_explicit" | "atomic_flag_clear" => "__atomic_clear",
+        _ => return None,
+    })
 }

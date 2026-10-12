@@ -891,6 +891,14 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Expression<R>> {
                     im.pretty_print(pp);
                 });
             }
+            Expression::Atomic { op, args } => {
+                pp.node("Atomic", &sp, |pp| {
+                    pp.leaf_data("Op", &fmt_span(&op.1, pp.config), &op.0);
+                    for a in args {
+                        a.pretty_print(pp);
+                    }
+                });
+            }
         }
     }
 }

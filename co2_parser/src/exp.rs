@@ -660,6 +660,28 @@ fn parse_primary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression
         }
         Some(Token::Lt) => return parse_ufcs_path(p, start),
         Some(Token::Ident(_)) | Some(Token::ColonColon) => {
+            // Atomic builtins are syntax, not paths: intercept `__atomic_*`,
+            // `__sync_*` (and bare `atomic_*`) calls before path resolution,
+            // so `(void)__atomic_fetch_add(...)` parses even though the name
+            // never resolves as a value.
+            if let Some(Token::Ident(name)) = p.peek(0) {
+                let name = name.clone();
+                if matches!(p.peek(1), Some(Token::LParen)) {
+                    if let Some(inner) = co2_ast::atomic_builtin_inner(&name) {
+                        let name_span = p.peek_span(0);
+                        p.pos += 1;
+                        let args = parse_call_args(p)?;
+                        let span = p.span_since(start);
+                        return Ok((
+                            Expression::Atomic {
+                                op: (inner.to_string(), name_span),
+                                args,
+                            },
+                            span,
+                        ));
+                    }
+                }
+            }
             return parse_normal_path(p, start);
         }
         Some(Token::StringLit(_)) => {

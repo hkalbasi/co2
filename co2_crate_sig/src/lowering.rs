@@ -58,6 +58,16 @@ pub struct WellknownDefs {
     pub offset_const: FnDef,
     pub offset_from: FnDef,
     pub zeroed: FnDef,
+    /// The generic `core::sync::atomic::Atomic` ADT, for enumerating its
+    /// inherent impls during atomic method resolution (impls are matched
+    /// by Self type so same-named methods on different widths cannot be
+    /// confused).
+    pub atomic_adt: AdtDef,
+    pub atomic_ordering: AdtDef,
+    /// Variant index of `Ordering::SeqCst` for SeqCst atomic lowering.
+    pub atomic_ordering_seqcst: usize,
+    pub atomic_fence: FnDef,
+    pub atomic_compiler_fence: FnDef,
 }
 
 fn has_const_qualifier_in_decl_specs(
@@ -510,6 +520,7 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         Expression::Call { func, params } => {
             expr_contains_local(&func.0) || params.iter().any(|param| expr_contains_local(&param.0))
         }
+        Expression::Atomic { args, .. } => args.iter().any(|param| expr_contains_local(&param.0)),
         Expression::MethodCall {
             receiver, params, ..
         } => {
@@ -2492,6 +2503,16 @@ pub fn lower_crate_sig(
         )
     };
 
+    let atomic_adt = AdtDef(ctx.resolve("core::sync::atomic::Atomic").unwrap().0);
+    let atomic_ordering = AdtDef(ctx.resolve("core::sync::atomic::Ordering").unwrap().0);
+    // ponytail: all orders strengthened to SeqCst; per-ordering lowering only if measurable.
+    let atomic_ordering_seqcst = atomic_ordering
+        .variants_iter()
+        .enumerate()
+        .find(|(_, v)| v.name() == "SeqCst")
+        .map(|(i, _)| i)
+        .expect("Ordering::SeqCst variant");
+
     let defs = WellknownDefs {
         maybe_uninit: AdtDef(ctx.resolve("core::mem::MaybeUninit").unwrap().0),
         maybe_uninit_uninit: FnDef(
@@ -2541,6 +2562,11 @@ pub fn lower_crate_sig(
             ),
             "offset_from",
         ),
+        atomic_adt,
+        atomic_ordering,
+        atomic_ordering_seqcst,
+        atomic_fence: FnDef(ctx.resolve("core::sync::atomic::fence").unwrap().0),
+        atomic_compiler_fence: FnDef(ctx.resolve("core::sync::atomic::compiler_fence").unwrap().0),
     };
     (
         HirStructure {
