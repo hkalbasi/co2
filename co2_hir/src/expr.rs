@@ -6,7 +6,7 @@ use co2_ast::{
     Initializer, IntegerSuffix, RustTy, Spanned, Statement, StatementOrDeclaration, StringLiteral,
     StringLiteralPrefix, TypeName, UnaryOp as ParsedUnaryOp, UpdateOp as ParsedUpdateOp,
 };
-use co2_crate_sig::{LocalResolver, LogicalAdtFieldKind, MethodResolutionKind};
+use co2_crate_sig::{AtomicOrder, LocalResolver, LogicalAdtFieldKind, MethodResolutionKind};
 use la_arena::Arena;
 use rustc_public_generative::rustc_public::{
     CrateDef, CrateDefType, CrateItem, DefId,
@@ -18,7 +18,7 @@ use rustc_public_generative::rustc_public::{
     },
 };
 
-use crate::initializer_tree::InitializerTree;
+use crate::initializer_tree::{InitializerTree, eval_const_int};
 use crate::item::{HirLocal, LocalId};
 use crate::resolver::invalid_span;
 use crate::resolver::{HirCtx, ResolvedValue, spanned_error};
@@ -3985,8 +3985,8 @@ impl HirCtx<'_> {
         )
     }
 
-    /// `Ordering::SeqCst` value (all C orders strengthened to SeqCst).
-    fn atomic_seqcst(&self, span: RustSpan) -> HirExpr {
+    /// `Ordering::<order>` value for an atomic op.
+    fn atomic_ordering(&self, order: AtomicOrder, span: RustSpan) -> HirExpr {
         let ty = Ty::from_rigid_kind(RigidTy::Adt(
             self.wellknown_defs.atomic_ordering,
             GenericArgs(vec![]),
@@ -3994,11 +3994,160 @@ impl HirCtx<'_> {
         HirExpr {
             kind: HirExprKind::Aggregate {
                 args: vec![],
-                variant: self.wellknown_defs.atomic_ordering_seqcst,
+                variant: self.wellknown_defs.atomic_ordering_variants[order as usize],
             },
             ty,
             span,
         }
+    }
+
+    /// Read a constant C memory-order arg (`__ATOMIC_*` / `memory_order_*`
+    /// codes 0-5); `None` when absent or non-constant, where callers fall
+    /// back to SeqCst (the C11 default and the safe strengthening).
+    fn atomic_order_code(lowered: &[HirExpr], idx: usize) -> Option<i128> {
+        lowered.get(idx).and_then(eval_const_int)
+    }
+
+    /// Map a C order code to a Rust `Ordering` for read-modify-write ops
+    /// (`fetch_*`, `*_fetch`, exchange, CAS success): every order is valid,
+    /// consume becomes acquire (Rust has no consume).
+    fn atomic_rmw_order(
+        &self,
+        code: Option<i128>,
+        op: &str,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let order = match code.unwrap_or(5) {
+            0 => AtomicOrder::Relaxed,
+            1 | 2 => AtomicOrder::Acquire,
+            3 => AtomicOrder::Release,
+            4 => AtomicOrder::AcqRel,
+            5 => AtomicOrder::SeqCst,
+            v => {
+                return Err(spanned_error(
+                    parser_span,
+                    format!("`{op}` expects a memory order 0-5, got {v}"),
+                ));
+            }
+        };
+        Ok(self.atomic_ordering(order, span))
+    }
+
+    /// Map a C order code for atomic loads: release/acq_rel are invalid C here.
+    fn atomic_load_order(
+        &self,
+        code: Option<i128>,
+        op: &str,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let order = match code.unwrap_or(5) {
+            0 => AtomicOrder::Relaxed,
+            1 | 2 => AtomicOrder::Acquire,
+            5 => AtomicOrder::SeqCst,
+            v => {
+                return Err(spanned_error(
+                    parser_span,
+                    format!("`{op}` cannot load with memory order {v} (use 0, 1, 2 or 5)"),
+                ));
+            }
+        };
+        Ok(self.atomic_ordering(order, span))
+    }
+
+    /// Map a C order code for atomic stores: consume/acquire/acq_rel are invalid C here.
+    fn atomic_store_order(
+        &self,
+        code: Option<i128>,
+        op: &str,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let order = match code.unwrap_or(5) {
+            0 => AtomicOrder::Relaxed,
+            3 => AtomicOrder::Release,
+            5 => AtomicOrder::SeqCst,
+            v => {
+                return Err(spanned_error(
+                    parser_span,
+                    format!("`{op}` cannot store with memory order {v} (use 0, 3 or 5)"),
+                ));
+            }
+        };
+        Ok(self.atomic_ordering(order, span))
+    }
+
+    /// Map C success/failure order codes for CAS. Failure must be
+    /// relaxed/consume/acquire/seq_cst like in C, and Rust panics when
+    /// failure is stronger than success, so narrow invalid-C combos down to
+    /// the strongest failure the success ordering allows.
+    fn atomic_cas_orders(
+        &self,
+        succ_code: Option<i128>,
+        fail_code: Option<i128>,
+        op: &str,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+    ) -> Result<(HirExpr, HirExpr), (co2_ast::Span, String)> {
+        let succ = match succ_code.unwrap_or(5) {
+            0 => AtomicOrder::Relaxed,
+            1 | 2 => AtomicOrder::Acquire,
+            3 => AtomicOrder::Release,
+            4 => AtomicOrder::AcqRel,
+            5 => AtomicOrder::SeqCst,
+            v => {
+                return Err(spanned_error(
+                    parser_span,
+                    format!("`{op}` expects a success memory order 0-5, got {v}"),
+                ));
+            }
+        };
+        let mut fail = match fail_code.unwrap_or(5) {
+            0 => AtomicOrder::Relaxed,
+            1 | 2 => AtomicOrder::Acquire,
+            5 => AtomicOrder::SeqCst,
+            v => {
+                return Err(spanned_error(
+                    parser_span,
+                    format!("`{op}` cannot fail with memory order {v} (use 0, 1, 2 or 5)"),
+                ));
+            }
+        };
+        let strength = |o: AtomicOrder| match o {
+            AtomicOrder::Relaxed => 0,
+            AtomicOrder::Acquire | AtomicOrder::Release => 1,
+            AtomicOrder::AcqRel => 2,
+            AtomicOrder::SeqCst => 3,
+        };
+        if strength(fail) > strength(succ) {
+            fail = match succ {
+                AtomicOrder::SeqCst => AtomicOrder::SeqCst,
+                AtomicOrder::Relaxed => AtomicOrder::Relaxed,
+                _ => AtomicOrder::Acquire,
+            };
+        }
+        Ok((
+            self.atomic_ordering(succ, span),
+            self.atomic_ordering(fail, span),
+        ))
+    }
+
+    /// Order for an RMW op (`fetch_*`, `*_fetch`): the `__sync_*` legacy
+    /// builtins are full barriers (SeqCst); `__atomic_*` read order arg 2.
+    fn atomic_rmw_order_for_op(
+        &self,
+        op: &str,
+        lowered: &[HirExpr],
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let code = if op.starts_with("__sync_") {
+            None
+        } else {
+            Self::atomic_order_code(lowered, 2)
+        };
+        self.atomic_rmw_order(code, op, span, parser_span)
     }
 
     /// Pointee of a raw-pointer/reference atomic operand.
@@ -4143,8 +4292,9 @@ impl HirCtx<'_> {
             let pointee = Self::atomic_pointee_ty(ptr.ty).expect("checked");
             Ok((self.atomic_place(ptr, self.atomic_ty_for(pointee)), pointee))
         };
-        let seqcst = || self.atomic_seqcst(span);
-        // ponytail: every memory order strengthened to SeqCst; per-ordering only if measurable.
+        let seqcst = || self.atomic_ordering(AtomicOrder::SeqCst, span);
+        // `__sync_*` ops have no order arg (full barrier: SeqCst); `__atomic_*`
+        // and C11 explicit ops read theirs (absent/non-constant defaults to SeqCst).
         // ponytail: CAS failure refreshes *expected via a second atomic load (exact
         //   single-threaded; a fresh race-free read under contention); payload reuse when checked.
         // ponytail: val-CAS is load-check-store (single-threaded exact, race-free
@@ -4154,37 +4304,37 @@ impl HirCtx<'_> {
             "__atomic_fetch_add" | "__sync_fetch_and_add" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_add", vec![lowered[1].clone(), seqcst()], parser_span)
+                self.atomic_method(place, "fetch_add", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
             }
             "__atomic_fetch_sub" | "__sync_fetch_and_sub" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_sub", vec![lowered[1].clone(), seqcst()], parser_span)
+                self.atomic_method(place, "fetch_sub", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
             }
             "__atomic_fetch_or" | "__sync_fetch_and_or" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_or", vec![lowered[1].clone(), seqcst()], parser_span)
+                self.atomic_method(place, "fetch_or", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
             }
             "__atomic_fetch_and" | "__sync_fetch_and_and" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_and", vec![lowered[1].clone(), seqcst()], parser_span)
+                self.atomic_method(place, "fetch_and", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
             }
             "__atomic_fetch_xor" | "__sync_fetch_and_xor" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_xor", vec![lowered[1].clone(), seqcst()], parser_span)
+                self.atomic_method(place, "fetch_xor", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
             }
             "__atomic_fetch_nand" | "__sync_fetch_and_nand" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_nand", vec![lowered[1].clone(), seqcst()], parser_span)
+                self.atomic_method(place, "fetch_nand", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
             }
             "__atomic_add_fetch" | "__sync_add_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_add", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let old = self.atomic_method(place, "fetch_add", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4199,7 +4349,7 @@ impl HirCtx<'_> {
             "__atomic_sub_fetch" | "__sync_sub_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_sub", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let old = self.atomic_method(place, "fetch_sub", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4214,7 +4364,7 @@ impl HirCtx<'_> {
             "__atomic_or_fetch" | "__sync_or_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_or", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let old = self.atomic_method(place, "fetch_or", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4229,7 +4379,7 @@ impl HirCtx<'_> {
             "__atomic_and_fetch" | "__sync_and_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_and", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let old = self.atomic_method(place, "fetch_and", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4244,7 +4394,7 @@ impl HirCtx<'_> {
             "__atomic_xor_fetch" | "__sync_xor_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_xor", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let old = self.atomic_method(place, "fetch_xor", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4259,7 +4409,7 @@ impl HirCtx<'_> {
             "__atomic_nand_fetch" | "__sync_nand_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_nand", vec![lowered[1].clone(), seqcst()], parser_span)?;
+                let old = self.atomic_method(place, "fetch_nand", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
                 let ty = old.ty;
                 let anded = HirExpr {
                     kind: HirExprKind::Binary {
@@ -4279,24 +4429,31 @@ impl HirCtx<'_> {
             "__atomic_load_n" => {
                 need(1)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "load", vec![seqcst()], parser_span)
+                let order = self.atomic_load_order(Self::atomic_order_code(&lowered, 1), &op.0, span, parser_span)?;
+                self.atomic_method(place, "load", vec![order], parser_span)
             }
             "__atomic_store_n" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "store", vec![lowered[1].clone(), seqcst()], parser_span)
+                let order = self.atomic_store_order(Self::atomic_order_code(&lowered, 2), &op.0, span, parser_span)?;
+                self.atomic_method(place, "store", vec![lowered[1].clone(), order], parser_span)
             }
             "__atomic_load" => {
                 need(1)?;
+                // Order arg is at 1 for C11 `atomic_load(ptr[, order])`, at 2
+                // for GCC `__atomic_load(ptr, ret, order)`.
+                let order_idx = if lowered.len() == 3 { 2 } else { 1 };
                 if lowered.len() == 1 || lowered.len() == 2 {
                     // C11 `atomic_load(ptr[, order])` returns the value.
                     let (place, _) = place_at(0)?;
-                    return self.atomic_method(place, "load", vec![seqcst()], parser_span);
+                    let order = self.atomic_load_order(Self::atomic_order_code(&lowered, order_idx), &op.0, span, parser_span)?;
+                    return self.atomic_method(place, "load", vec![order], parser_span);
                 }
                 // GCC `__atomic_load(ptr, ret, order)`: `*ret = load()`.
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let loaded = self.atomic_method(place, "load", vec![seqcst()], parser_span)?;
+                let order = self.atomic_load_order(Self::atomic_order_code(&lowered, order_idx), &op.0, span, parser_span)?;
+                let loaded = self.atomic_method(place, "load", vec![order], parser_span)?;
                 let ret_ptr = ptr_at(1)?;
                 let Some(ret_pointee) = Self::atomic_pointee_ty(ret_ptr.ty) else {
                     return Err(err(format!(
@@ -4327,14 +4484,18 @@ impl HirCtx<'_> {
                     lowered[1].clone()
                 };
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "store", vec![val, seqcst()], parser_span)
+                let order = self.atomic_store_order(Self::atomic_order_code(&lowered, 2), &op.0, span, parser_span)?;
+                self.atomic_method(place, "store", vec![val, order], parser_span)
             }
             "__atomic_exchange_n" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "swap", vec![lowered[1].clone(), seqcst()], parser_span)
+                self.atomic_method(place, "swap", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
             }
             "__atomic_exchange" => {
+                // Order arg is at 2 for C11 `atomic_exchange(ptr, val[, order])`,
+                // at 3 for GCC `__atomic_exchange(ptr, val_ptr, ret_ptr, order)`.
+                let order_idx = if lowered.len() > 3 { 3 } else { 2 };
                 if lowered.len() <= 3 {
                     // C11 `atomic_exchange(ptr, val[, order])` returns old.
                     need(2)?;
@@ -4344,13 +4505,15 @@ impl HirCtx<'_> {
                         lowered[1].clone()
                     };
                     let (place, _) = place_at(0)?;
-                    return self.atomic_method(place, "swap", vec![val, seqcst()], parser_span);
+                    let order = self.atomic_rmw_order(Self::atomic_order_code(&lowered, order_idx), &op.0, span, parser_span)?;
+                    return self.atomic_method(place, "swap", vec![val, order], parser_span);
                 }
                 // GCC `__atomic_exchange(ptr, val_ptr, ret_ptr, order)`: `*ret = swap(*val)`.
                 need(3)?;
                 let val = self.atomic_deref_ptr(lowered[1].clone())?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "swap", vec![val, seqcst()], parser_span)?;
+                let order = self.atomic_rmw_order(Self::atomic_order_code(&lowered, order_idx), &op.0, span, parser_span)?;
+                let old = self.atomic_method(place, "swap", vec![val, order], parser_span)?;
                 let ret_ptr = ptr_at(2)?;
                 let Some(ret_pointee) = Self::atomic_pointee_ty(ret_ptr.ty) else {
                     return Err(err(format!(
@@ -4410,10 +4573,31 @@ impl HirCtx<'_> {
                     lowered[desired_idx].clone()
                 };
                 let (place, _) = place_at(0)?;
+                // Order args at 4/5 for GCC 6-arg, at 3/4 for C11 5-arg
+                // explicit; otherwise the C11 default of SeqCst/SeqCst.
+                let (succ_order, fail_order) = if lowered.len() >= 6 {
+                    self.atomic_cas_orders(
+                        Self::atomic_order_code(&lowered, 4),
+                        Self::atomic_order_code(&lowered, 5),
+                        &op.0,
+                        span,
+                        parser_span,
+                    )?
+                } else if lowered.len() >= 5 {
+                    self.atomic_cas_orders(
+                        Self::atomic_order_code(&lowered, 3),
+                        Self::atomic_order_code(&lowered, 4),
+                        &op.0,
+                        span,
+                        parser_span,
+                    )?
+                } else {
+                    (seqcst(), seqcst())
+                };
                 let result = self.atomic_method(
                     place.clone(),
                     "compare_exchange",
-                    vec![current, desired, seqcst(), seqcst()],
+                    vec![current, desired, succ_order, fail_order.clone()],
                     parser_span,
                 )?;
                 let ok_bool = self.atomic_method(result, "is_ok", vec![], parser_span)?;
@@ -4429,10 +4613,10 @@ impl HirCtx<'_> {
                     ty: bool_ty,
                     span,
                 };
-                // On failure refresh `*expected` with an atomic load (the
-                // single-threaded value is exact; under contention it is a
-                // fresh atomic read, still race-free).
-                let loaded = self.atomic_method(place, "load", vec![seqcst()], parser_span)?;
+                // On failure refresh `*expected` with a load at the failure
+                // ordering (the single-threaded value is exact; under
+                // contention it is a fresh atomic read, still race-free).
+                let loaded = self.atomic_method(place, "load", vec![fail_order], parser_span)?;
                 let Some(exp_pointee) = Self::atomic_pointee_ty(exp_ptr.ty) else {
                     return Err(err(format!(
                         "atomic expected pointer must be a pointer, got {}",
@@ -4545,36 +4729,48 @@ impl HirCtx<'_> {
                     span,
                 })
             }
-            "__sync_lock_test_and_set" | "__atomic_test_and_set" => {
-                need(1)?;
-                let val = if lowered.len() >= 2 {
-                    if Self::atomic_pointee_ty(lowered[1].ty).is_some() {
-                        self.atomic_deref_ptr(lowered[1].clone())?
-                    } else {
-                        lowered[1].clone()
-                    }
+            "__sync_lock_test_and_set" => {
+                need(2)?;
+                let val = if Self::atomic_pointee_ty(lowered[1].ty).is_some() {
+                    self.atomic_deref_ptr(lowered[1].clone())?
                 } else {
-                    // `atomic_flag_test_and_set(ptr)` with no value: set to 1/true.
-                    let (_, pointee) = place_at(0)?;
-                    if matches!(pointee.kind(), TyKind::RigidTy(RigidTy::Bool)) {
-                        HirExpr {
-                            kind: HirExprKind::ConstInt(1),
-                            ty: Ty::bool_ty(),
-                            span,
-                        }
-                    } else {
-                        HirExpr {
-                            kind: HirExprKind::ConstInt(1),
-                            ty: pointee,
-                            span,
-                        }
-                    }
+                    lowered[1].clone()
                 };
                 let (place, _) = place_at(0)?;
                 self.atomic_method(place, "swap", vec![val, seqcst()], parser_span)
             }
+            "__atomic_test_and_set" => {
+                need(1)?;
+                // `atomic_flag_test_and_set[_explicit](ptr[, order])`: the value
+                // is always set-true; arg 1 is the order, not a value.
+                let order = self.atomic_rmw_order(Self::atomic_order_code(&lowered, 1), &op.0, span, parser_span)?;
+                let (_, pointee) = place_at(0)?;
+                let val = if matches!(pointee.kind(), TyKind::RigidTy(RigidTy::Bool)) {
+                    HirExpr {
+                        kind: HirExprKind::ConstInt(1),
+                        ty: Ty::bool_ty(),
+                        span,
+                    }
+                } else {
+                    HirExpr {
+                        kind: HirExprKind::ConstInt(1),
+                        ty: pointee,
+                        span,
+                    }
+                };
+                let (place, _) = place_at(0)?;
+                self.atomic_method(place, "swap", vec![val, order], parser_span)
+            }
             "__sync_lock_release" | "__atomic_clear" => {
                 need(1)?;
+                // Order arg at 1 for `__atomic_clear`/`atomic_flag_clear_explicit`;
+                // `__sync_lock_release` has none (full barrier: SeqCst).
+                let code = if op.0.as_str() == "__atomic_clear" {
+                    Self::atomic_order_code(&lowered, 1)
+                } else {
+                    None
+                };
+                let order = self.atomic_store_order(code, &op.0, span, parser_span)?;
                 let (place, pointee) = place_at(0)?;
                 let zero = if matches!(pointee.kind(), TyKind::RigidTy(RigidTy::Bool)) {
                     HirExpr {
@@ -4589,20 +4785,62 @@ impl HirCtx<'_> {
                         span,
                     }
                 };
-                self.atomic_method(place, "store", vec![zero, seqcst()], parser_span)
+                self.atomic_method(place, "store", vec![zero, order], parser_span)
             }
-            "__atomic_thread_fence" | "__sync_synchronize" => Ok(self.wellknown_call(
-                self.wellknown_defs.atomic_fence,
-                vec![],
-                vec![seqcst()],
-                span,
-            )),
-            "__atomic_signal_fence" => Ok(self.wellknown_call(
-                self.wellknown_defs.atomic_compiler_fence,
-                vec![],
-                vec![seqcst()],
-                span,
-            )),
+            "__atomic_thread_fence" | "__sync_synchronize" => {
+                // `__sync_synchronize()` has no order arg (full barrier).
+                // Rust's `fence` panics on relaxed, so a relaxed thread fence
+                // (no hardware effect in C) becomes a compiler barrier.
+                let order = match Self::atomic_order_code(&lowered, 0).unwrap_or(5) {
+                    0 => {
+                        return Ok(self.wellknown_call(
+                            self.wellknown_defs.atomic_compiler_fence,
+                            vec![],
+                            vec![seqcst()],
+                            span,
+                        ));
+                    }
+                    1 | 2 => AtomicOrder::Acquire,
+                    3 => AtomicOrder::Release,
+                    4 => AtomicOrder::AcqRel,
+                    5 => AtomicOrder::SeqCst,
+                    v => {
+                        return Err(spanned_error(
+                            parser_span,
+                            format!("`{}` expects a memory order 0-5, got {v}", op.0),
+                        ));
+                    }
+                };
+                Ok(self.wellknown_call(
+                    self.wellknown_defs.atomic_fence,
+                    vec![],
+                    vec![self.atomic_ordering(order, span)],
+                    span,
+                ))
+            }
+            "__atomic_signal_fence" => {
+                // Rust's `compiler_fence` panics on relaxed; a compiler
+                // barrier at SeqCst is the safe lowering of that no-op.
+                let order = match Self::atomic_order_code(&lowered, 0).unwrap_or(5) {
+                    0 => AtomicOrder::SeqCst,
+                    1 | 2 => AtomicOrder::Acquire,
+                    3 => AtomicOrder::Release,
+                    4 => AtomicOrder::AcqRel,
+                    5 => AtomicOrder::SeqCst,
+                    v => {
+                        return Err(spanned_error(
+                            parser_span,
+                            format!("`{}` expects a memory order 0-5, got {v}", op.0),
+                        ));
+                    }
+                };
+                Ok(self.wellknown_call(
+                    self.wellknown_defs.atomic_compiler_fence,
+                    vec![],
+                    vec![self.atomic_ordering(order, span)],
+                    span,
+                ))
+            }
             _ => Err(err(format!("unsupported atomic operation `{}`", op.0))),
         }
     }

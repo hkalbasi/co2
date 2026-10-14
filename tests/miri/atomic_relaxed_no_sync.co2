@@ -1,0 +1,33 @@
+//@ mode: co2
+//@ miri-error: Undefined Behavior: Data race detected
+
+// Relaxed flag carries no happens-before: the reader's `data` read races
+// with the writer's `data` write, so Miri must report a data race here.
+// (Strengthening both to SeqCst would synchronize and hide the race.)
+
+#include <stdatomic.h>
+
+use std::thread;
+
+int data = 0;
+_Atomic int flag = 0;
+
+fn writer() -> i32 {
+    data = 42;
+    __atomic_store_n(&flag, 1, __ATOMIC_RELAXED);
+    return 0;
+}
+
+fn reader() -> i32 {
+    while (__atomic_load_n(&flag, __ATOMIC_RELAXED) == 0) {
+    }
+    int x = data;
+    return x;
+}
+
+fn main() {
+    std::thread::JoinHandle::<i32> w = std::thread::spawn(writer);
+    std::thread::JoinHandle::<i32> r = std::thread::spawn(reader);
+    (void)w.join().unwrap();
+    (void)r.join().unwrap();
+}

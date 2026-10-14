@@ -20,7 +20,7 @@ pub use ast_resolver::{
     RegisteredArrayLenConst, expr_contains_label_address, initializer_contains_label_address,
 };
 pub use attr::{Co2Attr, co2_attrs_to_generated};
-pub use lowering::{WellknownDefs, lower_crate_sig};
+pub use lowering::{AtomicOrder, WellknownDefs, lower_crate_sig};
 pub use mir::MirOwnerInfo;
 pub use resolver::{ResolveError, Resolver};
 pub use struct_manager::{LogicalAdtFieldInfo, LogicalAdtFieldKind};

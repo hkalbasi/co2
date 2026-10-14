@@ -1,0 +1,71 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-miri
+
+// Message passing at weaker orders: a release store synchronizes with an
+// acquire (or consume, which maps to acquire) load, so the reader's `data`
+// reads below are race-free under Miri. With relaxed on either side they
+// would race (see atomic_relaxed_no_sync.co2).
+
+#include <stdatomic.h>
+
+use std::thread;
+
+int data_acq = 0;
+_Atomic int flag_acq = 0;
+int data_con = 0;
+_Atomic int flag_con = 0;
+_Atomic int counter_ar = 0;
+
+fn writer_acq() -> i32 {
+    data_acq = 42;
+    __atomic_store_n(&flag_acq, 1, __ATOMIC_RELEASE);
+    return 0;
+}
+
+fn reader_acq() -> i32 {
+    while (__atomic_load_n(&flag_acq, __ATOMIC_ACQUIRE) == 0) {
+    }
+    return data_acq;
+}
+
+fn writer_con() -> i32 {
+    data_con = 42;
+    atomic_store_explicit(&flag_con, 1, memory_order_release);
+    return 0;
+}
+
+fn reader_con() -> i32 {
+    while (atomic_load_explicit(&flag_con, memory_order_consume) == 0) {
+    }
+    return data_con;
+}
+
+fn worker_ar() -> i32 {
+    for (i32 i = 0; i < 1000; i += 1) {
+        (void)__atomic_fetch_add(&counter_ar, 1, __ATOMIC_ACQ_REL);
+    }
+    return 0;
+}
+
+fn main() {
+    std::thread::JoinHandle::<i32> w1 = std::thread::spawn(writer_acq);
+    std::thread::JoinHandle::<i32> r1 = std::thread::spawn(reader_acq);
+    (void)w1.join().unwrap();
+    if (r1.join().unwrap() != 42) {
+        std::process::exit(1);
+    }
+    std::thread::JoinHandle::<i32> w2 = std::thread::spawn(writer_con);
+    std::thread::JoinHandle::<i32> r2 = std::thread::spawn(reader_con);
+    (void)w2.join().unwrap();
+    if (r2.join().unwrap() != 42) {
+        std::process::exit(1);
+    }
+    std::thread::JoinHandle::<i32> c1 = std::thread::spawn(worker_ar);
+    std::thread::JoinHandle::<i32> c2 = std::thread::spawn(worker_ar);
+    (void)c1.join().unwrap();
+    (void)c2.join().unwrap();
+    if (counter_ar != 2000) {
+        std::process::exit(1);
+    }
+}
