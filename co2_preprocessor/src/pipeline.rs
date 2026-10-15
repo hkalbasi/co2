@@ -1375,13 +1375,6 @@ impl Preprocessor {
                         continue;
                     }
                 }
-                Token::Ident(name) if name == "__asm__" || name == "__asm" => {
-                    // skip asm call: __asm__ ( "...string..." )
-                    if let Some(body_end) = Self::skip_balanced_parens(tokens, i + 1) {
-                        let _ = tokens.drain(i..body_end);
-                        continue;
-                    }
-                }
                 Token::LBracket if i + 1 < tokens.len() && tokens[i + 1].0 == Token::LBracket => {
                     // C23 attribute specifier `[[ attr-list ]]`: treat it like
                     // `__attribute__((attr))`. Supported weak/alias forms are

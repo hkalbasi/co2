@@ -1214,7 +1214,7 @@ impl Builder<'_, '_> {
         }
     }
 
-    fn lower_cast(
+    pub(crate) fn lower_cast(
         &mut self,
         inner_op: MirOperand,
         src_ty: Ty,

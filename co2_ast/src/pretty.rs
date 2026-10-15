@@ -593,6 +593,9 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Statement<R>> {
                     body.pretty_print(pp);
                 });
             }
+            Statement::Asm(asm) => {
+                pp.leaf("Asm", &format!("{:?} volatile={}", asm.0.template, asm.0.is_volatile));
+            }
         }
     }
 }

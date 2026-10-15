@@ -75,6 +75,25 @@ pub enum Statement<R: TypeResolver> {
         post: Option<Spanned<Expression<R>>>,
         body: Box<Spanned<Statement<R>>>,
     },
+    Asm(Spanned<AsmStatement<R>>),
+}
+
+/// GNU `__asm__ [volatile] (template [: outputs [: inputs [: clobbers]]])`.
+#[derive(Debug, Clone)]
+pub struct AsmStatement<R: TypeResolver> {
+    pub template: String,
+    pub outputs: Vec<AsmOperand<R>>,
+    pub inputs: Vec<AsmOperand<R>>,
+    pub clobbers: Vec<String>,
+    pub is_volatile: bool,
+}
+
+/// One `"constraint"(expr)` operand, with optional `[name]`.
+#[derive(Debug, Clone)]
+pub struct AsmOperand<R: TypeResolver> {
+    pub name: Option<String>,
+    pub constraint: String,
+    pub expr: Spanned<Expression<R>>,
 }
 
 #[derive(Debug, Clone)]

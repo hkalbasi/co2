@@ -29,6 +29,26 @@ pub enum HirStmt {
         span: RustSpan,
     },
     Block(Vec<HirStmt>, RustSpan),
+    Asm(HirAsm),
+}
+
+/// Lowered GNU extended asm: operand exprs are already lowered; MIR decides
+/// reg classes, template rewriting, and clobber handling.
+#[derive(Clone, Debug)]
+pub struct HirAsm {
+    pub template: String,
+    pub outputs: Vec<HirAsmOperand>,
+    pub inputs: Vec<HirAsmOperand>,
+    pub clobbers: Vec<String>,
+    pub is_volatile: bool,
+    pub span: RustSpan,
+}
+
+#[derive(Clone, Debug)]
+pub struct HirAsmOperand {
+    pub name: Option<String>,
+    pub constraint: String,
+    pub expr: HirExpr,
 }
 
 impl HirCtx<'_> {
@@ -255,6 +275,39 @@ impl HirCtx<'_> {
                     .lower_expr(expr, locals, local_map)
                     .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                 out.push(HirStmt::Expr(expr));
+            }
+            Statement::Asm(asm) => {
+                let (asm, _) = asm;
+                let mut outputs = Vec::with_capacity(asm.outputs.len());
+                for op in asm.outputs {
+                    let expr = self
+                        .lower_expr(op.expr, locals, local_map)
+                        .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                    outputs.push(HirAsmOperand {
+                        name: op.name,
+                        constraint: op.constraint,
+                        expr,
+                    });
+                }
+                let mut inputs = Vec::with_capacity(asm.inputs.len());
+                for op in asm.inputs {
+                    let expr = self
+                        .lower_expr(op.expr, locals, local_map)
+                        .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                    inputs.push(HirAsmOperand {
+                        name: op.name,
+                        constraint: op.constraint,
+                        expr,
+                    });
+                }
+                out.push(HirStmt::Asm(HirAsm {
+                    template: asm.template,
+                    outputs,
+                    inputs,
+                    clobbers: asm.clobbers,
+                    is_volatile: asm.is_volatile,
+                    span,
+                }));
             }
             Statement::If {
                 cond,

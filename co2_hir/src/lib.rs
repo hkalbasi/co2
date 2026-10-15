@@ -20,6 +20,6 @@ pub use item::{
     lower_static_body, lower_static_body_for_ty,
 };
 pub use resolver::{HirCtx, ResolvedValue};
-pub use stmt::HirStmt;
+pub use stmt::{HirAsm, HirAsmOperand, HirStmt};
 pub use ty::enum_payload_ty;
 pub use ty::format_ty;

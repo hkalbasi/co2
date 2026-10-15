@@ -21,6 +21,7 @@ use rustc_abi::ExternAbi;
 use rustc_ast::token::{CommentKind, DocFragmentKind, Token};
 use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_ast::{Attribute, FloatTy, IntTy, Mutability as AstMutability, UintTy};
+use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_attr_ir::lang_items::LangItem;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
@@ -41,7 +42,12 @@ use rustc_infer::infer::{DefineOpaqueTypes, RegionVariableOrigin};
 use rustc_infer::traits::{ObligationCause, PredicateObligation};
 use rustc_lint::Level;
 use rustc_middle::mir::interpret::{CtfeProvenance, Pointer, Scalar};
-use rustc_middle::mir::{BorrowKind, Const as MirInternalConst, ConstValue};
+use rustc_middle::mir::{
+    BorrowKind, Const as MirInternalConst, ConstValue, InlineAsmMacro,
+    InlineAsmOperand as MiddleInlineAsmOperand,
+};
+use rustc_target::asm::{InlineAsmReg, InlineAsmRegClass, InlineAsmRegOrRegClass};
+use rustc_target::asm::{X86InlineAsmReg, X86InlineAsmRegClass};
 use rustc_middle::queries::mir_borrowck::ProvidedValue as BorrowckProvidedValue;
 use rustc_middle::query::Providers as QueryProviders;
 use rustc_middle::ty::{
@@ -5369,6 +5375,143 @@ fn build_mir_body<'tcx>(
                             tcx,
                             block.terminator.source_info.span,
                         ),
+                    }
+                }
+                MirTerminatorKind::InlineAsm {
+                    template,
+                    operands,
+                    options,
+                    line_spans: _,
+                    destination,
+                    unwind: _,
+                } => {
+                    let pieces: Vec<InlineAsmTemplatePiece> = if template.is_empty() {
+                        Vec::new()
+                    } else {
+                        template
+                            .split('\x1f')
+                            .map(|piece| {
+                                let (tag, rest) = piece.split_at(1);
+                                match tag {
+                                    "s" => InlineAsmTemplatePiece::String(
+                                        std::borrow::Cow::Owned(rest.to_string()),
+                                    ),
+                                    "p" => {
+                                        let (idx, modifier) = rest
+                                            .split_once(':')
+                                            .expect("bad co2 asm placeholder encoding");
+                                        InlineAsmTemplatePiece::Placeholder {
+                                            operand_idx: idx
+                                                .parse()
+                                                .expect("bad co2 asm placeholder index"),
+                                            modifier: match modifier {
+                                                "_" => None,
+                                                m => Some(
+                                                    m.chars().next().expect("bad co2 asm modifier"),
+                                                ),
+                                            },
+                                            span: DUMMY_SP,
+                                        }
+                                    }
+                                    _ => panic!("bad co2 asm template encoding"),
+                                }
+                            })
+                            .collect()
+                    };
+                    let template = tcx.arena.alloc_from_iter(pieces);
+                    let options = InlineAsmOptions::from_bits_retain(
+                        options.parse().expect("bad co2 asm options encoding"),
+                    );
+                    let operands: Box<[MiddleInlineAsmOperand<'_>]> = operands
+                        .iter()
+                        .map(|op| {
+                            let mut parts = op.raw_rpr.split(':');
+                            let reg = |spec: &str| -> InlineAsmRegOrRegClass {
+                                if let Some(name) = spec.strip_prefix('=') {
+                                    let reg = X86InlineAsmReg::parse(&name.to_lowercase())
+                                        .expect("co2 validated asm clobber register");
+                                    InlineAsmRegOrRegClass::Reg(InlineAsmReg::X86(reg))
+                                } else if spec == "r" {
+                                    InlineAsmRegOrRegClass::RegClass(InlineAsmRegClass::X86(
+                                        X86InlineAsmRegClass::reg,
+                                    ))
+                                } else if spec == "q" {
+                                    InlineAsmRegOrRegClass::RegClass(InlineAsmRegClass::X86(
+                                        X86InlineAsmRegClass::reg_byte,
+                                    ))
+                                } else {
+                                    panic!("bad co2 asm reg encoding: {spec}")
+                                }
+                            };
+                            let in_value = || {
+                                mir_operand_to_rustc(
+                                    tcx,
+                                    op.in_value
+                                        .as_ref()
+                                        .expect("bad co2 asm operand: missing in value"),
+                                )
+                            };
+                            let out_place = || {
+                                op.out_place
+                                    .as_ref()
+                                    .map(|place| mir_place_to_rustc(tcx, place))
+                            };
+                            match parts.next().expect("bad co2 asm operand encoding") {
+                                "I" => MiddleInlineAsmOperand::In {
+                                    reg: reg(parts.next().expect("bad co2 asm in encoding")),
+                                    value: in_value(),
+                                },
+                                "O" => {
+                                    let late = parts.next().expect("bad co2 asm out encoding");
+                                    MiddleInlineAsmOperand::Out {
+                                        reg: reg(parts.next().expect("bad co2 asm out encoding")),
+                                        late: late == "1",
+                                        place: out_place(),
+                                    }
+                                }
+                                "N" => {
+                                    let late = parts.next().expect("bad co2 asm inout encoding");
+                                    MiddleInlineAsmOperand::InOut {
+                                        reg: reg(parts.next().expect("bad co2 asm inout encoding")),
+                                        late: late == "1",
+                                        in_value: in_value(),
+                                        out_place: out_place(),
+                                    }
+                                }
+                                "C" => {
+                                    let rustc_middle::mir::Operand::Constant(value) = in_value()
+                                    else {
+                                        panic!("bad co2 asm const operand")
+                                    };
+                                    MiddleInlineAsmOperand::Const { value }
+                                }
+                                kind => panic!("bad co2 asm operand kind: {kind}"),
+                            }
+                        })
+                        .collect();
+                    // Diagnostics only; one span per template line.
+                    let line_count = template
+                        .iter()
+                        .filter_map(|piece| match piece {
+                            InlineAsmTemplatePiece::String(s) => Some(s),
+                            _ => None,
+                        })
+                        .flat_map(|s| s.lines())
+                        .count()
+                        .max(1);
+                    let line_spans =
+                        tcx.arena.alloc_from_iter(std::iter::repeat_n(DUMMY_SP, line_count));
+                    let destination = destination
+                        .map(rustc_middle::mir::BasicBlock::from_usize)
+                        .expect("co2 asm always has a fallthrough destination");
+                    rustc_middle::mir::TerminatorKind::InlineAsm {
+                        asm_macro: InlineAsmMacro::Asm,
+                        template,
+                        operands,
+                        options,
+                        line_spans,
+                        targets: Box::new([destination]),
+                        unwind: rustc_middle::mir::UnwindAction::Unreachable,
                     }
                 }
                 _ => todo!(),

@@ -395,6 +395,20 @@ fn emit_terminator(
         }
         TerminatorKind::SwitchInt { discr, .. } => emit_operand_read(facts, discr, mid),
         TerminatorKind::Assert { cond, .. } => emit_operand_read(facts, cond, mid),
+        TerminatorKind::InlineAsm { operands, .. } => {
+            for operand in operands {
+                if let Some(in_value) = &operand.in_value {
+                    emit_operand_read(facts, in_value, mid);
+                }
+                if let Some(out_place) = &operand.out_place
+                    && is_direct_place(out_place)
+                {
+                    facts
+                        .path_assigned_at_base
+                        .push((Path(out_place.local), mid));
+                }
+            }
+        }
         TerminatorKind::Return if !body.ret_local().ty.kind().is_unit() => {
             facts.path_accessed_at_base.push((Path(RETURN_LOCAL), mid));
         }

@@ -12,15 +12,15 @@
 
 use co2_ast::TypeResolver;
 use co2_ast::{
-    CompoundStatement, Declaration, DeclarationSpecifier, Declarator, EnumSpecifier, Enumerator,
-    Expression, FileId, ForInit, FunctionDefinitionSignature, FunctionSpecifier, InitDeclarator,
-    LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, ParameterList,
-    RustAttribute, RustAttributeStyle, RustFnAbi, RustFunctionParam, RustFunctionSignature,
-    RustPath, RustPathSegment, RustStructField, RustTy, Span, Spanned, SpecifierQualifier,
-    StatelessResolver, Statement, StatementOrDeclaration, StorageClassSpecifier, StringLiteral,
-    StringLiteralPrefix, StructDeclarator, StructOrUnionField, StructOrUnionKind,
-    StructOrUnionSpecifier, Token, TranslationUnit, TypeName, TypeQualifier, TypeQueryResult,
-    TypeSpecifier, UseItem, Visibility,
+    AsmOperand, AsmStatement, CompoundStatement, Constant, Declaration, DeclarationSpecifier,
+    Declarator, EnumSpecifier, Enumerator, Expression, FileId, ForInit, FunctionDefinitionSignature,
+    FunctionSpecifier, InitDeclarator, LazyCompoundStatement, LazyRustConstExpr, LazySubscription,
+    ModItem, ParameterList, RustAttribute, RustAttributeStyle, RustFnAbi, RustFunctionParam,
+    RustFunctionSignature, RustPath, RustPathSegment, RustStructField, RustTy, Span, Spanned,
+    SpecifierQualifier, StatelessResolver, Statement, StatementOrDeclaration,
+    StorageClassSpecifier, StringLiteral, StringLiteralPrefix, StructDeclarator,
+    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token, TranslationUnit, TypeName,
+    TypeQualifier, TypeQueryResult, TypeSpecifier, UseItem, Visibility,
 };
 
 // ── Errors (cold path only) ────────────────────────────────────────────
@@ -1704,6 +1704,31 @@ impl<'a, R: TypeResolver> P<'a, R> {
             pointers.push((quals, star));
         }
         let mut base = self.parse_direct_declarator()?;
+        // GNU asm label on a declarator (`int x __asm__("r12") = ...`):
+        // a register-allocation hint with no co2 equivalent; parse and
+        // ignore so local register variables still compile as plain locals.
+        while is_asm_keyword(self.peek(0)) {
+            let cp = self.checkpoint();
+            self.pos += 1;
+            if self.at(&Token::LParen) {
+                self.pos += 1;
+                let label = crate::exp::parse_expression(self);
+                match label {
+                    Ok(label) if asm_string_value(&label.0).is_some() => {}
+                    _ => {
+                        self.restore(cp);
+                        break;
+                    }
+                }
+                if self.expect(&Token::RParen, ")").is_err() {
+                    self.restore(cp);
+                    break;
+                }
+            } else {
+                self.restore(cp);
+                break;
+            }
+        }
         for (quals, star_span) in pointers.into_iter().rev() {
             let span = join_spans(star_span, base.1);
             base = (
@@ -2580,6 +2605,18 @@ pub(crate) fn parse_tu<R: TypeResolver>(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn is_asm_keyword(tok: Option<&Token>) -> bool {
+    matches!(tok, Some(Token::Ident(s)) if s == "__asm__" || s == "__asm" || s == "asm")
+}
+
+fn asm_string_value<R: TypeResolver>(expr: &Expression<R>) -> Option<String> {
+    if let Expression::Constant(Constant::String(lit)) = expr {
+        Some(String::from_utf8_lossy(&lit.to_bytes()).into_owned())
+    } else {
+        None
+    }
+}
+
 fn parse_tu_item<R: TypeResolver>(
     p: &mut P<'_, R>,
     attrs: Vec<Spanned<RustAttribute>>,
@@ -2587,7 +2624,15 @@ fn parse_tu_item<R: TypeResolver>(
     rust_mod_items: &mut Vec<Spanned<ModItem>>,
     declarations: &mut Vec<Spanned<Declaration<R>>>,
 ) -> PR<()> {
-    if !attrs.is_empty() {
+    if is_asm_keyword(p.peek(0)) && p.at_asm_start() {
+        // File-scope `__asm__("...");`: defines symbols out-of-band;
+        // co2 cannot emit them, so ignore (see parse_asm_top_level).
+        let cp = p.checkpoint();
+        match p.parse_asm_top_level() {
+            Ok(()) => return Ok(()),
+            Err(_) => p.restore(cp),
+        }
+    }    if !attrs.is_empty() {
         if !attrs_are_outer(&attrs) {
             let span = attrs
                 .first()
@@ -2871,6 +2916,28 @@ impl<'a, R: TypeResolver> P<'a, R> {
         }
     }
 
+    /// `__asm__`/`__asm`/`asm` followed by optional qualifiers and `(`.
+    /// Anything else (e.g. a variable named `asm`) is not an asm statement.
+    fn at_asm_start(&self) -> bool {
+        let mut i = 1;
+        loop {
+            match self.peek(i) {
+                Some(Token::Volatile) => i += 1,
+                Some(Token::Ident(s))
+                    if s == "volatile"
+                        || s == "__volatile"
+                        || s == "__volatile__"
+                        || s == "goto"
+                        || s == "__goto__" =>
+                {
+                    i += 1;
+                }
+                Some(Token::LParen) => return true,
+                _ => return false,
+            }
+        }
+    }
+
     pub fn parse_statement(&mut self) -> PR<Spanned<Statement<R>>> {
         let start = self.pos;
         let stmt = match self.peek(0) {
@@ -2953,6 +3020,12 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 Statement::Compound(body)
             }
             _ => {
+                // GNU `__asm__ [volatile] (...)` statement. Only when really
+                // followed by qualifiers + `(`; a variable named `asm` falls
+                // through to label/expression parsing below.
+                if is_asm_keyword(self.peek(0)) && self.at_asm_start() {
+                    return self.parse_asm_statement();
+                }
                 // Label (`ident :`) or expression statement.
                 if matches!(self.peek(0), Some(Token::Ident(_)))
                     && matches!(self.peek(1), Some(Token::Colon))
@@ -3001,6 +3074,157 @@ impl<'a, R: TypeResolver> P<'a, R> {
             return true;
         }
         matches!(self.peek(0), Some(Token::Ident(_))) && matches!(self.peek(1), Some(Token::Colon))
+    }
+
+    /// Parse a GNU asm statement (cursor past the dispatch check).
+    /// Consumes the trailing `;`.
+    fn parse_asm_statement(&mut self) -> PR<Spanned<Statement<R>>> {
+        let start = self.pos;
+        let asm = self.parse_asm_inner()?;
+        self.expect(&Token::Semicolon, ";")?;
+        let span = self.span_since(start);
+        Ok((Statement::Asm((asm, span)), span))
+    }
+
+    /// Parse a file-scope `__asm__("...");`: top-level asm defines symbols
+    /// out-of-band, which co2 cannot emit, so it is ignored (like an unused
+    /// global). Consumes the trailing `;`.
+    fn parse_asm_top_level(&mut self) -> PR<()> {
+        let _ = self.parse_asm_inner()?;
+        self.expect(&Token::Semicolon, ";")?;
+        Ok(())
+    }
+
+    /// Parse `asm-keyword [volatile] (template [: outputs [: inputs [: clobbers [: labels]]]])`.
+    fn parse_asm_inner(&mut self) -> PR<AsmStatement<R>> {
+        debug_assert!(is_asm_keyword(self.peek(0)));
+        self.pos += 1;
+        let mut is_volatile = false;
+        loop {
+            if self.at(&Token::Volatile) {
+                self.pos += 1;
+                is_volatile = true;
+            } else if let Some(Token::Ident(s)) = self.peek(0) {
+                if s == "volatile" || s == "__volatile" || s == "__volatile__" {
+                    self.pos += 1;
+                    is_volatile = true;
+                } else if s == "goto" || s == "__goto__" {
+                    return Err(self.fail_here(
+                        "asm goto is not supported: stable Rust has no equivalent; \
+                         compute the condition into an output and branch in C instead"
+                            .to_string(),
+                    ));
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        self.expect(&Token::LParen, "(")?;
+        let template_expr = crate::exp::parse_expression(self)?;
+        let template_span = template_expr.1;
+        let Some(template) = asm_string_value(&template_expr.0) else {
+            return Err(self.fail_at(
+                template_span,
+                "asm template must be a string literal".to_string(),
+            ));
+        };
+        let mut outputs = Vec::new();
+        let mut inputs = Vec::new();
+        let mut clobbers = Vec::new();
+        if self.eat(&Token::Colon).is_some() {
+            if !self.at(&Token::Colon) && !self.at(&Token::RParen) {
+                outputs = self.parse_asm_operands()?;
+            }
+            if self.eat(&Token::Colon).is_some() {
+                if !self.at(&Token::Colon) && !self.at(&Token::RParen) {
+                    inputs = self.parse_asm_operands()?;
+                }
+                if self.eat(&Token::Colon).is_some() {
+                    if !self.at(&Token::Colon) && !self.at(&Token::RParen) {
+                        clobbers = self.parse_asm_clobbers()?;
+                    }
+                    if self.eat(&Token::Colon).is_some() {
+                        return Err(self.fail_here(
+                            "asm goto labels are not supported: stable Rust has no equivalent; \
+                             compute the condition into an output and branch in C instead"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        self.expect(&Token::RParen, ")")?;
+        Ok(AsmStatement {
+            template,
+            outputs,
+            inputs,
+            clobbers,
+            is_volatile,
+        })
+    }
+
+    /// Parse comma-separated `[name] "constraint" (expr)` operands.
+    fn parse_asm_operands(&mut self) -> PR<Vec<AsmOperand<R>>> {
+        let mut ops = Vec::new();
+        loop {
+            let name = if self.at(&Token::LBracket) {
+                self.pos += 1;
+                let (name, _) = self.parse_identifier()?;
+                self.expect(&Token::RBracket, "]")?;
+                Some(name)
+            } else {
+                None
+            };
+            // Constraint literals are consumed as raw string tokens: going
+            // through expressions would misparse `"=r"(x)` as a call.
+            let constraint = self.parse_asm_string("asm constraint")?;
+            self.expect(&Token::LParen, "(")?;
+            let expr = crate::exp::parse_expression(self)?;
+            self.expect(&Token::RParen, ")")?;
+            ops.push(AsmOperand {
+                name,
+                constraint,
+                expr,
+            });
+            if self.eat(&Token::Comma).is_none() {
+                break;
+            }
+        }
+        Ok(ops)
+    }
+
+    /// Parse comma-separated `"clobber"` string literals.
+    fn parse_asm_clobbers(&mut self) -> PR<Vec<String>> {
+        let mut out = Vec::new();
+        loop {
+            out.push(self.parse_asm_string("asm clobber")?);
+            if self.eat(&Token::Comma).is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Consume adjacent string-literal tokens as one string. Used for asm
+    /// constraints/clobbers, where expression parsing would misread the
+    /// following `(...)` as a call.
+    fn parse_asm_string(&mut self, what: &str) -> PR<String> {
+        let start = self.pos;
+        let mut parts = Vec::new();
+        while let Some(Token::StringLit(s)) = self.peek(0) {
+            parts.push(s.clone());
+            self.pos += 1;
+        }
+        if parts.is_empty() {
+            return Err(self.fail_here(format!(
+                "{what} must be a string literal, found {}",
+                self.describe()
+            )));
+        }
+        let span = self.span_since(start);
+        Ok(String::from_utf8_lossy(&merge_string_literals(parts, span).to_bytes()).into_owned())
     }
 
     fn parse_if(&mut self) -> PR<Statement<R>> {

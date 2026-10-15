@@ -82,6 +82,9 @@ impl Builder<'_, '_> {
                 }
                 self.exit_scope();
             }
+            HirStmt::Asm(asm) => {
+                self.lower_asm_stmt(asm);
+            }
         }
     }
 
@@ -354,6 +357,7 @@ fn stmt_span(stmt: &HirStmt) -> Option<RustSpan> {
         | HirStmt::Return(_, span)
         | HirStmt::Block(_, span) => Some(*span),
         HirStmt::If { span, .. } => Some(*span),
+        HirStmt::Asm(asm) => Some(asm.span),
     }
 }
 
