@@ -1458,6 +1458,16 @@ fn lower_translation_unit_items(
                                         ))
                                     ))
                         });
+                        let mut attrs = lower_generated_attrs(&decl_attrs);
+                        // Leading `__attribute__((...))` on a definition lives
+                        // in the declaration specifiers (e.g. `static
+                        // __attribute__((noinline)) int f() ...`); merge it
+                        // like the prototype path does.
+                        for spec in declaration_specifiers.iter() {
+                            if let DeclarationSpecifier::GNUAttribute(gattrs) = &spec.0 {
+                                attrs.extend(lower_generated_attrs(gattrs));
+                            }
+                        }
                         let transformed_specs = declaration_specifiers;
                         let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
                         let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
@@ -1475,7 +1485,7 @@ fn lower_translation_unit_items(
                         (
                             name,
                             sig,
-                            lower_generated_attrs(&decl_attrs),
+                            attrs,
                             !is_static,
                             Visibility::Public,
                         )

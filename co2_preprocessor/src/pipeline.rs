@@ -1353,20 +1353,18 @@ impl Preprocessor {
                             tokens[i] = (Token::PackedAttr, start, end);
                             let _ = tokens.drain(i + 1..body_end);
                             i += 1;
-                        } else if Self::attribute_is_weak_or_alias(&tokens[i + 1..body_end]) {
-                            // Convert `__attribute__((weak))` and
+                        } else if Self::attribute_is_supported_codegen(&tokens[i + 1..body_end]) {
+                            // Convert `__attribute__((weak))`,
                             // `__attribute__((weak, alias("x")))` (and friends)
                             // into separate Rust-style attributes
                             // `#[weak] #[alias("x")]`, one `#[...]` group per
                             // comma-separated attribute inside the inner parens.
+                            // `noinline` becomes `#[inline(never)]`.
                             let inner = Self::attribute_inner_content(&tokens[i + 1..body_end]);
                             let groups = Self::split_attr_groups(inner);
                             let mut replacement: Vec<(Token, usize, usize)> = Vec::new();
                             for group in &groups {
-                                replacement.push((Token::Hash, start, end));
-                                replacement.push((Token::LBracket, start, end));
-                                replacement.extend(group.iter().cloned());
-                                replacement.push((Token::RBracket, start, end));
+                                replacement.extend(Self::codegen_attr_group(group, start, end));
                             }
                             tokens.splice(i..body_end, replacement);
                             i += 1;
@@ -1399,15 +1397,12 @@ impl Preprocessor {
                         let inner = &tokens[i + 2..spec_end - 2];
                         let stripped_ns = Self::strip_attr_namespace_prefixes(inner);
                         let is_attr_list = !inner.is_empty() && Self::is_c23_attribute_list(inner);
-                        if is_attr_list && Self::attribute_is_weak_or_alias(&stripped_ns) {
+                        if is_attr_list && Self::attribute_is_supported_codegen(&stripped_ns) {
                             let inner_content = Self::attribute_inner_content(&stripped_ns);
                             let groups = Self::split_attr_groups(inner_content);
                             let mut replacement: Vec<(Token, usize, usize)> = Vec::new();
                             for group in &groups {
-                                replacement.push((Token::Hash, start, end));
-                                replacement.push((Token::LBracket, start, end));
-                                replacement.extend(group.iter().cloned());
-                                replacement.push((Token::RBracket, start, end));
+                                replacement.extend(Self::codegen_attr_group(group, start, end));
                             }
                             tokens.splice(i..spec_end, replacement);
                             i += 1;
@@ -1558,10 +1553,10 @@ impl Preprocessor {
     }
 
     /// Returns true if the `__attribute__` body (the tokens between the outer
-    /// parentheses, inclusive) consists solely of `weak` and/or
-    /// `alias("name")` GNU attributes — the ones co2 supports as codegen
-    /// attributes. Other attributes remain stripped.
-    fn attribute_is_weak_or_alias(body: &[(Token, usize, usize)]) -> bool {
+    /// parentheses, inclusive) consists solely of GNU attributes co2 supports
+    /// as codegen attributes: `weak`, `alias("name")`, `noinline`, and
+    /// `always_inline`. Other attributes remain stripped.
+    fn attribute_is_supported_codegen(body: &[(Token, usize, usize)]) -> bool {
         // `body` is `( ... )`. Strip all surrounding balanced parentheses
         // (e.g. `__attribute__((weak))` nests two pairs).
         let mut inner = body;
@@ -1582,6 +1577,12 @@ impl Preprocessor {
         while i < inner.len() {
             match &inner[i].0 {
                 Token::Ident(name) if name == "weak" || name == "__weak__" => {
+                    i += 1;
+                }
+                Token::Ident(name) if Self::is_noinline_name(name) => {
+                    i += 1;
+                }
+                Token::Ident(name) if Self::is_always_inline_name(name) => {
                     i += 1;
                 }
                 Token::Ident(name) if name == "alias" || name == "__alias__" => {
@@ -1605,6 +1606,50 @@ impl Preprocessor {
             }
         }
         true
+    }
+
+    /// `noinline` and its reserved-word spellings.
+    fn is_noinline_name(name: &str) -> bool {
+        matches!(name, "noinline" | "__noinline__" | "__noinline")
+    }
+
+    /// `always_inline` and its reserved-word spellings.
+    fn is_always_inline_name(name: &str) -> bool {
+        matches!(
+            name,
+            "always_inline" | "__always_inline__" | "__always_inline"
+        )
+    }
+
+    /// Build the `#[...]` replacement for one comma-separated GNU attribute
+    /// group. `noinline` becomes `#[inline(never)]` and `always_inline`
+    /// becomes `#[inline(always)]` (Rust has neither as bare words);
+    /// everything else passes through unchanged.
+    fn codegen_attr_group(
+        group: &[(Token, usize, usize)],
+        start: usize,
+        end: usize,
+    ) -> Vec<(Token, usize, usize)> {
+        let mut replacement = vec![(Token::Hash, start, end), (Token::LBracket, start, end)];
+        let hint = match group {
+            [(Token::Ident(name), _, _)] if Self::is_noinline_name(name) => Some("never"),
+            [(Token::Ident(name), _, _)] if Self::is_always_inline_name(name) => {
+                Some("always")
+            }
+            _ => None,
+        };
+        if let Some(hint) = hint {
+            replacement.extend([
+                (Token::Ident("inline".to_string()), start, end),
+                (Token::LParen, start, end),
+                (Token::Ident(hint.to_string()), start, end),
+                (Token::RParen, start, end),
+            ]);
+        } else {
+            replacement.extend(group.iter().cloned());
+        }
+        replacement.push((Token::RBracket, start, end));
+        replacement
     }
 
     /// Returns the token content of an `__attribute__` body with all
