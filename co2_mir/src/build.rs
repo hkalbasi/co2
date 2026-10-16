@@ -102,6 +102,7 @@ pub fn build_mir_for_body(
         local_vdi_map,
         scope_stack: vec![0],
         next_scope: 1,
+        naked_templates: Vec::new(),
     };
 
     let generation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -109,7 +110,11 @@ pub fn build_mir_for_body(
             builder.lower_stmt(stmt);
         }
 
-        builder.terminate_fallthrough();
+        if body.naked {
+            builder.terminate_naked();
+        } else {
+            builder.terminate_fallthrough();
+        }
         builder.locals.extend(builder.extra_locals);
 
         MirBodyResult {
@@ -194,6 +199,9 @@ pub(crate) struct Builder<'ctx, 'tcx> {
     pub(crate) local_vdi_map: FxHashMap<usize, usize>,
     pub(crate) scope_stack: Vec<u32>,
     pub(crate) next_scope: u32,
+    /// Buffered `(template, span)` of naked-function asm statements,
+    /// concatenated into one diverging `naked_asm!` at fallthrough.
+    pub(crate) naked_templates: Vec<(String, RustSpan)>,
 }
 
 impl Builder<'_, '_> {

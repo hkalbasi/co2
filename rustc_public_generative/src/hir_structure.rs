@@ -32,6 +32,9 @@ pub enum GeneratedAttr {
     Weak,
     /// Emit `#[thread_local]` for TLS statics.
     ThreadLocal,
+    /// Emit `#[naked]` (a basic-asm-only function with no prologue or
+    /// epilogue) for GNU `__attribute__((naked))`.
+    Naked,
 }
 
 #[derive(Debug, Clone)]

@@ -98,8 +98,78 @@ struct ClassifiedOperand {
 }
 
 impl Builder<'_, '_> {
+    /// Emit the single diverging `naked_asm!` for a naked function body
+    /// from the buffered templates (in source order, like GCC emitting
+    /// each basic asm in sequence). No destination, no return block:
+    /// this mirrors rustc's own MIR for `naked_asm!`.
+    pub(crate) fn terminate_naked(&mut self) {
+        let mut template = String::new();
+        let mut span = self.span;
+        for (text, text_span) in std::mem::take(&mut self.naked_templates) {
+            if text.contains("%=") {
+                self.terminate_with_error(
+                    text_span,
+                    "asm template `%=` (unique number) is not supported",
+                );
+            }
+            if !template.is_empty() {
+                template.push('\n');
+            }
+            template.push_str(&text);
+            span = text_span;
+        }
+        self.push_terminator(
+            TerminatorKind::InlineAsm {
+                template: encode_template(&[TemplatePiece::Str(template)]),
+                operands: Vec::new(),
+                // `ATT_SYNTAX` (GNU templates are AT&T) |
+                // `PRESERVES_FLAGS` (basic asm declares no clobbers).
+                options: (64 | 8).to_string(),
+                line_spans: String::new(),
+                destination: None,
+                unwind: UnwindAction::Unreachable,
+            },
+            span,
+        );
+    }
+
     pub(crate) fn lower_asm_stmt(&mut self, asm: &HirAsm) {
         let span = asm.span;
+        if asm.naked {
+            // Naked bodies concatenate every basic asm template into the
+            // single diverging `naked_asm!` emitted at fallthrough (rustc
+            // rejects anything else in a naked function).
+            self.naked_templates.push((asm.template.clone(), span));
+            return;
+        }
+        if asm.is_basic {
+            // Basic asm has no operands, so the template is literal
+            // assembler text: GCC hands it to the assembler verbatim,
+            // meaning `%eax` is a register, not an operand placeholder.
+            // (`%=` still errors: only the compiler can substitute a
+            // unique number, so passing it on would just move the
+            // failure into the assembler with a worse message.)
+            if asm.template.contains("%=") {
+                self.terminate_with_error(
+                    span,
+                    "asm template `%=` (unique number) is not supported",
+                );
+            }
+            self.push_terminator(
+                TerminatorKind::InlineAsm {
+                    template: encode_template(&[TemplatePiece::Str(asm.template.clone())]),
+                    operands: Vec::new(),
+                    // `ATT_SYNTAX` (GNU templates are AT&T) |
+                    // `PRESERVES_FLAGS` (basic asm declares no clobbers).
+                    options: (64 | 8).to_string(),
+                    line_spans: String::new(),
+                    destination: Some(self.blocks.len() + 1),
+                    unwind: UnwindAction::Continue,
+                },
+                span,
+            );
+            return;
+        }
         let mut ops: Vec<ClassifiedOperand> = Vec::new();
         let mut name_to_gnu: Vec<(String, usize)> = Vec::new();
 

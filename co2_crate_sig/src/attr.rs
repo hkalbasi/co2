@@ -26,6 +26,9 @@ pub enum Co2Attr {
     /// Emit `#[linkage = "weak"]` so the symbol has weak linkage and may be
     /// overridden by a strong definition at link time.
     Weak,
+    /// A GNU `naked` attribute. The function body must be basic asm only;
+    /// rustc emits no prologue or epilogue for it.
+    Naked,
     /// A GNU `alias("target")` attribute. co2 implements this as a weak
     /// forwarding definition; `target` is the aliased symbol name. This has no
     /// rustc equivalent and is therefore excluded from [`GeneratedAttr`].
@@ -44,6 +47,7 @@ impl Co2Attr {
             }),
             Co2Attr::InlineHint(hint) => Some(GeneratedAttr::InlineHint(*hint)),
             Co2Attr::Weak => Some(GeneratedAttr::Weak),
+            Co2Attr::Naked => Some(GeneratedAttr::Naked),
             Co2Attr::Alias(_) => None,
         }
     }

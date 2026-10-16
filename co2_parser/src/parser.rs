@@ -3133,7 +3133,9 @@ impl<'a, R: TypeResolver> P<'a, R> {
         let mut outputs = Vec::new();
         let mut inputs = Vec::new();
         let mut clobbers = Vec::new();
+        let mut is_basic = true;
         if self.eat(&Token::Colon).is_some() {
+            is_basic = false;
             if !self.at(&Token::Colon) && !self.at(&Token::RParen) {
                 outputs = self.parse_asm_operands()?;
             }
@@ -3158,6 +3160,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
         self.expect(&Token::RParen, ")")?;
         Ok(AsmStatement {
             template,
+            is_basic,
             outputs,
             inputs,
             clobbers,

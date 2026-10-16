@@ -1353,26 +1353,30 @@ impl Preprocessor {
                             tokens[i] = (Token::PackedAttr, start, end);
                             let _ = tokens.drain(i + 1..body_end);
                             i += 1;
-                        } else if Self::attribute_is_supported_codegen(&tokens[i + 1..body_end]) {
-                            // Convert `__attribute__((weak))`,
-                            // `__attribute__((weak, alias("x")))` (and friends)
-                            // into separate Rust-style attributes
-                            // `#[weak] #[alias("x")]`, one `#[...]` group per
-                            // comma-separated attribute inside the inner parens.
-                            // `noinline` becomes `#[inline(never)]`.
+                        } else {
+                            // Convert each supported attribute group to `#[...]`
+                            // (`noinline` becomes `#[inline(never)]`, bare
+                            // words like `naked` pass through as `#[naked]`)
+                            // and drop the rest (`used`, `noreturn`,
+                            // `section`, `aligned`, ... carry no co2 codegen
+                            // meaning, so mixed lists like
+                            // `__attribute__((naked, used, noinline))` keep
+                            // exactly their supported subset).
                             let inner = Self::attribute_inner_content(&tokens[i + 1..body_end]);
                             let groups = Self::split_attr_groups(inner);
                             let mut replacement: Vec<(Token, usize, usize)> = Vec::new();
                             for group in &groups {
+                                if !Self::attr_group_is_kept(group) {
+                                    continue;
+                                }
                                 replacement.extend(Self::codegen_attr_group(group, start, end));
                             }
                             tokens.splice(i..body_end, replacement);
-                            i += 1;
-                        } else {
-                            let _ = tokens.drain(i..body_end);
-                            // i stays the same — next token shifted to position i
+                            // i stays the same — the spliced `#[...]` tokens
+                            // (or the next token, when every group was
+                            // dropped) shifted to position i for re-examination.
+                            continue;
                         }
-                        continue;
                     }
                 }
                 Token::LBracket if i + 1 < tokens.len() && tokens[i + 1].0 == Token::LBracket => {
@@ -1545,6 +1549,26 @@ impl Preprocessor {
         }
     }
 
+    /// Returns true for one comma-separated `__attribute__` group that co2
+    /// keeps as a codegen attribute: `naked`, `weak`, `alias("name")`,
+    /// `noinline`, and `always_inline`. Every other group (`used`,
+    /// `noreturn`, `section`, `aligned`, ...) is dropped.
+    fn attr_group_is_kept(group: &[(Token, usize, usize)]) -> bool {
+        match group {
+            [(Token::Ident(name), _, _)] if Self::is_naked_name(name) => true,
+            [(Token::Ident(name), _, _)] if name == "weak" || name == "__weak__" => true,
+            [(Token::Ident(name), _, _)] if Self::is_noinline_name(name) => true,
+            [(Token::Ident(name), _, _)] if Self::is_always_inline_name(name) => true,
+            [
+                (Token::Ident(name), _, _),
+                (Token::LParen, _, _),
+                (Token::StringLit(_), _, _),
+                (Token::RParen, _, _),
+            ] if name == "alias" || name == "__alias__" => true,
+            _ => false,
+        }
+    }
+
     /// Returns true if the `__attribute__` body (the tokens between the outer
     /// parentheses, inclusive) consists solely of GNU attributes co2 supports
     /// as codegen attributes: `weak`, `alias("name")`, `noinline`, and
@@ -1599,6 +1623,11 @@ impl Preprocessor {
             }
         }
         true
+    }
+
+    /// `naked` and its reserved-word spelling.
+    fn is_naked_name(name: &str) -> bool {
+        matches!(name, "naked" | "__naked__")
     }
 
     /// `noinline` and its reserved-word spellings.

@@ -82,6 +82,9 @@ pub enum Statement<R: TypeResolver> {
 #[derive(Debug, Clone)]
 pub struct AsmStatement<R: TypeResolver> {
     pub template: String,
+    /// `true` for basic asm (`__asm__("...")` with no colons): the
+    /// template is literal assembler text, not operand-substituted.
+    pub is_basic: bool,
     pub outputs: Vec<AsmOperand<R>>,
     pub inputs: Vec<AsmOperand<R>>,
     pub clobbers: Vec<String>,

@@ -37,6 +37,11 @@ pub enum HirStmt {
 #[derive(Clone, Debug)]
 pub struct HirAsm {
     pub template: String,
+    /// `true` for basic asm: template is literal assembler text.
+    pub is_basic: bool,
+    /// `true` inside a naked function: buffer the template for the single
+    /// diverging `naked_asm!` instead of emitting a terminator.
+    pub naked: bool,
     pub outputs: Vec<HirAsmOperand>,
     pub inputs: Vec<HirAsmOperand>,
     pub clobbers: Vec<String>,
@@ -70,6 +75,68 @@ impl HirCtx<'_> {
                 }
             }
         }
+    }
+
+    /// Naked-function path (GNU `__attribute__((naked))`): the body must
+    /// be basic asm only — no C statements, no declarations, no extended
+    /// asm with operands.
+    pub(crate) fn lower_naked_compound_items(
+        &self,
+        compound: CompoundStatement<LocalResolver>,
+        out: &mut Vec<HirStmt>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) {
+        for (stmt_or_decl, _) in compound.statements {
+            match stmt_or_decl {
+                StatementOrDeclaration::Statement((stmt, span)) => {
+                    let Statement::Asm((asm, _)) = stmt else {
+                        self.terminate_with_error(
+                            span,
+                            "naked function body must contain only basic asm statements",
+                        );
+                    };
+                    self.lower_naked_asm(asm, span, out, locals, local_map);
+                }
+                StatementOrDeclaration::Declaration((_, span)) => {
+                    self.terminate_with_error(
+                        span,
+                        "naked function body cannot contain declarations; use basic asm only",
+                    );
+                }
+            }
+        }
+    }
+
+    /// Lower one basic asm statement inside a naked function.
+    fn lower_naked_asm(
+        &self,
+        asm: co2_ast::AsmStatement<LocalResolver>,
+        parser_span: co2_ast::Span,
+        out: &mut Vec<HirStmt>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) {
+        let span = self.to_rust_span(parser_span);
+        if !asm.outputs.is_empty() || !asm.inputs.is_empty() {
+            self.terminate_with_error(
+                parser_span,
+                "naked functions cannot use extended asm with operands; use basic asm only",
+            );
+        }
+        // Basic asm has no operand exprs to lower; the template is buffered
+        // for the single diverging `naked_asm!` (see `HirAsm::naked`).
+        let _ = (locals, local_map);
+        out.push(HirStmt::Asm(HirAsm {
+            template: asm.template,
+            is_basic: asm.is_basic,
+            naked: true,
+            outputs: Vec::new(),
+            inputs: Vec::new(),
+            clobbers: asm.clobbers,
+            is_volatile: asm.is_volatile,
+            span,
+        }));
     }
 
     /// Lower a `case` bound (`case expr:` or one side of `case lo ... hi:`):
@@ -302,6 +369,8 @@ impl HirCtx<'_> {
                 }
                 out.push(HirStmt::Asm(HirAsm {
                     template: asm.template,
+                    is_basic: asm.is_basic,
+                    naked: false,
                     outputs,
                     inputs,
                     clobbers: asm.clobbers,

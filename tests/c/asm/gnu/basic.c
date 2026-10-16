@@ -312,6 +312,21 @@ void test_matching(void) {
 }
 
 // ------------------------------------------------------------------
+// 21. Basic asm with raw register references (no operands: the
+//     template is literal assembler text, so `%rip`/`%eax` name
+//     registers instead of starting an operand placeholder)
+// ------------------------------------------------------------------
+
+int basic_asm_counter = 0;
+
+void test_basic_asm_registers(void) {
+    basic_asm_counter = 0;
+    __asm__ __volatile__("incl basic_asm_counter(%rip)");
+    __asm__ __volatile__("addl $41, basic_asm_counter(%rip)");
+    assert(basic_asm_counter == 42);
+}
+
+// ------------------------------------------------------------------
 // Main
 // ------------------------------------------------------------------
 
@@ -334,6 +349,7 @@ int main(void) {
     test_modifiers();
     test_local_register_vars();
     test_matching();
+    test_basic_asm_registers();
 
     return 0;
 }

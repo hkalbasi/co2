@@ -33,6 +33,9 @@ pub enum MirOwnerInfo {
         body: co2_ast::Spanned<co2_ast::CompoundStatement<LocalResolver>>,
         /// Whether errors were reported while parsing this function body.
         had_errors: bool,
+        /// GNU `__attribute__((naked))`: body must be basic asm only and
+        /// rustc emits no prologue or epilogue.
+        naked: bool,
     },
     FnBodyError {
         def: FnDef,

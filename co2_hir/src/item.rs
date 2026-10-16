@@ -41,6 +41,9 @@ pub struct HirBody {
     pub c_variadic_local: Option<LocalId>,
     pub stmts: Vec<HirStmt>,
     pub span: RustSpan,
+    /// GNU `__attribute__((naked))`: every asm template concatenates into
+    /// a single diverging `naked_asm!`, no return value is produced.
+    pub naked: bool,
 }
 
 impl HirBody {
@@ -54,6 +57,7 @@ impl HirBody {
             c_variadic_local: None,
             stmts: vec![],
             span,
+            naked: false,
         }
     }
 }
@@ -94,6 +98,18 @@ pub fn lower_function_body(
     hir_ctx: &mut HirCtx<'_>,
 ) -> HirBody {
     hir_ctx.lower_function_body(tokens, def, param_names)
+}
+
+/// Naked-function entry point (GNU `__attribute__((naked))`): the body
+/// must be basic asm only; every template concatenates into a single
+/// diverging `naked_asm!`.
+pub fn lower_naked_function_body(
+    tokens: Spanned<CompoundStatement<LocalResolver>>,
+    def: FnDef,
+    param_names: &[(usize, String, RustSpan)],
+    hir_ctx: &mut HirCtx<'_>,
+) -> HirBody {
+    hir_ctx.lower_naked_function_body(tokens, def, param_names)
 }
 
 pub fn lower_static_body(
@@ -149,6 +165,7 @@ pub fn lower_static_body_for_ty(
         c_variadic_local: None,
         stmts: vec![HirStmt::Return(Some(init_expr), body_span)],
         span: body_span,
+        naked: false,
     }
 }
 
@@ -228,6 +245,16 @@ impl HirCtx<'_> {
         self.reset_labels();
         self.lower_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names)
     }
+
+    pub(crate) fn lower_naked_function_body(
+        &mut self,
+        parsed: Spanned<CompoundStatement<LocalResolver>>,
+        def: FnDef,
+        param_names: &[(usize, String, RustSpan)],
+    ) -> HirBody {
+        self.reset_labels();
+        self.lower_naked_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names)
+    }
 }
 
 /// Builds the body of a weak-alias forwarder: `return target(args...)`.
@@ -286,16 +313,23 @@ pub fn build_forwarding_fn_body(
         c_variadic_local: None,
         stmts: vec![HirStmt::Return(Some(call), span)],
         span,
+        naked: false,
     }
 }
 
 impl HirCtx<'_> {
-    fn lower_compound_statement(
+    /// Shared `_ret`/param/variadic preamble for both body kinds.
+    fn alloc_fn_preamble(
         &mut self,
-        (compound, parser_span): Spanned<CompoundStatement<LocalResolver>>,
         sig: &FnSig,
         param_names: &[(usize, String, RustSpan)],
-    ) -> HirBody {
+        parser_span: co2_ast::Span,
+    ) -> (
+        RustSpan,
+        Arena<HirLocal>,
+        Vec<LocalId>,
+        FxHashMap<usize, LocalId>,
+    ) {
         let body_span = self.to_rust_span(parser_span);
         let mut locals = Arena::new();
         let mut params = Vec::new();
@@ -320,6 +354,17 @@ impl HirCtx<'_> {
             params.push(id);
             self.c_variadic_local = Some(id);
         }
+        (body_span, locals, params, local_map)
+    }
+
+    fn lower_compound_statement(
+        &mut self,
+        (compound, parser_span): Spanned<CompoundStatement<LocalResolver>>,
+        sig: &FnSig,
+        param_names: &[(usize, String, RustSpan)],
+    ) -> HirBody {
+        let (body_span, mut locals, params, mut local_map) =
+            self.alloc_fn_preamble(sig, param_names, parser_span);
 
         let mut stmts = Vec::new();
         self.lower_compound_items(compound, &mut stmts, &mut locals, &mut local_map);
@@ -331,6 +376,30 @@ impl HirCtx<'_> {
             c_variadic_local: self.c_variadic_local,
             stmts,
             span: body_span,
+            naked: false,
+        }
+    }
+
+    fn lower_naked_compound_statement(
+        &mut self,
+        (compound, parser_span): Spanned<CompoundStatement<LocalResolver>>,
+        sig: &FnSig,
+        param_names: &[(usize, String, RustSpan)],
+    ) -> HirBody {
+        let (body_span, mut locals, params, mut local_map) =
+            self.alloc_fn_preamble(sig, param_names, parser_span);
+
+        let mut stmts = Vec::new();
+        self.lower_naked_compound_items(compound, &mut stmts, &mut locals, &mut local_map);
+
+        HirBody {
+            locals,
+            labels: self.take_labels(),
+            params,
+            c_variadic_local: self.c_variadic_local,
+            stmts,
+            span: body_span,
+            naked: true,
         }
     }
 }

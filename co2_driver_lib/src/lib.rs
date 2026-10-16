@@ -248,6 +248,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 resolver,
                 body,
                 had_errors,
+                naked,
             } => {
                 let span_converter = |span: co2_ast::Span| self.map_co2_span(&ctx, span);
                 let rust_span_converter =
@@ -262,10 +263,19 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     def.fn_sig().skip_binder().output(),
                     resolver.clone(),
                 );
+                // Naked functions skip the prologue/epilogue (via the
+                // `#[naked]` HIR attribute); their body must be basic asm
+                // only, and the MIR `return` is unreachable by construction,
+                // so borrowck's uninitialized-return-place warning would be
+                // noise.
 
                 let hir_start = Instant::now();
                 let hir = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    co2_hir::lower_function_body(body, def, &param_names, &mut hir_ctx)
+                    if naked {
+                        co2_hir::lower_naked_function_body(body, def, &param_names, &mut hir_ctx)
+                    } else {
+                        co2_hir::lower_function_body(body, def, &param_names, &mut hir_ctx)
+                    }
                 })) {
                     Ok(hir) => {
                         time_report::accumulate_hir_lowering(hir_start.elapsed());
@@ -323,6 +333,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 if BORROWCK_ENABLED.load(Ordering::Relaxed)
                     && !mir_result.is_error_recovery
                     && !had_errors
+                    && !naked
                 {
                     let borrowck_start = std::time::Instant::now();
                     self.emit_borrowck_warnings(&ctx, &mir_result.body);
@@ -753,6 +764,7 @@ fn build_error_fn_body(
         c_variadic_local,
         stmts,
         span,
+        naked: false,
     }
 }
 

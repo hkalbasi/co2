@@ -219,6 +219,8 @@ fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> 
             } else if attr.args.is_empty() {
                 if path == ["weak"] {
                     Some(Co2Attr::Weak)
+                } else if path == ["naked"] {
+                    Some(Co2Attr::Naked)
                 } else {
                     Some(Co2Attr::Word { path })
                 }
@@ -262,7 +264,7 @@ fn is_known_fn_word_attr(name: &str) -> bool {
     let name = name.trim_matches('_');
     matches!(
         name,
-        "test" | "ignore" | "should_panic" | "no_mangle" | "inline" | "weak"
+        "test" | "ignore" | "should_panic" | "no_mangle" | "inline" | "weak" | "naked"
     )
 }
 
@@ -1591,6 +1593,7 @@ fn lower_translation_unit_items(
                         resolver: resolver.clone(),
                         body,
                         had_errors: co2_ast::diagnostic_error_count() > errors_before_parse,
+                        naked: attrs.iter().any(|attr| matches!(attr, Co2Attr::Naked)),
                     },
                     Err(payload) => {
                         if co2_ast::is_diagnostic_abort(payload.as_ref()) {

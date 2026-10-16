@@ -847,12 +847,16 @@ impl DefinedCrateInfo {
             ItemSignatureKind::Function(sig) => Some((item.id, sig, item.span)),
             _ => None,
         }) {
-            let name = &self
+            let item_info = self
                 .items
                 .iter()
                 .find(|item| item.def_id() == my_def_id)
-                .unwrap()
-                .name;
+                .unwrap();
+            let name = &item_info.name;
+            let is_naked = item_info
+                .attrs
+                .iter()
+                .any(|attr| matches!(attr, GeneratedAttr::Naked));
             let def_id = my_def_id_to_rustc_def_id(tcx, my_def_id).expect_local();
             let mut item_allocator = HirItemAllocator::new(def_id);
             let body_hir_id = item_allocator.new_item();
@@ -865,31 +869,57 @@ impl DefinedCrateInfo {
                 &mut item_allocator,
                 rustc_public::rustc_internal::stable(span),
             );
-            let loop_expr = leak(hir::Block {
-                stmts: &[],
-                expr: None,
-                hir_id: item_allocator.new_item(),
-                rules: rustc_hir::BlockCheckMode::DefaultBlock,
-                span,
-                targeted_by_break: false,
-            });
-            let body_kind =
-                hir::ExprKind::Loop(loop_expr, None, rustc_hir::LoopSource::Loop, DUMMY_SP);
-            let body_expr = leak(hir::Expr {
-                hir_id: body_hir_id,
-                kind: body_kind,
-                span,
-            });
-            item_allocator.set_node(
-                body_expr.hir_id.local_id,
-                hir::Node::Expr(body_expr),
-                ItemLocalId::ZERO,
-            );
-            item_allocator.set_node(
-                loop_expr.hir_id.local_id,
-                hir::Node::Block(loop_expr),
-                body_expr.hir_id.local_id,
-            );
+            // Naked fns are checked on HIR (E0787) before our `mir_built`
+            // override runs, so the stub body must itself be a single
+            // `naked_asm!` (the real body comes from our MIR).
+            let body_expr = if is_naked {
+                let asm = leak(hir::InlineAsm {
+                    asm_macro: rustc_ast::AsmMacro::NakedAsm,
+                    template: &[],
+                    template_strs: &[],
+                    operands: &[],
+                    options: InlineAsmOptions::empty(),
+                    line_spans: &[],
+                });
+                let body_expr = leak(hir::Expr {
+                    hir_id: body_hir_id,
+                    kind: hir::ExprKind::InlineAsm(asm),
+                    span,
+                });
+                item_allocator.set_node(
+                    body_expr.hir_id.local_id,
+                    hir::Node::Expr(body_expr),
+                    ItemLocalId::ZERO,
+                );
+                body_expr
+            } else {
+                let loop_expr = leak(hir::Block {
+                    stmts: &[],
+                    expr: None,
+                    hir_id: item_allocator.new_item(),
+                    rules: rustc_hir::BlockCheckMode::DefaultBlock,
+                    span,
+                    targeted_by_break: false,
+                });
+                let body_kind =
+                    hir::ExprKind::Loop(loop_expr, None, rustc_hir::LoopSource::Loop, DUMMY_SP);
+                let body_expr = leak(hir::Expr {
+                    hir_id: body_hir_id,
+                    kind: body_kind,
+                    span,
+                });
+                item_allocator.set_node(
+                    body_expr.hir_id.local_id,
+                    hir::Node::Expr(body_expr),
+                    ItemLocalId::ZERO,
+                );
+                item_allocator.set_node(
+                    loop_expr.hir_id.local_id,
+                    hir::Node::Block(loop_expr),
+                    body_expr.hir_id.local_id,
+                );
+                body_expr
+            };
             let mut params = function
                 .inputs
                 .iter()
@@ -1704,7 +1734,6 @@ impl DefinedCrateState {
             });
         r
     }
-
     fn contains_key(&self, tcx: TyCtxt<'_>, key: &LocalDefId) -> bool {
         match self {
             DefinedCrateState::Stage0 => false,
@@ -1712,6 +1741,22 @@ impl DefinedCrateState {
             | DefinedCrateState::Stage2(defined_crate_info, _) => defined_crate_info
                 .find_item_by_rustc(tcx, key.to_def_id())
                 .is_some(),
+        }
+    }
+
+    /// Whether `key` is a function carrying co2's `naked` marker (from GNU
+    /// `__attribute__((naked))`), used to tag its `InlineAsm` as `naked_asm!`.
+    fn is_naked_fn(&self, tcx: TyCtxt<'_>, key: &LocalDefId) -> bool {
+        match self {
+            DefinedCrateState::Stage0 => false,
+            DefinedCrateState::Stage1(defined_crate_info)
+            | DefinedCrateState::Stage2(defined_crate_info, _) => defined_crate_info
+                .find_item_by_rustc(tcx, key.to_def_id())
+                .is_some_and(|item| {
+                    item.attrs
+                        .iter()
+                        .any(|attr| matches!(attr, GeneratedAttr::Naked))
+                }),
         }
     }
 
@@ -4862,6 +4907,7 @@ fn generated_attr(attr: &GeneratedAttr) -> Option<hir::Attribute> {
             hir::attrs::AttributeKind::Linkage(hir::attrs::Linkage::WeakAny, DUMMY_SP)
         }
         GeneratedAttr::ThreadLocal => hir::attrs::AttributeKind::ThreadLocal,
+        GeneratedAttr::Naked => hir::attrs::AttributeKind::Naked(DUMMY_SP),
     };
     Some(hir::Attribute::Parsed(kind))
 }
@@ -5230,6 +5276,22 @@ fn build_mir_body<'tcx>(
     body: &MirBody,
     owner: LocalDefId,
 ) -> rustc_middle::mir::Body<'static> {
+    // GNU `__attribute__((naked))` functions lower their basic asm to the
+    // same MIR `InlineAsm` as `asm!`; rustc only accepts it in a naked
+    // body when marked as `naked_asm!`, so recover the marker from co2's
+    // own item table (the stable MIR has no room for it).
+    let naked = {
+        let state = GENERATE_STATE
+            .get()
+            .cloned()
+            .expect("generate state missing");
+        let guard = state.state.try_lock().unwrap();
+        let naked = guard.defined_crate.is_naked_fn(tcx, &owner);
+        if std::env::var("GEN_DEBUG").is_ok() {
+            eprintln!("build_mir_body {owner:?} naked={naked}");
+        }
+        naked
+    };
     let max_vdi_scope = body
         .var_debug_info
         .iter()
@@ -5502,15 +5564,23 @@ fn build_mir_body<'tcx>(
                     let line_spans =
                         tcx.arena.alloc_from_iter(std::iter::repeat_n(DUMMY_SP, line_count));
                     let destination = destination
-                        .map(rustc_middle::mir::BasicBlock::from_usize)
-                        .expect("co2 asm always has a fallthrough destination");
+                        .map(rustc_middle::mir::BasicBlock::from_usize);
+                    // Naked functions end in a single diverging `naked_asm!`
+                    // with no destination (`targets` empty); every other
+                    // co2 asm falls through to the next block.
+                    let targets: Box<[rustc_middle::mir::BasicBlock]> =
+                        destination.into_iter().collect();
                     rustc_middle::mir::TerminatorKind::InlineAsm {
-                        asm_macro: InlineAsmMacro::Asm,
+                        asm_macro: if naked {
+                            InlineAsmMacro::NakedAsm
+                        } else {
+                            InlineAsmMacro::Asm
+                        },
                         template,
                         operands,
                         options,
                         line_spans,
-                        targets: Box::new([destination]),
+                        targets,
                         unwind: rustc_middle::mir::UnwindAction::Unreachable,
                     }
                 }
