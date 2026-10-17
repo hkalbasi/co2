@@ -1552,7 +1552,12 @@ impl<'a, R: TypeResolver> P<'a, R> {
         let mut list = Vec::new();
         loop {
             let sstart = self.pos;
-            if is_type_qualifier(self.peek(0)) {
+            if self.at(&Token::Hash) {
+                // `__attribute__((...))` inside a type-name (e.g. a cast)
+                // becomes a `#[...]` marker; it carries no type meaning, so
+                // skip it.
+                self.parse_attr_list()?;
+            } else if is_type_qualifier(self.peek(0)) {
                 let q = self.parse_type_qualifier()?;
                 list.push((
                     SpecifierQualifier::TypeQualifier(q),
@@ -1693,6 +1698,11 @@ impl<'a, R: TypeResolver> P<'a, R> {
         // struct/union (fields, variables, functions, abstract declarators)
         // carries no layout meaning here; drop it like other attributes.
         while self.eat(&Token::PackedAttr).is_some() {}
+        if self.at(&Token::Hash) {
+            // `__attribute__((...))` before a declarator (e.g. `int (ATTR *)`)
+            // becomes a `#[...]` marker; skip it, the attribute is ignored.
+            self.parse_attr_list()?;
+        }
         let mut pointers: Vec<(Vec<Spanned<TypeQualifier>>, Span)> = Vec::new();
         while self.at(&Token::Star) {
             let star = self.peek_span(0);
@@ -1754,13 +1764,15 @@ impl<'a, R: TypeResolver> P<'a, R> {
             let cp = self.checkpoint();
             self.pos += 1;
             match self.parse_declarator() {
-                Ok(inner) => {
-                    self.expect(&Token::RParen, ")")?;
+                Ok(inner) if self.at(&Token::RParen) => {
+                    self.pos += 1;
                     inner
                 }
-                Err(_) => {
+                _ => {
                     self.restore(cp);
-                    // Abstract empty (e.g. `void` param, `(*)` cast).
+                    // Not a grouped declarator: abstract empty (e.g. `void`
+                    // param, `(*)` cast) or a parameter-type-list tail such as
+                    // `int (int)`, parsed by the loop below.
                     (Declarator::Abstract, self.cur_span())
                 }
             }
