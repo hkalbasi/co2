@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <assert.h>
 #include <stdint.h>
+#include <limits.h>
 
 // ------------------------------------------------------------------
 // 1. Basic asm – no operands, implicitly volatile
@@ -36,11 +37,20 @@ __asm__(".globl my_asm_global\n"
 // ------------------------------------------------------------------
 
 void test_extended_empty(void) {
+    int x = 7;
+
     // Empty extended asm with all three sections empty.
     __asm__ __volatile__("" : : : );
 
     // A nop with no operands.
     __asm__ __volatile__("nop" : : : );
+
+    // Empty/trailing sections may be abbreviated to consecutive colons.
+    // co2 currently rejects these with `expected ), found ::`.
+    __asm__ __volatile__("" :: "r"(x));    // clobbers omitted
+    __asm__ __volatile__("" ::: "memory"); // outputs and inputs omitted
+    __asm__ __volatile__("" ::);           // inputs and clobbers omitted
+    __asm__ __volatile__("" :::);          // all four sections empty
 }
 
 // ------------------------------------------------------------------
@@ -303,12 +313,45 @@ void test_local_register_vars(void) {
 // 20. Matching constraint (`"0"` reuses the output register)
 // ------------------------------------------------------------------
 
+// A wider tied input must be truncated into the output register, so the
+// int output reads the low part of the long long (GCC torture 20030222-1).
+// The volatile store forces the result through an actual `int`. co2
+// currently ICEs on this (`broken MIR`, i64/i32).
+static void ll_to_int(long long x, volatile int *p) {
+    int i = 0;
+    __asm__("" : "=r"(i) : "0"(x));
+    *p = i;
+}
+
 void test_matching(void) {
-    int out = 0, in = 42;
-    __asm__("movl %1, %0"
-            : "=r"(out)
-            : "0"(in));
-    assert(out == 42);
+    {
+        int out = 0, in = 42;
+        __asm__("movl %1, %0"
+                : "=r"(out)
+                : "0"(in));
+        assert(out == 42);
+    }
+
+    {
+        volatile int i = 0;
+        ll_to_int((long long)(INT_MIN + 1), &i);
+        assert(i == INT_MIN + 1);
+        ll_to_int(0x1123456789LL, &i);
+        assert(i == 0x23456789); // low 32 bits
+    }
+
+    // A constant tied to a write-only output must be live in the output
+    // register when the (empty) asm runs, so the output reads it back
+    // (GCC PR middle-end/38533). co2 currently reads an uninitialised
+    // register, making the assertion below fail at run time.
+    {
+        int e = 0, f = 0;
+        for (int k = 0; k < 64; k++) {
+            __asm__ __volatile__("" : "=r"(f) : "0"(0));
+            e |= f;
+        }
+        assert(e == 0);
+    }
 }
 
 // ------------------------------------------------------------------

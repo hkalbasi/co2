@@ -237,8 +237,10 @@ impl Builder<'_, '_> {
             }
         }
 
-        // Lower places/operands, build MIR operands in GNU order. Matching
-        // inputs become pre-copies into the matched output (GCC semantics).
+        // Lower places/operands, build MIR operands in GNU order. A matching
+        // input (`"0"`) is folded into the output it ties to as an inout
+        // operand: the input value must be live in the output register when
+        // the asm runs, which a write-only output does not guarantee.
         let mut mir_operands: Vec<InlineAsmOperand> = Vec::new();
         // (mem output temp, destination place) for post-asm store-backs.
         let mut store_backs: Vec<(MirPlace, MirPlace)> = Vec::new();
@@ -246,8 +248,15 @@ impl Builder<'_, '_> {
         let mut gnu_to_mir: Vec<usize> = vec![usize::MAX; ops.len()];
         // GNU index -> rendered as an immediate (gets a GCC-style `$` prefix).
         let mut gnu_is_imm: Vec<bool> = vec![false; ops.len()];
-        // Output GNU index -> place for matching-input pre-copies.
-        let mut out_places: Vec<MirPlace> = vec![place(usize::MAX); asm.outputs.len()];
+        // Output GNU index -> the matching input tied to its register.
+        let mut tied_inputs: Vec<Option<usize>> = vec![None; asm.outputs.len()];
+        for op in &ops {
+            if let Some(out_gnu) = op.matches
+                && tied_inputs[out_gnu].is_none()
+            {
+                tied_inputs[out_gnu] = Some(op.gnu_index);
+            }
+        }
 
         for op in &ops {
             if op.matches.is_some() {
@@ -262,8 +271,28 @@ impl Builder<'_, '_> {
                         "unsupported asm output lvalue (only variables, dereferences and fields are supported)",
                     )
                 });
-                if op.is_inout {
-                    let in_value = self.asm_value_for_reg(&op.expr, span);
+                let tied = tied_inputs[op.gnu_index];
+                if op.is_inout || tied.is_some() {
+                    let in_value = match tied {
+                        Some(in_gnu) => {
+                            let in_expr = &ops[in_gnu].expr;
+                            let value = self.asm_value_for_reg(in_expr, span);
+                            // A tied input of a different type (e.g. a wider
+                            // `long long` tied to an `int` output) is
+                            // truncated to the output's width.
+                            if in_expr.ty == op.expr.ty {
+                                value
+                            } else {
+                                self.lower_cast(
+                                    value,
+                                    self.const_temp_ty(in_expr.ty),
+                                    op.expr.ty,
+                                    span,
+                                )
+                            }
+                        }
+                        None => self.asm_value_for_reg(&op.expr, span),
+                    };
                     if op.is_mem {
                         let tmp = self.new_temp(op.expr.ty, Mutability::Mut, span);
                         self.emit_assign_use(place(tmp), in_value, span);
@@ -274,18 +303,14 @@ impl Builder<'_, '_> {
                             place(tmp),
                         ));
                         store_backs.push((place(tmp), dst));
-                        out_places[op.gnu_index] = place(tmp).clone();
                     } else {
-                        out_places[op.gnu_index] = dst.clone();
                         mir_operands.push(self.mk_inout(op.late, op.size, in_value, dst));
                     }
                 } else if op.is_mem {
                     let tmp = self.new_temp(op.expr.ty, Mutability::Mut, span);
                     mir_operands.push(self.mk_out(op.late, op.size, Some(place(tmp))));
                     store_backs.push((place(tmp), dst));
-                    out_places[op.gnu_index] = place(tmp).clone();
                 } else {
-                    out_places[op.gnu_index] = dst.clone();
                     mir_operands.push(self.mk_out(op.late, op.size, Some(dst)));
                 }
             } else if op.is_const {
@@ -322,8 +347,6 @@ impl Builder<'_, '_> {
         for op in &ops {
             if let Some(out_gnu) = op.matches {
                 gnu_to_mir[op.gnu_index] = gnu_to_mir[out_gnu];
-                let in_value = self.lower_expr_to_operand(&op.expr);
-                self.emit_assign_use(out_places[out_gnu].clone(), in_value, span);
             }
         }
 

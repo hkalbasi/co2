@@ -3145,29 +3145,35 @@ impl<'a, R: TypeResolver> P<'a, R> {
         let mut outputs = Vec::new();
         let mut inputs = Vec::new();
         let mut clobbers = Vec::new();
-        let mut is_basic = true;
-        if self.eat(&Token::Colon).is_some() {
-            is_basic = false;
-            if !self.at(&Token::Colon) && !self.at(&Token::RParen) {
+        // `::` lexes as one `ColonColon` token but stands for two section
+        // separators, so count colons rather than matching one at a time;
+        // this also handles abbreviated empty sections (`::`, `:::`).
+        let mut colons = self.eat_asm_colons();
+        let is_basic = colons == 0;
+        if colons == 1 {
+            if !self.at_asm_section_end() {
                 outputs = self.parse_asm_operands()?;
             }
-            if self.eat(&Token::Colon).is_some() {
-                if !self.at(&Token::Colon) && !self.at(&Token::RParen) {
-                    inputs = self.parse_asm_operands()?;
-                }
-                if self.eat(&Token::Colon).is_some() {
-                    if !self.at(&Token::Colon) && !self.at(&Token::RParen) {
-                        clobbers = self.parse_asm_clobbers()?;
-                    }
-                    if self.eat(&Token::Colon).is_some() {
-                        return Err(self.fail_here(
-                            "asm goto labels are not supported: stable Rust has no equivalent; \
-                             compute the condition into an output and branch in C instead"
-                                .to_string(),
-                        ));
-                    }
-                }
+            colons += self.eat_asm_colons();
+        }
+        if colons == 2 {
+            if !self.at_asm_section_end() {
+                inputs = self.parse_asm_operands()?;
             }
+            colons += self.eat_asm_colons();
+        }
+        if colons == 3 {
+            if !self.at_asm_section_end() {
+                clobbers = self.parse_asm_clobbers()?;
+            }
+            colons += self.eat_asm_colons();
+        }
+        if colons >= 4 {
+            return Err(self.fail_here(
+                "asm goto labels are not supported: stable Rust has no equivalent; \
+                 compute the condition into an output and branch in C instead"
+                    .to_string(),
+            ));
         }
         self.expect(&Token::RParen, ")")?;
         Ok(AsmStatement {
@@ -3178,6 +3184,27 @@ impl<'a, R: TypeResolver> P<'a, R> {
             clobbers,
             is_volatile,
         })
+    }
+
+    /// Consume asm section separators, counting single colons (`::` counts
+    /// as two). Returns the number consumed.
+    fn eat_asm_colons(&mut self) -> usize {
+        let mut n = 0;
+        loop {
+            if self.eat(&Token::Colon).is_some() {
+                n += 1;
+            } else if self.eat(&Token::ColonColon).is_some() {
+                n += 2;
+            } else {
+                break;
+            }
+        }
+        n
+    }
+
+    /// True at a section boundary: a separator (single or `::`) or `)`.
+    fn at_asm_section_end(&self) -> bool {
+        self.at(&Token::Colon) || self.at(&Token::ColonColon) || self.at(&Token::RParen)
     }
 
     /// Parse comma-separated `[name] "constraint" (expr)` operands.
