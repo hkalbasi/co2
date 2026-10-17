@@ -77,6 +77,8 @@ pub struct HirCtx<'a> {
     break_labels: RefCell<Vec<LabelId>>,
     switch_scopes: RefCell<Vec<SwitchScope>>,
     pub(crate) c_variadic_local: Option<LocalId>,
+    /// Backing `Vec<Vec<u128>>` local, lazily created on the first `alloca`.
+    pub(crate) alloca_storage: RefCell<Option<LocalId>>,
     pub(crate) decl_resolver: LocalResolver,
     pub(crate) function_name: Option<String>,
     pub(crate) ret_ty: Ty,
@@ -101,6 +103,7 @@ impl<'a> HirCtx<'a> {
             break_labels: RefCell::new(Vec::new()),
             switch_scopes: RefCell::new(Vec::new()),
             c_variadic_local: None,
+            alloca_storage: RefCell::new(None),
             decl_resolver,
             function_name,
             ret_ty,

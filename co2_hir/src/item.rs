@@ -14,7 +14,7 @@ use rustc_public_generative::rustc_public::{
 
 use crate::initializer_tree::{ARRAY_LEN_PROBE, InitializerTree, eval_const_int};
 use crate::resolver::{HirCtx, ResolvedValue};
-use crate::{HirExpr, HirExprKind, HirStmt};
+use crate::{HirDecl, HirExpr, HirExprKind, HirStmt};
 
 #[derive(Clone, Debug)]
 pub struct HirLocal {
@@ -331,6 +331,7 @@ impl HirCtx<'_> {
         FxHashMap<usize, LocalId>,
     ) {
         let body_span = self.to_rust_span(parser_span);
+        *self.alloca_storage.borrow_mut() = None;
         let mut locals = Arena::new();
         let mut params = Vec::new();
         let mut local_map: FxHashMap<usize, LocalId> = FxHashMap::default();
@@ -368,6 +369,19 @@ impl HirCtx<'_> {
 
         let mut stmts = Vec::new();
         self.lower_compound_items(compound, &mut stmts, &mut locals, &mut local_map);
+        if let Some((storage, init)) = self.take_alloca_storage_init(body_span) {
+            // Free the backing store before every `return`, and on fall-through.
+            self.insert_alloca_storage_drops(&mut stmts, storage, &mut locals, body_span);
+            stmts.push(self.alloca_storage_drop(storage, body_span));
+            stmts.insert(
+                0,
+                HirStmt::Decl(HirDecl {
+                    local: storage,
+                    initializer: Some(init),
+                    span: body_span,
+                }),
+            );
+        }
 
         HirBody {
             locals,

@@ -269,6 +269,9 @@ pub enum Expression<R: TypeResolver> {
         op: Spanned<String>,
         args: Vec<Spanned<Expression<R>>>,
     },
+    Alloca {
+        size: Box<Spanned<Expression<R>>>,
+    },
 }
 
 #[derive(Debug, Clone)]

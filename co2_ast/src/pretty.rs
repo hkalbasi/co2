@@ -902,6 +902,9 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Expression<R>> {
                     }
                 });
             }
+            Expression::Alloca { size } => {
+                pp.node("Alloca", &sp, |pp| size.pretty_print(pp));
+            }
         }
     }
 }

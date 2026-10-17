@@ -667,6 +667,26 @@ fn parse_primary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression
             if let Some(Token::Ident(name)) = p.peek(0) {
                 let name = name.clone();
                 if matches!(p.peek(1), Some(Token::LParen)) {
+                    // `__builtin_alloca` is syntax, not a function: glibc's
+                    // `<alloca.h>` macro-expands `alloca` to it, so it never
+                    // resolves as a path. Form an `Alloca` node directly.
+                    if name == "__builtin_alloca" {
+                        p.pos += 1;
+                        let args = parse_call_args(p)?;
+                        let span = p.span_since(start);
+                        let [size] = args.as_slice() else {
+                            return Err(p.fail_here(format!(
+                                "`__builtin_alloca` expects exactly 1 argument, got {}",
+                                args.len()
+                            )));
+                        };
+                        return Ok((
+                            Expression::Alloca {
+                                size: Box::new(size.clone()),
+                            },
+                            span,
+                        ));
+                    }
                     if let Some(inner) = co2_ast::atomic_builtin_inner(&name) {
                         let name_span = p.peek_span(0);
                         p.pos += 1;

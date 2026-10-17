@@ -100,6 +100,7 @@ pub fn expr_contains_label_address<R: TypeResolver>(expr: &Expression<R>) -> boo
         }
         Expression::VaArg { args, .. } => expr_contains_label_address(&args.0),
         Expression::BuiltinConstantP { expr } => expr_contains_label_address(&expr.0),
+        Expression::Alloca { size } => expr_contains_label_address(&size.0),
         Expression::BuiltinComplex { re, im } => {
             expr_contains_label_address(&re.0) || expr_contains_label_address(&im.0)
         }

@@ -23,7 +23,7 @@ use co2_preprocessor::PreprocessedSource;
 use rustc_public_generative::rustc_public::{
     DefId,
     mir::Mutability,
-    ty::{AdtDef, FloatTy, FnDef, IntTy, RigidTy, Span, Ty, UintTy},
+    ty::{AdtDef, FloatTy, FnDef, GenericArgKind, GenericArgs, IntTy, RigidTy, Span, Ty, UintTy},
 };
 use rustc_public_generative::{
     AdtRepr, DefData, FileId, ForeignModItem, FunctionAbi, FunctionSignature, GeneratedAttr,
@@ -67,6 +67,7 @@ pub struct WellknownDefs {
     pub offset_const: FnDef,
     pub offset_from: FnDef,
     pub zeroed: FnDef,
+    pub drop: FnDef,
     /// The generic `core::sync::atomic::Atomic` ADT, for enumerating its
     /// inherent impls during atomic method resolution (impls are matched
     /// by Self type so same-named methods on different widths cannot be
@@ -78,6 +79,12 @@ pub struct WellknownDefs {
     pub atomic_ordering_variants: [usize; 5],
     pub atomic_fence: FnDef,
     pub atomic_compiler_fence: FnDef,
+    /// `alloc::vec::Vec`, for `alloca`'s backing storage.
+    pub vec: AdtDef,
+    /// `alloc::alloc::Global`, the default `Vec` allocator argument.
+    pub global: AdtDef,
+    pub vec_new: FnDef,
+    pub vec_with_capacity: FnDef,
 }
 
 fn has_const_qualifier_in_decl_specs(
@@ -603,6 +610,7 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         Expression::BuiltinComplex { re, im } => {
             expr_contains_local(&re.0) || expr_contains_local(&im.0)
         }
+        Expression::Alloca { size } => expr_contains_local(&size.0),
         Expression::Empty
         | Expression::Constant(_)
         | Expression::LabelAddress(_)
@@ -2526,6 +2534,19 @@ pub fn lower_crate_sig(
         )
     };
 
+    let vec_adt = AdtDef(ctx.resolve("alloc::vec::Vec").unwrap().0);
+    let global_adt = AdtDef(ctx.resolve("alloc::alloc::Global").unwrap().0);
+    let vec_u128_ty = Ty::from_rigid_kind(RigidTy::Adt(
+        vec_adt,
+        GenericArgs(vec![
+            GenericArgKind::Type(Ty::from_rigid_kind(RigidTy::Uint(UintTy::U128))),
+            GenericArgKind::Type(Ty::from_rigid_kind(RigidTy::Adt(
+                global_adt,
+                GenericArgs(vec![]),
+            ))),
+        ]),
+    ));
+
     let atomic_adt = AdtDef(ctx.resolve("core::sync::atomic::Atomic").unwrap().0);
     let atomic_ordering = AdtDef(ctx.resolve("core::sync::atomic::Ordering").unwrap().0);
     let mut atomic_ordering_variants = [0usize; 5];
@@ -2567,6 +2588,7 @@ pub fn lower_crate_sig(
         c_void: AdtDef(ctx.resolve("core::ffi::c_void").unwrap().0),
         clone: FnDef(ctx.resolve("core::clone::Clone::clone").unwrap().0),
         zeroed: FnDef(ctx.resolve("core::mem::zeroed").unwrap().0),
+        drop: FnDef(ctx.resolve("core::mem::drop").unwrap().0),
         transmute: FnDef(ctx.resolve("core::intrinsics::transmute").unwrap().0),
         transmute_copy: FnDef(ctx.resolve("core::mem::transmute_copy").unwrap().0),
         offset_mut: resolve_inherent_method(
@@ -2595,6 +2617,10 @@ pub fn lower_crate_sig(
         atomic_ordering_variants,
         atomic_fence: FnDef(ctx.resolve("core::sync::atomic::fence").unwrap().0),
         atomic_compiler_fence: FnDef(ctx.resolve("core::sync::atomic::compiler_fence").unwrap().0),
+        vec: vec_adt,
+        global: global_adt,
+        vec_new: resolve_inherent_method(vec_u128_ty, "new"),
+        vec_with_capacity: resolve_inherent_method(vec_u128_ty, "with_capacity"),
     };
     (
         HirStructure {

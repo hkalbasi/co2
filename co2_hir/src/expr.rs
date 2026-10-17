@@ -2227,6 +2227,9 @@ impl HirCtx<'_> {
                 ty: string_literal_ptr_ty(&s),
                 span,
             }),
+            Expression::Alloca { size } => {
+                self.lower_alloca(*size, span, parser_span, locals, local_map)
+            }
             Expression::Call { func, params } => {
                 let func_name = func.1.source_text().unwrap_or_default();
                 if let Some(lowered) =
@@ -5174,6 +5177,271 @@ impl HirCtx<'_> {
                 self.format_ty(target_ty),
             ),
         );
+    }
+
+    fn alloca_u128_ty(&self) -> Ty {
+        Ty::unsigned_ty(UintTy::U128)
+    }
+
+    fn alloca_global_ty(&self) -> Ty {
+        Ty::from_rigid_kind(RigidTy::Adt(
+            self.wellknown_defs.global,
+            GenericArgs(vec![]),
+        ))
+    }
+
+    fn alloca_vec_ty(&self, inner: Ty) -> Ty {
+        Ty::from_rigid_kind(RigidTy::Adt(
+            self.wellknown_defs.vec,
+            GenericArgs(vec![
+                GenericArgKind::Type(inner),
+                GenericArgKind::Type(self.alloca_global_ty()),
+            ]),
+        ))
+    }
+
+    /// One `alloca` block: `Vec<u128>` (`u128` gives 16-byte alignment,
+    /// matching `max_align_t` on x86-64).
+    fn alloca_block_ty(&self) -> Ty {
+        self.alloca_vec_ty(self.alloca_u128_ty())
+    }
+
+    /// Type of the per-function `alloca` backing store: `Vec<Vec<u128>>`.
+    pub(crate) fn alloca_storage_ty(&self) -> Ty {
+        self.alloca_vec_ty(self.alloca_block_ty())
+    }
+
+    fn alloca_storage_local(&self, locals: &mut Arena<HirLocal>, span: RustSpan) -> LocalId {
+        let existing = *self.alloca_storage.borrow();
+        if let Some(id) = existing {
+            return id;
+        }
+        let id = locals.alloc(HirLocal {
+            name: "__co2_alloca".to_owned(),
+            ty: self.alloca_storage_ty(),
+            span,
+            read_only: false,
+        });
+        *self.alloca_storage.borrow_mut() = Some(id);
+        id
+    }
+
+    /// If this body used `alloca`, return the storage local and its
+    /// `Vec::new()` initializer so the caller can prepend it to the body.
+    pub(crate) fn take_alloca_storage_init(&self, span: RustSpan) -> Option<(LocalId, HirExpr)> {
+        let id = self.alloca_storage.borrow_mut().take()?;
+        let init = self.wellknown_call(
+            self.wellknown_defs.vec_new,
+            vec![GenericArgKind::Type(self.alloca_block_ty())],
+            vec![],
+            span,
+        );
+        Some((id, init))
+    }
+
+    /// A `core::mem::drop(storage)` statement, moving the alloca backing store
+    /// out so it is freed (and so the borrow checker sees no leak).
+    pub(crate) fn alloca_storage_drop(&self, storage: LocalId, span: RustSpan) -> HirStmt {
+        let ty = self.alloca_storage_ty();
+        let expr = self.wellknown_call(
+            self.wellknown_defs.drop,
+            vec![GenericArgKind::Type(ty)],
+            vec![HirExpr {
+                kind: HirExprKind::Local(storage),
+                ty,
+                span,
+            }],
+            span,
+        );
+        HirStmt::Expr(expr)
+    }
+
+    /// Insert `drop(storage)` before every `return` reachable in `stmts`. The
+    /// returned value (if any) is first moved into a temporary so it is
+    /// evaluated before the store is freed. The caller appends a final drop
+    /// for the fall-through path.
+    pub(crate) fn insert_alloca_storage_drops(
+        &self,
+        stmts: &mut Vec<HirStmt>,
+        storage: LocalId,
+        locals: &mut Arena<HirLocal>,
+        span: RustSpan,
+    ) {
+        let mut i = 0;
+        while i < stmts.len() {
+            match &mut stmts[i] {
+                HirStmt::If {
+                    then_stmts,
+                    else_stmts,
+                    ..
+                } => {
+                    self.insert_alloca_storage_drops(then_stmts, storage, locals, span);
+                    self.insert_alloca_storage_drops(else_stmts, storage, locals, span);
+                    i += 1;
+                }
+                HirStmt::Block(inner, _) => {
+                    self.insert_alloca_storage_drops(inner, storage, locals, span);
+                    i += 1;
+                }
+                HirStmt::Return(ret_expr, ret_span) => {
+                    let ret_span = *ret_span;
+                    match ret_expr.take() {
+                        Some(expr) => {
+                            // `tmp = expr; drop(storage); return tmp;` so the
+                            // store is not freed while `expr` still reads it.
+                            let ty = expr.ty;
+                            let tmp = locals.alloc(HirLocal {
+                                name: "__co2_alloca_ret".to_owned(),
+                                ty,
+                                span,
+                                read_only: false,
+                            });
+                            stmts[i] = HirStmt::Decl(HirDecl {
+                                local: tmp,
+                                initializer: Some(expr),
+                                span,
+                            });
+                            stmts.insert(i + 1, self.alloca_storage_drop(storage, span));
+                            stmts.insert(
+                                i + 2,
+                                HirStmt::Return(
+                                    Some(HirExpr {
+                                        kind: HirExprKind::Local(tmp),
+                                        ty,
+                                        span,
+                                    }),
+                                    ret_span,
+                                ),
+                            );
+                            i += 3;
+                        }
+                        None => {
+                            stmts.insert(i, self.alloca_storage_drop(storage, span));
+                            i += 2;
+                        }
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+    }
+
+    /// Lower `__builtin_alloca(size)` (and `alloca` via the `<alloca.h>` macro)
+    /// to a `Vec<u128>`-backed allocation. Each call appends a fresh `Vec` to
+    /// the function's storage `Vec` and returns a pointer into it, so the
+    /// memory outlives blocks and is freed when the store is dropped at return.
+    fn lower_alloca(
+        &self,
+        size: Spanned<Expression<LocalResolver>>,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let size = self.lower_expr((size.0, size.1), locals, local_map)?;
+        let usize_ty = Ty::unsigned_ty(UintTy::Usize);
+        let size = self.emit_cast(size, usize_ty);
+
+        // nwords = (size + 15) / 16, rounding the byte count up to `u128` words.
+        // `size + 15` can wrap for sizes within 15 of `usize::MAX`; such an
+        // allocation cannot succeed anyway.
+        let int_const = |v: i128| HirExpr {
+            kind: HirExprKind::ConstInt(v),
+            ty: usize_ty,
+            span,
+        };
+        let size_plus = self.lower_binop_from_lowered(
+            size,
+            int_const(15),
+            ParsedBinOp::Add,
+            span,
+            parser_span,
+            false,
+        )?;
+        let nwords = self.lower_binop_from_lowered(
+            size_plus,
+            int_const(16),
+            ParsedBinOp::Div,
+            span,
+            parser_span,
+            false,
+        )?;
+
+        let u128_ty = self.alloca_u128_ty();
+        let vec_u128_ty = self.alloca_vec_ty(u128_ty);
+
+        // v: Vec<u128> = Vec::with_capacity(nwords)
+        let v_local = locals.alloc(HirLocal {
+            name: "__co2_alloca_buf".to_owned(),
+            ty: vec_u128_ty,
+            span,
+            read_only: false,
+        });
+        let v_expr = HirExpr {
+            kind: HirExprKind::Local(v_local),
+            ty: vec_u128_ty,
+            span,
+        };
+        let v_init = self.wellknown_call(
+            self.wellknown_defs.vec_with_capacity,
+            vec![GenericArgKind::Type(u128_ty)],
+            vec![nwords],
+            span,
+        );
+
+        // p: *mut u128 = v.as_mut_ptr(), captured before `v` is moved into the store.
+        let ptr_u128_ty = Ty::new_ptr(u128_ty, Mutability::Mut);
+        let p_local = locals.alloc(HirLocal {
+            name: "__co2_alloca_ptr".to_owned(),
+            ty: ptr_u128_ty,
+            span,
+            read_only: false,
+        });
+        let p_init = self.atomic_method(v_expr.clone(), "as_mut_ptr", vec![], parser_span)?;
+
+        // storage.push(v)
+        let storage_local = self.alloca_storage_local(locals, span);
+        let storage_expr = HirExpr {
+            kind: HirExprKind::Local(storage_local),
+            ty: self.alloca_storage_ty(),
+            span,
+        };
+        let push = self.atomic_method(storage_expr, "push", vec![v_expr], parser_span)?;
+
+        let c_void_ty = Ty::from_rigid_kind(RigidTy::Adt(
+            self.wellknown_defs.c_void,
+            GenericArgs(vec![]),
+        ));
+        let void_ptr_ty = Ty::new_ptr(c_void_ty, Mutability::Mut);
+        let tail = self.emit_cast(
+            HirExpr {
+                kind: HirExprKind::Local(p_local),
+                ty: ptr_u128_ty,
+                span,
+            },
+            void_ptr_ty,
+        );
+
+        Ok(HirExpr {
+            kind: HirExprKind::StatementExpr {
+                statements: vec![
+                    HirStmt::Decl(HirDecl {
+                        local: v_local,
+                        initializer: Some(v_init),
+                        span,
+                    }),
+                    HirStmt::Decl(HirDecl {
+                        local: p_local,
+                        initializer: Some(p_init),
+                        span,
+                    }),
+                    HirStmt::Expr(push),
+                ],
+                tail: Box::new(tail),
+            },
+            ty: void_ptr_ty,
+            span,
+        })
     }
 
     /// Lower long-double complex math (`creall`, `cimagl`, `conjl`, `cabsl`,

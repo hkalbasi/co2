@@ -555,6 +555,9 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
                 op: op.clone(),
                 args: args.transform(b),
             },
+            Expression::Alloca { size } => Expression::Alloca {
+                size: size.transform(b),
+            },
         }
     }
 }
