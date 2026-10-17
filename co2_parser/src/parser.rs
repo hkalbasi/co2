@@ -40,6 +40,10 @@ pub(crate) struct P<'a, R> {
     pub pos: usize,
     pub end_span: Span,
     pub resolver: R,
+    /// `__attribute__((...))` markers seen between a `*` and the declarator
+    /// name (e.g. `int *__attribute__((noinline)) f(void)`). `parse_declaration`
+    /// folds them into the declaration's specifiers so they still reach codegen.
+    pub pending_decl_attrs: Vec<Spanned<RustAttribute>>,
 }
 
 impl<'a, R: TypeResolver> P<'a, R> {
@@ -49,6 +53,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
             pos: 0,
             end_span,
             resolver,
+            pending_decl_attrs: Vec::new(),
         }
     }
 
@@ -125,13 +130,18 @@ impl<'a, R: TypeResolver> P<'a, R> {
         }
     }
 
-    pub fn checkpoint(&self) -> (usize, R) {
-        (self.pos, self.resolver.clone())
+    pub fn checkpoint(&self) -> (usize, R, Vec<Spanned<RustAttribute>>) {
+        (
+            self.pos,
+            self.resolver.clone(),
+            self.pending_decl_attrs.clone(),
+        )
     }
 
-    pub fn restore(&mut self, cp: (usize, R)) {
+    pub fn restore(&mut self, cp: (usize, R, Vec<Spanned<RustAttribute>>)) {
         self.pos = cp.0;
         self.resolver = cp.1;
+        self.pending_decl_attrs = cp.2;
     }
 
     fn take_ident(&mut self, want: Option<&str>) -> Option<(String, Span)> {
@@ -1708,8 +1718,20 @@ impl<'a, R: TypeResolver> P<'a, R> {
             let star = self.peek_span(0);
             self.pos += 1;
             let mut quals = Vec::new();
-            while is_type_qualifier(self.peek(0)) {
-                quals.push(self.parse_type_qualifier()?);
+            // Type qualifiers and `__attribute__((...))` / `packed` markers may
+            // be interleaved after the `*`, e.g.
+            // `int *__attribute__((noinline)) f(void)`. The attribute belongs
+            // to the declaration; keep it for `parse_declaration` to fold in.
+            loop {
+                if is_type_qualifier(self.peek(0)) {
+                    quals.push(self.parse_type_qualifier()?);
+                } else if self.at(&Token::Hash) {
+                    let mut attrs = self.parse_attr_list()?;
+                    self.pending_decl_attrs.append(&mut attrs);
+                } else if self.eat(&Token::PackedAttr).is_some() {
+                } else {
+                    break;
+                }
             }
             pointers.push((quals, star));
         }
@@ -2030,8 +2052,24 @@ impl<'a, R: TypeResolver> P<'a, R> {
         Ok(result)
     }
 
+    /// Move `__attribute__((...))` markers seen after a `*` into the
+    /// declaration specifiers. Lowering merges `GNUAttribute` specs into the
+    /// item's attributes, so e.g. `noinline` still reaches codegen regardless
+    /// of where it was written in the declarator.
+    fn fold_pending_decl_attrs(&mut self, specs: &mut Vec<Spanned<DeclarationSpecifier<R>>>) {
+        if self.pending_decl_attrs.is_empty() {
+            return;
+        }
+        let attrs = std::mem::take(&mut self.pending_decl_attrs);
+        let span = join_spans(attrs.first().unwrap().1, attrs.last().unwrap().1);
+        specs.push((DeclarationSpecifier::GNUAttribute(attrs), span));
+    }
+
     pub fn parse_declaration(&mut self) -> PR<Spanned<Declaration<R>>> {
         let start = self.pos;
+        // Attributes collected inside a type-name/cast in some earlier
+        // production must not leak into this declaration.
+        self.pending_decl_attrs.clear();
         if self.at(&Token::StaticAssert) {
             let d = self.parse_static_assert()?;
             let span = self.span_since(start);
@@ -2079,6 +2117,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                             // not modeled; drop the marker.
                             while self.eat(&Token::PackedAttr).is_some() {}
                             if self.at(&Token::LBrace) {
+                                self.fold_pending_decl_attrs(&mut specs);
                                 let body = self.parse_lazy_compound()?;
                                 let span = self.span_since(start);
                                 let d = Declaration::FunctionDefinition {
@@ -2108,6 +2147,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                     Ok(declarators) => {
                         let trailing = self.parse_attr_list().unwrap_or_default();
                         if self.eat(&Token::Semicolon).is_some() {
+                            self.fold_pending_decl_attrs(&mut specs);
                             let span = self.span_since(start);
                             let mut leading: Vec<Spanned<RustAttribute>> = specs
                                 .iter()
@@ -2908,6 +2948,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
             pos: self.pos,
             end_span: self.end_span,
             resolver: self.resolver.clone(),
+            pending_decl_attrs: Vec::new(),
         };
         match tmp.parse_rust_path(true) {
             Ok((path, _)) => self.resolver.classify_path(&path).ok(),
@@ -2921,6 +2962,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
             pos: self.pos,
             end_span: self.end_span,
             resolver: self.resolver.clone(),
+            pending_decl_attrs: Vec::new(),
         };
         match tmp.parse_rust_path(true) {
             Ok(_) => tmp.at(&Token::Colon),

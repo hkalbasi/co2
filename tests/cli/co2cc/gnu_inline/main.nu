@@ -2,7 +2,8 @@
 
 # GNU inline attributes vs gcc.
 #
-# noinline: `__attribute__((noinline))` must survive -O2 (supported).
+# noinline: `__attribute__((noinline))` must survive -O2 (supported), also
+#   when written after the `*` in a pointer return type (get_ptr).
 # always_inline: `__attribute__((always_inline))` must force inlining at -O0
 #   (not yet supported — co2cc strips it, so this case fails).
 # Both use an opaque value (argc) so the call cannot fold away.
@@ -35,6 +36,17 @@ if $gcc_text !~ 'call.*target' {
 let co2_text = (open $co2_asm)
 if $co2_text !~ 'call.*target' {
     print "co2cc -O2 inlined target despite __attribute__((noinline))"
+    exit 1
+}
+
+# Same attribute, but written after the `*`: must survive -O2 too.
+if $gcc_text !~ 'call.*get_ptr' {
+    print "gcc -O2 did not keep a call to get_ptr [oracle broken?]"
+    exit 1
+}
+
+if $co2_text !~ 'call.*get_ptr' {
+    print "co2cc -O2 inlined get_ptr despite __attribute__((noinline)) after '*'"
     exit 1
 }
 
