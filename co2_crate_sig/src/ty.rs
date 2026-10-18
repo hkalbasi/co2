@@ -1416,8 +1416,13 @@ impl LocalResolverBase {
                 let t2 = self.lower_type_name_for_const(*ty2.clone(), *span);
                 Ok(i128::from(hir_tys_compatible(&t1, &t2)))
             }
-            Expression::BuiltinConstantP { expr } => {
-                Ok(i128::from(self.eval_const_expr(expr).is_ok()))
+            Expression::BuiltinFunction { name, args } => {
+                if name.0 == "__builtin_constant_p"
+                    && let [expr] = args.as_slice()
+                {
+                    return Ok(i128::from(self.eval_const_expr(expr).is_ok()));
+                }
+                Err(spanned_error(*span, "cannot call non-const function"))
             }
             Expression::GenericSelection {
                 controlling,
@@ -1449,9 +1454,7 @@ impl LocalResolverBase {
                     ))
                 }
             }
-            Expression::Call { .. } | Expression::Atomic { .. } => {
-                Err(spanned_error(*span, "cannot call non-const function"))
-            }
+            Expression::Call { .. } => Err(spanned_error(*span, "cannot call non-const function")),
             _ => Err(spanned_error(*span, "unsupported constant expression")),
         }
     }

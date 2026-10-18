@@ -331,48 +331,6 @@ fn parse_unary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R
                 p.span_since(start),
             ))
         }
-        Some(Token::BuiltinTypesCompatibleP) => {
-            p.pos += 1;
-            p.expect(&Token::LParen, "(")?;
-            let ty1 = p.parse_type_name()?;
-            p.expect(&Token::Comma, ",")?;
-            let ty2 = p.parse_type_name()?;
-            p.expect(&Token::RParen, ")")?;
-            Ok((
-                Expression::BuiltinTypesCompatibleP {
-                    ty1: Box::new(ty1),
-                    ty2: Box::new(ty2),
-                },
-                p.span_since(start),
-            ))
-        }
-        Some(Token::BuiltinConstantP) => {
-            p.pos += 1;
-            p.expect(&Token::LParen, "(")?;
-            let expr = parse_assignment(p)?;
-            p.expect(&Token::RParen, ")")?;
-            Ok((
-                Expression::BuiltinConstantP {
-                    expr: Box::new(expr),
-                },
-                p.span_since(start),
-            ))
-        }
-        Some(Token::BuiltinComplex) => {
-            p.pos += 1;
-            p.expect(&Token::LParen, "(")?;
-            let re = parse_assignment(p)?;
-            p.expect(&Token::Comma, ",")?;
-            let im = parse_assignment(p)?;
-            p.expect(&Token::RParen, ")")?;
-            Ok((
-                Expression::BuiltinComplex {
-                    re: Box::new(re),
-                    im: Box::new(im),
-                },
-                p.span_since(start),
-            ))
-        }
         Some(Token::Inc) | Some(Token::Dec) => {
             let op = if matches!(p.peek(0), Some(Token::Inc)) {
                 UpdateOp::Inc
@@ -438,7 +396,86 @@ fn parse_struct_init_fields<'a, R: TypeResolver>(
     })
 }
 
+/// Builtin function spellings that are syntax, not resolvable names.
+fn builtin_name(token: &Token) -> Option<&'static str> {
+    match token {
+        Token::BuiltinConstantP => Some("__builtin_constant_p"),
+        Token::BuiltinTypesCompatibleP => Some("__builtin_types_compatible_p"),
+        Token::BuiltinComplex => Some("__builtin_complex"),
+        Token::Ident(name) if name == "__builtin_alloca" => Some("__builtin_alloca"),
+        Token::Ident(name) => co2_ast::atomic_builtin_inner(name),
+        _ => None,
+    }
+}
+
+/// Match `builtin(args)` or `(builtin)(args)`, returning the builtin name,
+/// its span, and the number of tokens to skip before the call's `(`.
+fn builtin_call<'a, R: TypeResolver>(p: &P<'a, R>) -> Option<(&'static str, Span, usize)> {
+    let mut depth = 0;
+    while matches!(p.peek(depth), Some(Token::LParen)) {
+        depth += 1;
+    }
+    if depth == 0 {
+        let name = builtin_name(p.peek(0)?)?;
+        if !matches!(p.peek(1), Some(Token::LParen)) {
+            return None;
+        }
+        return Some((name, p.peek_span(0), 1));
+    }
+    let name = builtin_name(p.peek(depth)?)?;
+    if (1..=depth).any(|i| !matches!(p.peek(depth + i), Some(Token::RParen))) {
+        return None;
+    }
+    if !matches!(p.peek(2 * depth + 1), Some(Token::LParen)) {
+        return None;
+    }
+    Some((name, p.peek_span(depth), 2 * depth + 1))
+}
+
+fn parse_builtin_call<'a, R: TypeResolver>(
+    p: &mut P<'a, R>,
+    name: &'static str,
+    name_span: Span,
+    start: usize,
+) -> PR<Spanned<Expression<R>>> {
+    // `__builtin_types_compatible_p` takes type names, not expressions.
+    if name == "__builtin_types_compatible_p" {
+        p.expect(&Token::LParen, "(")?;
+        let ty1 = p.parse_type_name()?;
+        p.expect(&Token::Comma, ",")?;
+        let ty2 = p.parse_type_name()?;
+        p.expect(&Token::RParen, ")")?;
+        return Ok((
+            Expression::BuiltinTypesCompatibleP {
+                ty1: Box::new(ty1),
+                ty2: Box::new(ty2),
+            },
+            p.span_since(start),
+        ));
+    }
+    Ok((
+        Expression::BuiltinFunction {
+            name: (name.to_owned(), name_span),
+            args: parse_call_args(p)?,
+        },
+        p.span_since(start),
+    ))
+}
+
 fn parse_postfix<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression<R>>> {
+    let start = p.pos;
+    // Builtins are syntax, not resolvable functions: both the direct and the
+    // parenthesised callee form parse to the same node.
+    if let Some((name, name_span, skip)) = builtin_call(p) {
+        p.pos += skip;
+        return parse_builtin_call(p, name, name_span, start);
+    }
+    // A builtin name without a call is not a function pointer.
+    if let Some(name) = p.peek(0).and_then(builtin_name) {
+        return Err(p.fail_here(format!(
+            "builtin function `{name}` must be called"
+        )));
+    }
     let mut node = parse_primary(p)?;
     let span = node.1;
     loop {
@@ -660,48 +697,6 @@ fn parse_primary<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression
         }
         Some(Token::Lt) => return parse_ufcs_path(p, start),
         Some(Token::Ident(_)) | Some(Token::ColonColon) => {
-            // Atomic builtins are syntax, not paths: intercept `__atomic_*`,
-            // `__sync_*` (and bare `atomic_*`) calls before path resolution,
-            // so `(void)__atomic_fetch_add(...)` parses even though the name
-            // never resolves as a value.
-            if let Some(Token::Ident(name)) = p.peek(0) {
-                let name = name.clone();
-                if matches!(p.peek(1), Some(Token::LParen)) {
-                    // `__builtin_alloca` is syntax, not a function: glibc's
-                    // `<alloca.h>` macro-expands `alloca` to it, so it never
-                    // resolves as a path. Form an `Alloca` node directly.
-                    if name == "__builtin_alloca" {
-                        p.pos += 1;
-                        let args = parse_call_args(p)?;
-                        let span = p.span_since(start);
-                        let [size] = args.as_slice() else {
-                            return Err(p.fail_here(format!(
-                                "`__builtin_alloca` expects exactly 1 argument, got {}",
-                                args.len()
-                            )));
-                        };
-                        return Ok((
-                            Expression::Alloca {
-                                size: Box::new(size.clone()),
-                            },
-                            span,
-                        ));
-                    }
-                    if let Some(inner) = co2_ast::atomic_builtin_inner(&name) {
-                        let name_span = p.peek_span(0);
-                        p.pos += 1;
-                        let args = parse_call_args(p)?;
-                        let span = p.span_since(start);
-                        return Ok((
-                            Expression::Atomic {
-                                op: (inner.to_string(), name_span),
-                                args,
-                            },
-                            span,
-                        ));
-                    }
-                }
-            }
             return parse_normal_path(p, start);
         }
         Some(Token::StringLit(_)) => {

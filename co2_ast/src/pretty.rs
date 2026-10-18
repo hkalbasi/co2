@@ -879,31 +879,19 @@ impl<R: TypeResolver> PrettyPrint for Spanned<Expression<R>> {
                     }
                 });
             }
-            Expression::BuiltinConstantP { expr } => {
-                pp.node("BuiltinConstantP", &sp, |pp| expr.pretty_print(pp));
-            }
             Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
                 pp.node("BuiltinTypesCompatibleP", &sp, |pp| {
                     ty1.pretty_print(pp);
                     ty2.pretty_print(pp);
                 });
             }
-            Expression::BuiltinComplex { re, im } => {
-                pp.node("BuiltinComplex", &sp, |pp| {
-                    re.pretty_print(pp);
-                    im.pretty_print(pp);
-                });
-            }
-            Expression::Atomic { op, args } => {
-                pp.node("Atomic", &sp, |pp| {
-                    pp.leaf_data("Op", &fmt_span(&op.1, pp.config), &op.0);
-                    for a in args {
-                        a.pretty_print(pp);
+            Expression::BuiltinFunction { name, args } => {
+                pp.node("BuiltinFunction", &sp, |pp| {
+                    pp.leaf_data("Name", &fmt_span(&name.1, pp.config), &name.0);
+                    for arg in args {
+                        arg.pretty_print(pp);
                     }
                 });
-            }
-            Expression::Alloca { size } => {
-                pp.node("Alloca", &sp, |pp| size.pretty_print(pp));
             }
         }
     }

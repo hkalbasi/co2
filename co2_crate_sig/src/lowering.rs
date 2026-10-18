@@ -531,15 +531,16 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         | Expression::Sizeof(base)
         | Expression::Alignof(base)
         | Expression::Countof(base)
-        | Expression::UnaryOp(_, base)
-        | Expression::BuiltinConstantP { expr: base } => expr_contains_local(&base.0),
+        | Expression::UnaryOp(_, base) => expr_contains_local(&base.0),
         Expression::Subscript(base, index) => {
             expr_contains_local(&base.0) || expr_contains_local(&index.0)
         }
         Expression::Call { func, params } => {
             expr_contains_local(&func.0) || params.iter().any(|param| expr_contains_local(&param.0))
         }
-        Expression::Atomic { args, .. } => args.iter().any(|param| expr_contains_local(&param.0)),
+        Expression::BuiltinFunction { args, .. } => {
+            args.iter().any(|param| expr_contains_local(&param.0))
+        }
         Expression::MethodCall {
             receiver, params, ..
         } => {
@@ -607,10 +608,6 @@ fn expr_contains_local(expr: &Expression<LocalResolver>) -> bool {
         Expression::BuiltinTypesCompatibleP { ty1, ty2 } => {
             type_name_contains_local(ty1) || type_name_contains_local(ty2)
         }
-        Expression::BuiltinComplex { re, im } => {
-            expr_contains_local(&re.0) || expr_contains_local(&im.0)
-        }
-        Expression::Alloca { size } => expr_contains_local(&size.0),
         Expression::Empty
         | Expression::Constant(_)
         | Expression::LabelAddress(_)

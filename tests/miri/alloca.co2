@@ -11,11 +11,10 @@
 // Miri has no shim for those libc functions, so it would abort with
 // "unsupported operation" rather than test alloca.
 //
-// The last case returns from inside a GNU statement expression. That path
-// skips the drop the alloca lowering inserts before every `return`, so the
-// backing store leaks: borrowck warns about it and Miri reports the leaked
-// allocation. That leak is the reason this test has no `compile-warning`
-// directive and is currently expected to fail.
+// The last case returns from inside a GNU statement expression. The drop the
+// alloca lowering inserts before every `return` must also cover returns nested
+// in expression trees, or the backing store leaks; Miri's leak check catches
+// that.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -393,8 +392,8 @@ fn test_temp_buffer() {
 }
 
 // ------------------------------------------------------------------
-// 20. `alloca` memory must be freed when the function returns. A `return`
-//     nested in a GNU statement expression skips the inserted drop.
+// 20. `alloca` memory must be freed when the function returns, including a
+//     `return` nested in a GNU statement expression (drop-insertion traversal).
 // ------------------------------------------------------------------
 
 fn return_from_statement_expr(c: i32) -> i32 {

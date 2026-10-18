@@ -2227,8 +2227,8 @@ impl HirCtx<'_> {
                 ty: string_literal_ptr_ty(&s),
                 span,
             }),
-            Expression::Alloca { size } => {
-                self.lower_alloca(*size, span, parser_span, locals, local_map)
+            Expression::BuiltinFunction { name, args } => {
+                self.lower_builtin_function(name, args, parser_span, span, locals, local_map)
             }
             Expression::Call { func, params } => {
                 let func_name = func.1.source_text().unwrap_or_default();
@@ -2887,42 +2887,6 @@ impl HirCtx<'_> {
                     ty: Ty::signed_ty(IntTy::I32),
                     span,
                 })
-            }
-            Expression::BuiltinConstantP { expr } => {
-                let is_constant = i128::from(self.decl_resolver.eval_const_expr(&expr).is_ok());
-                Ok(HirExpr {
-                    kind: HirExprKind::ConstInt(is_constant),
-                    ty: Ty::signed_ty(IntTy::I32),
-                    span,
-                })
-            }
-            Expression::BuiltinComplex { re, im } => {
-                // `__builtin_complex(re, im)` backs `CMPLX`/`CMPLXF`/`CMPLXL`:
-                // usual arithmetic conversions on the parts, then `Complex::new`.
-                let re = self.lower_expr(*re, locals, local_map)?;
-                let im = self.lower_expr(*im, locals, local_map)?;
-                let Some(inner) = common_numeric_ty(re.ty, im.ty) else {
-                    return Err(spanned_error(
-                        parser_span,
-                        format!(
-                            "invalid operands to __builtin_complex: {} and {}",
-                            self.format_ty(re.ty),
-                            self.format_ty(im.ty),
-                        ),
-                    ));
-                };
-                let inner = match inner.kind() {
-                    TyKind::RigidTy(RigidTy::Float(_)) => inner,
-                    _ => Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
-                };
-                Ok(self.complex_new_call(
-                    self.emit_cast(re, inner),
-                    self.emit_cast(im, inner),
-                    span,
-                ))
-            }
-            Expression::Atomic { op, args } => {
-                self.lower_atomic(op, args, parser_span, span, locals, local_map)
             }
             Expression::SizeofType(type_name) => {
                 let ty =
@@ -4248,6 +4212,75 @@ impl HirCtx<'_> {
             ty: pointee,
             span,
         })
+    }
+
+    fn lower_builtin_function(
+        &self,
+        name: Spanned<String>,
+        args: Vec<Spanned<Expression<LocalResolver>>>,
+        parser_span: co2_ast::Span,
+        span: RustSpan,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let arity_error = |expected: usize| {
+            spanned_error(
+                parser_span,
+                format!(
+                    "`{}` expects exactly {expected} argument(s), got {}",
+                    name.0,
+                    args.len()
+                ),
+            )
+        };
+        match name.0.as_str() {
+            "__builtin_alloca" => {
+                let [size] = args.as_slice() else {
+                    return Err(arity_error(1));
+                };
+                self.lower_alloca(size.clone(), span, parser_span, locals, local_map)
+            }
+            "__builtin_constant_p" => {
+                let [expr] = args.as_slice() else {
+                    return Err(arity_error(1));
+                };
+                let is_constant = i128::from(self.decl_resolver.eval_const_expr(expr).is_ok());
+                Ok(HirExpr {
+                    kind: HirExprKind::ConstInt(is_constant),
+                    ty: Ty::signed_ty(IntTy::I32),
+                    span,
+                })
+            }
+            "__builtin_complex" => {
+                // `__builtin_complex(re, im)` backs `CMPLX`/`CMPLXF`/`CMPLXL`:
+                // usual arithmetic conversions on the parts, then `Complex::new`.
+                let [re, im] = args.as_slice() else {
+                    return Err(arity_error(2));
+                };
+                let re = self.lower_expr(re.clone(), locals, local_map)?;
+                let im = self.lower_expr(im.clone(), locals, local_map)?;
+                let Some(inner) = common_numeric_ty(re.ty, im.ty) else {
+                    return Err(spanned_error(
+                        parser_span,
+                        format!(
+                            "invalid operands to __builtin_complex: {} and {}",
+                            self.format_ty(re.ty),
+                            self.format_ty(im.ty),
+                        ),
+                    ));
+                };
+                let inner = match inner.kind() {
+                    TyKind::RigidTy(RigidTy::Float(_)) => inner,
+                    _ => Ty::from_rigid_kind(RigidTy::Float(FloatTy::F64)),
+                };
+                Ok(self.complex_new_call(
+                    self.emit_cast(re, inner),
+                    self.emit_cast(im, inner),
+                    span,
+                ))
+            }
+            _ => self.lower_atomic(name, args, parser_span, span, locals, local_map),
+        }
     }
 
     fn lower_atomic(

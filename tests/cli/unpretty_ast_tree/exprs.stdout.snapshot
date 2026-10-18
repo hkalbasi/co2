@@ -186,7 +186,8 @@ TranslationUnit
     InitDeclarator@src/exprs.co2:578..618
       Identifier@src/exprs.co2:578..592 "constant_value"
       Expr@src/exprs.co2:595..618
-        BuiltinConstantP@src/exprs.co2:595..618
+        BuiltinFunction@src/exprs.co2:595..618
+          Name@src/exprs.co2:595..615 __builtin_constant_p
           Constant@src/exprs.co2:616..617
             Int 4
   Declaration@src/exprs.co2:620..686

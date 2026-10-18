@@ -1458,10 +1458,17 @@ impl HirCtx<'_> {
                     local_map,
                 )?))
             }
-            Expression::BuiltinConstantP { expr } => Ok(i128::from(
-                self.eval_const_expr_in_scope(expr, locals, local_map)
-                    .is_ok(),
-            )),
+            Expression::BuiltinFunction { name, args } => {
+                if name.0 == "__builtin_constant_p"
+                    && let [expr] = args.as_slice()
+                {
+                    return Ok(i128::from(
+                        self.eval_const_expr_in_scope(expr, locals, local_map)
+                            .is_ok(),
+                    ));
+                }
+                Err(spanned_error(*span, "cannot call non-const function"))
+            }
             Expression::GenericSelection {
                 controlling,
                 associations,
@@ -1477,9 +1484,7 @@ impl HirCtx<'_> {
                 )?;
                 self.eval_const_expr_in_scope(&expr, locals, local_map)
             }
-            Expression::Call { .. } | Expression::Atomic { .. } => {
-                Err(spanned_error(*span, "cannot call non-const function"))
-            }
+            Expression::Call { .. } => Err(spanned_error(*span, "cannot call non-const function")),
             _ => Err(spanned_error(*span, "unsupported constant expression")),
         }
     }

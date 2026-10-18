@@ -544,19 +544,9 @@ impl<A: TypeResolver> DoTransform for Expression<A> {
                     ty2: ty2.transform(b),
                 }
             }
-            Expression::BuiltinConstantP { expr } => Expression::BuiltinConstantP {
-                expr: expr.transform(b),
-            },
-            Expression::BuiltinComplex { re, im } => Expression::BuiltinComplex {
-                re: re.transform(b),
-                im: im.transform(b),
-            },
-            Expression::Atomic { op, args } => Expression::Atomic {
-                op: op.clone(),
+            Expression::BuiltinFunction { name, args } => Expression::BuiltinFunction {
+                name: name.clone(),
                 args: args.transform(b),
-            },
-            Expression::Alloca { size } => Expression::Alloca {
-                size: size.transform(b),
             },
         }
     }

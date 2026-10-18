@@ -254,23 +254,16 @@ pub enum Expression<R: TypeResolver> {
         controlling: Box<Spanned<Expression<R>>>,
         associations: Vec<Spanned<GenericAssociation<R>>>,
     },
-    BuiltinConstantP {
-        expr: Box<Spanned<Expression<R>>>,
-    },
     BuiltinTypesCompatibleP {
         ty1: Box<TypeName<R>>,
         ty2: Box<TypeName<R>>,
     },
-    BuiltinComplex {
-        re: Box<Spanned<Expression<R>>>,
-        im: Box<Spanned<Expression<R>>>,
-    },
-    Atomic {
-        op: Spanned<String>,
+    /// A call to a compiler builtin function, e.g. `__builtin_alloca(n)` or
+    /// `__atomic_load_n(p, order)`. Builtins are syntax, not resolvable
+    /// functions, so they share one node.
+    BuiltinFunction {
+        name: Spanned<String>,
         args: Vec<Spanned<Expression<R>>>,
-    },
-    Alloca {
-        size: Box<Spanned<Expression<R>>>,
     },
 }
 
@@ -1751,8 +1744,8 @@ pub fn parse_unsigned_integer_constant(text: &str) -> Option<u128> {
 /// Map an atomic builtin spelling to its canonical `__atomic_*`/`__sync_*`
 /// operation. Direct builtins map to themselves; `<stdatomic.h>` generics
 /// map to the `__atomic_*` op they expand to. `None` for anything else, so
-/// the parser only forms an [`Expression::Atomic`] node for real builtins
-/// (bypassing path resolution entirely — no resolver seeding needed).
+/// the parser only forms an [`Expression::BuiltinFunction`] node for real
+/// builtins (bypassing path resolution entirely — no resolver seeding needed).
 pub fn atomic_builtin_inner(name: &str) -> Option<&'static str> {
     Some(match name {
         "__atomic_fetch_add" => "__atomic_fetch_add",
