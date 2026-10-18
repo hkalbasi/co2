@@ -5271,10 +5271,12 @@ impl HirCtx<'_> {
         while i < stmts.len() {
             match &mut stmts[i] {
                 HirStmt::If {
+                    cond,
                     then_stmts,
                     else_stmts,
                     ..
                 } => {
+                    self.insert_alloca_storage_drops_in_expr(cond, storage, locals, span);
                     self.insert_alloca_storage_drops(then_stmts, storage, locals, span);
                     self.insert_alloca_storage_drops(else_stmts, storage, locals, span);
                     i += 1;
@@ -5283,7 +5285,35 @@ impl HirCtx<'_> {
                     self.insert_alloca_storage_drops(inner, storage, locals, span);
                     i += 1;
                 }
+                HirStmt::Decl(decl) => {
+                    if let Some(init) = &mut decl.initializer {
+                        self.insert_alloca_storage_drops_in_expr(init, storage, locals, span);
+                    }
+                    i += 1;
+                }
+                HirStmt::Expr(expr) => {
+                    self.insert_alloca_storage_drops_in_expr(expr, storage, locals, span);
+                    i += 1;
+                }
+                HirStmt::IndirectGoto(target, _) => {
+                    self.insert_alloca_storage_drops_in_expr(target, storage, locals, span);
+                    i += 1;
+                }
+                HirStmt::Asm(asm) => {
+                    for operand in asm.outputs.iter_mut().chain(asm.inputs.iter_mut()) {
+                        self.insert_alloca_storage_drops_in_expr(
+                            &mut operand.expr,
+                            storage,
+                            locals,
+                            span,
+                        );
+                    }
+                    i += 1;
+                }
                 HirStmt::Return(ret_expr, ret_span) => {
+                    if let Some(expr) = ret_expr.as_mut() {
+                        self.insert_alloca_storage_drops_in_expr(expr, storage, locals, span);
+                    }
                     let ret_span = *ret_span;
                     match ret_expr.take() {
                         Some(expr) => {
@@ -5323,6 +5353,86 @@ impl HirCtx<'_> {
                 }
                 _ => i += 1,
             }
+        }
+    }
+
+    /// `insert_alloca_storage_drops` for a single expression: a `return` can
+    /// hide inside a GNU statement expression, whose statements live in
+    /// `HirExprKind::StatementExpr`, so walk the whole expression tree.
+    fn insert_alloca_storage_drops_in_expr(
+        &self,
+        expr: &mut HirExpr,
+        storage: LocalId,
+        locals: &mut Arena<HirLocal>,
+        span: RustSpan,
+    ) {
+        match &mut expr.kind {
+            HirExprKind::StatementExpr { statements, tail } => {
+                self.insert_alloca_storage_drops(statements, storage, locals, span);
+                self.insert_alloca_storage_drops_in_expr(tail, storage, locals, span);
+            }
+            HirExprKind::UnionAggregate { arg, .. } => {
+                self.insert_alloca_storage_drops_in_expr(arg, storage, locals, span);
+            }
+            HirExprKind::Field { base, .. } | HirExprKind::Bitfield { base, .. } => {
+                self.insert_alloca_storage_drops_in_expr(base, storage, locals, span);
+            }
+            HirExprKind::PtrOffset { base, index } => {
+                self.insert_alloca_storage_drops_in_expr(base, storage, locals, span);
+                self.insert_alloca_storage_drops_in_expr(index, storage, locals, span);
+            }
+            HirExprKind::PtrDiff { lhs, rhs }
+            | HirExprKind::Binary { lhs, rhs, .. }
+            | HirExprKind::Comma { lhs, rhs }
+            | HirExprKind::Logical { lhs, rhs, .. }
+            | HirExprKind::Assign { lhs, rhs }
+            | HirExprKind::AssignWithBinOp { lhs, rhs, .. }
+            | HirExprKind::AssignPtrOffset { lhs, rhs, .. }
+            | HirExprKind::VaCopy { dest: lhs, src: rhs } => {
+                self.insert_alloca_storage_drops_in_expr(lhs, storage, locals, span);
+                self.insert_alloca_storage_drops_in_expr(rhs, storage, locals, span);
+            }
+            HirExprKind::LogicalNot(inner)
+            | HirExprKind::BitNot(inner)
+            | HirExprKind::AddrOf(inner)
+            | HirExprKind::Deref(inner)
+            | HirExprKind::Cast(inner)
+            | HirExprKind::ArrayToPointer(inner)
+            | HirExprKind::VaStart(inner)
+            | HirExprKind::VaArg(inner)
+            | HirExprKind::VaEnd(inner) => {
+                self.insert_alloca_storage_drops_in_expr(inner, storage, locals, span);
+            }
+            HirExprKind::Aggregate { args, .. } => {
+                for arg in args {
+                    self.insert_alloca_storage_drops_in_expr(arg, storage, locals, span);
+                }
+            }
+            HirExprKind::Call { func, args } => {
+                self.insert_alloca_storage_drops_in_expr(func, storage, locals, span);
+                for arg in args {
+                    self.insert_alloca_storage_drops_in_expr(arg, storage, locals, span);
+                }
+            }
+            HirExprKind::Conditional {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
+                self.insert_alloca_storage_drops_in_expr(cond, storage, locals, span);
+                if let Some(then_expr) = then_expr {
+                    self.insert_alloca_storage_drops_in_expr(then_expr, storage, locals, span);
+                }
+                self.insert_alloca_storage_drops_in_expr(else_expr, storage, locals, span);
+            }
+            HirExprKind::Local(_)
+            | HirExprKind::LocalConst(_)
+            | HirExprKind::ConstInt(_)
+            | HirExprKind::ConstFloat(_)
+            | HirExprKind::ConstStr(_)
+            | HirExprKind::LabelAddress(_)
+            | HirExprKind::Zeroed
+            | HirExprKind::Path(_) => {}
         }
     }
 

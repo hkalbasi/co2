@@ -1402,6 +1402,7 @@ fn link_objects(
         };
 
         // Try linking with the no_std stub first (produces smaller binaries).
+        // TODO: This is invalid garbage.
         if let Some(ref output) = link_with_stub(CO2C_LINK_STUB) {
             if output.status.success() {
                 forward_output(output);
@@ -1414,6 +1415,8 @@ fn link_objects(
                 || stderr.contains("undefined symbol: <std::")
                 || stderr.contains("reference to `std::")
                 || stderr.contains("undefined symbol: alloc::")
+                || stderr.contains("undefined symbol: <alloc::")
+                || stderr.contains("reference to `alloc::")
                 || stderr.contains("_Unwind_Resume")
             {
                 if let Some(ref retry_output) = link_with_stub(CO2C_LINK_STD_STUB) {

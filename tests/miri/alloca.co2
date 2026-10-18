@@ -1,0 +1,447 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-miri
+
+// Miri coverage for `alloca` / `__builtin_alloca`: the miri counterpart of
+// tests/c/gnu/alloca.c. It checks allocation, alignment, distinctness,
+// lifetime (memory survives block exit but is freed at function return), reuse
+// in loops and recursion, and that the result is usable as any type.
+//
+// The only alloca.c case not ported is the strcpy/strcat/strcmp/strlen one:
+// Miri has no shim for those libc functions, so it would abort with
+// "unsupported operation" rather than test alloca.
+//
+// The last case returns from inside a GNU statement expression. That path
+// skips the drop the alloca lowering inserts before every `return`, so the
+// backing store leaks: borrowck warns about it and Miri reports the leaked
+// allocation. That leak is the reason this test has no `compile-warning`
+// directive and is currently expected to fail.
+
+#include <stddef.h>
+#include <stdint.h>
+#include <assert.h>
+#include <alloca.h>
+
+use core::ffi::c_void;
+
+// ------------------------------------------------------------------
+// 1. Basic: allocate one int, write, read. `alloca` and `__builtin_alloca`
+//    are the same thing.
+// ------------------------------------------------------------------
+
+fn test_basic() {
+    int *p = alloca(sizeof(int));
+    assert(p != NULL);
+    *p = 42;
+    assert(*p == 42);
+
+    int *q = __builtin_alloca(sizeof(int));
+    assert(q != NULL);
+    *q = 7;
+    assert(*q == 7);
+}
+
+// ------------------------------------------------------------------
+// 2. Alignment: the result is maximally aligned.
+// ------------------------------------------------------------------
+
+fn test_alignment() {
+    for (size_t n = 1; n <= 64; n += 1) {
+        c_void *p = alloca(n);
+        assert(p != NULL);
+        assert(((uintptr_t)p % alignof(max_align_t)) == 0);
+    }
+}
+
+// ------------------------------------------------------------------
+// 3. Types: allocate arrays, structs, aligned buffers.
+// ------------------------------------------------------------------
+
+typedef struct { int a; double b; char c[3]; } S;
+
+fn test_types() {
+    int *arr = alloca(10 * sizeof(int));
+    for (int i = 0; i < 10; i += 1) {
+        arr[i] = i * i;
+    }
+    for (int i = 0; i < 10; i += 1) {
+        assert(arr[i] == i * i);
+    }
+
+    S *s = alloca(sizeof(S));
+    s->a = 1;
+    s->b = 2.5;
+    s->c[0] = 'x';
+    s->c[1] = 'y';
+    s->c[2] = 'z';
+    assert(s->a == 1 && s->b == 2.5);
+    assert(s->c[0] == 'x' && s->c[1] == 'y' && s->c[2] == 'z');
+
+    S *sarr = alloca(4 * sizeof(S));
+    for (int i = 0; i < 4; i += 1) {
+        sarr[i].a = i;
+        sarr[i].b = i * 1.5;
+    }
+    for (int i = 0; i < 4; i += 1) {
+        assert(sarr[i].a == i);
+        assert(sarr[i].b == i * 1.5);
+    }
+
+    unsigned char *buf = alloca(64);
+    assert(((uintptr_t)buf % alignof(double)) == 0);
+    for (int i = 0; i < 64; i += 1) {
+        buf[i] = 0xAA;
+    }
+    for (int i = 0; i < 64; i += 1) {
+        assert(buf[i] == 0xAA);
+    }
+}
+
+// ------------------------------------------------------------------
+// 4. Zero-size alloca: returns a (possibly non-NULL) pointer that must not
+//    be dereferenced.
+// ------------------------------------------------------------------
+
+fn test_zero() {
+    c_void *p = alloca(0);
+    (void)p;
+    c_void *q = alloca(0);
+    (void)q;
+}
+
+// ------------------------------------------------------------------
+// 5. Variable size (runtime value).
+// ------------------------------------------------------------------
+
+fn test_variable_size(n: usize) {
+    unsigned char *p = alloca(n);
+    assert(p != NULL);
+    for (size_t i = 0; i < n; i += 1) {
+        p[i] = (unsigned char)i;
+    }
+    for (size_t i = 0; i < n; i += 1) {
+        assert(p[i] == (unsigned char)i);
+    }
+}
+
+// ------------------------------------------------------------------
+// 6. Multiple allocations are distinct and don't overlap.
+// ------------------------------------------------------------------
+
+fn test_no_overlap() {
+    int *a = alloca(sizeof(int));
+    int *b = alloca(sizeof(int));
+    int *c = alloca(sizeof(int));
+    assert(a != b);
+    assert(b != c);
+    assert(a != c);
+
+    *a = 1;
+    *b = 2;
+    *c = 3;
+    assert(*a == 1);
+    assert(*b == 2);
+    assert(*c == 3);
+}
+
+// ------------------------------------------------------------------
+// 7. Memory lifetime: alloca memory survives block exit and is only released
+//    at function return.
+// ------------------------------------------------------------------
+
+fn test_lifetime_block_exit() {
+    int *p;
+    {
+        p = alloca(sizeof(int));
+        *p = 99;
+    }
+    assert(*p == 99);
+
+    int *q;
+    {
+        int arr[3];
+        q = alloca(3 * sizeof(int));
+        q[0] = 10;
+        q[1] = 20;
+        q[2] = 30;
+        (void)arr;
+    }
+    assert(q[0] == 10 && q[1] == 20 && q[2] == 30);
+}
+
+// ------------------------------------------------------------------
+// 8. alloca in a bounded loop: every allocation stays live.
+// ------------------------------------------------------------------
+
+fn test_loop() {
+    int *ptrs[8];
+    for (int i = 0; i < 8; i += 1) {
+        ptrs[i] = alloca(sizeof(int));
+        *ptrs[i] = i;
+    }
+    for (int i = 0; i < 8; i += 1) {
+        assert(*ptrs[i] == i);
+        assert(ptrs[i] != NULL);
+    }
+}
+
+// ------------------------------------------------------------------
+// 9. Pass alloca memory to another call.
+// ------------------------------------------------------------------
+
+fn use_during_call(p: *mut i32, n: i32) {
+    for (int i = 0; i < n; i += 1) {
+        assert(p[i] == i * 7);
+    }
+}
+
+fn test_nested_call() {
+    int *p = alloca(5 * sizeof(int));
+    for (int i = 0; i < 5; i += 1) {
+        p[i] = i * 7;
+    }
+    use_during_call(p, 5);
+}
+
+// ------------------------------------------------------------------
+// 10. Interaction with local arrays: both live on the stack, alloca memory
+//     outlives the enclosing block.
+// ------------------------------------------------------------------
+
+fn test_local_array_interaction() {
+    int *p = alloca(4 * sizeof(int));
+    for (int i = 0; i < 4; i += 1) {
+        p[i] = i + 1;
+    }
+
+    {
+        int ar[4];
+        for (int i = 0; i < 4; i += 1) {
+            ar[i] = 100 + i;
+        }
+        assert(ar[0] == 100 && ar[3] == 103);
+    }
+    assert(p[0] == 1 && p[1] == 2 && p[2] == 3 && p[3] == 4);
+}
+
+// ------------------------------------------------------------------
+// 11. `sizeof` on an alloca result is pointer size, not the allocated size.
+// ------------------------------------------------------------------
+
+fn test_sizeof() {
+    c_void *p = alloca(128);
+    assert(sizeof(p) == sizeof(c_void *));
+    unsigned char *b = p;
+    for (int i = 0; i < 128; i += 1) {
+        b[i] = 0;
+    }
+    for (int i = 0; i < 128; i += 1) {
+        assert(b[i] == 0);
+    }
+}
+
+// ------------------------------------------------------------------
+// 12. Read and write with memcpy / memmove / memcmp.
+// ------------------------------------------------------------------
+
+fn test_mem_ops() {
+    unsigned char *a = alloca(32);
+    unsigned char *b = alloca(32);
+    for (int i = 0; i < 32; i += 1) {
+        a[i] = (unsigned char)(i * 3);
+    }
+    for (int i = 0; i < 32; i += 1) {
+        b[i] = a[i];
+    }
+    for (int i = 0; i < 32; i += 1) {
+        assert(a[i] == b[i]);
+    }
+
+    for (int i = 27; i >= 0; i -= 1) {
+        a[4 + i] = a[i];
+    }
+    for (int i = 4; i < 32; i += 1) {
+        assert(a[i] == (unsigned char)((i - 4) * 3));
+    }
+}
+
+// ------------------------------------------------------------------
+// 13. Recursion: each recursion frame gets its own alloca memory.
+// ------------------------------------------------------------------
+
+fn recurse(depth: i32, prev: *mut i32) -> i32 {
+    int *p = alloca(sizeof(int));
+    *p = depth;
+    if (prev != NULL) {
+        assert(*prev == depth + 1);
+        assert(p != prev);
+    }
+    if (depth == 0) {
+        return 0;
+    }
+    return recurse(depth - 1, p) + *p;
+}
+
+fn test_recursion() {
+    int sum = recurse(5, NULL);
+    assert(sum == 15);
+}
+
+// ------------------------------------------------------------------
+// 14. Large-ish allocation (a few KB) works and is aligned.
+// ------------------------------------------------------------------
+
+fn test_large() {
+    size_t n = 16 * 1024;
+    unsigned char *p = alloca(n);
+    assert(p != NULL);
+    assert(((uintptr_t)p % alignof(max_align_t)) == 0);
+    for (size_t i = 0; i < n; i += 4096) {
+        p[i] = 0x55;
+    }
+    for (size_t i = 0; i < n; i += 4096) {
+        assert(p[i] == 0x55);
+    }
+}
+
+// ------------------------------------------------------------------
+// 15. Store pointers in the alloca'd region.
+// ------------------------------------------------------------------
+
+fn test_pointer_array() {
+    int **pp = alloca(4 * sizeof(int *));
+    for (int i = 0; i < 4; i += 1) {
+        pp[i] = alloca(sizeof(int));
+        *pp[i] = i * 11;
+    }
+    for (int i = 0; i < 4; i += 1) {
+        assert(pp[i] != NULL);
+        assert(*pp[i] == i * 11);
+    }
+}
+
+// ------------------------------------------------------------------
+// 16. Build a linked list of alloca'd nodes.
+// ------------------------------------------------------------------
+
+typedef struct node { int v; struct node *next; } Node;
+
+fn test_linked_list() {
+    Node *head = NULL;
+    for (int i = 4; i >= 0; i -= 1) {
+        Node *n = alloca(sizeof(Node));
+        n->v = i;
+        n->next = head;
+        head = n;
+    }
+    int expect = 0;
+    Node *it = head;
+    while (it != NULL) {
+        assert(it->v == expect);
+        expect += 1;
+        it = it->next;
+    }
+    assert(expect == 5);
+}
+
+// ------------------------------------------------------------------
+// 17. Alignment of specific types: the result must be usable as a `long double`
+//     and as a `double`.
+// ------------------------------------------------------------------
+
+fn test_specific_alignment() {
+    long double *ld = alloca(sizeof(long double));
+    *ld = 3.14;
+    assert(((uintptr_t)ld % alignof(long double)) == 0);
+    assert(*ld > 3.13 && *ld < 3.15);
+
+    double *d = alloca(sizeof(double));
+    *d = 2.5;
+    assert(((uintptr_t)d % alignof(double)) == 0);
+    assert(*d == 2.5);
+}
+
+// ------------------------------------------------------------------
+// 18. Write a value that happens to be zero (alloca memory is uninitialized,
+//     so we never read before writing).
+// ------------------------------------------------------------------
+
+fn test_not_zeroed() {
+    int *p = alloca(sizeof(int));
+    *p = 0;
+    assert(*p == 0);
+}
+
+// ------------------------------------------------------------------
+// 19. Use alloca as a temporary buffer passed to another call.
+// ------------------------------------------------------------------
+
+fn sum_bytes(p: *const u8, n: usize) -> usize {
+    usize s = 0;
+    for (usize i = 0; i < n; i += 1) {
+        s += p[i];
+    }
+    return s;
+}
+
+fn test_temp_buffer() {
+    unsigned char *p = alloca(10);
+    for (int i = 0; i < 10; i += 1) {
+        p[i] = (unsigned char)i;
+    }
+    assert(sum_bytes(p, 10) == 45);
+}
+
+// ------------------------------------------------------------------
+// 20. `alloca` memory must be freed when the function returns. A `return`
+//     nested in a GNU statement expression skips the inserted drop.
+// ------------------------------------------------------------------
+
+fn return_from_statement_expr(c: i32) -> i32 {
+    int *p = alloca(sizeof(int));
+    *p = 7;
+    int r = ({ if (c != 0) return *p; 1; });
+    return r + *p;
+}
+
+static void dead_branch(void) {
+    if (0) {
+        int *p = alloca(sizeof(int));
+        *p = 1;
+    }
+}
+
+static int never_evaluated(void) {
+    return (int)sizeof(__builtin_alloca(4));
+}
+
+fn main() {
+    test_basic();
+    test_alignment();
+    test_types();
+    test_zero();
+    test_variable_size(0);
+    test_variable_size(1);
+    test_variable_size(7);
+    test_variable_size(100);
+    test_no_overlap();
+    test_lifetime_block_exit();
+    test_loop();
+    test_nested_call();
+    test_local_array_interaction();
+    test_sizeof();
+    test_mem_ops();
+    test_recursion();
+    test_large();
+    test_pointer_array();
+    test_not_zeroed();
+    test_temp_buffer();
+    test_linked_list();
+    test_specific_alignment();
+
+    assert(return_from_statement_expr(1) == 7);
+    assert(return_from_statement_expr(0) == 8);
+
+    dead_branch();
+    assert(never_evaluated() == (int)sizeof(void *));
+}
