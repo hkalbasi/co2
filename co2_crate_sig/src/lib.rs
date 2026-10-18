@@ -17,11 +17,12 @@ pub(crate) use ctx::CrateSigCtx;
 
 pub use ast_resolver::{
     DefOrLocal, LocalResolver, LocalResolverBase, MethodResolutionKind, PendingExtern,
-    RegisteredArrayLenConst, expr_contains_label_address, initializer_contains_label_address,
+    RegisteredArrayLenConst, RegisteredSubscription, expr_contains_label_address,
+    initializer_contains_label_address,
 };
 pub use attr::{Co2Attr, co2_attrs_to_generated};
 pub use lowering::{AtomicOrder, WellknownDefs, lower_crate_sig};
-pub use mir::MirOwnerInfo;
+pub use mir::{MirOwnerInfo, VlaParamDim};
 pub use resolver::{ResolveError, Resolver};
 pub use struct_manager::{LogicalAdtFieldInfo, LogicalAdtFieldKind};
 pub use ty::{CTy, CompressedTypeSpecifier, PrimitiveTy};

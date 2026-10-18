@@ -501,11 +501,9 @@ impl CrateSigCtx<'_> {
                         rust_span,
                         span,
                     )),
-                    CTy::UnsizedArray(inner) => CTy::Ty(HirTy::new_ptr(
-                        HirTy::new_ptr(inner, Mutability::Mut, rust_span),
-                        ptr_mutability,
-                        rust_span,
-                    )),
+                    CTy::UnsizedArray(inner) => {
+                        CTy::Ty(HirTy::new_ptr(inner, ptr_mutability, rust_span))
+                    }
                 };
                 let next_const = qualifiers
                     .iter()
@@ -545,9 +543,22 @@ impl CrateSigCtx<'_> {
                         .ok_or_else(|| {
                             spanned_error(subscription.1, "missing registered array size constant")
                         })?;
-                    let literal_len = self
-                        .eval_array_len_expr(&registered.expr)
-                        .unwrap_or_else(|err| CrateSigCtx::<'_>::terminate_with_spanned_error(err));
+                    let literal_len = match self.eval_array_len_expr(&registered.expr) {
+                        Ok(len) => len,
+                        Err((_, msg))
+                            if msg.starts_with("unsupported identifier in constant expression") =>
+                        {
+                            // A non-constant VLA bound (e.g. a parameter or local).
+                            // Represent it as an unsized array; parameters decay to
+                            // pointers and body lowering handles the runtime size.
+                            return self.extract_decl_type_with_consts(
+                                CTy::UnsizedArray(inner),
+                                current_const,
+                                *declarator,
+                            );
+                        }
+                        Err(err) => CrateSigCtx::<'_>::terminate_with_spanned_error(err),
+                    };
                     let len_expr = (
                         Expression::Constant(Constant::Int(
                             literal_len as i128,
@@ -2658,11 +2669,9 @@ impl LocalResolverBase {
                         rust_span,
                         span,
                     )),
-                    CTy::UnsizedArray(inner) => CTy::Ty(HirTy::new_ptr(
-                        HirTy::new_ptr(inner, Mutability::Mut, rust_span),
-                        ptr_mutability,
-                        rust_span,
-                    )),
+                    CTy::UnsizedArray(inner) => {
+                        CTy::Ty(HirTy::new_ptr(inner, ptr_mutability, rust_span))
+                    }
                 };
                 let next_const = qualifiers
                     .iter()
@@ -2707,9 +2716,22 @@ impl LocalResolverBase {
                             )
                         })?
                         .expr;
-                    let literal_len = self
-                        .eval_array_len_expr(&expr)
-                        .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                    let literal_len = match self.eval_array_len_expr(&expr) {
+                        Ok(len) => len,
+                        Err((_, msg))
+                            if msg.starts_with("unsupported identifier in constant expression") =>
+                        {
+                            // Non-constant VLA bound: treat as unsized. Parameters
+                            // decay to pointers; body lowering computes the runtime
+                            // size.
+                            return self.extract_decl_type(
+                                CTy::UnsizedArray(inner),
+                                current_const,
+                                *declarator,
+                            );
+                        }
+                        Err(err) => self.terminate_with_spanned_error(err),
+                    };
                     HirTyConst::Literal(literal_len)
                 };
                 let array_ty = CTy::Ty(HirTy::new_array(inner, len, rust_span));

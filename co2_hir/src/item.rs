@@ -8,12 +8,12 @@ use rustc_public_generative::rustc_public::{
     CrateItem, DefId,
     ty::{
         FnDef, FnSig, GenericArgKind, GenericArgs, Region, RegionKind, RigidTy, Span as RustSpan,
-        Ty,
+        Ty, TyKind,
     },
 };
 
 use crate::initializer_tree::{ARRAY_LEN_PROBE, InitializerTree, eval_const_int};
-use crate::resolver::{HirCtx, ResolvedValue};
+use crate::resolver::{HirCtx, ResolvedValue, VlaShape};
 use crate::{HirDecl, HirExpr, HirExprKind, HirStmt};
 
 #[derive(Clone, Debug)]
@@ -95,9 +95,10 @@ pub fn lower_function_body(
     tokens: Spanned<CompoundStatement<LocalResolver>>,
     def: FnDef,
     param_names: &[(usize, String, RustSpan)],
+    vla_params: &[(usize, Vec<co2_crate_sig::VlaParamDim>)],
     hir_ctx: &mut HirCtx<'_>,
 ) -> HirBody {
-    hir_ctx.lower_function_body(tokens, def, param_names)
+    hir_ctx.lower_function_body(tokens, def, param_names, vla_params)
 }
 
 /// Naked-function entry point (GNU `__attribute__((naked))`): the body
@@ -241,9 +242,15 @@ impl HirCtx<'_> {
         parsed: Spanned<CompoundStatement<LocalResolver>>,
         def: FnDef,
         param_names: &[(usize, String, RustSpan)],
+        vla_params: &[(usize, Vec<co2_crate_sig::VlaParamDim>)],
     ) -> HirBody {
         self.reset_labels();
-        self.lower_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names)
+        self.lower_compound_statement(
+            parsed,
+            &def.fn_sig().skip_binder(),
+            param_names,
+            vla_params,
+        )
     }
 
     pub(crate) fn lower_naked_function_body(
@@ -323,18 +330,25 @@ impl HirCtx<'_> {
         &mut self,
         sig: &FnSig,
         param_names: &[(usize, String, RustSpan)],
+        vla_params: &[(usize, Vec<co2_crate_sig::VlaParamDim>)],
         parser_span: co2_ast::Span,
     ) -> (
         RustSpan,
         Arena<HirLocal>,
         Vec<LocalId>,
         FxHashMap<usize, LocalId>,
+        Vec<HirStmt>,
     ) {
         let body_span = self.to_rust_span(parser_span);
         *self.alloca_storage.borrow_mut() = None;
+        *self.vla.borrow_mut() = Default::default();
+        *self.pending_vla.borrow_mut() = None;
+        *self.vla_typedefs.borrow_mut() = FxHashMap::default();
         let mut locals = Arena::new();
         let mut params = Vec::new();
         let mut local_map: FxHashMap<usize, LocalId> = FxHashMap::default();
+        let mut param_stmts: Vec<HirStmt> = Vec::new();
+        let usize_ty = Ty::usize_ty();
 
         alloc_ret_local(&mut locals, sig.output(), body_span);
 
@@ -355,7 +369,76 @@ impl HirCtx<'_> {
             params.push(id);
             self.c_variadic_local = Some(id);
         }
-        (body_span, locals, params, local_map)
+
+        for (idx, dims) in vla_params {
+            let Some(param_ty) = sig.inputs().get(*idx) else {
+                continue;
+            };
+            let TyKind::RigidTy(RigidTy::RawPtr(elem_ty, _)) = param_ty.kind() else {
+                continue;
+            };
+            let mut dim_locals = Vec::with_capacity(dims.len());
+            let mut resolved = true;
+            for dim in dims {
+                let value = match dim {
+                    co2_crate_sig::VlaParamDim::Name(name) => {
+                        match param_names
+                            .iter()
+                            .find(|p| &p.1 == name)
+                            .and_then(|p| local_map.get(&p.0))
+                        {
+                            Some(local) => {
+                                let src_ty = locals[*local].ty;
+                                let src = HirExpr {
+                                    kind: HirExprKind::Local(*local),
+                                    ty: src_ty,
+                                    span: body_span,
+                                };
+                                if src_ty == usize_ty {
+                                    src
+                                } else {
+                                    HirExpr {
+                                        kind: HirExprKind::Cast(Box::new(src)),
+                                        ty: usize_ty,
+                                        span: body_span,
+                                    }
+                                }
+                            }
+                            None => {
+                                resolved = false;
+                                break;
+                            }
+                        }
+                    }
+                    co2_crate_sig::VlaParamDim::Const(n) => HirExpr {
+                        kind: HirExprKind::ConstInt(*n as i128),
+                        ty: usize_ty,
+                        span: body_span,
+                    },
+                };
+                let local = locals.alloc(HirLocal {
+                    name: "__co2_vla_dim".to_owned(),
+                    ty: usize_ty,
+                    span: body_span,
+                    read_only: false,
+                });
+                param_stmts.push(HirStmt::Decl(HirDecl {
+                    local,
+                    initializer: Some(value),
+                    span: body_span,
+                }));
+                dim_locals.push(local);
+            }
+            if resolved {
+                let shape = VlaShape {
+                    elem_ty,
+                    dims: dim_locals,
+                };
+                self.vla.borrow_mut().ptrs.insert(params[*idx], shape);
+            }
+        }
+
+        (body_span, locals, params, local_map, param_stmts)
     }
 
     fn lower_compound_statement(
@@ -363,11 +446,11 @@ impl HirCtx<'_> {
         (compound, parser_span): Spanned<CompoundStatement<LocalResolver>>,
         sig: &FnSig,
         param_names: &[(usize, String, RustSpan)],
+        vla_params: &[(usize, Vec<co2_crate_sig::VlaParamDim>)],
     ) -> HirBody {
-        let (body_span, mut locals, params, mut local_map) =
-            self.alloc_fn_preamble(sig, param_names, parser_span);
+        let (body_span, mut locals, params, mut local_map, mut stmts) =
+            self.alloc_fn_preamble(sig, param_names, vla_params, parser_span);
 
-        let mut stmts = Vec::new();
         self.lower_compound_items(compound, &mut stmts, &mut locals, &mut local_map);
         if let Some((storage, init)) = self.take_alloca_storage_init(body_span) {
             // Free the backing store before every `return`, and on fall-through.
@@ -400,10 +483,9 @@ impl HirCtx<'_> {
         sig: &FnSig,
         param_names: &[(usize, String, RustSpan)],
     ) -> HirBody {
-        let (body_span, mut locals, params, mut local_map) =
-            self.alloc_fn_preamble(sig, param_names, parser_span);
+        let (body_span, mut locals, params, mut local_map, mut stmts) =
+            self.alloc_fn_preamble(sig, param_names, &[], parser_span);
 
-        let mut stmts = Vec::new();
         self.lower_naked_compound_items(compound, &mut stmts, &mut locals, &mut local_map);
 
         HirBody {

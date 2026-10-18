@@ -33,7 +33,7 @@ use rustc_public_generative::{
 };
 
 use crate::{
-    CrateSigCtx, DefOrLocal, LocalResolver, LocalResolverBase, MirOwnerInfo,
+    CrateSigCtx, DefOrLocal, LocalResolver, LocalResolverBase, MirOwnerInfo, VlaParamDim,
     ast_resolver::StructAndEnumData,
     resolver::{ModuleData, Resolver},
     struct_manager::{PendingEnum, StructData, StructManager},
@@ -1259,6 +1259,79 @@ fn adt_repr_from_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> Ad
     AdtRepr::Rust
 }
 
+fn collect_param_names(decl: &Declarator<StatelessResolver>, out: &mut Vec<String>) {
+    match decl {
+        Declarator::FunctionDeclarator {
+            declarator,
+            param_list,
+        } => {
+            for (_, param) in &param_list.parameters {
+                if let Some(name) = param.0.ident() {
+                    out.push(name);
+                }
+            }
+            collect_param_names(&declarator.0, out);
+        }
+        Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::ArrayDeclarator { declarator, .. } => collect_param_names(&declarator.0, out),
+        Declarator::Identifier(_) | Declarator::Abstract => {}
+    }
+}
+
+/// Collect pointer-to-VLA parameters (`int (*a)[n]`) of a function definition:
+/// parameter index → runtime dimensions (named after other parameters).
+fn collect_vla_params(decl: &Declarator<StatelessResolver>) -> Vec<(usize, Vec<VlaParamDim>)> {
+    match decl {
+        Declarator::FunctionDeclarator { param_list, .. } => param_list
+            .parameters
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, (_, param))| {
+                pointer_to_vla_dims(&param.0).map(|dims| (idx, dims))
+            })
+            .collect(),
+        Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::ArrayDeclarator { declarator, .. } => collect_vla_params(&declarator.0),
+        Declarator::Identifier(_) | Declarator::Abstract => vec![],
+    }
+}
+
+fn pointer_to_vla_dims(decl: &Declarator<StatelessResolver>) -> Option<Vec<VlaParamDim>> {
+    // `int (*a)[n]` parses as ArrayDeclarator { PointerDeclarator { a } }.
+    // Walk the array wrappers (outermost dimension first), then require a
+    // pointer directly around the identifier.
+    let mut dims = Vec::new();
+    let mut cur = decl;
+    while let Declarator::ArrayDeclarator {
+        declarator,
+        subscription,
+    } = cur
+    {
+        dims.push(subscription_to_vla_dim(&subscription.0)?);
+        cur = &declarator.0;
+    }
+    match cur {
+        Declarator::PointerDeclarator { declarator, .. }
+            if matches!(declarator.0, Declarator::Identifier(_) | Declarator::Abstract) => {}
+        _ => return None,
+    }
+    if dims.iter().any(|d| matches!(d, VlaParamDim::Name(_))) {
+        Some(dims)
+    } else {
+        None
+    }
+}
+
+fn subscription_to_vla_dim(sub: &co2_ast::LazySubscription) -> Option<VlaParamDim> {
+    if let Some(len) = sub.constant_len() {
+        return Some(VlaParamDim::Const(len as u64));
+    }
+    sub.tokens.iter().find_map(|(token, _)| match token {
+        co2_ast::Token::Ident(name) => Some(VlaParamDim::Name(name.clone())),
+        _ => None,
+    })
+}
+
 fn lower_translation_unit_items(
     ctx: &mut CrateSigCtx<'_>,
     tu: &TranslationUnit<StatelessResolver>,
@@ -1277,7 +1350,7 @@ fn lower_translation_unit_items(
     for (item, parser_span) in &tu.items {
         let parser_span = *parser_span;
         let span = ctx.co2_span_to_rustc(parser_span);
-        let mut resolver =
+        let resolver =
             LocalResolver::new(ctx.resolver.clone()).with_module_path(module_path.to_vec());
 
         if let Declaration::Declaration {
@@ -1365,6 +1438,18 @@ fn lower_translation_unit_items(
             continue;
         }
 
+        let mut resolver = resolver;
+        let mut vla_params = Vec::new();
+        if let Declaration::FunctionDefinition { signature, .. } = item
+            && let FunctionDefinitionSignature::C { declarator, .. } = signature
+        {
+            let mut names = Vec::new();
+            collect_param_names(&declarator.0, &mut names);
+            for name in names {
+                resolver = resolver.declare_ident_as_local(&(0, name));
+            }
+            vla_params = collect_vla_params(&declarator.0);
+        }
         let item = item.transform(&resolver);
         match item {
             Declaration::RustTypeAlias {
@@ -1595,6 +1680,7 @@ fn lower_translation_unit_items(
                         def: id,
                         function_name,
                         param_names,
+                        vla_params,
                         resolver: resolver.clone(),
                         body,
                         had_errors: co2_ast::diagnostic_error_count() > errors_before_parse,
@@ -2130,6 +2216,8 @@ pub fn lower_crate_sig(
             file_ids: file_ids.clone(),
             struct_manager: StructManager::default(),
             unrepresentable_typedefs: FxHashMap::default(),
+            unrepresentable_typedef_defs: FxHashMap::default(),
+            unrepresentable_typedef_names: FxHashMap::default(),
             typedef_tys: FxHashMap::default(),
             transparent_unions: FxHashSet::default(),
             global_value_tys: FxHashMap::default(),
@@ -2199,14 +2287,20 @@ pub fn lower_crate_sig(
             ) => {
                 let span = ctx.co2_span_to_rustc(parser_span);
                 let base_const = has_const_qualifier_in_decl_specs(&specifiers);
+                let c_name = declarator.ident().map(|id| id.1);
                 let ty = ctx.base_ty_of_decl(specifiers, parser_span);
                 let (_, ty, _) =
                     ctx.lower_value_decl_ctype(ty, base_const, (declarator, parser_span));
                 let CTy::Ty(ty) = ty else {
-                    CrateSigCtx::<'_>::terminate_with_error(
-                        parser_span,
-                        "typedef did not lower to a first-class type",
-                    );
+                    // A VLA (or other CTy with no first-class `HirTy`
+                    // representation) typedef is expanded at each use site.
+                    let mut base = ctx.resolver.borrow_mut();
+                    if let Some(c_name) = c_name {
+                        base.unrepresentable_typedefs.insert(c_name.clone(), ty.clone());
+                        base.unrepresentable_typedef_names.insert(id, c_name);
+                    }
+                    base.unrepresentable_typedef_defs.insert(id, ty);
+                    continue;
                 };
                 ctx.resolver.borrow_mut().typedef_tys.insert(id, ty.clone());
                 if is_transparent_union {
@@ -2491,10 +2585,9 @@ pub fn lower_crate_sig(
             .eval_array_len_expr(&registered.expr)
         {
             Ok(value) => value,
-            Err(err) => {
-                co2_ast::emit_errors(vec![co2_ast::Rich::custom(err.0, err.1)]);
-                1000
-            }
+            // A bound that cannot be evaluated as a module constant is a VLA
+            // bound; it is lowered with its runtime dims in HIR instead.
+            Err(_) => continue,
         };
         let expr = (
             Expression::Constant(Constant::Int(value as i128, IntegerSuffix::None)),

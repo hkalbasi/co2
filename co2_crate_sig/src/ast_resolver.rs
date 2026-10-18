@@ -202,6 +202,8 @@ pub struct LocalResolverBase {
     pub file_ids: Arc<FxHashMap<co2_ast::FileId, FileId>>,
     pub(crate) struct_manager: StructManager,
     pub(crate) unrepresentable_typedefs: FxHashMap<String, CTy>,
+    pub(crate) unrepresentable_typedef_defs: FxHashMap<DefId, CTy>,
+    pub(crate) unrepresentable_typedef_names: FxHashMap<DefId, String>,
     pub(crate) typedef_tys: FxHashMap<DefId, HirTy>,
     pub(crate) transparent_unions: FxHashSet<DefId>,
     pub(crate) global_value_tys: FxHashMap<DefId, HirTy>,
@@ -413,6 +415,25 @@ impl LocalResolver {
     /// (e.g. an incomplete/forward-declared C struct lowered as TypeDef → ForeignType).
     pub fn get_typedef_hir_ty(&self, def_id: DefId) -> Option<HirTy> {
         self.base.borrow().typedef_tys.get(&def_id).cloned()
+    }
+
+    /// Returns the signature-level `CTy` for a typedef that has no first-class
+    /// `HirTy` (e.g. a VLA typedef). Use sites expand this at lowering time.
+    pub fn get_unrepresentable_typedef_cty(&self, def_id: DefId) -> Option<CTy> {
+        self.base
+            .borrow()
+            .unrepresentable_typedef_defs
+            .get(&def_id)
+            .cloned()
+    }
+
+    /// Returns the C name of a typedef that has no first-class `HirTy`.
+    pub fn get_unrepresentable_typedef_name(&self, def_id: DefId) -> Option<String> {
+        self.base
+            .borrow()
+            .unrepresentable_typedef_names
+            .get(&def_id)
+            .cloned()
     }
 
     pub fn peel_constexpr_typedef_hir(&self, ty: HirTy) -> HirTy {

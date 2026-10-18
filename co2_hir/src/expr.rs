@@ -21,7 +21,7 @@ use rustc_public_generative::rustc_public::{
 use crate::initializer_tree::{InitializerTree, eval_const_int};
 use crate::item::{HirLocal, LocalId};
 use crate::resolver::invalid_span;
-use crate::resolver::{HirCtx, ResolvedValue, spanned_error};
+use crate::resolver::{HirCtx, ResolvedValue, VlaShape, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
     array_elem_ty, common_numeric_ty, enum_payload_ty, integer_promote_ty, is_array_ty,
@@ -1809,6 +1809,322 @@ impl HirCtx<'_> {
         }
     }
 
+    /// If `expr` names a VLA object or pointer-to-VLA local, return its runtime
+    /// shape and whether it is a pointer-to-VLA (`true`) or an object (`false`).
+    fn vla_shape_of_expr(&self, expr: &HirExpr) -> Option<(VlaShape, bool)> {
+        let HirExprKind::Local(id) = &expr.kind else {
+            return None;
+        };
+        let vla = self.vla.borrow();
+        if let Some(shape) = vla.objects.get(id) {
+            return Some((shape.clone(), false));
+        }
+        if let Some(shape) = vla.ptrs.get(id) {
+            return Some((shape.clone(), true));
+        }
+        None
+    }
+
+    fn vla_usize_binop(&self, op: HirBinOp, lhs: HirExpr, rhs: HirExpr, span: RustSpan) -> HirExpr {
+        HirExpr {
+            kind: HirExprKind::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            ty: Ty::usize_ty(),
+            span,
+        }
+    }
+
+    fn vla_dim_local(&self, dim: LocalId, span: RustSpan) -> HirExpr {
+        HirExpr {
+            kind: HirExprKind::Local(dim),
+            ty: Ty::usize_ty(),
+            span,
+        }
+    }
+
+    /// `product(dims)` as a runtime `usize`, `1` when empty.
+    fn vla_product_dims(&self, dims: &[LocalId], span: RustSpan) -> HirExpr {
+        let mut acc = HirExpr {
+            kind: HirExprKind::ConstInt(1),
+            ty: Ty::usize_ty(),
+            span,
+        };
+        for dim in dims {
+            acc = self.vla_usize_binop(
+                HirBinOp::Mul,
+                acc,
+                self.vla_dim_local(*dim, span),
+                span,
+            );
+        }
+        acc
+    }
+
+    /// Byte offset of indexing `shape` with `indices`. Returns the offset
+    /// expression and the dimensions still remaining after the indices.
+    fn vla_index_offset(
+        &self,
+        shape: &VlaShape,
+        is_ptr: bool,
+        indices: &[&co2_ast::Spanned<co2_ast::Expression<LocalResolver>>],
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<(HirExpr, Vec<LocalId>), (co2_ast::Span, String)> {
+        let elem_size = self.sizeof_ty(shape.elem_ty)?;
+        let mut dims = shape.dims.clone();
+        let mut offset = HirExpr {
+            kind: HirExprKind::ConstInt(0),
+            ty: Ty::usize_ty(),
+            span,
+        };
+        let mut first = true;
+        for index in indices {
+            let index = self.lower_expr(((*index).0.clone(), (*index).1), locals, local_map)?;
+            let index = self.emit_cast(index, Ty::usize_ty());
+            let stride = if first && is_ptr {
+                // `p[i]` on `int (*p)[n]`: one step is a whole row.
+                self.vla_usize_binop(
+                    HirBinOp::Mul,
+                    self.vla_product_dims(&dims, span),
+                    HirExpr {
+                        kind: HirExprKind::ConstInt(elem_size as i128),
+                        ty: Ty::usize_ty(),
+                        span,
+                    },
+                    span,
+                )
+            } else if !dims.is_empty() {
+                let stride = self.vla_usize_binop(
+                    HirBinOp::Mul,
+                    self.vla_product_dims(&dims[1..], span),
+                    HirExpr {
+                        kind: HirExprKind::ConstInt(elem_size as i128),
+                        ty: Ty::usize_ty(),
+                        span,
+                    },
+                    span,
+                );
+                dims.remove(0);
+                stride
+            } else {
+                HirExpr {
+                    kind: HirExprKind::ConstInt(elem_size as i128),
+                    ty: Ty::usize_ty(),
+                    span,
+                }
+            };
+            let _ = parser_span;
+            let term = self.vla_usize_binop(HirBinOp::Mul, index, stride, span);
+            offset = self.vla_usize_binop(HirBinOp::Add, offset, term, span);
+            first = false;
+        }
+        Ok((offset, dims))
+    }
+
+    /// Build a `*mut elem` address `base + byte_offset`.
+    fn vla_byte_ptr(&self, base: HirExpr, offset: HirExpr, elem_ty: Ty, span: RustSpan) -> HirExpr {
+        let u8_ptr = Ty::new_ptr(Ty::unsigned_ty(UintTy::U8), Mutability::Mut);
+        let base = self.emit_cast(base, u8_ptr);
+        let byte = HirExpr {
+            kind: HirExprKind::PtrOffset {
+                base: Box::new(base),
+                index: Box::new(offset),
+            },
+            ty: u8_ptr,
+            span,
+        };
+        self.emit_cast(byte, Ty::new_ptr(elem_ty, Mutability::Mut))
+    }
+
+    /// Scale a pointer-arithmetic index for a pointer-to-VLA base: one step
+    /// advances a whole row (product of dimensions) of elements.
+    fn vla_scaled_ptr_index(&self, base: &HirExpr, index: HirExpr, span: RustSpan) -> HirExpr {
+        let Some((shape, true)) = self.vla_shape_of_expr(base) else {
+            return index;
+        };
+        let isize_ty = Ty::signed_ty(IntTy::Isize);
+        let idx = self.emit_cast(index, isize_ty);
+        let row = self.emit_cast(self.vla_product_dims(&shape.dims, span), isize_ty);
+        HirExpr {
+            kind: HirExprKind::Binary {
+                op: HirBinOp::Mul,
+                lhs: Box::new(idx),
+                rhs: Box::new(row),
+            },
+            ty: isize_ty,
+            span,
+        }
+    }
+
+    /// Decompose a pointer expression into its VLA root and the accumulated
+    /// element offset (in `isize`), recognising left-associative chains such
+    /// as `p + i + 1`.
+    fn vla_ptr_chain(&self, e: &HirExpr) -> Option<(HirExpr, HirExpr)> {
+        let HirExprKind::PtrOffset { base, index } = &e.kind else {
+            return None;
+        };
+        let isize_ty = Ty::signed_ty(IntTy::Isize);
+        if let Some((_, true)) = self.vla_shape_of_expr(base) {
+            return Some(((**base).clone(), self.emit_cast((**index).clone(), isize_ty)));
+        }
+        let (root, acc) = self.vla_ptr_chain(base)?;
+        let idx = self.emit_cast((**index).clone(), isize_ty);
+        let sum = HirExpr {
+            kind: HirExprKind::Binary {
+                op: HirBinOp::Add,
+                lhs: Box::new(acc),
+                rhs: Box::new(idx),
+            },
+            ty: isize_ty,
+            span: e.span,
+        };
+        Some((root, sum))
+    }
+
+    /// `sizeof` of a VLA expression (`a`, `a[0]`, `*p`) yields a runtime size.
+    fn try_lower_vla_sizeof(
+        &self,
+        operand: &co2_ast::Spanned<Expression<LocalResolver>>,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<Option<HirExpr>, (co2_ast::Span, String)> {
+        // Flatten a subscript chain.
+        let mut indices: Vec<&co2_ast::Spanned<Expression<LocalResolver>>> = vec![];
+        let mut cur: &co2_ast::Spanned<Expression<LocalResolver>> = operand;
+        while let Expression::Subscript(b, i) = &cur.0 {
+            indices.push(&**i);
+            cur = &**b;
+        }
+        indices.reverse();
+
+        let (dims, elem_ty) = match &cur.0 {
+            Expression::Identifier(_) => {
+                let base = self.lower_expr((cur.0.clone(), cur.1), locals, local_map)?;
+                match self.vla_shape_of_expr(&base) {
+                    Some((shape, is_ptr)) => {
+                        if indices.is_empty() {
+                            // `sizeof(a)`: a whole VLA object (not a pointer).
+                            if is_ptr {
+                                return Ok(None);
+                            }
+                            (shape.dims.clone(), shape.elem_ty)
+                        } else {
+                            let (_offset, dims) = self.vla_index_offset(
+                                &shape,
+                                is_ptr,
+                                &indices,
+                                span,
+                                parser_span,
+                                locals,
+                                local_map,
+                            )?;
+                            (dims, shape.elem_ty)
+                        }
+                    }
+                    None => return Ok(None),
+                }
+            }
+            // `sizeof(*p)` where `p` is a pointer-to-VLA local.
+            Expression::UnaryOp(co2_ast::UnaryOp::Deref, inner)
+                if matches!(&inner.0, Expression::Identifier(_)) =>
+            {
+                let base = self.lower_expr((inner.0.clone(), inner.1), locals, local_map)?;
+                match self.vla_shape_of_expr(&base) {
+                    Some((shape, true)) => (shape.dims.clone(), shape.elem_ty),
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        let elem_size = self.sizeof_ty(elem_ty)?;
+        let product = self.vla_product_dims(&dims, span);
+        Ok(Some(self.vla_usize_binop(
+            HirBinOp::Mul,
+            product,
+            HirExpr {
+                kind: HirExprKind::ConstInt(elem_size as i128),
+                ty: Ty::usize_ty(),
+                span,
+            },
+            span,
+        )))
+    }
+
+    /// Product of VLA dims built inline (no statements emitted), for
+    /// `sizeof(type-name)` where the bound is evaluated in place.
+    fn lower_vla_dims_product(
+        &self,
+        dims: &[crate::resolver::VlaDim],
+        span: RustSpan,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let mut acc = HirExpr {
+            kind: HirExprKind::ConstInt(1),
+            ty: Ty::usize_ty(),
+            span,
+        };
+        for dim in dims {
+            let value = match dim {
+                crate::resolver::VlaDim::Const(n) => HirExpr {
+                    kind: HirExprKind::ConstInt(*n as i128),
+                    ty: Ty::usize_ty(),
+                    span,
+                },
+                crate::resolver::VlaDim::Expr(e) => {
+                    let e = self.lower_expr(e.clone(), locals, local_map)?;
+                    self.emit_cast(e, Ty::usize_ty())
+                }
+                crate::resolver::VlaDim::Local(id) => self.vla_dim_local(*id, span),
+            };
+            acc = self.vla_usize_binop(HirBinOp::Mul, acc, value, span);
+        }
+        Ok(acc)
+    }
+
+    /// Lower an entire VLA subscript chain `base[i0][i1]...`, or return `None`
+    /// if `base` is not a VLA object/pointer.
+    fn try_lower_vla_subscript(
+        &self,
+        base: &HirExpr,
+        indices: &[&co2_ast::Spanned<co2_ast::Expression<LocalResolver>>],
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Result<Option<HirExpr>, (co2_ast::Span, String)> {
+        let Some((shape, is_ptr)) = self.vla_shape_of_expr(base) else {
+            return Ok(None);
+        };
+        let (offset, dims) = self.vla_index_offset(
+            &shape,
+            is_ptr,
+            indices,
+            span,
+            parser_span,
+            locals,
+            local_map,
+        )?;
+        let ptr = self.vla_byte_ptr(base.clone(), offset, shape.elem_ty, span);
+        if dims.is_empty() {
+            Ok(Some(HirExpr {
+                kind: HirExprKind::Deref(Box::new(ptr)),
+                ty: shape.elem_ty,
+                span,
+            }))
+        } else {
+            Ok(Some(ptr))
+        }
+    }
+
     pub(crate) fn fn_def_to_c_fn_ptr_decay_if_fn_def(&self, expr: &mut HirExpr) {
         if !matches!(expr.ty.kind(), TyKind::RigidTy(RigidTy::FnDef(..))) {
             return;
@@ -1849,7 +2165,7 @@ impl HirCtx<'_> {
         }
     }
 
-    fn emit_cast(&self, expr: HirExpr, ty: Ty) -> HirExpr {
+    pub(crate) fn emit_cast(&self, expr: HirExpr, ty: Ty) -> HirExpr {
         if expr.ty == ty {
             expr
         } else {
@@ -2473,6 +2789,30 @@ impl HirCtx<'_> {
                 }
             }
             Expression::Subscript(base, index) => {
+                // VLA indexing needs runtime row strides, which the ordinary
+                // `*(base + index)` lowering cannot express. Flatten the whole
+                // chain and handle it here when the base names a VLA local.
+                if matches!(&base.0, Expression::Identifier(_)) {
+                    let mut indices: Vec<&co2_ast::Spanned<Expression<LocalResolver>>> =
+                        vec![&index];
+                    let mut cur: &co2_ast::Spanned<Expression<LocalResolver>> = &base;
+                    while let Expression::Subscript(b, i) = &cur.0 {
+                        indices.push(&**i);
+                        cur = &**b;
+                    }
+                    indices.reverse();
+                    let base_hir = self.lower_expr((cur.0.clone(), cur.1), locals, local_map)?;
+                    if let Some(res) = self.try_lower_vla_subscript(
+                        &base_hir,
+                        &indices,
+                        span,
+                        parser_span,
+                        locals,
+                        local_map,
+                    )? {
+                        return Ok(res);
+                    }
+                }
                 // E1[E2] is equivalent to (*((E1)+(E2))). Reuse the `+` lowering.
                 let mut lhs = self.lower_expr(*base, locals, local_map)?;
                 self.array_to_pointer_decay_if_array(&mut lhs);
@@ -2715,6 +3055,11 @@ impl HirCtx<'_> {
                 }
             }
             Expression::Sizeof(expr) => {
+                if let Some(vla_size) =
+                    self.try_lower_vla_sizeof(&expr, span, parser_span, locals, local_map)?
+                {
+                    return Ok(vla_size);
+                }
                 let inner = self.lower_expr(*expr, locals, local_map)?;
                 let size = if let HirExprKind::ConstStr(s) = &inner.kind {
                     s.storage_size() as u64
@@ -2889,8 +3234,46 @@ impl HirCtx<'_> {
                 })
             }
             Expression::SizeofType(type_name) => {
-                let ty =
-                    self.lower_type_name_in_scope(*type_name, parser_span, locals, local_map)?;
+                let cty = self.lower_type_name_cty_with_scope(
+                    *type_name,
+                    parser_span,
+                    Some((locals, local_map)),
+                )?;
+                if let Some(build) = self.pending_vla.borrow_mut().take() {
+                    // `sizeof(int[m])`: a runtime value.
+                    let product = self.lower_vla_dims_product(
+                        &build.dims,
+                        span,
+                        locals,
+                        local_map,
+                    )?;
+                    let elem_size = self.sizeof_ty(build.elem)?;
+                    return Ok(self.vla_usize_binop(
+                        HirBinOp::Mul,
+                        product,
+                        HirExpr {
+                            kind: HirExprKind::ConstInt(elem_size as i128),
+                            ty: Ty::usize_ty(),
+                            span,
+                        },
+                        span,
+                    ));
+                }
+                let ty = match cty {
+                    CTy::Ty(ty) => ty,
+                    CTy::Function(_) => {
+                        return Err(spanned_error(
+                            parser_span,
+                            "Function is invalid as a type name",
+                        ));
+                    }
+                    CTy::UnsizedArray(_) => {
+                        return Err(spanned_error(
+                            parser_span,
+                            "Unsized array is invalid as a type name",
+                        ));
+                    }
+                };
                 // Operands must be `Sized` (same solver check as locals);
                 // unsized layouts would otherwise silently yield 0.
                 {
@@ -4983,6 +5366,22 @@ impl HirCtx<'_> {
                 span: expr.span,
             });
         }
+        // Pointer-to-VLA params are represented as `*mut elem`; passing
+        // `&arr` (`*mut [elem; N]`) must decay to `*mut elem`.
+        // ponytail: only handles one array level; extend if nested `(*)[m][n]` needs it.
+        if let (
+            TyKind::RigidTy(RigidTy::RawPtr(exp_elem, _)),
+            TyKind::RigidTy(RigidTy::RawPtr(act_elem, _)),
+        ) = (expected_ty.kind(), expr.ty.kind())
+            && is_array_ty(act_elem)
+            && array_elem_ty(act_elem) == Some(exp_elem)
+        {
+            return Some(HirExpr {
+                kind: HirExprKind::Cast(Box::new(expr.clone())),
+                ty: expected_ty,
+                span: expr.span,
+            });
+        }
         if self.needs_implicit_cast(expected_ty, expr.ty) {
             return Some(HirExpr {
                 kind: HirExprKind::Cast(Box::new(expr.clone())),
@@ -5482,6 +5881,19 @@ impl HirCtx<'_> {
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<HirExpr, (co2_ast::Span, String)> {
         let size = self.lower_expr((size.0, size.1), locals, local_map)?;
+        self.lower_alloca_ir(size, span, parser_span, locals)
+    }
+
+    /// Heap-allocate `size` bytes with 16-byte alignment, returning a
+    /// `*mut c_void`. The allocation is owned by the per-function backing store
+    /// and freed on return (see `alloca_storage`).
+    pub(crate) fn lower_alloca_ir(
+        &self,
+        size: HirExpr,
+        span: RustSpan,
+        parser_span: co2_ast::Span,
+        locals: &mut Arena<HirLocal>,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
         let usize_ty = Ty::unsigned_ty(UintTy::Usize);
         let size = self.emit_cast(size, usize_ty);
 
@@ -5794,20 +6206,43 @@ impl HirCtx<'_> {
             if matches!(op, HirBinOp::Add) {
                 match (lhs_is_ptr, rhs_is_ptr) {
                     (true, false) if is_numeric_ty(rhs.ty) => {
+                        if let Some((root, acc)) = self.vla_ptr_chain(&lhs) {
+                            let isize_ty = Ty::signed_ty(IntTy::Isize);
+                            let extra = self.vla_scaled_ptr_index(&root, rhs, span);
+                            let sum = HirExpr {
+                                kind: HirExprKind::Binary {
+                                    op: HirBinOp::Add,
+                                    lhs: Box::new(acc),
+                                    rhs: Box::new(extra),
+                                },
+                                ty: isize_ty,
+                                span,
+                            };
+                            return Ok(HirExpr {
+                                kind: HirExprKind::PtrOffset {
+                                    base: Box::new(root),
+                                    index: Box::new(sum),
+                                },
+                                ty: lhs.ty,
+                                span,
+                            });
+                        }
+                        let index = self.vla_scaled_ptr_index(&lhs, rhs, span);
                         return Ok(HirExpr {
                             kind: HirExprKind::PtrOffset {
                                 base: Box::new(lhs.clone()),
-                                index: Box::new(rhs),
+                                index: Box::new(index),
                             },
                             ty: lhs.ty,
                             span,
                         });
                     }
                     (false, true) if is_numeric_ty(lhs.ty) && !is_assignment => {
+                        let index = self.vla_scaled_ptr_index(&rhs, lhs, span);
                         return Ok(HirExpr {
                             kind: HirExprKind::PtrOffset {
                                 base: Box::new(rhs.clone()),
-                                index: Box::new(lhs),
+                                index: Box::new(index),
                             },
                             ty: rhs.ty,
                             span,
@@ -5825,6 +6260,27 @@ impl HirCtx<'_> {
                 match (lhs_is_ptr, rhs_is_ptr) {
                     (true, false) if is_numeric_ty(rhs.ty) => {
                         let offset_ty = Ty::signed_ty(IntTy::Isize);
+                        if let Some((root, acc)) = self.vla_ptr_chain(&lhs) {
+                            let extra = self.vla_scaled_ptr_index(&root, rhs, span);
+                            let sum = HirExpr {
+                                kind: HirExprKind::Binary {
+                                    op: HirBinOp::Sub,
+                                    lhs: Box::new(acc),
+                                    rhs: Box::new(extra),
+                                },
+                                ty: offset_ty,
+                                span,
+                            };
+                            return Ok(HirExpr {
+                                kind: HirExprKind::PtrOffset {
+                                    base: Box::new(root),
+                                    index: Box::new(sum),
+                                },
+                                ty: lhs.ty,
+                                span,
+                            });
+                        }
+                        let scaled = self.vla_scaled_ptr_index(&lhs, rhs, span);
                         let neg_rhs = HirExpr {
                             kind: HirExprKind::Binary {
                                 op: HirBinOp::Sub,
@@ -5833,11 +6289,7 @@ impl HirCtx<'_> {
                                     ty: offset_ty,
                                     span,
                                 }),
-                                rhs: Box::new(HirExpr {
-                                    kind: HirExprKind::Cast(Box::new(rhs)),
-                                    ty: offset_ty,
-                                    span,
-                                }),
+                                rhs: Box::new(self.emit_cast(scaled, offset_ty)),
                             },
                             ty: offset_ty,
                             span,

@@ -5,7 +5,8 @@ use co2_ast::{
     Initializer, RustTy, Spanned, StorageClassSpecifier, TypeName, TypeQualifier,
 };
 use co2_crate_sig::{
-    CompressedTypeSpecifier, LocalResolver, LogicalAdtFieldKind, initializer_contains_label_address,
+    CompressedTypeSpecifier, LocalResolver, LogicalAdtFieldKind,
+    RegisteredSubscription, initializer_contains_label_address,
 };
 use co2_parser::parse_expression_tokens;
 use la_arena::Arena;
@@ -22,9 +23,9 @@ use rustc_public_generative::{
     },
 };
 
-use crate::expr::HirExpr;
+use crate::expr::{HirBinOp, HirExpr, HirExprKind};
 use crate::item::{HirLocal, LocalId};
-use crate::resolver::{HirCtx, invalid_span, spanned_error};
+use crate::resolver::{HirCtx, VlaBuild, VlaDim, VlaShape, invalid_span, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
     array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt,
@@ -709,6 +710,8 @@ impl HirCtx<'_> {
                     }
                 }
                 let is_auto_decl = has_auto_decl_specs(&declaration_specifiers);
+                let is_typedef_decl =
+                    declaration_specifiers.iter().any(|s| s.0.is_typedef());
                 for init in declarators {
                     let InitDeclarator {
                         declarator,
@@ -799,12 +802,54 @@ impl HirCtx<'_> {
 
                     let raw_initializer = initializer.clone();
                     let declarator_for_checks = declarator.0.clone();
-                    let ((name, parser_span), ty) = self.lower_value_decl_type(
+                    let vla_typedef_name = declarator.0.ident().map(|id| id.1);
+                    let typedef_decl_span = declarator.1;
+                    *self.pending_vla.borrow_mut() = None;
+                    let lower_result = self.try_lower_value_decl_type(
                         declaration_specifiers.clone(),
                         declarator,
                         locals,
                         local_map,
                     );
+                    if is_typedef_decl
+                        && let Some(build) = self.pending_vla.borrow_mut().take()
+                    {
+                        // `typedef int row_t[n];`: fix the bound now (as C
+                        // does) and expand the shape at each use site.
+                        if let Some(name) = vla_typedef_name {
+                            let span = self.to_rust_span(typedef_decl_span);
+                            let dims = self.eval_vla_dims(
+                                &build.dims,
+                                span,
+                                out,
+                                locals,
+                                local_map,
+                            );
+                            self.vla_typedefs.borrow_mut().insert(
+                                name,
+                                VlaShape {
+                                    elem_ty: build.elem,
+                                    dims,
+                                },
+                            );
+                        }
+                        continue;
+                    }
+                    if let Some(build) = self.pending_vla.borrow_mut().take() {
+                        let ((name, parser_span), _) = lower_result
+                            .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                        self.lower_vla_decl(
+                            (name, parser_span),
+                            build,
+                            initializer,
+                            out,
+                            locals,
+                            local_map,
+                        );
+                        continue;
+                    }
+                    let ((name, parser_span), ty) = lower_result
+                        .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                     validate_local_constexpr_decl(
                         self,
                         &declaration_specifiers,
@@ -1005,18 +1050,152 @@ impl HirCtx<'_> {
         Ok((name, decl_ty))
     }
 
-    pub(crate) fn lower_value_decl_type(
+    /// Lower a local VLA declaration (`int a[n][m];` or `int (*p)[n] = ...;`).
+    ///
+    /// A VLA object is heap-allocated into the per-function alloca backing
+    /// store and the local itself holds a `*mut elem` pointing at the block.
+    /// A pointer-to-VLA local also holds a `*mut elem`, but only *indexes* with
+    /// the runtime dimensions (its allocation belongs to whatever it points at).
+    fn lower_vla_decl(
         &self,
-        declaration_specifiers: Vec<Spanned<DeclarationSpecifier<LocalResolver>>>,
-        declarator: Spanned<Declarator<LocalResolver>>,
+        (name, parser_span): ((usize, String), co2_ast::Span),
+        build: VlaBuild,
+        initializer: Option<Spanned<Initializer<LocalResolver>>>,
+        out: &mut Vec<HirStmt>,
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
-    ) -> (Spanned<(usize, String)>, CTy) {
-        match self.try_lower_value_decl_type(declaration_specifiers, declarator, locals, local_map)
-        {
-            Ok(x) => x,
-            Err(err) => self.terminate_with_spanned_error(err),
+    ) {
+        let span = self.to_rust_span(parser_span);
+        let elem_ty = build.elem;
+        let usize_ty = Ty::usize_ty();
+
+        let dim_locals =
+            self.eval_vla_dims(&build.dims, span, out, locals, local_map);
+
+        let (crate_id, local_name) = name;
+        let ptr_ty = Ty::new_ptr(elem_ty, Mutability::Mut);
+        let local = locals.alloc(HirLocal {
+            name: local_name,
+            ty: ptr_ty,
+            span,
+            read_only: false,
+        });
+        local_map.insert(crate_id, local);
+
+        let shape = VlaShape {
+            elem_ty,
+            dims: dim_locals.clone(),
+        };
+
+        if build.is_ptr {
+            self.vla.borrow_mut().ptrs.insert(local, shape);
+            let init = initializer.and_then(|init| match init.0 {
+                Initializer::Expr(e) => {
+                    let mut e = self
+                        .lower_expr(e, locals, local_map)
+                        .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                    self.array_to_pointer_decay_if_array(&mut e);
+                    let e = match self.coerce_expr_to_type(&e, ptr_ty) {
+                        Some(it) => it,
+                        None => self.emit_cast(e, ptr_ty),
+                    };
+                    Some(e)
+                }
+                _ => None,
+            });
+            out.push(HirStmt::Decl(HirDecl {
+                local,
+                initializer: init,
+                span,
+            }));
+            return;
         }
+
+        // VLA object: allocate `product(dims) * sizeof(elem)` bytes.
+        let elem_size = self
+            .sizeof_ty(elem_ty)
+            .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+        let mut total = HirExpr {
+            kind: HirExprKind::ConstInt(elem_size as i128),
+            ty: usize_ty,
+            span,
+        };
+        for d in &dim_locals {
+            let dv = HirExpr {
+                kind: HirExprKind::Local(*d),
+                ty: usize_ty,
+                span,
+            };
+            total = HirExpr {
+                kind: HirExprKind::Binary {
+                    op: HirBinOp::Mul,
+                    lhs: Box::new(total),
+                    rhs: Box::new(dv),
+                },
+                ty: usize_ty,
+                span,
+            };
+        }
+        let alloc = self
+            .lower_alloca_ir(total, span, parser_span, locals)
+            .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+        let ptr = self.emit_cast(alloc, ptr_ty);
+
+        self.vla.borrow_mut().objects.insert(local, shape);
+        out.push(HirStmt::Decl(HirDecl {
+            local,
+            initializer: Some(ptr),
+            span,
+        }));
+    }
+
+    /// Evaluate each VLA dimension expression exactly once into a hidden
+    /// `usize` local so later `sizeof`/strides never re-run side effects.
+    fn eval_vla_dims(
+        &self,
+        dims: &[VlaDim],
+        span: rustc_public_generative::rustc_public::ty::Span,
+        out: &mut Vec<HirStmt>,
+        locals: &mut Arena<HirLocal>,
+        local_map: &mut FxHashMap<usize, LocalId>,
+    ) -> Vec<LocalId> {
+        let usize_ty = Ty::usize_ty();
+        let mut dim_locals = Vec::with_capacity(dims.len());
+        for dim in dims {
+            let local = match dim {
+                VlaDim::Local(id) => {
+                    dim_locals.push(*id);
+                    continue;
+                }
+                _ => locals.alloc(HirLocal {
+                    name: "__co2_vla_dim".to_owned(),
+                    ty: usize_ty,
+                    span,
+                    read_only: false,
+                }),
+            };
+            let value = match dim {
+                VlaDim::Const(n) => HirExpr {
+                    kind: HirExprKind::ConstInt(*n as i128),
+                    ty: usize_ty,
+                    span,
+                },
+                VlaDim::Expr(e) => {
+                    let e = self
+                        .lower_expr(e.clone(), locals, local_map)
+                        .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                    self.emit_cast(e, usize_ty)
+                }
+                VlaDim::Local(_) => unreachable!(),
+            };
+            dim_locals.push(local);
+            out.push(HirStmt::Decl(HirDecl {
+                local,
+                initializer: Some(value),
+                span,
+            }));
+        }
+        dim_locals
     }
 
     pub(crate) fn lower_type_name_in_scope(
@@ -1177,6 +1356,32 @@ impl HirCtx<'_> {
                 return match &path.0 {
                     co2_crate_sig::DefOrLocal::UnrepresentableType(sig_ty) => {
                         (Self::sig_cty_to_cty(sig_ty), specifiers)
+                    }
+                    co2_crate_sig::DefOrLocal::Def { def_id, .. } => {
+                        let vla_ty = self
+                            .decl_resolver
+                            .get_unrepresentable_typedef_name(*def_id)
+                            .and_then(|name| {
+                                self.vla_typedefs.borrow().get(&name).cloned()
+                            });
+                        if let Some(shape) = vla_ty {
+                            let elem = shape.elem_ty;
+                            let dims =
+                                shape.dims.iter().map(|d| VlaDim::Local(*d)).collect();
+                            *self.pending_vla.borrow_mut() = Some(VlaBuild {
+                                elem,
+                                dims,
+                                is_ptr: false,
+                            });
+                            return (CTy::Ty(elem), specifiers);
+                        }
+                        match self.decl_resolver.get_unrepresentable_typedef_cty(*def_id) {
+                            Some(sig_ty) => (Self::sig_cty_to_cty(&sig_ty), specifiers),
+                            None => (
+                                CTy::Ty(self.ty_of_resolved_path(&path.0, path.1)),
+                                specifiers,
+                            ),
+                        }
                     }
                     _ => (
                         CTy::Ty(self.ty_of_resolved_path(&path.0, path.1)),
@@ -1512,7 +1717,7 @@ impl HirCtx<'_> {
         Ok(result.ty)
     }
 
-    fn sizeof_ty(&self, ty: Ty) -> Result<u64, (co2_ast::Span, String)> {
+    pub(crate) fn sizeof_ty(&self, ty: Ty) -> Result<u64, (co2_ast::Span, String)> {
         // Operands must be `Sized` (same solver check as locals and runtime
         // sizeof); unsized layouts would otherwise silently yield 0.
         {
@@ -1726,6 +1931,43 @@ impl HirCtx<'_> {
         Ok((offset_bytes, cur_ty))
     }
 
+    /// Parse the size expression of an array subscript (used for VLA bounds).
+    fn subscription_size_expr(
+        &self,
+        subscription: &Spanned<RegisteredSubscription>,
+    ) -> Result<Spanned<Expression<LocalResolver>>, (co2_ast::Span, String)> {
+        if let Some(const_id) = subscription.0.array_len_const.as_ref() {
+            return self
+                .decl_resolver
+                .lookup_array_len_const_expr(*const_id)
+                .ok_or_else(|| spanned_error(subscription.1, "Can not calculate subscription"));
+        }
+        let tokens = subscription
+            .0
+            .raw
+            .tokens
+            .get(1..subscription.0.raw.tokens.len().saturating_sub(1))
+            .ok_or_else(|| spanned_error(subscription.1, "Can not calculate subscription"))?
+            .iter()
+            .skip_while(|(token, _)| {
+                matches!(
+                    token,
+                    co2_ast::Token::Static
+                        | co2_ast::Token::Const
+                        | co2_ast::Token::Restrict
+                        | co2_ast::Token::Volatile
+                        | co2_ast::Token::Atomic
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(parse_expression_tokens(
+            &tokens,
+            subscription.1,
+            self.decl_resolver.clone(),
+        ))
+    }
+
     fn extract_decl_type(
         &self,
         current: CTy,
@@ -1821,10 +2063,17 @@ impl HirCtx<'_> {
                         let fn_ptr = Ty::from_rigid_kind(RigidTy::FnPtr(Binder::dummy(sig)));
                         CTy::Ty(self.maybe_uninit_of(fn_ptr))
                     }
-                    CTy::UnsizedArray(elem) => CTy::Ty(Ty::new_ptr(
-                        Ty::new_ptr(elem, Mutability::Mut),
-                        ptr_mutability,
-                    )),
+                    CTy::UnsizedArray(elem) => {
+                        if let Some(b) = self.pending_vla.borrow_mut().as_mut() {
+                            b.is_ptr = true;
+                            CTy::Ty(Ty::new_ptr(elem, ptr_mutability))
+                        } else {
+                            CTy::Ty(Ty::new_ptr(
+                                Ty::new_ptr(elem, Mutability::Mut),
+                                ptr_mutability,
+                            ))
+                        }
+                    }
                 };
                 let next_const = qualifiers
                     .iter()
@@ -1850,46 +2099,7 @@ impl HirCtx<'_> {
                             CTy::UnsizedArray(inner)
                         } else {
                             let expr =
-                                if let Some(const_id) = subscription.0.array_len_const.as_ref() {
-                                    self.decl_resolver
-                                        .lookup_array_len_const_expr(*const_id)
-                                        .ok_or_else(|| {
-                                            spanned_error(
-                                                subscription.1,
-                                                "Can not calculate subscription",
-                                            )
-                                        })?
-                                } else {
-                                    let tokens = subscription
-                                        .0
-                                        .raw
-                                        .tokens
-                                        .get(1..subscription.0.raw.tokens.len().saturating_sub(1))
-                                        .ok_or_else(|| {
-                                            spanned_error(
-                                                subscription.1,
-                                                "Can not calculate subscription",
-                                            )
-                                        })?
-                                        .iter()
-                                        .skip_while(|(token, _)| {
-                                            matches!(
-                                                token,
-                                                co2_ast::Token::Static
-                                                    | co2_ast::Token::Const
-                                                    | co2_ast::Token::Restrict
-                                                    | co2_ast::Token::Volatile
-                                                    | co2_ast::Token::Atomic
-                                            )
-                                        })
-                                        .cloned()
-                                        .collect::<Vec<_>>();
-                                    parse_expression_tokens(
-                                        &tokens,
-                                        subscription.1,
-                                        self.decl_resolver.clone(),
-                                    )
-                                };
+                                self.subscription_size_expr(&subscription)?;
                             let len = if let Some((locals, local_map)) = scope.as_mut() {
                                 self.eval_array_len_expr_in_scope(&expr, locals, local_map)
                             } else {
@@ -1900,21 +2110,64 @@ impl HirCtx<'_> {
                                     &mut locals,
                                     &mut local_map,
                                 )
+                            };
+                            match len {
+                                Ok(len) => {
+                                    CTy::Ty(Ty::try_new_array(inner, len as u64).map_err(|e| {
+                                        spanned_error(
+                                            subscription.1,
+                                            format!("failed to build array type: {e}"),
+                                        )
+                                    })?)
+                                }
+                                Err((_, msg))
+                                    if scope.is_some()
+                                        && (msg.starts_with(
+                                            "unsupported identifier in constant expression",
+                                        ) || msg == "cannot call non-const function") =>
+                                {
+                                    // A non-constant VLA bound with locals in scope: a VLA.
+                                    // (A function call is a valid runtime VLA bound too.)
+                                    let mut build = self.pending_vla.borrow_mut();
+                                    let b = build.get_or_insert_with(|| VlaBuild {
+                                        elem: inner,
+                                        dims: Vec::new(),
+                                        is_ptr: false,
+                                    });
+                                    b.dims.insert(0, VlaDim::Expr(expr));
+                                    CTy::UnsizedArray(inner)
+                                }
+                                Err(err) => self.terminate_with_spanned_error(err),
                             }
-                            .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                            CTy::Ty(Ty::try_new_array(inner, len as u64).map_err(|e| {
-                                spanned_error(
-                                    subscription.1,
-                                    format!("failed to build array type: {e}"),
-                                )
-                            })?)
                         }
                     }
                     CTy::Function(_) => {
                         return Err(spanned_error(span, "array of functions is invalid"));
                     }
-                    CTy::UnsizedArray(_) => {
-                        return Err(spanned_error(span, "array of unsized arrays is invalid"));
+                    CTy::UnsizedArray(inner) => {
+                        if self.pending_vla.borrow().is_some() {
+                            // Inner dimensions of a VLA already under construction.
+                            let dim = if let Some(size) = subscription.0.raw.constant_len() {
+                                Some(VlaDim::Const(size as u64))
+                            } else if subscription.0.raw.is_unsized()
+                                || subscription.0.raw.is_unspecified_vla()
+                            {
+                                None
+                            } else {
+                                Some(VlaDim::Expr(self.subscription_size_expr(&subscription)?))
+                            };
+                            if let Some(dim) = dim {
+                                self.pending_vla
+                                    .borrow_mut()
+                                    .as_mut()
+                                    .unwrap()
+                                    .dims
+                                    .insert(0, dim);
+                            }
+                            CTy::UnsizedArray(inner)
+                        } else {
+                            return Err(spanned_error(span, "array of unsized arrays is invalid"));
+                        }
                     }
                 };
                 self.extract_decl_type_in_scope(array_ty, current_const, *declarator, scope)

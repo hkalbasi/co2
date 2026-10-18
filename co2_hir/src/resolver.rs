@@ -18,6 +18,46 @@ pub(crate) struct SwitchScope {
     pub(crate) default_label: Option<LabelId>,
 }
 
+/// Runtime shape of a variable-length array: the innermost element type and
+/// each dimension (in indexing order) as a local holding its value.
+#[derive(Clone, Debug)]
+pub(crate) struct VlaShape {
+    pub(crate) elem_ty: Ty,
+    pub(crate) dims: Vec<LocalId>,
+}
+
+/// VLA metadata for the body currently being lowered.
+#[derive(Default)]
+pub(crate) struct VlaState {
+    /// Locals that are themselves VLA *objects* (`int a[n][m];`). The local's
+    /// value is a `*mut elem` into the heap block.
+    pub(crate) objects: FxHashMap<LocalId, VlaShape>,
+    /// Locals that are *pointers to VLA* (`int (*p)[n];`). The local's value is
+    /// a `*mut elem` pointing at the start of the pointed-to array.
+    pub(crate) ptrs: FxHashMap<LocalId, VlaShape>,
+}
+
+/// One dimension of a VLA under construction. Dimensions are stored in
+/// indexing order (outermost first).
+#[derive(Clone)]
+pub(crate) enum VlaDim {
+    Const(u64),
+    Expr(co2_ast::Spanned<co2_ast::Expression<LocalResolver>>),
+    /// A dimension whose value was already evaluated into a local (used when
+    /// expanding a VLA typedef whose bound was fixed at its declaration).
+    Local(LocalId),
+}
+
+/// Accumulates a VLA shape while a declarator is being walked.
+#[derive(Clone)]
+pub(crate) struct VlaBuild {
+    pub(crate) elem: Ty,
+    pub(crate) dims: Vec<VlaDim>,
+    /// Set when the accumulated array is wrapped in a pointer declarator
+    /// (`int (*p)[n]`).
+    pub(crate) is_ptr: bool,
+}
+
 #[derive(Clone, Debug)]
 pub enum ResolvedValue {
     Fn(FnDef, Vec<GenericArgKind>),
@@ -79,6 +119,13 @@ pub struct HirCtx<'a> {
     pub(crate) c_variadic_local: Option<LocalId>,
     /// Backing `Vec<Vec<u128>>` local, lazily created on the first `alloca`.
     pub(crate) alloca_storage: RefCell<Option<LocalId>>,
+    /// VLA shapes for the current body.
+    pub(crate) vla: RefCell<VlaState>,
+    /// Scratch VLA shape being accumulated by the current declarator walk.
+    pub(crate) pending_vla: RefCell<Option<VlaBuild>>,
+    /// VLA typedefs (e.g. `typedef int row_t[n];`) visible in the current body,
+    /// keyed by the C name. Bounds are fixed when the typedef is declared.
+    pub(crate) vla_typedefs: RefCell<FxHashMap<String, VlaShape>>,
     pub(crate) decl_resolver: LocalResolver,
     pub(crate) function_name: Option<String>,
     pub(crate) ret_ty: Ty,
@@ -104,6 +151,9 @@ impl<'a> HirCtx<'a> {
             switch_scopes: RefCell::new(Vec::new()),
             c_variadic_local: None,
             alloca_storage: RefCell::new(None),
+            vla: RefCell::new(VlaState::default()),
+            pending_vla: RefCell::new(None),
+            vla_typedefs: RefCell::new(FxHashMap::default()),
             decl_resolver,
             function_name,
             ret_ty,

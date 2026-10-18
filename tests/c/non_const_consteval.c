@@ -25,11 +25,6 @@ int fn_case() {
     }
 }
 
-int fn_array_size() {
-    int a[non_const_fn()];
-        //^^^^^^^^^^^^^^ error: cannot call non-const function
-}
-
 int div_zero_static() {
     static int a = 1 / 0;
                  //^^^^^ error: division by zero happened in const eval

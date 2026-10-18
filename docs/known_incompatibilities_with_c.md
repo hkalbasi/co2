@@ -8,8 +8,8 @@ cases when CO2 miscompiles or reject valid C code.
 * `long double` in some system ABIs is defined to be a 80 bit thing, but in CO2 it is always 64 or 128 bit IEEE
   floating point. Linking with libraries built with other compilers and passing long double to them will break (e.g
   You can't use printf `%Lf`)
-* Variable length arrays are not implemented (they are optional in the C standard).
-  * `alloca` (gnu extension) is supported.
+* Variable length arrays are implemented using heap allocations.
+  * `alloca` too uses heap allocations.
 * Casting pointers to integers in compile time expression contexts is not accepted:
 ```
 static int value = (int)"foo"; // Valid in C, compile error in CO2!

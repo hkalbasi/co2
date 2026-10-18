@@ -5,6 +5,14 @@ use rustc_public_generative::rustc_public::{
 
 use crate::LocalResolver;
 
+/// One runtime dimension of a pointer-to-VLA parameter (`int (*a)[n]`).
+#[derive(Debug, Clone)]
+pub enum VlaParamDim {
+    Const(u64),
+    /// Bound named after another parameter (e.g. `n` in `int (*a)[n]`).
+    Name(String),
+}
+
 #[derive(Debug, Clone)]
 pub enum MirOwnerInfo {
     CloneMethod(AdtDef),
@@ -29,6 +37,8 @@ pub enum MirOwnerInfo {
         def: FnDef,
         function_name: String,
         param_names: Vec<(usize, String, Span)>,
+        /// Pointer-to-VLA parameters: parameter index → runtime dimensions.
+        vla_params: Vec<(usize, Vec<VlaParamDim>)>,
         resolver: LocalResolver,
         body: co2_ast::Spanned<co2_ast::CompoundStatement<LocalResolver>>,
         /// Whether errors were reported while parsing this function body.

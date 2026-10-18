@@ -245,6 +245,7 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                 def,
                 function_name,
                 param_names,
+                vla_params,
                 resolver,
                 body,
                 had_errors,
@@ -274,7 +275,13 @@ impl rustc_gen::CrateGeneratorState for Co2GeneratorState {
                     if naked {
                         co2_hir::lower_naked_function_body(body, def, &param_names, &mut hir_ctx)
                     } else {
-                        co2_hir::lower_function_body(body, def, &param_names, &mut hir_ctx)
+                        co2_hir::lower_function_body(
+                            body,
+                            def,
+                            &param_names,
+                            &vla_params,
+                            &mut hir_ctx,
+                        )
                     }
                 })) {
                     Ok(hir) => {
