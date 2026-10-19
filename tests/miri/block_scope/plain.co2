@@ -1,0 +1,19 @@
+//@ mode: co2
+//@ miri-error
+
+// A local variable's lifetime ends when its block exits (C11 6.2.4p6), so
+// dereferencing a pointer to it afterwards is undefined behavior. Co2 emits
+// `StorageLive`/`StorageDead` for block-scoped locals, so miri must catch it.
+
+fn main() {
+    i32* p;
+    {
+        i32 x = 42;
+        p = &x;
+    }
+    i32 escaped = *p;
+                //^^ error:
+    if (escaped != 42) {
+        std::process::exit(1);
+    }
+}

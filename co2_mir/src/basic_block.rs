@@ -16,9 +16,13 @@ impl Builder<'_, '_> {
         }
         match stmt {
             HirStmt::Decl(HirDecl {
-                local, initializer, ..
+                local,
+                initializer,
+                span,
             }) => {
                 let local_index = self.local_to_index(*local);
+                self.push_statement(MirStatementKind::StorageLive(local_index), *span);
+                self.record_local_decl(local_index);
                 if let Some(init) = initializer {
                     let value = self.lower_expr_to_operand(init);
                     self.emit_assign_use(place(local_index), value, init.span);
@@ -75,12 +79,12 @@ impl Builder<'_, '_> {
             } => {
                 self.lower_if_stmt(cond, then_stmts, else_stmts, *span);
             }
-            HirStmt::Block(stmts, _span) => {
+            HirStmt::Block(stmts, span) => {
                 self.enter_scope();
                 for stmt in stmts {
                     self.lower_stmt(stmt);
                 }
-                self.exit_scope();
+                self.exit_scope(*span);
             }
             HirStmt::Asm(asm) => {
                 self.lower_asm_stmt(asm);

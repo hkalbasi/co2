@@ -1,0 +1,20 @@
+//@ mode: co2
+//@ miri-error
+
+// A `while` body is its own block, so a local declared inside it dies at the
+// end of each iteration.
+
+fn main() {
+    i32* p;
+    i32 i = 0;
+    while (i < 1) {
+        i32 y = 7;
+        p = &y;
+        i += 1;
+    }
+    i32 escaped = *p;
+                //^^ error:
+    if (escaped != 7) {
+        std::process::exit(1);
+    }
+}

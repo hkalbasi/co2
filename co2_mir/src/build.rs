@@ -6,8 +6,8 @@ use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
     CrateDefType, DefId,
     mir::{
-        Body, ConstOperand, LocalDecl as MirLocalDecl, Mutability, Place, SourceInfo, VarDebugInfo,
-        VarDebugInfoContents,
+        Body, ConstOperand, LocalDecl as MirLocalDecl, Mutability, Place, SourceInfo,
+        StatementKind as MirStatementKind, VarDebugInfo, VarDebugInfoContents,
     },
     ty::{
         FnDef, GenericArgKind, GenericArgs, MirConst, RigidTy, Span as RustSpan, Ty, TyKind,
@@ -101,6 +101,7 @@ pub fn build_mir_for_body(
         var_debug_info,
         local_vdi_map,
         scope_stack: vec![0],
+        scope_locals: vec![Vec::new()],
         next_scope: 1,
         naked_templates: Vec::new(),
     };
@@ -198,6 +199,10 @@ pub(crate) struct Builder<'ctx, 'tcx> {
     pub(crate) var_debug_info: Vec<VarDebugInfo>,
     pub(crate) local_vdi_map: FxHashMap<usize, usize>,
     pub(crate) scope_stack: Vec<u32>,
+    /// Locals declared directly in each active source scope, parallel to
+    /// `scope_stack`. Emitted as `StorageLive` on declaration and `StorageDead`
+    /// when the scope exits, so a C local's storage ends with its block.
+    pub(crate) scope_locals: Vec<Vec<usize>>,
     pub(crate) next_scope: u32,
     /// Buffered `(template, span)` of naked-function asm statements,
     /// concatenated into one diverging `naked_asm!` at fallthrough.
@@ -233,10 +238,22 @@ impl Builder<'_, '_> {
         let scope = self.next_scope;
         self.next_scope += 1;
         self.scope_stack.push(scope);
+        self.scope_locals.push(Vec::new());
         scope
     }
 
-    pub(crate) fn exit_scope(&mut self) {
+    pub(crate) fn record_local_decl(&mut self, local_index: usize) {
+        if let Some(scope) = self.scope_locals.last_mut() {
+            scope.push(local_index);
+        }
+    }
+
+    pub(crate) fn exit_scope(&mut self, span: RustSpan) {
+        if let Some(locals) = self.scope_locals.pop() {
+            for local_index in locals {
+                self.push_statement(MirStatementKind::StorageDead(local_index), span);
+            }
+        }
         self.scope_stack.pop();
     }
 

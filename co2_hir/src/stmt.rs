@@ -520,16 +520,19 @@ impl HirCtx<'_> {
                 body,
             } => {
                 let mut loop_map = local_map.clone();
+                // The `for` statement is its own scope: a for-init declaration
+                // (and anything else declared here) dies at the loop's end.
+                let mut for_stmts = Vec::new();
                 if let Some(init) = init {
                     match init {
                         ForInit::Expression(init) => {
                             let init = self
                                 .lower_expr(init, locals, &mut loop_map)
                                 .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                            out.push(HirStmt::Expr(init));
+                            for_stmts.push(HirStmt::Expr(init));
                         }
                         ForInit::Declaration((decl, _)) => {
-                            self.lower_decl(decl, out, locals, &mut loop_map)
+                            self.lower_decl(decl, &mut for_stmts, locals, &mut loop_map)
                                 .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                         }
                     }
@@ -550,29 +553,30 @@ impl HirCtx<'_> {
                 let continue_label = self.fresh_label();
                 let end_label = self.fresh_label();
 
-                out.push(HirStmt::Label(cond_label, span));
-                out.push(HirStmt::If {
+                for_stmts.push(HirStmt::Label(cond_label, span));
+                for_stmts.push(HirStmt::If {
                     cond,
                     then_stmts: vec![HirStmt::Goto(body_label, span)],
                     else_stmts: vec![HirStmt::Goto(end_label, span)],
                     span,
                 });
-                out.push(HirStmt::Label(body_label, span));
+                for_stmts.push(HirStmt::Label(body_label, span));
 
                 let mut body_map = local_map.clone();
                 body_map.extend(loop_map.clone());
                 self.enter_loop(continue_label, end_label);
-                self.lower_stmt(body.0, body.1, out, locals, &mut body_map);
+                self.lower_stmt(body.0, body.1, &mut for_stmts, locals, &mut body_map);
                 self.exit_loop();
-                out.push(HirStmt::Label(continue_label, span));
+                for_stmts.push(HirStmt::Label(continue_label, span));
                 if let Some(post) = post {
                     let post = self
                         .lower_expr(post, locals, &mut body_map)
                         .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-                    out.push(HirStmt::Expr(post));
+                    for_stmts.push(HirStmt::Expr(post));
                 }
-                out.push(HirStmt::Goto(cond_label, span));
-                out.push(HirStmt::Label(end_label, span));
+                for_stmts.push(HirStmt::Goto(cond_label, span));
+                for_stmts.push(HirStmt::Label(end_label, span));
+                out.push(HirStmt::Block(for_stmts, span));
             }
             Statement::Switch { expr, body } => {
                 let switch_expr_span = expr.1;

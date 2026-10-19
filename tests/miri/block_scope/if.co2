@@ -1,0 +1,18 @@
+//@ mode: co2
+//@ miri-error
+
+// An `if` body is its own block, so a local declared inside it dies at the end
+// of the branch.
+
+fn main() {
+    i32* p;
+    if (1) {
+        i32 y = 7;
+        p = &y;
+    }
+    i32 escaped = *p;
+                //^^ error:
+    if (escaped != 7) {
+        std::process::exit(1);
+    }
+}

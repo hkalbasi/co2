@@ -5376,6 +5376,38 @@ fn build_mir_body<'tcx>(
                         rustc_middle::mir::StatementKind::Assign(Box::new((place, rvalue))),
                     ));
                 }
+                MirStatementKind::StorageLive(local) => {
+                    statements.push(rustc_middle::mir::Statement::new(
+                        rustc_middle::mir::SourceInfo {
+                            span: rustc_public::rustc_internal::internal(
+                                tcx,
+                                stmt.source_info.span,
+                            ),
+                            scope: rustc_middle::mir::SourceScope::from_usize(
+                                stmt.source_info.scope as usize,
+                            ),
+                        },
+                        rustc_middle::mir::StatementKind::StorageLive(
+                            rustc_middle::mir::Local::from_usize(*local),
+                        ),
+                    ));
+                }
+                MirStatementKind::StorageDead(local) => {
+                    statements.push(rustc_middle::mir::Statement::new(
+                        rustc_middle::mir::SourceInfo {
+                            span: rustc_public::rustc_internal::internal(
+                                tcx,
+                                stmt.source_info.span,
+                            ),
+                            scope: rustc_middle::mir::SourceScope::from_usize(
+                                stmt.source_info.scope as usize,
+                            ),
+                        },
+                        rustc_middle::mir::StatementKind::StorageDead(
+                            rustc_middle::mir::Local::from_usize(*local),
+                        ),
+                    ));
+                }
                 _ => todo!(),
             }
         }

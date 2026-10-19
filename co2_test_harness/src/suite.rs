@@ -793,9 +793,14 @@ fn parse_miri_rendered_diagnostics(stderr: &str) -> Vec<MiriRenderedDiagnostic> 
                 break;
             }
             if let Some(line_no) = parse_miri_location(line) {
-                location = Some(line_no);
+                if location.is_none() {
+                    location = Some(line_no);
+                }
             } else if let Some((column_start, column_end)) = parse_miri_caret(line) {
+                // The primary span comes first; later carets belong to `help:`
+                // notes (e.g. "allocated here" / "deallocated here").
                 caret = Some((column_start, column_end));
+                break;
             }
             cursor += 1;
         }
@@ -839,6 +844,7 @@ fn miri_diagnostic_matches_expected(
     diagnostic: &MiriRenderedDiagnostic,
 ) -> bool {
     if let Some(message) = &expected.message
+        && !message.is_empty()
         && diagnostic.message != *message
     {
         return false;

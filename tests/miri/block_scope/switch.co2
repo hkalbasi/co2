@@ -1,0 +1,20 @@
+//@ mode: co2
+//@ miri-error
+
+// A `switch` case body block is its own scope, so a local declared inside it
+// dies at the end of the block.
+
+fn main() {
+    i32* p;
+    switch (1) {
+        case 1: {
+            i32 y = 7;
+            p = &y;
+        }
+    }
+    i32 escaped = *p;
+                //^^ error:
+    if (escaped != 7) {
+        std::process::exit(1);
+    }
+}

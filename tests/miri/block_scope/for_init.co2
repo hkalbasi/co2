@@ -1,0 +1,17 @@
+//@ mode: co2
+//@ miri-error
+
+// A `for`-init declaration is scoped to the loop itself, so a pointer to it
+// dangles once the loop ends.
+
+fn main() {
+    i32* p;
+    for (i32 i = 0; i < 1; i += 1) {
+        p = &i;
+    }
+    i32 escaped = *p;
+                //^^ error:
+    if (escaped != 0) {
+        std::process::exit(1);
+    }
+}
