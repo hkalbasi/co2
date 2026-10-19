@@ -1563,6 +1563,14 @@ fn lower_translation_unit_items(
                         let transformed_specs = declaration_specifiers;
                         let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
                         let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
+                        if let Some(star_span) =
+                            crate::ast_resolver::function_param_unspecified_vla_span(&declarator.0)
+                        {
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                                star_span,
+                                "`[*]` is only allowed in a function prototype",
+                            )]);
+                        }
                         let (name, sig) = ctx
                             .lower_function_signature(base, base_const, declarator)
                             .unwrap_or_else(|err| {
@@ -1772,8 +1780,22 @@ fn lower_translation_unit_items(
                     } = init.0;
                     let declarator_for_checks = declarator.clone();
 
-                    let (name, ty, array_len) =
-                        ctx.lower_value_decl_ctype(base.clone(), base_const, declarator);
+                    ctx.disallow_vla = true;
+                    let lowered =
+                        ctx.try_lower_value_decl_ctype(base.clone(), base_const, declarator);
+                    ctx.disallow_vla = false;
+                    let (name, ty, array_len) = match lowered {
+                        Ok(value) => value,
+                        Err(err)
+                            if err.1 == "variable length array cannot appear at file scope" =>
+                        {
+                            // Emit and keep going so sibling declarators (and the
+                            // rest of the translation unit) are still checked.
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(err.0, err.1)]);
+                            continue;
+                        }
+                        Err(err) => CrateSigCtx::<'_>::terminate_with_spanned_error(err),
+                    };
 
                     ctx.resolver
                         .borrow()
@@ -2227,11 +2249,13 @@ pub fn lower_crate_sig(
             enum_const_defs: FxHashMap::default(),
             constexpr_def_exprs: FxHashMap::default(),
             constexpr_local_exprs: FxHashMap::default(),
+            vla_locals: FxHashSet::default(),
         })),
         hir_ctx: ctx,
         file_ids,
         mir_owners: FxHashMap::default(),
         hir_items: vec![],
+        disallow_vla: false,
     };
 
     {
@@ -2345,6 +2369,36 @@ pub fn lower_crate_sig(
                 }
                 match ty {
                     CTy::Ty(ty) => {
+                        let vla_init_span = {
+                            let base = ctx.resolver.borrow();
+                            declarator
+                                .initializer
+                                .as_ref()
+                                .and_then(|init| {
+                                    crate::ast_resolver::initializer_contains_vla_sizeof(
+                                        init,
+                                        &base.vla_locals,
+                                    )
+                                })
+                        };
+                        if let Some(vla_span) = vla_init_span {
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                                vla_span,
+                                "initializer is not a constant expression",
+                            )]);
+                            ctx.hir_items.push(HirModuleItem::Static {
+                                name,
+                                id,
+                                ty,
+                                span,
+                                mutable: !is_constexpr,
+                                no_mangle: false,
+                                attrs: tls_attrs.clone(),
+                                visibility: Visibility::Public,
+                            });
+                            ctx.mir_owners.insert(id, MirOwnerInfo::StaticZeroed);
+                            continue;
+                        }
                         if is_constexpr {
                             let validation = ctx.resolver.borrow_mut().validate_constexpr_decl(
                                 &original_specs,
@@ -2391,6 +2445,15 @@ pub fn lower_crate_sig(
                         }
                     }
                     CTy::UnsizedArray(elem_ty) => {
+                        if crate::ast_resolver::declarator_has_vla_subscript(
+                            &declarator_for_checks.0,
+                        ) {
+                            co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                                parser_span,
+                                "variable length array cannot have static storage duration",
+                            )]);
+                            continue;
+                        }
                         if is_constexpr
                             && let Err((span, msg)) =
                                 ctx.resolver.borrow_mut().validate_constexpr_decl(
@@ -2456,6 +2519,13 @@ pub fn lower_crate_sig(
                 } = pending;
                 let is_thread_local = is_thread_local(&specifiers);
                 let span = ctx.co2_span_to_rustc(parser_span);
+                if crate::ast_resolver::declarator_has_vla_subscript(&declarator) {
+                    co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                        parser_span,
+                        "variable length array cannot have linkage",
+                    )]);
+                    continue;
+                }
                 let cleaned = strip_storage_specs(specifiers);
                 let base_const = has_const_qualifier_in_decl_specs(&cleaned);
                 let base = ctx.base_ty_of_decl(cleaned, parser_span);

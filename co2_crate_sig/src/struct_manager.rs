@@ -172,9 +172,24 @@ impl LocalResolver {
 
     pub(crate) fn collect_enumerator(
         &self,
-        enumerator: Enumerator<LocalResolver>,
+        mut enumerator: Enumerator<LocalResolver>,
         _span: co2_ast::Span,
     ) -> (DefId, String, Option<Spanned<Expression<LocalResolver>>>) {
+        if let Some(value) = enumerator.value.as_ref() {
+            let vla_span = {
+                let base = self.base.borrow();
+                crate::ast_resolver::expr_contains_vla_sizeof(value, &base.vla_locals)
+            };
+            if let Some(span) = vla_span {
+                co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                    span,
+                    "enumerator value is not an integer constant expression",
+                )]);
+                // Drop the invalid value so later range computation does not
+                // re-report it as a non-constant local.
+                enumerator.value = None;
+            }
+        }
         let mut base = self.base.borrow_mut();
         let (def_id, fake_name) = base.emit_fake_def(rustc_public_generative::DefData::ValueNs);
 
@@ -647,6 +662,17 @@ impl LocalResolverBase {
             for (declarator, parser_span) in &field.declarators {
                 seen_declarators += 1;
                 let rust_span = self.co2_span_to_rustc(*parser_span);
+                if let Some(bits) = declarator.bits.as_ref() {
+                    let vla_span =
+                        crate::ast_resolver::expr_contains_vla_sizeof(bits, &self.vla_locals);
+                    if let Some(span) = vla_span {
+                        co2_ast::emit_errors(vec![co2_ast::Rich::custom(
+                            span,
+                            "bit-field width is not an integer constant expression",
+                        )]);
+                        continue;
+                    }
+                }
                 let width = declarator
                     .bits
                     .as_ref()
@@ -867,6 +893,18 @@ impl LocalResolverBase {
                     // `start + storage_bits`.
                 }
                 if is_unsized {
+                    if crate::ast_resolver::declarator_has_vla_subscript(&declarator.declarator.0) {
+                        let msg = match struct_kind {
+                            StructOrUnionKind::Union => {
+                                "variable length array cannot be a union member"
+                            }
+                            StructOrUnionKind::Struct => {
+                                "variable length array cannot be a struct member"
+                            }
+                        };
+                        co2_ast::emit_errors(vec![co2_ast::Rich::custom(*parser_span, msg)]);
+                        continue;
+                    }
                     let is_last = seen_declarators == total_declarators;
                     if !is_last || matches!(struct_kind, StructOrUnionKind::Union) {
                         self.terminate_with_error(

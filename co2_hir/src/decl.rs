@@ -28,7 +28,7 @@ use crate::item::{HirLocal, LocalId};
 use crate::resolver::{HirCtx, VlaBuild, VlaDim, VlaShape, invalid_span, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
-    array_elem_ty, enum_payload_ty, is_array_ty, resolve_field_path_in_adt,
+    array_elem_ty, enum_payload_ty, is_array_ty, is_integer_ty, resolve_field_path_in_adt,
     ty_has_unsubstituted_param,
 };
 
@@ -836,10 +836,10 @@ impl HirCtx<'_> {
                         continue;
                     }
                     if let Some(build) = self.pending_vla.borrow_mut().take() {
-                        let ((name, parser_span), _) = lower_result
+                        let ((name, _), _) = lower_result
                             .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                         self.lower_vla_decl(
-                            (name, parser_span),
+                            (name, typedef_decl_span),
                             build,
                             initializer,
                             out,
@@ -1016,6 +1016,14 @@ impl HirCtx<'_> {
             }
             Declaration::PragmaPack { .. } | Declaration::BreakCo2 => Ok(()),
             Declaration::StaticAssert { expr, message } => {
+                if let Some(span) =
+                    co2_crate_sig::expr_contains_vla_sizeof(&expr, &self.decl_resolver.vla_locals())
+                {
+                    return Err(spanned_error(
+                        span,
+                        "static assertion expression is not a constant expression",
+                    ));
+                }
                 let value = self.eval_const_expr_in_scope(&expr, locals, local_map)?;
                 if value == 0 {
                     Err(spanned_error(
@@ -1040,12 +1048,18 @@ impl HirCtx<'_> {
         let base =
             self.base_ty_of_decl_in_scope(declaration_specifiers, declarator.1, locals, local_map);
         let base_const = has_const_qualifier_in_decl_specs(&base.1);
-        let (decl_ty, name) = self.extract_decl_type_in_scope(
-            base.0,
-            base_const,
-            declarator,
-            Some((locals, local_map)),
-        )?;
+        let (decl_ty, name) =
+            match self.extract_decl_type_in_scope(
+                base.0,
+                base_const,
+                declarator,
+                Some((locals, local_map)),
+            ) {
+                Err((_, msg)) if msg.starts_with("array element type") => {
+                    return Err(spanned_error(span, &msg));
+                }
+                other => other?,
+            };
         let name = name.ok_or_else(|| spanned_error(span, "missing declaration name"))?;
         Ok((name, decl_ty))
     }
@@ -1066,6 +1080,12 @@ impl HirCtx<'_> {
         local_map: &mut FxHashMap<usize, LocalId>,
     ) {
         let span = self.to_rust_span(parser_span);
+        if !build.is_ptr && initializer.is_some() {
+            self.terminate_with_error(
+                parser_span,
+                "variable length array cannot be initialized",
+            );
+        }
         let elem_ty = build.elem;
         let usize_ty = Ty::usize_ty();
 
@@ -1088,7 +1108,20 @@ impl HirCtx<'_> {
         };
 
         if build.is_ptr {
-            self.vla.borrow_mut().ptrs.insert(local, shape);
+            if let Some(init) = &initializer
+                && let Initializer::Expr((
+                    Expression::UnaryOp(co2_ast::UnaryOp::AddrOf, inner),
+                    init_span,
+                )) = &init.0
+                && !self.addr_of_is_array_like(inner, locals, local_map)
+            {
+                self.terminate_with_error(*init_span, "mismatched types");
+            }
+            {
+                let mut vla = self.vla.borrow_mut();
+                vla.ptrs.insert(local, shape);
+                vla.decls.push((self.block_depth.get(), parser_span));
+            }
             let init = initializer.and_then(|init| match init.0 {
                 Initializer::Expr(e) => {
                     let mut e = self
@@ -1142,11 +1175,35 @@ impl HirCtx<'_> {
         let ptr = self.emit_cast(alloc, ptr_ty);
 
         self.vla.borrow_mut().objects.insert(local, shape);
+        self.vla
+            .borrow_mut()
+            .decls
+            .push((self.block_depth.get(), parser_span));
         out.push(HirStmt::Decl(HirDecl {
             local,
             initializer: Some(ptr),
             span,
         }));
+    }
+
+    /// True when `inner` (the operand of `&`) refers to an array-like object:
+    /// a fixed array, a VLA object, or a pointer-to-VLA. Unknown operands are
+    /// treated as array-like so ordinary `int (*p)[n] = &expr;` assignments are
+    /// not rejected.
+    fn addr_of_is_array_like(
+        &self,
+        inner: &Spanned<Expression<LocalResolver>>,
+        locals: &Arena<HirLocal>,
+        local_map: &FxHashMap<usize, LocalId>,
+    ) -> bool {
+        let Expression::Identifier((co2_crate_sig::DefOrLocal::Local(crate_id), _)) = &inner.0
+        else {
+            return true;
+        };
+        let Some(local) = local_map.get(&(*crate_id as usize)) else {
+            return true;
+        };
+        is_array_ty(locals[*local].ty) || self.vla.borrow().objects.contains_key(local)
     }
 
     /// Evaluate each VLA dimension expression exactly once into a hidden
@@ -2084,8 +2141,48 @@ impl HirCtx<'_> {
                 declarator,
                 subscription,
             } => {
+                // `static` and type qualifiers are only meaningful in a parameter
+                // array declarator; `[*]` is only allowed in a function prototype.
+                if scope.is_some() {
+                    let has_param_only_tokens = subscription.0.raw.tokens.iter().any(|(tok, _)| {
+                        matches!(
+                            tok,
+                            co2_ast::Token::Static
+                                | co2_ast::Token::Const
+                                | co2_ast::Token::Restrict
+                                | co2_ast::Token::Volatile
+                                | co2_ast::Token::Atomic
+                        )
+                    });
+                    if has_param_only_tokens {
+                        return Err(spanned_error(
+                            subscription.1,
+                            "`static` and type qualifiers are only allowed in parameter array declarators",
+                        ));
+                    }
+                    if subscription.0.raw.is_unspecified_vla() {
+                        return Err(spanned_error(
+                            subscription.1,
+                            "`[*]` is only allowed in a function prototype",
+                        ));
+                    }
+                }
                 let array_ty = match current {
                     CTy::Ty(inner) => {
+                        if scope.is_some() {
+                            if self.is_void_ty(inner) {
+                                return Err(spanned_error(
+                                    span,
+                                    "array element type cannot be void",
+                                ));
+                            }
+                            if self.sizeof_ty(inner).is_err() {
+                                return Err(spanned_error(
+                                    span,
+                                    "array element type must be complete",
+                                ));
+                            }
+                        }
                         if let Some(size) = subscription.0.raw.constant_len() {
                             CTy::Ty(Ty::try_new_array(inner, size as u64).map_err(|e| {
                                 spanned_error(
@@ -2126,8 +2223,18 @@ impl HirCtx<'_> {
                                             "unsupported identifier in constant expression",
                                         ) || msg == "cannot call non-const function") =>
                                 {
-                                    // A non-constant VLA bound with locals in scope: a VLA.
-                                    // (A function call is a valid runtime VLA bound too.)
+                                    // A non-constant bound names a VLA: its bound
+                                    // must still have integer type.
+                                    if let Some((locals, local_map)) = scope.as_mut()
+                                        && let Ok(bound_ty) =
+                                            self.type_of_expr_for_sizeof(&expr, locals, local_map)
+                                        && !is_integer_ty(bound_ty)
+                                    {
+                                        return Err(spanned_error(
+                                            span,
+                                            "array size must have integer type",
+                                        ));
+                                    }
                                     let mut build = self.pending_vla.borrow_mut();
                                     let b = build.get_or_insert_with(|| VlaBuild {
                                         elem: inner,
@@ -2142,7 +2249,10 @@ impl HirCtx<'_> {
                         }
                     }
                     CTy::Function(_) => {
-                        return Err(spanned_error(span, "array of functions is invalid"));
+                        return Err(spanned_error(
+                            span,
+                            "array element type cannot be a function type",
+                        ));
                     }
                     CTy::UnsizedArray(inner) => {
                         if self.pending_vla.borrow().is_some() {

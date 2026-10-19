@@ -371,6 +371,26 @@ impl CrateSigCtx<'_> {
             .lower_function_signature(base, base_const, declarator)
     }
 
+    pub(crate) fn try_lower_value_decl_ctype(
+        &mut self,
+        base: CTy,
+        base_const: bool,
+        declarator: Spanned<Declarator<LocalResolver>>,
+    ) -> Result<
+        (
+            String,
+            CTy,
+            Option<co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>>,
+        ),
+        (co2_ast::Span, String),
+    > {
+        let span = declarator.1;
+        let (ty, name, array_len) =
+            self.extract_decl_type_with_consts(base, base_const, declarator)?;
+        let name = name.ok_or_else(|| spanned_error(span, "Unexpected abstract declarator"))?;
+        Ok((name, ty, array_len))
+    }
+
     pub(crate) fn lower_value_decl_ctype(
         &mut self,
         base: CTy,
@@ -381,14 +401,8 @@ impl CrateSigCtx<'_> {
         CTy,
         Option<co2_ast::Spanned<co2_ast::Initializer<LocalResolver>>>,
     ) {
-        let span = declarator.1;
-        match self.extract_decl_type_with_consts(base, base_const, declarator) {
-            Ok((ty, name, array_len)) => {
-                let Some(name) = name else {
-                    CrateSigCtx::<'_>::terminate_with_error(span, "Unexpected abstract declarator");
-                };
-                (name, ty, array_len)
-            }
+        match self.try_lower_value_decl_ctype(base, base_const, declarator) {
+            Ok(value) => value,
             Err(err) => CrateSigCtx::<'_>::terminate_with_spanned_error(err),
         }
     }
@@ -548,6 +562,12 @@ impl CrateSigCtx<'_> {
                         Err((_, msg))
                             if msg.starts_with("unsupported identifier in constant expression") =>
                         {
+                            if self.disallow_vla {
+                                return Err(spanned_error(
+                                    declarator.1,
+                                    "variable length array cannot appear at file scope",
+                                ));
+                            }
                             // A non-constant VLA bound (e.g. a parameter or local).
                             // Represent it as an unsized array; parameters decay to
                             // pointers and body lowering handles the runtime size.
@@ -556,6 +576,14 @@ impl CrateSigCtx<'_> {
                                 current_const,
                                 *declarator,
                             );
+                        }
+                        Err((_, msg))
+                            if self.disallow_vla && msg.starts_with("unsupported const value") =>
+                        {
+                            return Err(spanned_error(
+                                declarator.1,
+                                "variable length array cannot appear at file scope",
+                            ));
                         }
                         Err(err) => CrateSigCtx::<'_>::terminate_with_spanned_error(err),
                     };

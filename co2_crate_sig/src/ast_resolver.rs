@@ -125,6 +125,222 @@ pub fn initializer_contains_label_address<R: TypeResolver>(
     }
 }
 
+/// Returns the span of the first `sizeof(x)` in `spanned` whose operand names
+/// (or dereferences) a local with variably modified type, i.e. a VLA. Such a
+/// `sizeof` is a runtime value and cannot appear in an integer constant
+/// expression.
+pub fn expr_contains_vla_sizeof<R: TypeResolver<ResolvedRustPath = DefOrLocal>>(
+    spanned: &Spanned<Expression<R>>,
+    vla_locals: &FxHashSet<u32>,
+) -> Option<Span> {
+    let (expr, span) = spanned;
+    match expr {
+        Expression::Sizeof(inner) => {
+            if vla_sizeof_operand(inner, vla_locals) {
+                return Some(*span);
+            }
+            expr_contains_vla_sizeof(inner, vla_locals)
+        }
+        Expression::Field(base, _)
+        | Expression::Arrow(base, _)
+        | Expression::UnaryOp(_, base)
+        | Expression::Alignof(base)
+        | Expression::Countof(base) => expr_contains_vla_sizeof(base, vla_locals),
+        Expression::Subscript(base, index) | Expression::BinOp(base, _, index) => {
+            expr_contains_vla_sizeof(base, vla_locals)
+                .or_else(|| expr_contains_vla_sizeof(index, vla_locals))
+        }
+        Expression::Call { func, params } => expr_contains_vla_sizeof(func, vla_locals)
+            .or_else(|| {
+                params
+                    .iter()
+                    .find_map(|param| expr_contains_vla_sizeof(param, vla_locals))
+            }),
+        Expression::BuiltinFunction { args, .. } => args
+            .iter()
+            .find_map(|param| expr_contains_vla_sizeof(param, vla_locals)),
+        Expression::MethodCall {
+            receiver, params, ..
+        } => expr_contains_vla_sizeof(receiver, vla_locals).or_else(|| {
+            params
+                .iter()
+                .find_map(|param| expr_contains_vla_sizeof(param, vla_locals))
+        }),
+        Expression::Update { expr, .. } | Expression::Cast { expr, .. } => {
+            expr_contains_vla_sizeof(expr, vla_locals)
+        }
+        Expression::AssignWithOp { lhs, rhs, .. } => expr_contains_vla_sizeof(lhs, vla_locals)
+            .or_else(|| expr_contains_vla_sizeof(rhs, vla_locals)),
+        Expression::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => expr_contains_vla_sizeof(cond, vla_locals)
+            .or_else(|| {
+                then_expr
+                    .as_ref()
+                    .and_then(|e| expr_contains_vla_sizeof(e, vla_locals))
+            })
+            .or_else(|| expr_contains_vla_sizeof(else_expr, vla_locals)),
+        Expression::CompoundLiteral { initializer, .. } => {
+            initializer_contains_vla_sizeof(initializer, vla_locals)
+        }
+        Expression::GenericSelection {
+            controlling,
+            associations,
+        } => expr_contains_vla_sizeof(controlling, vla_locals).or_else(|| {
+            associations.iter().find_map(|assoc| match &assoc.0 {
+                co2_ast::GenericAssociation::Type { expr, .. }
+                | co2_ast::GenericAssociation::Default { expr } => {
+                    expr_contains_vla_sizeof(expr, vla_locals)
+                }
+            })
+        }),
+        Expression::Offsetof { designator, .. } => {
+            designator.iter().find_map(|m| match m {
+                co2_ast::OffsetofMember::Field(_) => None,
+                co2_ast::OffsetofMember::Index(idx) => {
+                    expr_contains_vla_sizeof(idx, vla_locals)
+                }
+            })
+        }
+        Expression::Identifier(_)
+        | Expression::Empty
+        | Expression::Constant(_)
+        | Expression::LabelAddress(_)
+        | Expression::SizeofType(_)
+        | Expression::AlignofType(_)
+        | Expression::CountofType(_)
+        | Expression::GnuStatementExpr { .. }
+        | Expression::BuiltinTypesCompatibleP { .. }
+        | Expression::VaStart { .. }
+        | Expression::VaEnd { .. }
+        | Expression::VaCopy { .. }
+        | Expression::VaArg { .. }
+        | Expression::StructInit { .. } => None,
+    }
+}
+
+pub fn initializer_contains_vla_sizeof<R: TypeResolver<ResolvedRustPath = DefOrLocal>>(
+    initializer: &Spanned<Initializer<R>>,
+    vla_locals: &FxHashSet<u32>,
+) -> Option<Span> {
+    match &initializer.0 {
+        Initializer::Expr(expr) => expr_contains_vla_sizeof(expr, vla_locals),
+        Initializer::List(items) => items
+            .iter()
+            .find_map(|item| initializer_contains_vla_sizeof(&item.0.initializer, vla_locals)),
+    }
+}
+
+fn vla_sizeof_operand<R: TypeResolver<ResolvedRustPath = DefOrLocal>>(
+    inner: &Spanned<Expression<R>>,
+    vla_locals: &FxHashSet<u32>,
+) -> bool {
+    match &inner.0 {
+        Expression::Identifier((DefOrLocal::Local(id), _)) => vla_locals.contains(id),
+        Expression::UnaryOp(co2_ast::UnaryOp::Deref, operand) => {
+            matches!(&operand.0, Expression::Identifier((DefOrLocal::Local(id), _)) if vla_locals.contains(id))
+        }
+        _ => false,
+    }
+}
+
+/// True when `decl` contains an array declarator whose bound is not an integer
+/// constant expression but references a local variable — i.e. a VLA bound.
+pub fn declarator_has_vla_bound(
+    decl: &Declarator<LocalResolver>,
+    is_local: &dyn Fn(&str) -> bool,
+) -> bool {
+    match decl {
+        Declarator::ArrayDeclarator {
+            declarator,
+            subscription,
+        } => {
+            let raw = &subscription.0.raw;
+            let vla = !raw.is_unsized()
+                && !raw.is_unspecified_vla()
+                && raw.constant_len().is_none()
+                && raw.tokens.iter().any(|(tok, _)| match tok {
+                    co2_ast::Token::Ident(name) => is_local(name),
+                    _ => false,
+                });
+            vla || declarator_has_vla_bound(&declarator.0, is_local)
+        }
+        Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::FunctionDeclarator { declarator, .. } => {
+            declarator_has_vla_bound(&declarator.0, is_local)
+        }
+        Declarator::Abstract | Declarator::Identifier(_) => false,
+    }
+}
+
+/// True when `decl` contains an array declarator with a non-constant,
+/// non-`[]`, non-`[*]` bound. Such a bound is a variably modified (VLA) type
+/// regardless of whether the bound expression happens to be a named local.
+pub fn declarator_has_vla_subscript(decl: &Declarator<LocalResolver>) -> bool {
+    match decl {
+        Declarator::ArrayDeclarator {
+            declarator,
+            subscription,
+        } => {
+            let raw = &subscription.0.raw;
+            (!raw.is_unsized() && !raw.is_unspecified_vla() && raw.constant_len().is_none())
+                || declarator_has_vla_subscript(&declarator.0)
+        }
+        Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::FunctionDeclarator { declarator, .. } => {
+            declarator_has_vla_subscript(&declarator.0)
+        }
+        Declarator::Abstract | Declarator::Identifier(_) => false,
+    }
+}
+
+/// Span of the first `[*]` in a function prototype or definition's parameter
+/// list. `[*]` is only allowed in a prototype, so a definition must reject it.
+pub fn function_param_unspecified_vla_span(
+    decl: &Declarator<LocalResolver>,
+) -> Option<co2_ast::Span> {
+    match decl {
+        Declarator::FunctionDeclarator {
+            declarator,
+            param_list,
+        } => {
+            for (_, param) in &param_list.parameters {
+                if let Some(span) = declarator_unspecified_vla_span(&param.0) {
+                    return Some(span);
+                }
+            }
+            function_param_unspecified_vla_span(&declarator.0)
+        }
+        Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::ArrayDeclarator { declarator, .. } => {
+            function_param_unspecified_vla_span(&declarator.0)
+        }
+        Declarator::Abstract | Declarator::Identifier(_) => None,
+    }
+}
+
+fn declarator_unspecified_vla_span(decl: &Declarator<LocalResolver>) -> Option<co2_ast::Span> {
+    match decl {
+        Declarator::ArrayDeclarator {
+            declarator,
+            subscription,
+        } => {
+            if subscription.0.raw.is_unspecified_vla() {
+                Some(subscription.1)
+            } else {
+                declarator_unspecified_vla_span(&declarator.0)
+            }
+        }
+        Declarator::PointerDeclarator { declarator, .. }
+        | Declarator::FunctionDeclarator { declarator, .. } => {
+            declarator_unspecified_vla_span(&declarator.0)
+        }
+        Declarator::Abstract | Declarator::Identifier(_) => None,
+    }
+}
+
 fn resolve_or_create_block_extern(
     base: &mut LocalResolverBase,
     module_path: &[String],
@@ -213,6 +429,10 @@ pub struct LocalResolverBase {
     pub(crate) enum_const_defs: FxHashMap<DefId, DefId>,
     pub(crate) constexpr_def_exprs: FxHashMap<DefId, co2_ast::Spanned<Expression<LocalResolver>>>,
     pub(crate) constexpr_local_exprs: FxHashMap<u32, co2_ast::Spanned<Expression<LocalResolver>>>,
+    /// Local ids whose declared type is a variable-length array (or a pointer
+    /// to one). Used to reject `sizeof` of a VLA in constant-expression
+    /// contexts, where the bound is not an integer constant expression.
+    pub(crate) vla_locals: FxHashSet<u32>,
 }
 
 impl std::fmt::Debug for LocalResolverBase {
@@ -316,6 +536,12 @@ impl LocalResolver {
     pub fn is_va_arg_safe(&self, ty: Ty) -> bool {
         let guard = self.base.borrow();
         guard.hir_ctx.type_is_va_arg_safe(self.current_owner, ty)
+    }
+
+    /// Local ids whose declared type is a variable-length array (or a pointer
+    /// to one), as recorded while parsing the enclosing scopes.
+    pub fn vla_locals(&self) -> FxHashSet<u32> {
+        self.base.borrow().vla_locals.clone()
     }
 
     pub fn new(base: Rc<RefCell<LocalResolverBase>>) -> Self {
@@ -1172,6 +1398,12 @@ impl co2_ast::TypeResolver for LocalResolver {
                             ),
                         );
                     } else {
+                        let is_vla = {
+                            let locals = next.locals.borrow();
+                            declarator_has_vla_bound(&decl.0.declarator.0, &|name: &str| {
+                                matches!(locals.get(name), Some((DefOrLocal::Local(_), _)))
+                            })
+                        };
                         if is_constexpr
                             && let Some((co2_ast::Initializer::Expr(expr), _span)) =
                                 decl.0.initializer.clone()
@@ -1192,6 +1424,9 @@ impl co2_ast::TypeResolver for LocalResolver {
                                 TypeQueryResult::Expr,
                             ),
                         );
+                        if is_vla {
+                            next.base.borrow_mut().vla_locals.insert(name.0 as u32);
+                        }
                     }
                 }
                 next

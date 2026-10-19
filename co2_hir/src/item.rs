@@ -344,6 +344,8 @@ impl HirCtx<'_> {
         *self.vla.borrow_mut() = Default::default();
         *self.pending_vla.borrow_mut() = None;
         *self.vla_typedefs.borrow_mut() = FxHashMap::default();
+        self.block_depth.set(0);
+        self.pending_gotos.borrow_mut().clear();
         let mut locals = Arena::new();
         let mut params = Vec::new();
         let mut local_map: FxHashMap<usize, LocalId> = FxHashMap::default();

@@ -16,6 +16,9 @@ pub(crate) struct CrateSigCtx<'a> {
     pub(crate) copy_trait: DefId,
     pub(crate) mir_owners: FxHashMap<DefId, MirOwnerInfo>,
     pub(crate) hir_items: Vec<HirModuleItem>,
+    /// Set while lowering a file-scope declarator: there is no runtime scope
+    /// in which a variably modified type could be evaluated (C11 6.7.6.2p2).
+    pub(crate) disallow_vla: bool,
 }
 
 impl CrateSigCtx<'_> {

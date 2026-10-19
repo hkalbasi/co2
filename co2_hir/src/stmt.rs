@@ -57,6 +57,32 @@ pub struct HirAsmOperand {
 }
 
 impl HirCtx<'_> {
+    /// Resolve a forward `goto` at `Label`: if any VLA declared between the
+    /// `goto` and this label is still in scope here, the jump entered the VLA's
+    /// scope, which C11 6.8.6.1p1 forbids.
+    fn check_goto_into_vla_scope(&self, label: LabelId) {
+        let label_depth = self.block_depth.get();
+        let mut offending = None;
+        self.pending_gotos
+            .borrow_mut()
+            .retain(|(goto_label, _goto_depth, decl_len, _span)| {
+                if *goto_label != label {
+                    return true;
+                }
+                let vla = self.vla.borrow();
+                if let Some((_, span)) = vla.decls[*decl_len..]
+                    .iter()
+                    .find(|(depth, _)| *depth <= label_depth)
+                {
+                    offending = Some(*span);
+                }
+                false
+            });
+        if let Some(span) = offending {
+            self.terminate_with_error(span, "jump into scope of variable length array");
+        }
+    }
+
     pub(crate) fn lower_compound_items(
         &self,
         compound: CompoundStatement<LocalResolver>,
@@ -64,6 +90,8 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) {
+        let depth = self.block_depth.get();
+        self.block_depth.set(depth + 1);
         for (stmt_or_decl, _) in compound.statements {
             match stmt_or_decl {
                 StatementOrDeclaration::Statement((stmt, span)) => {
@@ -75,6 +103,7 @@ impl HirCtx<'_> {
                 }
             }
         }
+        self.block_depth.set(depth);
     }
 
     /// Naked-function path (GNU `__attribute__((naked))`): the body must
@@ -150,6 +179,11 @@ impl HirCtx<'_> {
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> HirExpr {
         let bound_span = expr.1;
+        if let Some(span) =
+            co2_crate_sig::expr_contains_vla_sizeof(&expr, &self.decl_resolver.vla_locals())
+        {
+            self.terminate_with_error(span, "case label is not an integer constant expression");
+        }
         if let Err(err) = self.eval_const_expr_in_scope(&expr, locals, local_map) {
             self.terminate_with_spanned_error(err);
         }
@@ -282,7 +316,14 @@ impl HirCtx<'_> {
                 out.push(HirStmt::Label(label, span));
             }
             Statement::Goto(name) => {
-                out.push(HirStmt::Goto(self.resolve_or_insert_label(name.0), span));
+                let label = self.resolve_or_insert_label(name.0);
+                self.pending_gotos.borrow_mut().push((
+                    label,
+                    self.block_depth.get(),
+                    self.vla.borrow().decls.len(),
+                    parser_span,
+                ));
+                out.push(HirStmt::Goto(label, span));
             }
             Statement::IndirectGoto(expr) => {
                 let expr = self
@@ -300,7 +341,9 @@ impl HirCtx<'_> {
                 out.push(HirStmt::IndirectGoto(expr, span));
             }
             Statement::Label { name } => {
-                out.push(HirStmt::Label(self.resolve_or_insert_label(name.0), span));
+                let label = self.resolve_or_insert_label(name.0);
+                self.check_goto_into_vla_scope(label);
+                out.push(HirStmt::Label(label, span));
             }
             Statement::Return(expr) => {
                 if let Some(expr) = expr {
@@ -308,8 +351,16 @@ impl HirCtx<'_> {
                     let mut expr = self
                         .lower_expr((expr.0, expr.1), locals, local_map)
                         .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                    let returns_vla_object =
+                        self.vla_shape_of_expr(&expr).is_some_and(|(_, is_ptr)| !is_ptr);
                     self.array_to_pointer_decay_if_array(&mut expr);
                     self.fn_def_to_fn_ptr_decay_for_expected(&mut expr, self.ret_ty);
+                    if returns_vla_object && !self.ty_matches_expected(self.ret_ty, expr.ty) {
+                        self.terminate_with_error(
+                            expr_span,
+                            "cannot return a variable length array",
+                        );
+                    }
                     if let Some(coerced) = self.coerce_expr_to_type(&expr, self.ret_ty) {
                         expr = coerced;
                     }

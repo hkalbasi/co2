@@ -18,7 +18,7 @@ pub(crate) use ctx::CrateSigCtx;
 pub use ast_resolver::{
     DefOrLocal, LocalResolver, LocalResolverBase, MethodResolutionKind, PendingExtern,
     RegisteredArrayLenConst, RegisteredSubscription, expr_contains_label_address,
-    initializer_contains_label_address,
+    expr_contains_vla_sizeof, initializer_contains_label_address,
 };
 pub use attr::{Co2Attr, co2_attrs_to_generated};
 pub use lowering::{AtomicOrder, WellknownDefs, lower_crate_sig};

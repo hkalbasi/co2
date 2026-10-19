@@ -1811,7 +1811,7 @@ impl HirCtx<'_> {
 
     /// If `expr` names a VLA object or pointer-to-VLA local, return its runtime
     /// shape and whether it is a pointer-to-VLA (`true`) or an object (`false`).
-    fn vla_shape_of_expr(&self, expr: &HirExpr) -> Option<(VlaShape, bool)> {
+    pub(crate) fn vla_shape_of_expr(&self, expr: &HirExpr) -> Option<(VlaShape, bool)> {
         let HirExprKind::Local(id) = &expr.kind else {
             return None;
         };
@@ -2185,11 +2185,22 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<Ty, (co2_ast::Span, String)> {
-        match self.lower_type_name_cty_with_scope(
+        let cty = self.lower_type_name_cty_with_scope(
             type_name,
             parser_span,
             Some((locals, local_map)),
-        )? {
+        )?;
+        if self.pending_vla.borrow_mut().take().is_some() {
+            let type_span = co2_ast::Span::from_parts(
+                parser_span.context(),
+                parser_span.start()..initializer.1.start(),
+            );
+            self.terminate_with_error(
+                type_span,
+                "compound literal cannot have variable length array type",
+            );
+        }
+        match cty {
             CTy::Ty(ty) => Ok(ty),
             CTy::Function(_) => {
                 self.terminate_with_error(parser_span, "Function is invalid as a type name");
@@ -2869,6 +2880,11 @@ impl HirCtx<'_> {
                             parser_span,
                             "Type error - can not run binop on arrays.",
                         ));
+                    }
+                    if let HirExprKind::Local(id) = &lhs.kind
+                        && self.vla.borrow().objects.contains_key(id)
+                    {
+                        return Err(spanned_error(rhs.1, "array type is not assignable"));
                     }
                     let mut rhs = self.lower_expr(*rhs, locals, local_map)?;
                     self.array_to_pointer_decay_if_array(&mut rhs);

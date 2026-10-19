@@ -375,20 +375,6 @@ static void test_sizeof_stable(void) {
 }
 
 // ------------------------------------------------------------------
-// Constraints that must NOT compile (kept as comments):
-//
-//   int n = 5;
-//   int a[n] = {0};              // error: VLA cannot be initialized
-//   static int b[n];             // error: VLA cannot have static storage
-//   extern int c[n];             // error: VLA cannot have linkage
-//   struct S { int n; int m[n]; }; // error: VLA cannot be a struct member
-//   goto skip; int d[n]; skip: ;  // error: jump into VLA scope
-//   (int[n]){0};                 // error: compound literal cannot be VLA
-//   int f(void) { int n; int a[n]; return a; }  // error: cannot return VLA
-//   _Static_assert(sizeof(a) == 20, "");        // error: non-constant
-// ------------------------------------------------------------------
-
-// ------------------------------------------------------------------
 // main
 // ------------------------------------------------------------------
 

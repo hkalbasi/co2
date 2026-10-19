@@ -35,6 +35,10 @@ pub(crate) struct VlaState {
     /// Locals that are *pointers to VLA* (`int (*p)[n];`). The local's value is
     /// a `*mut elem` pointing at the start of the pointed-to array.
     pub(crate) ptrs: FxHashMap<LocalId, VlaShape>,
+    /// Every variably modified declaration seen so far, in source order, with
+    /// the block nesting depth it was declared at. Used to reject `goto` jumps
+    /// into the scope of a VLA.
+    pub(crate) decls: Vec<(usize, co2_ast::Span)>,
 }
 
 /// One dimension of a VLA under construction. Dimensions are stored in
@@ -126,6 +130,12 @@ pub struct HirCtx<'a> {
     /// VLA typedefs (e.g. `typedef int row_t[n];`) visible in the current body,
     /// keyed by the C name. Bounds are fixed when the typedef is declared.
     pub(crate) vla_typedefs: RefCell<FxHashMap<String, VlaShape>>,
+    /// Lexical block nesting depth while lowering the current body.
+    pub(crate) block_depth: std::cell::Cell<usize>,
+    /// Forward `goto`s seen so far in the current body that may jump into the
+    /// scope of a VLA declared later: the label, the block depth at the goto,
+    /// the number of VLA declarations before the goto, and the goto span.
+    pub(crate) pending_gotos: RefCell<Vec<(LabelId, usize, usize, co2_ast::Span)>>,
     pub(crate) decl_resolver: LocalResolver,
     pub(crate) function_name: Option<String>,
     pub(crate) ret_ty: Ty,
@@ -154,6 +164,8 @@ impl<'a> HirCtx<'a> {
             vla: RefCell::new(VlaState::default()),
             pending_vla: RefCell::new(None),
             vla_typedefs: RefCell::new(FxHashMap::default()),
+            block_depth: std::cell::Cell::new(0),
+            pending_gotos: RefCell::new(Vec::new()),
             decl_resolver,
             function_name,
             ret_ty,
