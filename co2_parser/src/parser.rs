@@ -12,8 +12,8 @@
 
 use co2_ast::TypeResolver;
 use co2_ast::{
-    AsmOperand, AsmStatement, CompoundStatement, Constant, Declaration, DeclarationSpecifier,
-    Declarator, EnumSpecifier, Enumerator, Expression, FileId, ForInit,
+    AlignmentSpecifier, AsmOperand, AsmStatement, CompoundStatement, Constant, Declaration,
+    DeclarationSpecifier, Declarator, EnumSpecifier, Enumerator, Expression, FileId, ForInit,
     FunctionDefinitionSignature, FunctionSpecifier, InitDeclarator, LazyCompoundStatement,
     LazyRustConstExpr, LazySubscription, ModItem, ParameterList, RustAttribute, RustAttributeStyle,
     RustFnAbi, RustFunctionParam, RustFunctionSignature, RustPath, RustPathSegment,
@@ -1113,6 +1113,15 @@ impl<'a, R: TypeResolver> P<'a, R> {
         Ok((s, self.span_since(start)))
     }
 
+    fn parse_alignment_specifier(&mut self) -> PR<Spanned<AlignmentSpecifier>> {
+        let start = self.pos;
+        self.expect(&Token::Alignas, "_Alignas")?;
+        self.expect(&Token::LParen, "(")?;
+        self.capture_until(&Token::RParen);
+        self.expect(&Token::RParen, ")")?;
+        Ok((AlignmentSpecifier::Alignas, self.span_since(start)))
+    }
+
     pub fn parse_type_specifier(&mut self) -> PR<Spanned<TypeSpecifier<R>>> {
         let start = self.pos;
         let spec = match self.peek(0) {
@@ -1138,13 +1147,6 @@ impl<'a, R: TypeResolver> P<'a, R> {
             Some(Token::Unsigned) => TypeSpecifier::Unsigned,
             _ => {
                 return match self.peek(0) {
-                    Some(Token::Alignas) => {
-                        self.pos += 1;
-                        self.expect(&Token::LParen, "(")?;
-                        self.capture_until(&Token::RParen);
-                        self.expect(&Token::RParen, ")")?;
-                        Ok((TypeSpecifier::Alignas, self.span_since(start)))
-                    }
                     Some(Token::Struct) | Some(Token::Union) => self.parse_struct_or_union(),
                     Some(Token::Enum) => self.parse_enum_specifier(),
                     Some(Token::Typeof) => self.parse_typeof_specifier(),
@@ -1373,6 +1375,13 @@ impl<'a, R: TypeResolver> P<'a, R> {
             let q = self.parse_type_qualifier()?;
             return Ok((SpecifierQualifier::TypeQualifier(q), self.span_since(start)));
         }
+        if self.at(&Token::Alignas) {
+            let s = self.parse_alignment_specifier()?;
+            return Ok((
+                SpecifierQualifier::AlignmentSpecifier(s),
+                self.span_since(start),
+            ));
+        }
         let s = self.parse_type_specifier()?;
         Ok((SpecifierQualifier::TypeSpecifier(s), self.span_since(start)))
     }
@@ -1520,7 +1529,6 @@ impl<'a, R: TypeResolver> P<'a, R> {
                     | Token::Complex
                     | Token::Signed
                     | Token::Unsigned
-                    | Token::Alignas
                     | Token::Struct
                     | Token::Union
                     | Token::Enum
@@ -1675,6 +1683,13 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 self.pos += 1;
                 Ok((
                     DeclarationSpecifier::FunctionSpecifier((FunctionSpecifier::Inline, kw_span)),
+                    self.span_since(start),
+                ))
+            }
+            Some(Token::Alignas) => {
+                let s = self.parse_alignment_specifier()?;
+                Ok((
+                    DeclarationSpecifier::AlignmentSpecifier(s),
                     self.span_since(start),
                 ))
             }

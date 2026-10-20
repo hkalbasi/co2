@@ -644,7 +644,8 @@ fn type_name_contains_local(type_name: &co2_ast::TypeName<LocalResolver>) -> boo
                 }
                 _ => false,
             },
-            co2_ast::SpecifierQualifier::TypeQualifier(_) => false,
+            co2_ast::SpecifierQualifier::TypeQualifier(_)
+            | co2_ast::SpecifierQualifier::AlignmentSpecifier(_) => false,
         })
         || type_name
             .abstract_declarator

@@ -5,15 +5,15 @@ use std::{
 };
 
 use crate::{
-    BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier, Declarator, Designator,
-    EnumSpecifier, Expression, FileId, FloatSuffix, ForInit, FunctionDefinitionSignature,
-    FunctionSpecifier, GenericAssociation, InitDeclarator, Initializer, InitializerItem,
-    IntegerSuffix, LazyCompoundStatement, LazyRustConstExpr, LazySubscription, ModItem, PackAction,
-    ParameterList, RustAttribute, RustFnAbi, RustFunctionParam, RustFunctionSignature,
-    RustStructField, RustTy, Span, Spanned, SpecifierQualifier, Statement, StatementOrDeclaration,
-    StorageClassSpecifier, StructDeclarator, StructOrUnionField, StructOrUnionKind,
-    StructOrUnionSpecifier, TranslationUnit, TypeName, TypeQualifier, TypeSpecifier, UnaryOp,
-    UpdateOp, UseItem, Visibility,
+    AlignmentSpecifier, BinOp, CompoundStatement, Constant, Declaration, DeclarationSpecifier,
+    Declarator, Designator, EnumSpecifier, Expression, FileId, FloatSuffix, ForInit,
+    FunctionDefinitionSignature, FunctionSpecifier, GenericAssociation, InitDeclarator,
+    Initializer, InitializerItem, IntegerSuffix, LazyCompoundStatement, LazyRustConstExpr,
+    LazySubscription, ModItem, PackAction, ParameterList, RustAttribute, RustFnAbi,
+    RustFunctionParam, RustFunctionSignature, RustStructField, RustTy, Span, Spanned,
+    SpecifierQualifier, Statement, StatementOrDeclaration, StorageClassSpecifier, StructDeclarator,
+    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, TranslationUnit, TypeName,
+    TypeQualifier, TypeSpecifier, UnaryOp, UpdateOp, UseItem, Visibility,
 };
 
 pub trait TypeResolver
@@ -336,6 +336,15 @@ impl PrettyPrint for Spanned<FunctionSpecifier> {
     }
 }
 
+impl PrettyPrint for Spanned<AlignmentSpecifier> {
+    fn pretty_print(&self, pp: &mut PrettyPrinter) {
+        let sp = fmt_span(&self.1, pp.config);
+        match self.0 {
+            AlignmentSpecifier::Alignas => pp.leaf("Alignas", &sp),
+        }
+    }
+}
+
 impl PrettyPrint for PackAction {
     fn pretty_print(&self, pp: &mut PrettyPrinter) {
         match self {
@@ -367,6 +376,9 @@ impl<R: TypeResolver> PrettyPrint for Spanned<DeclarationSpecifier<R>> {
             }
             DeclarationSpecifier::FunctionSpecifier(fs) => {
                 pp.node("FunctionSpecifier", &sp, |pp| fs.pretty_print(pp));
+            }
+            DeclarationSpecifier::AlignmentSpecifier(r#as) => {
+                pp.node("AlignmentSpecifier", &sp, |pp| r#as.pretty_print(pp));
             }
             DeclarationSpecifier::GNUAttribute(attrs) => {
                 pp.node("GNUAttribute", &sp, |pp| {
@@ -431,9 +443,6 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
             TypeSpecifier::TypeofExpr(expr) => {
                 pp.node("TypeofExpr", &sp, |pp| expr.pretty_print(pp));
             }
-            TypeSpecifier::Alignas => {
-                pp.node("Alignas", &sp, |_pp| ());
-            }
         }
     }
 }
@@ -488,6 +497,9 @@ impl<R: TypeResolver> PrettyPrint for Spanned<SpecifierQualifier<R>> {
             }
             SpecifierQualifier::TypeQualifier(tq) => {
                 pp.node("TypeQualifier", &sp, |pp| tq.pretty_print(pp));
+            }
+            SpecifierQualifier::AlignmentSpecifier(r#as) => {
+                pp.node("AlignmentSpecifier", &sp, |pp| r#as.pretty_print(pp));
             }
         }
     }

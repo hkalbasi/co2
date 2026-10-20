@@ -89,6 +89,7 @@ impl CompressedTypeSpecifier {
                 DeclarationSpecifier::TypeQualifier(_)
                 | DeclarationSpecifier::StorageSpecifier(_)
                 | DeclarationSpecifier::FunctionSpecifier(_)
+                | DeclarationSpecifier::AlignmentSpecifier(_)
                 | DeclarationSpecifier::GNUAttribute(_) => None,
             })
             .collect::<Vec<_>>();
@@ -175,7 +176,6 @@ impl CompressedTypeSpecifier {
                     }
                     signed = Some(new_signed);
                 }
-                TypeSpecifier::Alignas => {}
                 TypeSpecifier::Bool
                 | TypeSpecifier::Void
                 | TypeSpecifier::StructOrUnion { .. }
@@ -2313,6 +2313,9 @@ impl LocalResolverBase {
                     }
                     co2_ast::SpecifierQualifier::TypeQualifier(t) => {
                         DeclarationSpecifier::TypeQualifier(t)
+                    }
+                    co2_ast::SpecifierQualifier::AlignmentSpecifier(t) => {
+                        DeclarationSpecifier::AlignmentSpecifier(t)
                     }
                 };
                 (s, span)

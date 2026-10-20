@@ -159,6 +159,9 @@ impl<A: TypeResolver> DoTransform for DeclarationSpecifier<A> {
             DeclarationSpecifier::FunctionSpecifier(e) => {
                 DeclarationSpecifier::FunctionSpecifier(*e)
             }
+            DeclarationSpecifier::AlignmentSpecifier(e) => {
+                DeclarationSpecifier::AlignmentSpecifier(*e)
+            }
             DeclarationSpecifier::GNUAttribute(e) => DeclarationSpecifier::GNUAttribute(e.clone()),
         }
     }
@@ -199,7 +202,6 @@ impl<A: TypeResolver> DoTransform for TypeSpecifier<A> {
                 TypeSpecifier::TypeofType(type_name.transform(b))
             }
             TypeSpecifier::TypeofExpr(expr) => TypeSpecifier::TypeofExpr(expr.transform(b)),
-            TypeSpecifier::Alignas => TypeSpecifier::Alignas,
         }
     }
 }
@@ -392,6 +394,7 @@ impl<A: TypeResolver> DoTransform for SpecifierQualifier<A> {
                 SpecifierQualifier::TypeSpecifier(e.transform(b))
             }
             SpecifierQualifier::TypeQualifier(e) => SpecifierQualifier::TypeQualifier(*e),
+            SpecifierQualifier::AlignmentSpecifier(e) => SpecifierQualifier::AlignmentSpecifier(*e),
         }
     }
 }

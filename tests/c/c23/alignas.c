@@ -8,6 +8,13 @@ typedef struct {
     _Alignas(32) int old_align;
 } Foo;
 
+typedef unsigned char byte;
+
+struct header {
+    int size;
+    _Alignas(8) byte user_data[];
+};
+
 int main() {
     // Check aligned fields are usable
     Foo x = { .new_align = 5, .old_align = 10 };
@@ -18,6 +25,10 @@ int main() {
     y += 3;
     if (y != 8) {
         return 2;
+    }
+    struct header h = { .size = 3 };
+    if (h.size != 3) {
+        return 3;
     }
     return 0;
 }

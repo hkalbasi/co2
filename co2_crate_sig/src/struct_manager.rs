@@ -653,6 +653,9 @@ impl LocalResolverBase {
                         co2_ast::SpecifierQualifier::TypeQualifier(tq) => {
                             DeclarationSpecifier::TypeQualifier(*tq)
                         }
+                        co2_ast::SpecifierQualifier::AlignmentSpecifier(al) => {
+                            DeclarationSpecifier::AlignmentSpecifier(*al)
+                        }
                     };
                     (spec, f.1)
                 })

@@ -1260,6 +1260,9 @@ impl HirCtx<'_> {
                     co2_ast::SpecifierQualifier::TypeQualifier(t) => {
                         DeclarationSpecifier::TypeQualifier(t)
                     }
+                    co2_ast::SpecifierQualifier::AlignmentSpecifier(t) => {
+                        DeclarationSpecifier::AlignmentSpecifier(t)
+                    }
                 };
                 (s, span)
             })

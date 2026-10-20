@@ -553,7 +553,6 @@ pub enum TypeSpecifier<R: TypeResolver> {
     TypedefName(Spanned<R::ResolvedRustPath>),
     TypeofType(Box<TypeName<R>>),
     TypeofExpr(Box<Spanned<Expression<R>>>),
-    Alignas,
 }
 
 #[derive(Debug, Clone)]
@@ -627,10 +626,16 @@ pub enum FunctionSpecifier {
     Inline,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum AlignmentSpecifier {
+    Alignas,
+}
+
 #[derive(Debug, Clone)]
 pub enum SpecifierQualifier<R: TypeResolver> {
     TypeSpecifier(Spanned<TypeSpecifier<R>>),
     TypeQualifier(Spanned<TypeQualifier>),
+    AlignmentSpecifier(Spanned<AlignmentSpecifier>),
 }
 
 #[derive(Debug, Clone)]
@@ -1628,6 +1633,7 @@ pub enum DeclarationSpecifier<R: TypeResolver> {
     TypeQualifier(Spanned<TypeQualifier>),
     StorageSpecifier(Spanned<StorageClassSpecifier>),
     FunctionSpecifier(Spanned<FunctionSpecifier>),
+    AlignmentSpecifier(Spanned<AlignmentSpecifier>),
     GNUAttribute(Vec<Spanned<RustAttribute>>),
 }
 
@@ -1636,7 +1642,8 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
         match self {
             DeclarationSpecifier::TypeSpecifier(_)
             | DeclarationSpecifier::TypeQualifier(_)
-            | DeclarationSpecifier::FunctionSpecifier(_) => false,
+            | DeclarationSpecifier::FunctionSpecifier(_)
+            | DeclarationSpecifier::AlignmentSpecifier(_) => false,
             DeclarationSpecifier::GNUAttribute(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Typedef)
@@ -1648,7 +1655,8 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
         match self {
             DeclarationSpecifier::TypeSpecifier(_)
             | DeclarationSpecifier::TypeQualifier(_)
-            | DeclarationSpecifier::FunctionSpecifier(_) => false,
+            | DeclarationSpecifier::FunctionSpecifier(_)
+            | DeclarationSpecifier::AlignmentSpecifier(_) => false,
             DeclarationSpecifier::GNUAttribute(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Extern)
@@ -1660,7 +1668,8 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
         match self {
             DeclarationSpecifier::TypeSpecifier(_)
             | DeclarationSpecifier::TypeQualifier(_)
-            | DeclarationSpecifier::FunctionSpecifier(_) => false,
+            | DeclarationSpecifier::FunctionSpecifier(_)
+            | DeclarationSpecifier::AlignmentSpecifier(_) => false,
             DeclarationSpecifier::GNUAttribute(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Static)
@@ -1672,7 +1681,8 @@ impl<R: TypeResolver> DeclarationSpecifier<R> {
         match self {
             DeclarationSpecifier::TypeSpecifier(_)
             | DeclarationSpecifier::TypeQualifier(_)
-            | DeclarationSpecifier::FunctionSpecifier(_) => false,
+            | DeclarationSpecifier::FunctionSpecifier(_)
+            | DeclarationSpecifier::AlignmentSpecifier(_) => false,
             DeclarationSpecifier::GNUAttribute(_) => false,
             DeclarationSpecifier::StorageSpecifier(c) => {
                 matches!(c.0, StorageClassSpecifier::Constexpr)
