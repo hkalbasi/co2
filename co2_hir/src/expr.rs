@@ -4588,6 +4588,21 @@ impl HirCtx<'_> {
                 };
                 self.lower_alloca(size.clone(), span, parser_span, locals, local_map)
             }
+            "__builtin_frame_address" => {
+                co2_ast::emit_warnings(vec![co2_ast::Rich::custom(
+                    parser_span,
+                    "`__builtin_frame_address` is not supported, returning NULL",
+                )]);
+                let c_void_ty = Ty::from_rigid_kind(RigidTy::Adt(
+                    self.wellknown_defs.c_void,
+                    GenericArgs(vec![]),
+                ));
+                Ok(HirExpr {
+                    kind: HirExprKind::ConstInt(0),
+                    ty: Ty::new_ptr(c_void_ty, Mutability::Mut),
+                    span,
+                })
+            }
             "__builtin_constant_p" => {
                 let [expr] = args.as_slice() else {
                     return Err(arity_error(1));

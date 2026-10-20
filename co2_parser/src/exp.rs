@@ -403,6 +403,7 @@ fn builtin_name(token: &Token) -> Option<&'static str> {
         Token::BuiltinTypesCompatibleP => Some("__builtin_types_compatible_p"),
         Token::BuiltinComplex => Some("__builtin_complex"),
         Token::Ident(name) if name == "__builtin_alloca" => Some("__builtin_alloca"),
+        Token::Ident(name) if name == "__builtin_frame_address" => Some("__builtin_frame_address"),
         Token::Ident(name) => co2_ast::atomic_builtin_inner(name),
         _ => None,
     }
