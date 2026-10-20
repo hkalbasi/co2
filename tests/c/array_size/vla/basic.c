@@ -295,7 +295,7 @@ static void test_loop(void) {
 
         b_t b1;
         assert(sizeof(b1) == (size_t)i * sizeof(int));
-    
+
         i += 3;
         typedef int c_t[i];
         c_t c;

@@ -1,0 +1,20 @@
+//@ mode: co2
+//@ miri-error
+
+// A `goto` out of a block ends the block's lifetime just like falling off its
+// end (C11 6.2.4p5), so a local of that block is dead at the label.
+
+fn main() {
+    i32* p;
+    {
+        i32 y = 7;
+        p = &y;
+        goto out;
+    }
+out:
+    i32 escaped = *p;
+                //^^ error:
+    if (escaped != 7) {
+        std::process::exit(1);
+    }
+}

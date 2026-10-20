@@ -1655,9 +1655,7 @@ impl Preprocessor {
         let mut replacement = vec![(Token::Hash, start, end), (Token::LBracket, start, end)];
         let hint = match group {
             [(Token::Ident(name), _, _)] if Self::is_noinline_name(name) => Some("never"),
-            [(Token::Ident(name), _, _)] if Self::is_always_inline_name(name) => {
-                Some("always")
-            }
+            [(Token::Ident(name), _, _)] if Self::is_always_inline_name(name) => Some("always"),
             _ => None,
         };
         if let Some(hint) = hint {

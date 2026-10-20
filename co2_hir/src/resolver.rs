@@ -26,19 +26,12 @@ pub(crate) struct VlaShape {
     pub(crate) dims: Vec<LocalId>,
 }
 
-/// VLA metadata for the body currently being lowered.
-#[derive(Default)]
-pub(crate) struct VlaState {
-    /// Locals that are themselves VLA *objects* (`int a[n][m];`). The local's
-    /// value is a `*mut elem` into the heap block.
-    pub(crate) objects: FxHashMap<LocalId, VlaShape>,
-    /// Locals that are *pointers to VLA* (`int (*p)[n];`). The local's value is
-    /// a `*mut elem` pointing at the start of the pointed-to array.
-    pub(crate) ptrs: FxHashMap<LocalId, VlaShape>,
-    /// Every variably modified declaration seen so far, in source order, with
-    /// the block nesting depth it was declared at. Used to reject `goto` jumps
-    /// into the scope of a VLA.
-    pub(crate) decls: Vec<(usize, co2_ast::Span)>,
+/// A local whose type is variably modified: either a VLA object
+/// (`int a[n];`) or a pointer to a VLA (`int (*p)[n];`).
+#[derive(Clone, Debug)]
+pub(crate) struct VlaLocal {
+    pub(crate) shape: VlaShape,
+    pub(crate) is_ptr: bool,
 }
 
 /// One dimension of a VLA under construction. Dimensions are stored in
@@ -123,19 +116,13 @@ pub struct HirCtx<'a> {
     pub(crate) c_variadic_local: Option<LocalId>,
     /// Backing `Vec<Vec<u128>>` local, lazily created on the first `alloca`.
     pub(crate) alloca_storage: RefCell<Option<LocalId>>,
-    /// VLA shapes for the current body.
-    pub(crate) vla: RefCell<VlaState>,
+    /// VLA locals for the current body, keyed by local.
+    pub(crate) vla: RefCell<FxHashMap<LocalId, VlaLocal>>,
     /// Scratch VLA shape being accumulated by the current declarator walk.
     pub(crate) pending_vla: RefCell<Option<VlaBuild>>,
     /// VLA typedefs (e.g. `typedef int row_t[n];`) visible in the current body,
     /// keyed by the C name. Bounds are fixed when the typedef is declared.
     pub(crate) vla_typedefs: RefCell<FxHashMap<String, VlaShape>>,
-    /// Lexical block nesting depth while lowering the current body.
-    pub(crate) block_depth: std::cell::Cell<usize>,
-    /// Forward `goto`s seen so far in the current body that may jump into the
-    /// scope of a VLA declared later: the label, the block depth at the goto,
-    /// the number of VLA declarations before the goto, and the goto span.
-    pub(crate) pending_gotos: RefCell<Vec<(LabelId, usize, usize, co2_ast::Span)>>,
     pub(crate) decl_resolver: LocalResolver,
     pub(crate) function_name: Option<String>,
     pub(crate) ret_ty: Ty,
@@ -161,11 +148,9 @@ impl<'a> HirCtx<'a> {
             switch_scopes: RefCell::new(Vec::new()),
             c_variadic_local: None,
             alloca_storage: RefCell::new(None),
-            vla: RefCell::new(VlaState::default()),
+            vla: RefCell::new(FxHashMap::default()),
             pending_vla: RefCell::new(None),
             vla_typedefs: RefCell::new(FxHashMap::default()),
-            block_depth: std::cell::Cell::new(0),
-            pending_gotos: RefCell::new(Vec::new()),
             decl_resolver,
             function_name,
             ret_ty,
@@ -222,6 +207,11 @@ impl<'a> HirCtx<'a> {
 
     pub(crate) fn take_labels(&self) -> Arena<HirLabel> {
         std::mem::take(&mut *self.labels.borrow_mut())
+    }
+
+    /// True for a VLA object (`int a[n]`), false for a pointer to a VLA.
+    pub(crate) fn is_vla_object(&self, local: LocalId) -> bool {
+        self.vla.borrow().get(&local).is_some_and(|vla| !vla.is_ptr)
     }
 
     pub(crate) fn fresh_label(&self) -> LabelId {

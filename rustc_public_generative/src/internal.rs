@@ -46,8 +46,6 @@ use rustc_middle::mir::{
     BorrowKind, Const as MirInternalConst, ConstValue, InlineAsmMacro,
     InlineAsmOperand as MiddleInlineAsmOperand,
 };
-use rustc_target::asm::{InlineAsmReg, InlineAsmRegClass, InlineAsmRegOrRegClass};
-use rustc_target::asm::{X86InlineAsmReg, X86InlineAsmRegClass};
 use rustc_middle::queries::mir_borrowck::ProvidedValue as BorrowckProvidedValue;
 use rustc_middle::query::Providers as QueryProviders;
 use rustc_middle::ty::{
@@ -58,6 +56,8 @@ use rustc_public::rustc_internal::internal;
 use rustc_session::config::{CrateType, EntryFnType};
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
+use rustc_target::asm::{InlineAsmReg, InlineAsmRegClass, InlineAsmRegOrRegClass};
+use rustc_target::asm::{X86InlineAsmReg, X86InlineAsmRegClass};
 use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
 use rustc_trait_selection::traits::ObligationCtxt;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
@@ -5487,9 +5487,9 @@ fn build_mir_body<'tcx>(
                             .map(|piece| {
                                 let (tag, rest) = piece.split_at(1);
                                 match tag {
-                                    "s" => InlineAsmTemplatePiece::String(
-                                        std::borrow::Cow::Owned(rest.to_string()),
-                                    ),
+                                    "s" => InlineAsmTemplatePiece::String(std::borrow::Cow::Owned(
+                                        rest.to_string(),
+                                    )),
                                     "p" => {
                                         let (idx, modifier) = rest
                                             .split_once(':')
@@ -5593,10 +5593,10 @@ fn build_mir_body<'tcx>(
                         .flat_map(|s| s.lines())
                         .count()
                         .max(1);
-                    let line_spans =
-                        tcx.arena.alloc_from_iter(std::iter::repeat_n(DUMMY_SP, line_count));
-                    let destination = destination
-                        .map(rustc_middle::mir::BasicBlock::from_usize);
+                    let line_spans = tcx
+                        .arena
+                        .alloc_from_iter(std::iter::repeat_n(DUMMY_SP, line_count));
+                    let destination = destination.map(rustc_middle::mir::BasicBlock::from_usize);
                     // Naked functions end in a single diverging `naked_asm!`
                     // with no destination (`targets` empty); every other
                     // co2 asm falls through to the next block.

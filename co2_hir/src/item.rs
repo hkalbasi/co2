@@ -13,7 +13,7 @@ use rustc_public_generative::rustc_public::{
 };
 
 use crate::initializer_tree::{ARRAY_LEN_PROBE, InitializerTree, eval_const_int};
-use crate::resolver::{HirCtx, ResolvedValue, VlaShape};
+use crate::resolver::{HirCtx, ResolvedValue, VlaLocal, VlaShape};
 use crate::{HirDecl, HirExpr, HirExprKind, HirStmt};
 
 #[derive(Clone, Debug)]
@@ -245,12 +245,7 @@ impl HirCtx<'_> {
         vla_params: &[(usize, Vec<co2_crate_sig::VlaParamDim>)],
     ) -> HirBody {
         self.reset_labels();
-        self.lower_compound_statement(
-            parsed,
-            &def.fn_sig().skip_binder(),
-            param_names,
-            vla_params,
-        )
+        self.lower_compound_statement(parsed, &def.fn_sig().skip_binder(), param_names, vla_params)
     }
 
     pub(crate) fn lower_naked_function_body(
@@ -344,8 +339,6 @@ impl HirCtx<'_> {
         *self.vla.borrow_mut() = Default::default();
         *self.pending_vla.borrow_mut() = None;
         *self.vla_typedefs.borrow_mut() = FxHashMap::default();
-        self.block_depth.set(0);
-        self.pending_gotos.borrow_mut().clear();
         let mut locals = Arena::new();
         let mut params = Vec::new();
         let mut local_map: FxHashMap<usize, LocalId> = FxHashMap::default();
@@ -412,11 +405,9 @@ impl HirCtx<'_> {
                             }
                         }
                     }
-                    co2_crate_sig::VlaParamDim::Const(n) => HirExpr {
-                        kind: HirExprKind::ConstInt(*n as i128),
-                        ty: usize_ty,
-                        span: body_span,
-                    },
+                    co2_crate_sig::VlaParamDim::Const(n) => {
+                        self.const_int_expr(*n as i128, usize_ty, body_span)
+                    }
                 };
                 let local = locals.alloc(HirLocal {
                     name: "__co2_vla_dim".to_owned(),
@@ -424,11 +415,7 @@ impl HirCtx<'_> {
                     span: body_span,
                     read_only: false,
                 });
-                param_stmts.push(HirStmt::Decl(HirDecl {
-                    local,
-                    initializer: Some(value),
-                    span: body_span,
-                }));
+                param_stmts.push(HirStmt::Decl(HirDecl::new(local, Some(value), body_span)));
                 dim_locals.push(local);
             }
             if resolved {
@@ -436,7 +423,13 @@ impl HirCtx<'_> {
                     elem_ty,
                     dims: dim_locals,
                 };
-                self.vla.borrow_mut().ptrs.insert(params[*idx], shape);
+                self.vla.borrow_mut().insert(
+                    params[*idx],
+                    VlaLocal {
+                        shape,
+                        is_ptr: true,
+                    },
+                );
             }
         }
 
@@ -460,11 +453,7 @@ impl HirCtx<'_> {
             stmts.push(self.alloca_storage_drop(storage, body_span));
             stmts.insert(
                 0,
-                HirStmt::Decl(HirDecl {
-                    local: storage,
-                    initializer: Some(init),
-                    span: body_span,
-                }),
+                HirStmt::Decl(HirDecl::new(storage, Some(init), body_span)),
             );
         }
 

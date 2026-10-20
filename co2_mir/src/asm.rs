@@ -356,10 +356,7 @@ impl Builder<'_, '_> {
                 continue;
             }
             if rustc_target::asm::X86InlineAsmReg::parse(&clobber.to_lowercase()).is_err() {
-                self.terminate_with_error(
-                    span,
-                    &format!("unsupported asm clobber `{clobber}`"),
-                );
+                self.terminate_with_error(span, &format!("unsupported asm clobber `{clobber}`"));
             }
             mir_operands.push(InlineAsmOperand {
                 in_value: None,
@@ -408,10 +405,7 @@ impl Builder<'_, '_> {
         span: RustSpan,
     ) {
         if name_to_gnu.iter().any(|(n, _)| n == name) {
-            self.terminate_with_error(
-                span,
-                &format!("duplicate asm operand name `{name}`"),
-            );
+            self.terminate_with_error(span, &format!("duplicate asm operand name `{name}`"));
         }
         name_to_gnu.push((name.to_string(), gnu_index));
     }
@@ -460,9 +454,7 @@ impl Builder<'_, '_> {
         if constraint.starts_with('=') || constraint.starts_with('+') {
             self.terminate_with_error(
                 span,
-                &format!(
-                    "asm input constraint must not start with `=` or `+`, got `{constraint}`"
-                ),
+                &format!("asm input constraint must not start with `=` or `+`, got `{constraint}`"),
             );
         }
         if let Some(name) = constraint
@@ -728,9 +720,7 @@ impl Builder<'_, '_> {
                         if start == i {
                             self.terminate_with_error(
                                 span,
-                                &format!(
-                                    "unsupported asm template modifier `%{gnu_mod}`"
-                                ),
+                                &format!("unsupported asm template modifier `%{gnu_mod}`"),
                             );
                         }
                         template[start..i].parse().unwrap_or(usize::MAX)

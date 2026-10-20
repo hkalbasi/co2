@@ -1,0 +1,115 @@
+//@ mode: co2
+//@ run-miri
+
+// `goto` may enter and leave nested blocks, `if` branches and loop bodies.
+// A local is live for the whole block it belongs to, and every entry into the
+// block starts a new lifetime (C11 6.2.4p5).
+
+fn jump_into_nested() -> i32 {
+    i32 result = 0;
+    goto inner;
+    {
+        i32 skipped;
+        {
+        inner:
+            i32 x = 7;
+            result = x;
+        }
+        skipped = 5;
+        result += skipped;
+    }
+    return result;
+}
+
+fn jump_out_of_if() -> i32 {
+    i32 result = 0;
+    {
+        i32 outer = 3;
+        {
+            i32 inner = 4;
+            if (outer == 3) {
+                result = outer + inner;
+                goto after_if;
+            }
+            result = -1;
+        }
+        result = -2;
+    }
+after_if:
+    return result;
+}
+
+fn jump_out_of_loop() -> i32 {
+    i32 sum = 0;
+    for (i32 i = 0; i < 4; i += 1) {
+        {
+            i32 x = i * 10;
+            sum += x;
+            if (i == 2) {
+                goto done;
+            }
+        }
+    }
+done:
+    return sum;
+}
+
+fn jump_between_siblings() -> i32 {
+    i32 result = 0;
+    i32 go_left = 1;
+    if (go_left != 0) {
+        goto left;
+    }
+    goto right;
+    {
+    left:
+        i32 left = 10;
+        left += 1;
+        result += left;
+        goto right;
+    }
+    {
+    right:
+        i32 right = 20;
+        right += 2;
+        result += right;
+    }
+    return result;
+}
+
+fn reenter_loop() -> i32 {
+    i32 i = 0;
+    i32 total = 0;
+    i32 visits = 0;
+    while (i < 2) {
+        {
+        body:
+            i32 x = i + 1;
+            total += x;
+            i += 1;
+        }
+    }
+    visits += 1;
+    if (visits == 1) {
+        goto body;
+    }
+    return total;
+}
+
+fn main() {
+    if (jump_into_nested() != 12) {
+        std::process::exit(1);
+    }
+    if (jump_out_of_if() != 7) {
+        std::process::exit(1);
+    }
+    if (jump_out_of_loop() != 30) {
+        std::process::exit(1);
+    }
+    if (jump_between_siblings() != 33) {
+        std::process::exit(1);
+    }
+    if (reenter_loop() != 6) {
+        std::process::exit(1);
+    }
+}

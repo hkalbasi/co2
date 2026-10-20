@@ -5,8 +5,8 @@ use co2_ast::{
     Initializer, RustTy, Spanned, StorageClassSpecifier, TypeName, TypeQualifier,
 };
 use co2_crate_sig::{
-    CompressedTypeSpecifier, LocalResolver, LogicalAdtFieldKind,
-    RegisteredSubscription, initializer_contains_label_address,
+    CompressedTypeSpecifier, LocalResolver, LogicalAdtFieldKind, RegisteredSubscription,
+    initializer_contains_label_address,
 };
 use co2_parser::parse_expression_tokens;
 use la_arena::Arena;
@@ -23,9 +23,9 @@ use rustc_public_generative::{
     },
 };
 
-use crate::expr::{HirBinOp, HirExpr, HirExprKind};
+use crate::expr::{HirBinOp, HirExpr};
 use crate::item::{HirLocal, LocalId};
-use crate::resolver::{HirCtx, VlaBuild, VlaDim, VlaShape, invalid_span, spanned_error};
+use crate::resolver::{HirCtx, VlaBuild, VlaDim, VlaLocal, VlaShape, invalid_span, spanned_error};
 use crate::stmt::HirStmt;
 use crate::ty::{
     array_elem_ty, enum_payload_ty, is_array_ty, is_integer_ty, resolve_field_path_in_adt,
@@ -322,6 +322,28 @@ pub struct HirDecl {
     pub local: LocalId,
     pub initializer: Option<HirExpr>,
     pub span: RustSpan,
+    /// The local has a variably modified type, so its identifier scope starts
+    /// at this declaration (C11 6.8.6.1p1); MIR uses this to reject jumps
+    /// that enter its scope.
+    pub is_vla: bool,
+}
+
+impl HirDecl {
+    pub(crate) fn new(local: LocalId, initializer: Option<HirExpr>, span: RustSpan) -> Self {
+        Self {
+            local,
+            initializer,
+            span,
+            is_vla: false,
+        }
+    }
+
+    pub(crate) fn vla(local: LocalId, initializer: Option<HirExpr>, span: RustSpan) -> Self {
+        Self {
+            is_vla: true,
+            ..Self::new(local, initializer, span)
+        }
+    }
 }
 
 impl HirCtx<'_> {
@@ -710,8 +732,7 @@ impl HirCtx<'_> {
                     }
                 }
                 let is_auto_decl = has_auto_decl_specs(&declaration_specifiers);
-                let is_typedef_decl =
-                    declaration_specifiers.iter().any(|s| s.0.is_typedef());
+                let is_typedef_decl = declaration_specifiers.iter().any(|s| s.0.is_typedef());
                 for init in declarators {
                     let InitDeclarator {
                         declarator,
@@ -792,11 +813,7 @@ impl HirCtx<'_> {
                         }
                         self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut expr);
 
-                        out.push(HirStmt::Decl(HirDecl {
-                            local,
-                            initializer: Some(expr),
-                            span,
-                        }));
+                        out.push(HirStmt::Decl(HirDecl::new(local, Some(expr), span)));
                         continue;
                     }
 
@@ -811,20 +828,13 @@ impl HirCtx<'_> {
                         locals,
                         local_map,
                     );
-                    if is_typedef_decl
-                        && let Some(build) = self.pending_vla.borrow_mut().take()
-                    {
+                    if is_typedef_decl && let Some(build) = self.pending_vla.borrow_mut().take() {
                         // `typedef int row_t[n];`: fix the bound now (as C
                         // does) and expand the shape at each use site.
                         if let Some(name) = vla_typedef_name {
                             let span = self.to_rust_span(typedef_decl_span);
-                            let dims = self.eval_vla_dims(
-                                &build.dims,
-                                span,
-                                out,
-                                locals,
-                                local_map,
-                            );
+                            let dims =
+                                self.eval_vla_dims(&build.dims, span, out, locals, local_map);
                             self.vla_typedefs.borrow_mut().insert(
                                 name,
                                 VlaShape {
@@ -848,8 +858,8 @@ impl HirCtx<'_> {
                         );
                         continue;
                     }
-                    let ((name, parser_span), ty) = lower_result
-                        .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+                    let ((name, parser_span), ty) =
+                        lower_result.unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                     validate_local_constexpr_decl(
                         self,
                         &declaration_specifiers,
@@ -906,11 +916,7 @@ impl HirCtx<'_> {
                             });
                             local_map.insert(name.0, local);
 
-                            out.push(HirStmt::Decl(HirDecl {
-                                local,
-                                initializer: Some(tree_expr),
-                                span,
-                            }));
+                            out.push(HirStmt::Decl(HirDecl::new(local, Some(tree_expr), span)));
                             continue;
                         }
                     };
@@ -1006,11 +1012,7 @@ impl HirCtx<'_> {
                         None
                     };
 
-                    out.push(HirStmt::Decl(HirDecl {
-                        local,
-                        initializer,
-                        span,
-                    }));
+                    out.push(HirStmt::Decl(HirDecl::new(local, initializer, span)));
                 }
                 Ok(())
             }
@@ -1048,18 +1050,17 @@ impl HirCtx<'_> {
         let base =
             self.base_ty_of_decl_in_scope(declaration_specifiers, declarator.1, locals, local_map);
         let base_const = has_const_qualifier_in_decl_specs(&base.1);
-        let (decl_ty, name) =
-            match self.extract_decl_type_in_scope(
-                base.0,
-                base_const,
-                declarator,
-                Some((locals, local_map)),
-            ) {
-                Err((_, msg)) if msg.starts_with("array element type") => {
-                    return Err(spanned_error(span, &msg));
-                }
-                other => other?,
-            };
+        let (decl_ty, name) = match self.extract_decl_type_in_scope(
+            base.0,
+            base_const,
+            declarator,
+            Some((locals, local_map)),
+        ) {
+            Err((_, msg)) if msg.starts_with("array element type") => {
+                return Err(spanned_error(span, &msg));
+            }
+            other => other?,
+        };
         let name = name.ok_or_else(|| spanned_error(span, "missing declaration name"))?;
         Ok((name, decl_ty))
     }
@@ -1081,16 +1082,11 @@ impl HirCtx<'_> {
     ) {
         let span = self.to_rust_span(parser_span);
         if !build.is_ptr && initializer.is_some() {
-            self.terminate_with_error(
-                parser_span,
-                "variable length array cannot be initialized",
-            );
+            self.terminate_with_error(parser_span, "variable length array cannot be initialized");
         }
         let elem_ty = build.elem;
-        let usize_ty = Ty::usize_ty();
 
-        let dim_locals =
-            self.eval_vla_dims(&build.dims, span, out, locals, local_map);
+        let dim_locals = self.eval_vla_dims(&build.dims, span, out, locals, local_map);
 
         let (crate_id, local_name) = name;
         let ptr_ty = Ty::new_ptr(elem_ty, Mutability::Mut);
@@ -1102,12 +1098,7 @@ impl HirCtx<'_> {
         });
         local_map.insert(crate_id, local);
 
-        let shape = VlaShape {
-            elem_ty,
-            dims: dim_locals.clone(),
-        };
-
-        if build.is_ptr {
+        let initializer = if build.is_ptr {
             if let Some(init) = &initializer
                 && let Initializer::Expr((
                     Expression::UnaryOp(co2_ast::UnaryOp::AddrOf, inner),
@@ -1117,73 +1108,46 @@ impl HirCtx<'_> {
             {
                 self.terminate_with_error(*init_span, "mismatched types");
             }
-            {
-                let mut vla = self.vla.borrow_mut();
-                vla.ptrs.insert(local, shape);
-                vla.decls.push((self.block_depth.get(), parser_span));
-            }
-            let init = initializer.and_then(|init| match init.0 {
+            initializer.and_then(|init| match init.0 {
                 Initializer::Expr(e) => {
                     let mut e = self
                         .lower_expr(e, locals, local_map)
                         .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
                     self.array_to_pointer_decay_if_array(&mut e);
-                    let e = match self.coerce_expr_to_type(&e, ptr_ty) {
+                    Some(match self.coerce_expr_to_type(&e, ptr_ty) {
                         Some(it) => it,
                         None => self.emit_cast(e, ptr_ty),
-                    };
-                    Some(e)
+                    })
                 }
                 _ => None,
-            });
-            out.push(HirStmt::Decl(HirDecl {
-                local,
-                initializer: init,
+            })
+        } else {
+            // VLA object: allocate `product(dims) * sizeof(elem)` bytes.
+            let elem_size = self
+                .sizeof_ty(elem_ty)
+                .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+            let total = self.vla_usize_binop(
+                HirBinOp::Mul,
+                self.const_int_expr(elem_size as i128, Ty::usize_ty(), span),
+                self.vla_product_dims(&dim_locals, span),
                 span,
-            }));
-            return;
-        }
-
-        // VLA object: allocate `product(dims) * sizeof(elem)` bytes.
-        let elem_size = self
-            .sizeof_ty(elem_ty)
-            .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-        let mut total = HirExpr {
-            kind: HirExprKind::ConstInt(elem_size as i128),
-            ty: usize_ty,
-            span,
+            );
+            let alloc = self
+                .lower_alloca_ir(total, span, parser_span, locals)
+                .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
+            Some(self.emit_cast(alloc, ptr_ty))
         };
-        for d in &dim_locals {
-            let dv = HirExpr {
-                kind: HirExprKind::Local(*d),
-                ty: usize_ty,
-                span,
-            };
-            total = HirExpr {
-                kind: HirExprKind::Binary {
-                    op: HirBinOp::Mul,
-                    lhs: Box::new(total),
-                    rhs: Box::new(dv),
-                },
-                ty: usize_ty,
-                span,
-            };
-        }
-        let alloc = self
-            .lower_alloca_ir(total, span, parser_span, locals)
-            .unwrap_or_else(|err| self.terminate_with_spanned_error(err));
-        let ptr = self.emit_cast(alloc, ptr_ty);
 
-        self.vla.borrow_mut().objects.insert(local, shape);
-        self.vla
-            .borrow_mut()
-            .decls
-            .push((self.block_depth.get(), parser_span));
-        out.push(HirStmt::Decl(HirDecl {
-            local,
-            initializer: Some(ptr),
-            span,
-        }));
+        let shape = VlaShape {
+            elem_ty,
+            dims: dim_locals,
+        };
+        let vla = VlaLocal {
+            shape,
+            is_ptr: build.is_ptr,
+        };
+        self.vla.borrow_mut().insert(local, vla);
+        out.push(HirStmt::Decl(HirDecl::vla(local, initializer, span)));
     }
 
     /// True when `inner` (the operand of `&`) refers to an array-like object:
@@ -1203,7 +1167,7 @@ impl HirCtx<'_> {
         let Some(local) = local_map.get(&(*crate_id as usize)) else {
             return true;
         };
-        is_array_ty(locals[*local].ty) || self.vla.borrow().objects.contains_key(local)
+        is_array_ty(locals[*local].ty) || self.is_vla_object(*local)
     }
 
     /// Evaluate each VLA dimension expression exactly once into a hidden
@@ -1232,11 +1196,7 @@ impl HirCtx<'_> {
                 }),
             };
             let value = match dim {
-                VlaDim::Const(n) => HirExpr {
-                    kind: HirExprKind::ConstInt(*n as i128),
-                    ty: usize_ty,
-                    span,
-                },
+                VlaDim::Const(n) => self.const_int_expr(*n as i128, usize_ty, span),
                 VlaDim::Expr(e) => {
                     let e = self
                         .lower_expr(e.clone(), locals, local_map)
@@ -1246,11 +1206,7 @@ impl HirCtx<'_> {
                 VlaDim::Local(_) => unreachable!(),
             };
             dim_locals.push(local);
-            out.push(HirStmt::Decl(HirDecl {
-                local,
-                initializer: Some(value),
-                span,
-            }));
+            out.push(HirStmt::Decl(HirDecl::new(local, Some(value), span)));
         }
         dim_locals
     }
@@ -1418,13 +1374,10 @@ impl HirCtx<'_> {
                         let vla_ty = self
                             .decl_resolver
                             .get_unrepresentable_typedef_name(*def_id)
-                            .and_then(|name| {
-                                self.vla_typedefs.borrow().get(&name).cloned()
-                            });
+                            .and_then(|name| self.vla_typedefs.borrow().get(&name).cloned());
                         if let Some(shape) = vla_ty {
                             let elem = shape.elem_ty;
-                            let dims =
-                                shape.dims.iter().map(|d| VlaDim::Local(*d)).collect();
+                            let dims = shape.dims.iter().map(|d| VlaDim::Local(*d)).collect();
                             *self.pending_vla.borrow_mut() = Some(VlaBuild {
                                 elem,
                                 dims,
@@ -2195,8 +2148,7 @@ impl HirCtx<'_> {
                         {
                             CTy::UnsizedArray(inner)
                         } else {
-                            let expr =
-                                self.subscription_size_expr(&subscription)?;
+                            let expr = self.subscription_size_expr(&subscription)?;
                             let len = if let Some((locals, local_map)) = scope.as_mut() {
                                 self.eval_array_len_expr_in_scope(&expr, locals, local_map)
                             } else {

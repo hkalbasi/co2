@@ -150,12 +150,13 @@ pub fn expr_contains_vla_sizeof<R: TypeResolver<ResolvedRustPath = DefOrLocal>>(
             expr_contains_vla_sizeof(base, vla_locals)
                 .or_else(|| expr_contains_vla_sizeof(index, vla_locals))
         }
-        Expression::Call { func, params } => expr_contains_vla_sizeof(func, vla_locals)
-            .or_else(|| {
+        Expression::Call { func, params } => {
+            expr_contains_vla_sizeof(func, vla_locals).or_else(|| {
                 params
                     .iter()
                     .find_map(|param| expr_contains_vla_sizeof(param, vla_locals))
-            }),
+            })
+        }
         Expression::BuiltinFunction { args, .. } => args
             .iter()
             .find_map(|param| expr_contains_vla_sizeof(param, vla_locals)),
@@ -196,14 +197,10 @@ pub fn expr_contains_vla_sizeof<R: TypeResolver<ResolvedRustPath = DefOrLocal>>(
                 }
             })
         }),
-        Expression::Offsetof { designator, .. } => {
-            designator.iter().find_map(|m| match m {
-                co2_ast::OffsetofMember::Field(_) => None,
-                co2_ast::OffsetofMember::Index(idx) => {
-                    expr_contains_vla_sizeof(idx, vla_locals)
-                }
-            })
-        }
+        Expression::Offsetof { designator, .. } => designator.iter().find_map(|m| match m {
+            co2_ast::OffsetofMember::Field(_) => None,
+            co2_ast::OffsetofMember::Index(idx) => expr_contains_vla_sizeof(idx, vla_locals),
+        }),
         Expression::Identifier(_)
         | Expression::Empty
         | Expression::Constant(_)

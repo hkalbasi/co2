@@ -1286,9 +1286,7 @@ fn collect_vla_params(decl: &Declarator<StatelessResolver>) -> Vec<(usize, Vec<V
             .parameters
             .iter()
             .enumerate()
-            .filter_map(|(idx, (_, param))| {
-                pointer_to_vla_dims(&param.0).map(|dims| (idx, dims))
-            })
+            .filter_map(|(idx, (_, param))| pointer_to_vla_dims(&param.0).map(|dims| (idx, dims)))
             .collect(),
         Declarator::PointerDeclarator { declarator, .. }
         | Declarator::ArrayDeclarator { declarator, .. } => collect_vla_params(&declarator.0),
@@ -1312,7 +1310,10 @@ fn pointer_to_vla_dims(decl: &Declarator<StatelessResolver>) -> Option<Vec<VlaPa
     }
     match cur {
         Declarator::PointerDeclarator { declarator, .. }
-            if matches!(declarator.0, Declarator::Identifier(_) | Declarator::Abstract) => {}
+            if matches!(
+                declarator.0,
+                Declarator::Identifier(_) | Declarator::Abstract
+            ) => {}
         _ => return None,
     }
     if dims.iter().any(|d| matches!(d, VlaParamDim::Name(_))) {
@@ -1582,13 +1583,7 @@ fn lower_translation_unit_items(
                                 "Main function with C ABI is not accepted in cargo projects. Use `fn main()` or `#![no_main]`.",
                             );
                         }
-                        (
-                            name,
-                            sig,
-                            attrs,
-                            !is_static,
-                            Visibility::Public,
-                        )
+                        (name, sig, attrs, !is_static, Visibility::Public)
                     }
                     FunctionDefinitionSignature::Rust(sig) => {
                         let sig_attrs = lower_generated_attrs(&sig.attrs);
@@ -2320,7 +2315,8 @@ pub fn lower_crate_sig(
                     // representation) typedef is expanded at each use site.
                     let mut base = ctx.resolver.borrow_mut();
                     if let Some(c_name) = c_name {
-                        base.unrepresentable_typedefs.insert(c_name.clone(), ty.clone());
+                        base.unrepresentable_typedefs
+                            .insert(c_name.clone(), ty.clone());
                         base.unrepresentable_typedef_names.insert(id, c_name);
                     }
                     base.unrepresentable_typedef_defs.insert(id, ty);
@@ -2371,15 +2367,12 @@ pub fn lower_crate_sig(
                     CTy::Ty(ty) => {
                         let vla_init_span = {
                             let base = ctx.resolver.borrow();
-                            declarator
-                                .initializer
-                                .as_ref()
-                                .and_then(|init| {
-                                    crate::ast_resolver::initializer_contains_vla_sizeof(
-                                        init,
-                                        &base.vla_locals,
-                                    )
-                                })
+                            declarator.initializer.as_ref().and_then(|init| {
+                                crate::ast_resolver::initializer_contains_vla_sizeof(
+                                    init,
+                                    &base.vla_locals,
+                                )
+                            })
                         };
                         if let Some(vla_span) = vla_init_span {
                             co2_ast::emit_errors(vec![co2_ast::Rich::custom(

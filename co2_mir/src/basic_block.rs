@@ -1,4 +1,4 @@
-use co2_hir::{HirDecl, HirExpr, HirExprKind, HirStmt, LabelId};
+use co2_hir::{HirExpr, HirExprKind, HirStmt, LabelId};
 use rustc_public_generative::rustc_public::{
     mir::{
         SourceInfo, Statement as MirStatement, StatementKind as MirStatementKind, SwitchTargets,
@@ -7,7 +7,10 @@ use rustc_public_generative::rustc_public::{
     ty::{RigidTy, Span as RustSpan, TyKind},
 };
 
-use crate::{build::Builder, place::place};
+use crate::{
+    build::{Builder, ScopeState},
+    place::place,
+};
 
 impl Builder<'_, '_> {
     pub(crate) fn lower_stmt(&mut self, stmt: &HirStmt) {
@@ -15,20 +18,17 @@ impl Builder<'_, '_> {
             self.last_stmt_span = Some(span);
         }
         match stmt {
-            HirStmt::Decl(HirDecl {
-                local,
-                initializer,
-                span,
-            }) => {
-                let local_index = self.local_to_index(*local);
-                self.push_statement(MirStatementKind::StorageLive(local_index), *span);
-                self.record_local_decl(local_index);
-                if let Some(init) = initializer {
+            HirStmt::Decl(decl) => {
+                let local_index = self.local_to_index(decl.local);
+                if let Some(init) = &decl.initializer {
                     let value = self.lower_expr_to_operand(init);
                     self.emit_assign_use(place(local_index), value, init.span);
                 }
                 if let Some(&vdi_idx) = self.local_vdi_map.get(&local_index) {
                     self.var_debug_info[vdi_idx].source_info.scope = self.current_scope();
+                }
+                if decl.is_vla {
+                    self.record_vla_decl(local_index);
                 }
             }
             HirStmt::Expr(expr) => {
@@ -39,7 +39,7 @@ impl Builder<'_, '_> {
             }
             HirStmt::Goto(label, span) => {
                 let bb = self.push_terminator(TerminatorKind::Goto { target: usize::MAX }, *span);
-                self.pending_gotos.push((bb, *label));
+                self.pending_gotos.push((bb, *label, self.scope_state()));
             }
             HirStmt::IndirectGoto(expr, span) => {
                 let discr_expr = self.ptr_like_to_usize_expr(expr);
@@ -51,7 +51,7 @@ impl Builder<'_, '_> {
                     },
                     *span,
                 );
-                self.pending_indirect_gotos.push(bb);
+                self.pending_indirect_gotos.push((bb, self.scope_state()));
             }
             HirStmt::Return(expr, span) => {
                 if let Some(expr) = expr {
@@ -81,9 +81,7 @@ impl Builder<'_, '_> {
             }
             HirStmt::Block(stmts, span) => {
                 self.enter_scope();
-                for stmt in stmts {
-                    self.lower_stmt(stmt);
-                }
+                self.lower_stmts(stmts);
                 self.exit_scope(*span);
             }
             HirStmt::Asm(asm) => {
@@ -197,23 +195,93 @@ impl Builder<'_, '_> {
             self.push_terminator(TerminatorKind::Goto { target: next }, span);
             next
         };
-        self.label_blocks.insert(label, target);
+        self.label_targets
+            .insert(label, (target, self.scope_state()));
     }
 
     fn patch_pending_gotos(&mut self) {
-        for (bb, label) in std::mem::take(&mut self.pending_gotos) {
-            let target = match self.label_blocks.get(&label).copied() {
-                Some(target) => target,
-                None => {
-                    let rust_span = self.blocks[bb].terminator.source_info.span;
-                    self.terminate_with_error(rust_span, "unresolved label")
-                }
-            };
+        for (bb, label, from) in std::mem::take(&mut self.pending_gotos) {
+            let (target, to) = self.resolve_label(bb, label);
+            let target = self.scope_transition(bb, target, &from, &to);
             self.patch_goto_target(bb, target);
         }
-        for bb in std::mem::take(&mut self.pending_indirect_gotos) {
-            self.patch_indirect_goto_targets(bb);
+        for (bb, from) in std::mem::take(&mut self.pending_indirect_gotos) {
+            self.patch_indirect_goto_targets(bb, &from);
         }
+    }
+
+    /// Resolves a label to its block and the scope state at the label.
+    fn resolve_label(&self, src_bb: usize, label: LabelId) -> (usize, ScopeState) {
+        self.label_targets.get(&label).cloned().unwrap_or_else(|| {
+            let rust_span = self.blocks[src_bb].terminator.source_info.span;
+            self.terminate_with_error(rust_span, "unresolved label")
+        })
+    }
+
+    /// Returns the block to jump to for an edge from `from` to a label with
+    /// scope state `to`. A jump into the scope of a variably modified
+    /// identifier is rejected (C11 6.8.6.1p1); otherwise, when the jump enters
+    /// or leaves a scope, a new block with the matching storage transitions is
+    /// inserted before the target.
+    fn scope_transition(
+        &mut self,
+        src_bb: usize,
+        target: usize,
+        from: &ScopeState,
+        to: &ScopeState,
+    ) -> usize {
+        if let Some(&vla) = to
+            .iter()
+            .flat_map(|scope| &scope.vlas)
+            .find(|vla| !from.iter().any(|scope| scope.vlas.contains(vla)))
+        {
+            self.terminate_with_error(
+                self.locals[vla].span,
+                "jump into scope of variable length array",
+            );
+        }
+        let (span, scope) = {
+            let source_info = &self.blocks[src_bb].terminator.source_info;
+            (source_info.span, source_info.scope)
+        };
+        let source_info = SourceInfo { span, scope };
+        let common = from
+            .iter()
+            .zip(to)
+            .take_while(|(from_scope, to_scope)| from_scope.id == to_scope.id)
+            .count();
+        let mut statements = Vec::new();
+        // Scopes left by the jump, innermost first.
+        for scope in from[common..].iter().rev() {
+            for &local in &scope.locals {
+                statements.push(MirStatement {
+                    kind: MirStatementKind::StorageDead(local),
+                    source_info: source_info.clone(),
+                });
+            }
+        }
+        // Scopes entered by the jump, outermost first.
+        for scope in &to[common..] {
+            for &local in &scope.locals {
+                statements.push(MirStatement {
+                    kind: MirStatementKind::StorageLive(local),
+                    source_info: source_info.clone(),
+                });
+            }
+        }
+        if statements.is_empty() {
+            return target;
+        }
+        let transition = self.blocks.len();
+        self.blocks
+            .push(rustc_public_generative::rustc_public::mir::BasicBlock {
+                statements,
+                terminator: MirTerminator {
+                    kind: TerminatorKind::Goto { target },
+                    source_info,
+                },
+            });
+        transition
     }
 
     pub(crate) fn emit_call_block(
@@ -316,20 +384,15 @@ impl Builder<'_, '_> {
         }
     }
 
-    fn patch_indirect_goto_targets(&mut self, block_idx: usize) {
-        let mut branches = self
-            .label_discriminants
-            .iter()
-            .filter_map(|(label, discr)| {
-                let target = match self.label_blocks.get(label).copied() {
-                    Some(target) => target,
-                    None => {
-                        let rust_span = self.blocks[block_idx].terminator.source_info.span;
-                        self.terminate_with_error(rust_span, "unresolved label")
-                    }
-                };
-                Some((*discr, target))
-            })
+    fn patch_indirect_goto_targets(&mut self, block_idx: usize, from: &ScopeState) {
+        let mut resolved = Vec::new();
+        for (label, discr) in &self.label_discriminants {
+            let (target, to) = self.resolve_label(block_idx, *label);
+            resolved.push((*discr, target, to));
+        }
+        let mut branches = resolved
+            .into_iter()
+            .map(|(discr, target, to)| (discr, self.scope_transition(block_idx, target, from, &to)))
             .collect::<Vec<_>>();
         branches.sort_by_key(|(discr, _)| *discr);
         let otherwise = match branches.first() {
@@ -353,7 +416,7 @@ impl Builder<'_, '_> {
 
 fn stmt_span(stmt: &HirStmt) -> Option<RustSpan> {
     match stmt {
-        HirStmt::Decl(HirDecl { initializer, .. }) => initializer.as_ref().map(|init| init.span),
+        HirStmt::Decl(decl) => decl.initializer.as_ref().map(|init| init.span),
         HirStmt::Expr(expr) => Some(expr.span),
         HirStmt::Label(_, span)
         | HirStmt::Goto(_, span)

@@ -1,7 +1,7 @@
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
 
-use co2_hir::{HirBody, LabelId, LocalId, LocalResolver, WellknownDefs};
+use co2_hir::{HirBody, HirStmt, LabelId, LocalId, LocalResolver, WellknownDefs};
 use rustc_public_generative as rustc_gen;
 use rustc_public_generative::rustc_public::{
     CrateDefType, DefId,
@@ -84,7 +84,7 @@ pub fn build_mir_for_body(
         extra_locals: Vec::new(),
         blocks: Vec::new(),
         stmts: Vec::new(),
-        label_blocks: FxHashMap::default(),
+        label_targets: FxHashMap::default(),
         label_discriminants: body
             .labels
             .iter()
@@ -100,16 +100,13 @@ pub fn build_mir_for_body(
         decl_resolver,
         var_debug_info,
         local_vdi_map,
-        scope_stack: vec![0],
-        scope_locals: vec![Vec::new()],
+        scopes: vec![Scope::default()],
         next_scope: 1,
         naked_templates: Vec::new(),
     };
 
     let generation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        for stmt in &body.stmts {
-            builder.lower_stmt(stmt);
-        }
+        builder.lower_stmts(&body.stmts);
 
         if body.naked {
             builder.terminate_naked();
@@ -179,6 +176,24 @@ fn dummy_mir_body(
     }
 }
 
+/// One lexical scope while lowering, and also the snapshot kept for a label or
+/// a jump.
+#[derive(Clone, Default)]
+pub(crate) struct Scope {
+    /// Identity used to match scopes between two control-flow points.
+    pub(crate) id: u32,
+    /// Locals declared directly in the block: their storage lives from block
+    /// entry to block exit (C11 6.2.4p5), so `goto` edges move these between
+    /// `StorageLive` and `StorageDead`.
+    pub(crate) locals: Vec<usize>,
+    /// VLA locals declared in the block so far. A VLA identifier's scope starts
+    /// at its declaration, not at block entry (C11 6.8.6.1p1).
+    pub(crate) vlas: Vec<usize>,
+}
+
+/// The active scopes at a point control flow can reach, outermost first.
+pub(crate) type ScopeState = Vec<Scope>;
+
 pub(crate) struct Builder<'ctx, 'tcx> {
     pub(crate) ctx: &'ctx rustc_gen::HirStructureCtx<'tcx>,
     pub(crate) owner: DefId,
@@ -189,20 +204,17 @@ pub(crate) struct Builder<'ctx, 'tcx> {
     pub(crate) extra_locals: Vec<MirLocalDecl>,
     pub(crate) blocks: Vec<rustc_gen::rustc_public::mir::BasicBlock>,
     pub(crate) stmts: Vec<rustc_gen::rustc_public::mir::Statement>,
-    pub(crate) label_blocks: FxHashMap<LabelId, usize>,
+    /// Target block and scope state of each bound label.
+    pub(crate) label_targets: FxHashMap<LabelId, (usize, ScopeState)>,
     pub(crate) label_discriminants: FxHashMap<LabelId, u128>,
-    pub(crate) pending_gotos: Vec<(usize, LabelId)>,
-    pub(crate) pending_indirect_gotos: Vec<usize>,
+    pub(crate) pending_gotos: Vec<(usize, LabelId, ScopeState)>,
+    pub(crate) pending_indirect_gotos: Vec<(usize, ScopeState)>,
     pub(crate) span: RustSpan,
     pub(crate) last_stmt_span: Option<RustSpan>,
     pub(crate) c_variadic_local: Option<usize>,
     pub(crate) var_debug_info: Vec<VarDebugInfo>,
     pub(crate) local_vdi_map: FxHashMap<usize, usize>,
-    pub(crate) scope_stack: Vec<u32>,
-    /// Locals declared directly in each active source scope, parallel to
-    /// `scope_stack`. Emitted as `StorageLive` on declaration and `StorageDead`
-    /// when the scope exits, so a C local's storage ends with its block.
-    pub(crate) scope_locals: Vec<Vec<usize>>,
+    pub(crate) scopes: Vec<Scope>,
     pub(crate) next_scope: u32,
     /// Buffered `(template, span)` of naked-function asm statements,
     /// concatenated into one diverging `naked_asm!` at fallthrough.
@@ -231,30 +243,74 @@ impl Builder<'_, '_> {
     }
 
     pub(crate) fn current_scope(&self) -> u32 {
-        *self.scope_stack.last().unwrap_or(&0)
+        self.scopes.last().map_or(0, |scope| scope.id)
     }
 
-    pub(crate) fn enter_scope(&mut self) -> u32 {
-        let scope = self.next_scope;
+    /// Snapshot of the active scopes, used to insert the
+    /// `StorageLive`/`StorageDead` transitions a `goto` needs and to reject
+    /// jumps into a VLA's scope.
+    pub(crate) fn scope_state(&self) -> ScopeState {
+        self.scopes.clone()
+    }
+
+    pub(crate) fn enter_scope(&mut self) {
+        let id = self.next_scope;
         self.next_scope += 1;
-        self.scope_stack.push(scope);
-        self.scope_locals.push(Vec::new());
-        scope
+        self.scopes.push(Scope {
+            id,
+            ..Scope::default()
+        });
     }
 
     pub(crate) fn record_local_decl(&mut self, local_index: usize) {
-        if let Some(scope) = self.scope_locals.last_mut() {
-            scope.push(local_index);
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.locals.push(local_index);
+        }
+    }
+
+    /// Records that a VLA identifier's scope starts here. Storage for every
+    /// local in the block goes live on block entry, but a jump into the block
+    /// before the declaration is legal, so the VLA is not in scope until now.
+    pub(crate) fn record_vla_decl(&mut self, local_index: usize) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.vlas.push(local_index);
+        }
+    }
+
+    /// Marks every local declared directly in `stmts` live. C gives a local
+    /// the lifetime of its whole block (C11 6.2.4p5), so this runs on block
+    /// entry rather than at the declaration: a `goto` past the declaration
+    /// still leaves the local alive.
+    pub(crate) fn declare_scope_locals(&mut self, stmts: &[HirStmt]) {
+        for stmt in stmts {
+            if let HirStmt::Decl(decl) = stmt {
+                let local_index = self.local_to_index(decl.local);
+                self.push_statement(MirStatementKind::StorageLive(local_index), decl.span);
+                self.record_local_decl(local_index);
+            }
+        }
+    }
+
+    /// Lowers the statements of the current scope: marks its locals live on
+    /// entry, then lowers each statement.
+    pub(crate) fn lower_stmts(&mut self, stmts: &[HirStmt]) {
+        self.declare_scope_locals(stmts);
+        for stmt in stmts {
+            self.lower_stmt(stmt);
         }
     }
 
     pub(crate) fn exit_scope(&mut self, span: RustSpan) {
-        if let Some(locals) = self.scope_locals.pop() {
-            for local_index in locals {
-                self.push_statement(MirStatementKind::StorageDead(local_index), span);
-            }
+        // Take the locals without popping the scope yet: `push_statement`
+        // attributes each `StorageDead` to the scope being exited.
+        let locals = match self.scopes.last_mut() {
+            Some(scope) => std::mem::take(&mut scope.locals),
+            None => Vec::new(),
+        };
+        for local_index in locals {
+            self.push_statement(MirStatementKind::StorageDead(local_index), span);
         }
-        self.scope_stack.pop();
+        self.scopes.pop();
     }
 
     pub(crate) fn emit_nullary_call(

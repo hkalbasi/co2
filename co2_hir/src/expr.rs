@@ -1816,25 +1816,40 @@ impl HirCtx<'_> {
             return None;
         };
         let vla = self.vla.borrow();
-        if let Some(shape) = vla.objects.get(id) {
-            return Some((shape.clone(), false));
-        }
-        if let Some(shape) = vla.ptrs.get(id) {
-            return Some((shape.clone(), true));
-        }
-        None
+        vla.get(id).map(|local| (local.shape.clone(), local.is_ptr))
     }
 
-    fn vla_usize_binop(&self, op: HirBinOp, lhs: HirExpr, rhs: HirExpr, span: RustSpan) -> HirExpr {
+    fn vla_binop(
+        &self,
+        op: HirBinOp,
+        lhs: HirExpr,
+        rhs: HirExpr,
+        ty: Ty,
+        span: RustSpan,
+    ) -> HirExpr {
         HirExpr {
             kind: HirExprKind::Binary {
                 op,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             },
-            ty: Ty::usize_ty(),
+            ty,
             span,
         }
+    }
+
+    pub(crate) fn vla_usize_binop(
+        &self,
+        op: HirBinOp,
+        lhs: HirExpr,
+        rhs: HirExpr,
+        span: RustSpan,
+    ) -> HirExpr {
+        self.vla_binop(op, lhs, rhs, Ty::usize_ty(), span)
+    }
+
+    fn vla_isize_binop(&self, op: HirBinOp, lhs: HirExpr, rhs: HirExpr, span: RustSpan) -> HirExpr {
+        self.vla_binop(op, lhs, rhs, Ty::signed_ty(IntTy::Isize), span)
     }
 
     fn vla_dim_local(&self, dim: LocalId, span: RustSpan) -> HirExpr {
@@ -1846,19 +1861,10 @@ impl HirCtx<'_> {
     }
 
     /// `product(dims)` as a runtime `usize`, `1` when empty.
-    fn vla_product_dims(&self, dims: &[LocalId], span: RustSpan) -> HirExpr {
-        let mut acc = HirExpr {
-            kind: HirExprKind::ConstInt(1),
-            ty: Ty::usize_ty(),
-            span,
-        };
+    pub(crate) fn vla_product_dims(&self, dims: &[LocalId], span: RustSpan) -> HirExpr {
+        let mut acc = self.const_int_expr(1, Ty::usize_ty(), span);
         for dim in dims {
-            acc = self.vla_usize_binop(
-                HirBinOp::Mul,
-                acc,
-                self.vla_dim_local(*dim, span),
-                span,
-            );
+            acc = self.vla_usize_binop(HirBinOp::Mul, acc, self.vla_dim_local(*dim, span), span);
         }
         acc
     }
@@ -1871,17 +1877,12 @@ impl HirCtx<'_> {
         is_ptr: bool,
         indices: &[&co2_ast::Spanned<co2_ast::Expression<LocalResolver>>],
         span: RustSpan,
-        parser_span: co2_ast::Span,
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<(HirExpr, Vec<LocalId>), (co2_ast::Span, String)> {
         let elem_size = self.sizeof_ty(shape.elem_ty)?;
         let mut dims = shape.dims.clone();
-        let mut offset = HirExpr {
-            kind: HirExprKind::ConstInt(0),
-            ty: Ty::usize_ty(),
-            span,
-        };
+        let mut offset = self.const_int_expr(0, Ty::usize_ty(), span);
         let mut first = true;
         for index in indices {
             let index = self.lower_expr(((*index).0.clone(), (*index).1), locals, local_map)?;
@@ -1891,34 +1892,21 @@ impl HirCtx<'_> {
                 self.vla_usize_binop(
                     HirBinOp::Mul,
                     self.vla_product_dims(&dims, span),
-                    HirExpr {
-                        kind: HirExprKind::ConstInt(elem_size as i128),
-                        ty: Ty::usize_ty(),
-                        span,
-                    },
+                    self.const_int_expr(elem_size as i128, Ty::usize_ty(), span),
                     span,
                 )
             } else if !dims.is_empty() {
                 let stride = self.vla_usize_binop(
                     HirBinOp::Mul,
                     self.vla_product_dims(&dims[1..], span),
-                    HirExpr {
-                        kind: HirExprKind::ConstInt(elem_size as i128),
-                        ty: Ty::usize_ty(),
-                        span,
-                    },
+                    self.const_int_expr(elem_size as i128, Ty::usize_ty(), span),
                     span,
                 );
                 dims.remove(0);
                 stride
             } else {
-                HirExpr {
-                    kind: HirExprKind::ConstInt(elem_size as i128),
-                    ty: Ty::usize_ty(),
-                    span,
-                }
+                self.const_int_expr(elem_size as i128, Ty::usize_ty(), span)
             };
-            let _ = parser_span;
             let term = self.vla_usize_binop(HirBinOp::Mul, index, stride, span);
             offset = self.vla_usize_binop(HirBinOp::Add, offset, term, span);
             first = false;
@@ -1950,15 +1938,7 @@ impl HirCtx<'_> {
         let isize_ty = Ty::signed_ty(IntTy::Isize);
         let idx = self.emit_cast(index, isize_ty);
         let row = self.emit_cast(self.vla_product_dims(&shape.dims, span), isize_ty);
-        HirExpr {
-            kind: HirExprKind::Binary {
-                op: HirBinOp::Mul,
-                lhs: Box::new(idx),
-                rhs: Box::new(row),
-            },
-            ty: isize_ty,
-            span,
-        }
+        self.vla_isize_binop(HirBinOp::Mul, idx, row, span)
     }
 
     /// Decompose a pointer expression into its VLA root and the accumulated
@@ -1970,19 +1950,14 @@ impl HirCtx<'_> {
         };
         let isize_ty = Ty::signed_ty(IntTy::Isize);
         if let Some((_, true)) = self.vla_shape_of_expr(base) {
-            return Some(((**base).clone(), self.emit_cast((**index).clone(), isize_ty)));
+            return Some((
+                (**base).clone(),
+                self.emit_cast((**index).clone(), isize_ty),
+            ));
         }
         let (root, acc) = self.vla_ptr_chain(base)?;
         let idx = self.emit_cast((**index).clone(), isize_ty);
-        let sum = HirExpr {
-            kind: HirExprKind::Binary {
-                op: HirBinOp::Add,
-                lhs: Box::new(acc),
-                rhs: Box::new(idx),
-            },
-            ty: isize_ty,
-            span: e.span,
-        };
+        let sum = self.vla_isize_binop(HirBinOp::Add, acc, idx, e.span);
         Some((root, sum))
     }
 
@@ -1991,7 +1966,6 @@ impl HirCtx<'_> {
         &self,
         operand: &co2_ast::Spanned<Expression<LocalResolver>>,
         span: RustSpan,
-        parser_span: co2_ast::Span,
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<Option<HirExpr>, (co2_ast::Span, String)> {
@@ -2017,13 +1991,7 @@ impl HirCtx<'_> {
                             (shape.dims.clone(), shape.elem_ty)
                         } else {
                             let (_offset, dims) = self.vla_index_offset(
-                                &shape,
-                                is_ptr,
-                                &indices,
-                                span,
-                                parser_span,
-                                locals,
-                                local_map,
+                                &shape, is_ptr, &indices, span, locals, local_map,
                             )?;
                             (dims, shape.elem_ty)
                         }
@@ -2049,11 +2017,7 @@ impl HirCtx<'_> {
         Ok(Some(self.vla_usize_binop(
             HirBinOp::Mul,
             product,
-            HirExpr {
-                kind: HirExprKind::ConstInt(elem_size as i128),
-                ty: Ty::usize_ty(),
-                span,
-            },
+            self.const_int_expr(elem_size as i128, Ty::usize_ty(), span),
             span,
         )))
     }
@@ -2067,18 +2031,12 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<HirExpr, (co2_ast::Span, String)> {
-        let mut acc = HirExpr {
-            kind: HirExprKind::ConstInt(1),
-            ty: Ty::usize_ty(),
-            span,
-        };
+        let mut acc = self.const_int_expr(1, Ty::usize_ty(), span);
         for dim in dims {
             let value = match dim {
-                crate::resolver::VlaDim::Const(n) => HirExpr {
-                    kind: HirExprKind::ConstInt(*n as i128),
-                    ty: Ty::usize_ty(),
-                    span,
-                },
+                crate::resolver::VlaDim::Const(n) => {
+                    self.const_int_expr(*n as i128, Ty::usize_ty(), span)
+                }
                 crate::resolver::VlaDim::Expr(e) => {
                     let e = self.lower_expr(e.clone(), locals, local_map)?;
                     self.emit_cast(e, Ty::usize_ty())
@@ -2097,22 +2055,14 @@ impl HirCtx<'_> {
         base: &HirExpr,
         indices: &[&co2_ast::Spanned<co2_ast::Expression<LocalResolver>>],
         span: RustSpan,
-        parser_span: co2_ast::Span,
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<Option<HirExpr>, (co2_ast::Span, String)> {
         let Some((shape, is_ptr)) = self.vla_shape_of_expr(base) else {
             return Ok(None);
         };
-        let (offset, dims) = self.vla_index_offset(
-            &shape,
-            is_ptr,
-            indices,
-            span,
-            parser_span,
-            locals,
-            local_map,
-        )?;
+        let (offset, dims) =
+            self.vla_index_offset(&shape, is_ptr, indices, span, locals, local_map)?;
         let ptr = self.vla_byte_ptr(base.clone(), offset, shape.elem_ty, span);
         if dims.is_empty() {
             Ok(Some(HirExpr {
@@ -2185,11 +2135,8 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<Ty, (co2_ast::Span, String)> {
-        let cty = self.lower_type_name_cty_with_scope(
-            type_name,
-            parser_span,
-            Some((locals, local_map)),
-        )?;
+        let cty =
+            self.lower_type_name_cty_with_scope(type_name, parser_span, Some((locals, local_map)))?;
         if self.pending_vla.borrow_mut().take().is_some() {
             let type_span = co2_ast::Span::from_parts(
                 parser_span.context(),
@@ -2813,14 +2760,9 @@ impl HirCtx<'_> {
                     }
                     indices.reverse();
                     let base_hir = self.lower_expr((cur.0.clone(), cur.1), locals, local_map)?;
-                    if let Some(res) = self.try_lower_vla_subscript(
-                        &base_hir,
-                        &indices,
-                        span,
-                        parser_span,
-                        locals,
-                        local_map,
-                    )? {
+                    if let Some(res) =
+                        self.try_lower_vla_subscript(&base_hir, &indices, span, locals, local_map)?
+                    {
                         return Ok(res);
                     }
                 }
@@ -2882,7 +2824,7 @@ impl HirCtx<'_> {
                         ));
                     }
                     if let HirExprKind::Local(id) = &lhs.kind
-                        && self.vla.borrow().objects.contains_key(id)
+                        && self.is_vla_object(*id)
                     {
                         return Err(spanned_error(rhs.1, "array type is not assignable"));
                     }
@@ -3071,9 +3013,7 @@ impl HirCtx<'_> {
                 }
             }
             Expression::Sizeof(expr) => {
-                if let Some(vla_size) =
-                    self.try_lower_vla_sizeof(&expr, span, parser_span, locals, local_map)?
-                {
+                if let Some(vla_size) = self.try_lower_vla_sizeof(&expr, span, locals, local_map)? {
                     return Ok(vla_size);
                 }
                 let inner = self.lower_expr(*expr, locals, local_map)?;
@@ -3257,12 +3197,8 @@ impl HirCtx<'_> {
                 )?;
                 if let Some(build) = self.pending_vla.borrow_mut().take() {
                     // `sizeof(int[m])`: a runtime value.
-                    let product = self.lower_vla_dims_product(
-                        &build.dims,
-                        span,
-                        locals,
-                        local_map,
-                    )?;
+                    let product =
+                        self.lower_vla_dims_product(&build.dims, span, locals, local_map)?;
                     let elem_size = self.sizeof_ty(build.elem)?;
                     return Ok(self.vla_usize_binop(
                         HirBinOp::Mul,
@@ -4565,11 +4501,18 @@ impl HirCtx<'_> {
         else {
             return Err(spanned_error(
                 parser_span,
-                format!("unknown atomic method `{method}` on type {}", self.format_ty(place.ty)),
+                format!(
+                    "unknown atomic method `{method}` on type {}",
+                    self.format_ty(place.ty)
+                ),
             ));
         };
-        let receiver =
-            self.apply_resolved_receiver_adjustment(place, &resolved.receiver_adjustment, parser_span, span);
+        let receiver = self.apply_resolved_receiver_adjustment(
+            place,
+            &resolved.receiver_adjustment,
+            parser_span,
+            span,
+        );
         let mut all_args = vec![receiver];
         all_args.extend(args);
         let (generic_args, sig) = self.finalize_method_sig(
@@ -4603,7 +4546,10 @@ impl HirCtx<'_> {
         let Some(pointee) = Self::atomic_pointee_ty(ptr.ty) else {
             return Err(spanned_error(
                 self.to_parser_span(span),
-                format!("atomic value pointer must be a pointer, got {}", self.format_ty(ptr.ty)),
+                format!(
+                    "atomic value pointer must be a pointer, got {}",
+                    self.format_ty(ptr.ty)
+                ),
             ));
         };
         Ok(HirExpr {
@@ -4739,37 +4685,93 @@ impl HirCtx<'_> {
             "__atomic_fetch_add" | "__sync_fetch_and_add" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_add", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
+                self.atomic_method(
+                    place,
+                    "fetch_add",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )
             }
             "__atomic_fetch_sub" | "__sync_fetch_and_sub" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_sub", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
+                self.atomic_method(
+                    place,
+                    "fetch_sub",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )
             }
             "__atomic_fetch_or" | "__sync_fetch_and_or" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_or", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
+                self.atomic_method(
+                    place,
+                    "fetch_or",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )
             }
             "__atomic_fetch_and" | "__sync_fetch_and_and" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_and", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
+                self.atomic_method(
+                    place,
+                    "fetch_and",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )
             }
             "__atomic_fetch_xor" | "__sync_fetch_and_xor" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_xor", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
+                self.atomic_method(
+                    place,
+                    "fetch_xor",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )
             }
             "__atomic_fetch_nand" | "__sync_fetch_and_nand" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "fetch_nand", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
+                self.atomic_method(
+                    place,
+                    "fetch_nand",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )
             }
             "__atomic_add_fetch" | "__sync_add_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_add", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
+                let old = self.atomic_method(
+                    place,
+                    "fetch_add",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4784,7 +4786,15 @@ impl HirCtx<'_> {
             "__atomic_sub_fetch" | "__sync_sub_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_sub", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
+                let old = self.atomic_method(
+                    place,
+                    "fetch_sub",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4799,7 +4809,15 @@ impl HirCtx<'_> {
             "__atomic_or_fetch" | "__sync_or_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_or", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
+                let old = self.atomic_method(
+                    place,
+                    "fetch_or",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4814,7 +4832,15 @@ impl HirCtx<'_> {
             "__atomic_and_fetch" | "__sync_and_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_and", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
+                let old = self.atomic_method(
+                    place,
+                    "fetch_and",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4829,7 +4855,15 @@ impl HirCtx<'_> {
             "__atomic_xor_fetch" | "__sync_xor_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_xor", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
+                let old = self.atomic_method(
+                    place,
+                    "fetch_xor",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )?;
                 let ty = old.ty;
                 Ok(HirExpr {
                     kind: HirExprKind::Binary {
@@ -4844,7 +4878,15 @@ impl HirCtx<'_> {
             "__atomic_nand_fetch" | "__sync_nand_and_fetch" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let old = self.atomic_method(place, "fetch_nand", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)?;
+                let old = self.atomic_method(
+                    place,
+                    "fetch_nand",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )?;
                 let ty = old.ty;
                 let anded = HirExpr {
                     kind: HirExprKind::Binary {
@@ -4864,13 +4906,23 @@ impl HirCtx<'_> {
             "__atomic_load_n" => {
                 need(1)?;
                 let (place, _) = place_at(0)?;
-                let order = self.atomic_load_order(Self::atomic_order_code(&lowered, 1), &op.0, span, parser_span)?;
+                let order = self.atomic_load_order(
+                    Self::atomic_order_code(&lowered, 1),
+                    &op.0,
+                    span,
+                    parser_span,
+                )?;
                 self.atomic_method(place, "load", vec![order], parser_span)
             }
             "__atomic_store_n" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let order = self.atomic_store_order(Self::atomic_order_code(&lowered, 2), &op.0, span, parser_span)?;
+                let order = self.atomic_store_order(
+                    Self::atomic_order_code(&lowered, 2),
+                    &op.0,
+                    span,
+                    parser_span,
+                )?;
                 self.atomic_method(place, "store", vec![lowered[1].clone(), order], parser_span)
             }
             "__atomic_load" => {
@@ -4881,13 +4933,23 @@ impl HirCtx<'_> {
                 if lowered.len() == 1 || lowered.len() == 2 {
                     // C11 `atomic_load(ptr[, order])` returns the value.
                     let (place, _) = place_at(0)?;
-                    let order = self.atomic_load_order(Self::atomic_order_code(&lowered, order_idx), &op.0, span, parser_span)?;
+                    let order = self.atomic_load_order(
+                        Self::atomic_order_code(&lowered, order_idx),
+                        &op.0,
+                        span,
+                        parser_span,
+                    )?;
                     return self.atomic_method(place, "load", vec![order], parser_span);
                 }
                 // GCC `__atomic_load(ptr, ret, order)`: `*ret = load()`.
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                let order = self.atomic_load_order(Self::atomic_order_code(&lowered, order_idx), &op.0, span, parser_span)?;
+                let order = self.atomic_load_order(
+                    Self::atomic_order_code(&lowered, order_idx),
+                    &op.0,
+                    span,
+                    parser_span,
+                )?;
                 let loaded = self.atomic_method(place, "load", vec![order], parser_span)?;
                 let ret_ptr = ptr_at(1)?;
                 let Some(ret_pointee) = Self::atomic_pointee_ty(ret_ptr.ty) else {
@@ -4919,13 +4981,26 @@ impl HirCtx<'_> {
                     lowered[1].clone()
                 };
                 let (place, _) = place_at(0)?;
-                let order = self.atomic_store_order(Self::atomic_order_code(&lowered, 2), &op.0, span, parser_span)?;
+                let order = self.atomic_store_order(
+                    Self::atomic_order_code(&lowered, 2),
+                    &op.0,
+                    span,
+                    parser_span,
+                )?;
                 self.atomic_method(place, "store", vec![val, order], parser_span)
             }
             "__atomic_exchange_n" => {
                 need(2)?;
                 let (place, _) = place_at(0)?;
-                self.atomic_method(place, "swap", vec![lowered[1].clone(), self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?], parser_span)
+                self.atomic_method(
+                    place,
+                    "swap",
+                    vec![
+                        lowered[1].clone(),
+                        self.atomic_rmw_order_for_op(&op.0, &lowered, span, parser_span)?,
+                    ],
+                    parser_span,
+                )
             }
             "__atomic_exchange" => {
                 // Order arg is at 2 for C11 `atomic_exchange(ptr, val[, order])`,
@@ -4940,14 +5015,24 @@ impl HirCtx<'_> {
                         lowered[1].clone()
                     };
                     let (place, _) = place_at(0)?;
-                    let order = self.atomic_rmw_order(Self::atomic_order_code(&lowered, order_idx), &op.0, span, parser_span)?;
+                    let order = self.atomic_rmw_order(
+                        Self::atomic_order_code(&lowered, order_idx),
+                        &op.0,
+                        span,
+                        parser_span,
+                    )?;
                     return self.atomic_method(place, "swap", vec![val, order], parser_span);
                 }
                 // GCC `__atomic_exchange(ptr, val_ptr, ret_ptr, order)`: `*ret = swap(*val)`.
                 need(3)?;
                 let val = self.atomic_deref_ptr(lowered[1].clone())?;
                 let (place, _) = place_at(0)?;
-                let order = self.atomic_rmw_order(Self::atomic_order_code(&lowered, order_idx), &op.0, span, parser_span)?;
+                let order = self.atomic_rmw_order(
+                    Self::atomic_order_code(&lowered, order_idx),
+                    &op.0,
+                    span,
+                    parser_span,
+                )?;
                 let old = self.atomic_method(place, "swap", vec![val, order], parser_span)?;
                 let ret_ptr = ptr_at(2)?;
                 let Some(ret_pointee) = Self::atomic_pointee_ty(ret_ptr.ty) else {
@@ -5074,11 +5159,7 @@ impl HirCtx<'_> {
                 Ok(HirExpr {
                     kind: HirExprKind::StatementExpr {
                         statements: vec![
-                            HirStmt::Decl(HirDecl {
-                                local: ok_local,
-                                initializer: Some(ok_bool),
-                                span,
-                            }),
+                            HirStmt::Decl(HirDecl::new(ok_local, Some(ok_bool), span)),
                             HirStmt::If {
                                 cond: HirExpr {
                                     kind: HirExprKind::LogicalNot(Box::new(ok_place())),
@@ -5117,7 +5198,8 @@ impl HirCtx<'_> {
                 // Single-threaded exact (load-check-store; under contention a
                 // fresh race-free sequence, not one intrinsic): return previous.
                 let (place, pointee) = place_at(0)?;
-                let actual = self.atomic_method(place.clone(), "load", vec![seqcst()], parser_span)?;
+                let actual =
+                    self.atomic_method(place.clone(), "load", vec![seqcst()], parser_span)?;
                 let actual_local = locals.alloc(HirLocal {
                     name: "__co2_atomic_prev".to_string(),
                     ty: pointee,
@@ -5146,11 +5228,7 @@ impl HirCtx<'_> {
                 Ok(HirExpr {
                     kind: HirExprKind::StatementExpr {
                         statements: vec![
-                            HirStmt::Decl(HirDecl {
-                                local: actual_local,
-                                initializer: Some(actual),
-                                span,
-                            }),
+                            HirStmt::Decl(HirDecl::new(actual_local, Some(actual), span)),
                             HirStmt::If {
                                 cond: self.condition_to_bool(cmp, parser_span),
                                 then_stmts: vec![HirStmt::Expr(store)],
@@ -5178,7 +5256,12 @@ impl HirCtx<'_> {
                 need(1)?;
                 // `atomic_flag_test_and_set[_explicit](ptr[, order])`: the value
                 // is always set-true; arg 1 is the order, not a value.
-                let order = self.atomic_rmw_order(Self::atomic_order_code(&lowered, 1), &op.0, span, parser_span)?;
+                let order = self.atomic_rmw_order(
+                    Self::atomic_order_code(&lowered, 1),
+                    &op.0,
+                    span,
+                    parser_span,
+                )?;
                 let (_, pointee) = place_at(0)?;
                 let val = if matches!(pointee.kind(), TyKind::RigidTy(RigidTy::Bool)) {
                     HirExpr {
@@ -5774,11 +5857,7 @@ impl HirCtx<'_> {
                                 span,
                                 read_only: false,
                             });
-                            stmts[i] = HirStmt::Decl(HirDecl {
-                                local: tmp,
-                                initializer: Some(expr),
-                                span,
-                            });
+                            stmts[i] = HirStmt::Decl(HirDecl::new(tmp, Some(expr), span));
                             stmts.insert(i + 1, self.alloca_storage_drop(storage, span));
                             stmts.insert(
                                 i + 2,
@@ -5836,7 +5915,10 @@ impl HirCtx<'_> {
             | HirExprKind::Assign { lhs, rhs }
             | HirExprKind::AssignWithBinOp { lhs, rhs, .. }
             | HirExprKind::AssignPtrOffset { lhs, rhs, .. }
-            | HirExprKind::VaCopy { dest: lhs, src: rhs } => {
+            | HirExprKind::VaCopy {
+                dest: lhs,
+                src: rhs,
+            } => {
                 self.insert_alloca_storage_drops_in_expr(lhs, storage, locals, span);
                 self.insert_alloca_storage_drops_in_expr(rhs, storage, locals, span);
             }
@@ -5996,16 +6078,8 @@ impl HirCtx<'_> {
         Ok(HirExpr {
             kind: HirExprKind::StatementExpr {
                 statements: vec![
-                    HirStmt::Decl(HirDecl {
-                        local: v_local,
-                        initializer: Some(v_init),
-                        span,
-                    }),
-                    HirStmt::Decl(HirDecl {
-                        local: p_local,
-                        initializer: Some(p_init),
-                        span,
-                    }),
+                    HirStmt::Decl(HirDecl::new(v_local, Some(v_init), span)),
+                    HirStmt::Decl(HirDecl::new(p_local, Some(p_init), span)),
                     HirStmt::Expr(push),
                 ],
                 tail: Box::new(tail),
@@ -6483,7 +6557,7 @@ impl HirCtx<'_> {
         }
     }
 
-    fn const_int_expr(&self, value: i128, ty: Ty, span: RustSpan) -> HirExpr {
+    pub(crate) fn const_int_expr(&self, value: i128, ty: Ty, span: RustSpan) -> HirExpr {
         HirExpr {
             kind: HirExprKind::ConstInt(value),
             ty,

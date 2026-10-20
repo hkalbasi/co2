@@ -1,0 +1,21 @@
+//@ mode: co2
+//@ run-miri
+
+// Jumping into a block past a declaration is allowed in C (the only
+// restriction is variably modified types, C11 6.8.6.1p1). The local's
+// lifetime still begins on entry into the block (C11 6.2.4p5), so assigning
+// and reading it after the label is well defined.
+
+fn main() {
+    i32 result = 0;
+    goto inside;
+    {
+        i32 x;
+    inside:
+        x = 5;
+        result = x;
+    }
+    if (result != 5) {
+        std::process::exit(1);
+    }
+}

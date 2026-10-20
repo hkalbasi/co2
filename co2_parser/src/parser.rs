@@ -13,14 +13,14 @@
 use co2_ast::TypeResolver;
 use co2_ast::{
     AsmOperand, AsmStatement, CompoundStatement, Constant, Declaration, DeclarationSpecifier,
-    Declarator, EnumSpecifier, Enumerator, Expression, FileId, ForInit, FunctionDefinitionSignature,
-    FunctionSpecifier, InitDeclarator, LazyCompoundStatement, LazyRustConstExpr, LazySubscription,
-    ModItem, ParameterList, RustAttribute, RustAttributeStyle, RustFnAbi, RustFunctionParam,
-    RustFunctionSignature, RustPath, RustPathSegment, RustStructField, RustTy, Span, Spanned,
-    SpecifierQualifier, StatelessResolver, Statement, StatementOrDeclaration,
-    StorageClassSpecifier, StringLiteral, StringLiteralPrefix, StructDeclarator,
-    StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token, TranslationUnit, TypeName,
-    TypeQualifier, TypeQueryResult, TypeSpecifier, UseItem, Visibility,
+    Declarator, EnumSpecifier, Enumerator, Expression, FileId, ForInit,
+    FunctionDefinitionSignature, FunctionSpecifier, InitDeclarator, LazyCompoundStatement,
+    LazyRustConstExpr, LazySubscription, ModItem, ParameterList, RustAttribute, RustAttributeStyle,
+    RustFnAbi, RustFunctionParam, RustFunctionSignature, RustPath, RustPathSegment,
+    RustStructField, RustTy, Span, Spanned, SpecifierQualifier, StatelessResolver, Statement,
+    StatementOrDeclaration, StorageClassSpecifier, StringLiteral, StringLiteralPrefix,
+    StructDeclarator, StructOrUnionField, StructOrUnionKind, StructOrUnionSpecifier, Token,
+    TranslationUnit, TypeName, TypeQualifier, TypeQueryResult, TypeSpecifier, UseItem, Visibility,
 };
 
 // ── Errors (cold path only) ────────────────────────────────────────────
@@ -2684,7 +2684,8 @@ fn parse_tu_item<R: TypeResolver>(
             Ok(()) => return Ok(()),
             Err(_) => p.restore(cp),
         }
-    }    if !attrs.is_empty() {
+    }
+    if !attrs.is_empty() {
         if !attrs_are_outer(&attrs) {
             let span = attrs
                 .first()

@@ -472,9 +472,7 @@ fn parse_postfix<'a, R: TypeResolver>(p: &mut P<'a, R>) -> PR<Spanned<Expression
     }
     // A builtin name without a call is not a function pointer.
     if let Some(name) = p.peek(0).and_then(builtin_name) {
-        return Err(p.fail_here(format!(
-            "builtin function `{name}` must be called"
-        )));
+        return Err(p.fail_here(format!("builtin function `{name}` must be called")));
     }
     let mut node = parse_primary(p)?;
     let span = node.1;
