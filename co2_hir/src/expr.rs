@@ -59,7 +59,10 @@ impl HirCtx<'_> {
             return true;
         }
         match ty.kind() {
-            TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => self.is_sized_ty(pointee),
+            TyKind::RigidTy(RigidTy::RawPtr(pointee, _)) => {
+                self.is_sized_ty(pointee)
+                    || matches!(pointee.kind(), TyKind::RigidTy(RigidTy::Foreign(_)))
+            }
             TyKind::RigidTy(RigidTy::FnPtr(_) | RigidTy::FnDef(_, _)) => true,
             _ => false,
         }
