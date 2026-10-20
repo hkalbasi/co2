@@ -1640,33 +1640,108 @@ fn link_shared_objects(
     sanitizers: &[String],
     lto: bool,
 ) {
-    let mut cmd = Command::new(resolve_c_compiler());
-    cmd.arg("-shared");
-    if !sanitizers.is_empty() {
-        cmd.arg(format!("-fsanitize={}", sanitizers.join(",")));
-    }
-    if lto {
-        cmd.arg("-flto");
+    let run_link = |rust_runtime: Option<&Path>| {
+        let mut cmd = Command::new(resolve_c_compiler());
+        cmd.arg("-shared");
+        if !sanitizers.is_empty() {
+            cmd.arg(format!("-fsanitize={}", sanitizers.join(",")));
+        }
+        if lto {
+            cmd.arg("-flto");
+        }
+
+        for object in objects {
+            cmd.arg(object);
+        }
+        if let Some(runtime) = rust_runtime {
+            cmd.arg(runtime);
+        }
+        for arg in linker_args {
+            cmd.arg(arg);
+        }
+
+        cmd.arg("-o");
+        cmd.arg(output.unwrap_or_else(|| Path::new("a.out")));
+
+        cmd.output()
+            .expect("failed to execute shared library link step")
+    };
+
+    let first = run_link(None);
+    if first.status.success() {
+        return;
     }
 
-    for object in objects {
-        cmd.arg(object);
-    }
-    for arg in linker_args {
-        cmd.arg(arg);
-    }
-
-    cmd.arg("-o");
-    cmd.arg(output.unwrap_or_else(|| Path::new("a.out")));
-
-    let output = cmd
-        .output()
-        .expect("failed to execute shared library link step");
-    if !output.status.success() {
-        let cc_stderr = String::from_utf8_lossy(&output.stderr);
+    let cc_stderr = String::from_utf8_lossy(&first.stderr);
+    if !needs_rust_runtime(&cc_stderr) {
         eprintln!("{cc_stderr}");
         process::exit(1);
     }
+
+    // The objects reference the Rust runtime (alloc/core/std) but a plain C
+    // shared link does not include it. Add a staticlib holding std; the linker
+    // only pulls in referenced members, so unrelated C symbols stay holes.
+    let temp_dir = make_temp_dir();
+    let runtime = build_shared_runtime_archive(&temp_dir);
+    let Ok(runtime) = runtime else {
+        eprintln!("{cc_stderr}");
+        let _ = fs::remove_dir_all(&temp_dir);
+        process::exit(1);
+    };
+
+    let retry = run_link(Some(&runtime));
+    let _ = fs::remove_dir_all(&temp_dir);
+    if !retry.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&retry.stderr));
+        process::exit(1);
+    }
+}
+
+fn needs_rust_runtime(stderr: &str) -> bool {
+    ["alloc::", "core::", "std::", "__rust", "_RN"]
+        .iter()
+        .any(|needle| stderr.contains(needle))
+}
+
+fn build_shared_runtime_archive(temp_dir: &Path) -> Result<PathBuf, ()> {
+    let stub_path = temp_dir.join("co2c_shared_runtime.rs");
+    fs::write(&stub_path, CO2C_LINK_STD_STUB).map_err(|_| ())?;
+    let archive = temp_dir.join("libco2c_shared_runtime.a");
+
+    let exe = std::env::var_os("CO2_RUN_SCRIPT")
+        .map(PathBuf::from)
+        .or_else(current_invocation_path)
+        .or_else(|| std::env::current_exe().ok())
+        .ok_or(())?;
+
+    let mut rustc_args = vec![
+        "--crate-name".to_owned(),
+        "co2c_shared_runtime".to_owned(),
+        "--crate-type=staticlib".to_owned(),
+        "--edition=2024".to_owned(),
+        "-o".to_owned(),
+        archive.to_string_lossy().into_owned(),
+        "-C".to_owned(),
+        "opt-level=2".to_owned(),
+        "-C".to_owned(),
+        "panic=abort".to_owned(),
+        "-C".to_owned(),
+        "relocation-model=pic".to_owned(),
+    ];
+    rustc_args.extend(shared_rust_flags());
+    rustc_args.push(stub_path.to_string_lossy().into_owned());
+
+    let output = Command::new(exe)
+        .args(&rustc_args)
+        .env("CO2_APPLET_OVERRIDE", "co2rustc")
+        .output()
+        .map_err(|_| ())?;
+    if !output.status.success() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        return Err(());
+    }
+
+    Ok(archive)
 }
 
 fn quote_for_make(s: &str) -> String {
