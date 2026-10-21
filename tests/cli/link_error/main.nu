@@ -13,7 +13,7 @@ let actual_co2cc = (
     $result_co2cc.stderr
     | str replace -a -r '\x1b\[[0-9;]*[a-zA-Z]' ''
     | str replace -a $test_dir "[TEMP]"
-    | str replace -a -r '/tmp/\.co2cc-\d+-\d+' "[TEMP]"
+    | str replace -a -r '/tmp/\.co2cc-[^/\\]+' "[TEMP]"
     | str replace -a -r 'rustc[A-Za-z0-9]{6}' "[RUSTC_TEMP]"
     | str replace -a -r '[a-f0-9]{16}' 'CGU_HASH'
     | str replace -a -r '(?m)^/[^\s:]*ld(\.[a-zA-Z]+)?:' '[LD]:'
@@ -62,7 +62,7 @@ let actual_shared = (
     $result_shared.stderr
     | str replace -a -r '\x1b\[[0-9;]*[a-zA-Z]' ''
     | str replace -a $test_dir "[TEMP]"
-    | str replace -a -r '/tmp/\.co2cc-\d+-\d+' "[TEMP]"
+    | str replace -a -r '/tmp/\.co2cc-[^/\\]+' "[TEMP]"
     | str replace -a -r 'rustc[A-Za-z0-9]{6}' "[RUSTC_TEMP]"
     | str replace -a -r '[a-f0-9]{16}' 'CGU_HASH'
     | str replace -a -r '(?m)^/[^\s:]*ld(\.[a-zA-Z]+)?:' '[LD]:'

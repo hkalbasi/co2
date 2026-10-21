@@ -457,6 +457,7 @@ dependencies = [
  "co2_ast",
  "co2_driver_lib",
  "co2_preprocessor",
+ "tempfile",
 ]
 
 [[package]]

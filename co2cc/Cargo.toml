@@ -10,6 +10,7 @@ workspace = true
 co2_ast = { path = "../co2_ast" }
 co2_driver_lib = { path = "../co2_driver_lib" }
 co2_preprocessor = { path = "../co2_preprocessor" }
+tempfile = "3"
 
 [package.metadata.rust-analyzer]
 rustc_private = true

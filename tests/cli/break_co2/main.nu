@@ -6,7 +6,7 @@ def normalize [s: string] {
     $s
     | str replace --all --regex '\(\d+\) panicked' '(PID) panicked'
     | str replace --all --regex 'panicked at .*co2_crate_sig[/\\]src[/\\]lowering\.rs:\d+:\d+' 'panicked at co2_crate_sig/src/lowering.rs:LINE:COL'
-    | str replace --all --regex 'panicked at .*co2cc[/\\]src[/\\]lib\.rs:\d+:\d+' 'panicked at co2cc/src/lib.rs:LINE:COL'
+    | str replace --all --regex 'panicked at .*co2cc[/\\]src[/\\][^/\\:]+\.rs:\d+:\d+' 'panicked at co2cc/src/FILE.rs:LINE:COL'
     | str replace --all --regex 'rustc-ice-\d{4}-\d{2}-\d{2}T\d{2}_\d{2}_\d{2}-\d+' 'rustc-ice-TIMESTAMP'
     | str replace --all --regex '/tmp/co2-ct-dir-\w+' '/tmp/co2-ct-dir'
     | str replace --all --regex 'rustc .* running' 'rustc VERSION running'
