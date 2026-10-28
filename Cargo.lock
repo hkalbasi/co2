@@ -106,9 +106,9 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "askama"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1bf825125edd887a019d0a3a837dcc5499a68b0d034cc3eb594070c3e18addc"
+checksum = "6024d73179f43f15ccd2b881bfea6fee7f3a46ec53f33b52210dea749ebebaa4"
 dependencies = [
  "askama_macros",
  "itoa",
@@ -119,9 +119,9 @@ dependencies = [
 
 [[package]]
 name = "askama_derive"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1c7065972a130eafa84215f21352ae15b4a7393da48c1f5e103904490736738"
+checksum = "071ee5ebf2138e3ad180e0aacf6940c2cab5e6d8333741d9925c7bee2b153f39"
 dependencies = [
  "askama_parser",
  "basic-toml",
@@ -132,23 +132,23 @@ dependencies = [
  "rustc-hash 2.1.3",
  "serde",
  "serde_derive",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "askama_macros"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e23b1d2c4bd39a41971f6124cef4cc6fd0540913ecb90919b69ab3bbe44ae1a"
+checksum = "643e1c7cbb6aec1d920332fe51a7c0d8219e273dcb8602db03f5263e4d16487b"
 dependencies = [
  "askama_derive",
 ]
 
 [[package]]
 name = "askama_parser"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7db09fde9143e7ac4513358fb32ee32847125b63b18ea715afd487956da715da"
+checksum = "2c5ae75772275d268b03ab8bdccdd12117b6169ee23256942b34e46c9f476583"
 dependencies = [
  "rustc-hash 2.1.3",
  "serde",
@@ -162,12 +162,6 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
-
-[[package]]
-name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "basic-toml"
@@ -889,9 +883,9 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libffi"
-version = "5.2.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a8d526bc07aa02e6826944ec446ecd8d228bd97b1cbd21e5bc5e3407a09a585"
+checksum = "0498fe5655f857803e156523e644dcdcdc3b3c7edda42ea2afdae2e09b2db87b"
 dependencies = [
  "libc",
  "libffi-sys",
@@ -899,9 +893,9 @@ dependencies = [
 
 [[package]]
 name = "libffi-sys"
-version = "4.2.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54d39d034f5ea2662814789448722078d01cc9431a2a09ff15e55f0df7120bae"
+checksum = "71d4f1d4ce15091955144350b75db16a96d4a63728500122706fb4d29a26afbb"
 dependencies = [
  "cc",
 ]
@@ -1005,7 +999,7 @@ dependencies = [
 [[package]]
 name = "miri"
 version = "0.1.0"
-source = "git+https://github.com/rust-lang/miri/?rev=1397f3a5cfa3ec23c56b462a32010ff22bf18d15#1397f3a5cfa3ec23c56b462a32010ff22bf18d15"
+source = "git+https://github.com/rust-lang/miri/?rev=05bc2ba02113afb84d837576c7f95dc9bb2f42d9#05bc2ba02113afb84d837576c7f95dc9bb2f42d9"
 dependencies = [
  "aes",
  "bitflags",
@@ -1017,6 +1011,7 @@ dependencies = [
  "ipc-channel",
  "libc",
  "libffi",
+ "libffi-sys",
  "libloading",
  "measureme",
  "mio",
@@ -1024,13 +1019,15 @@ dependencies = [
  "rand 0.10.2",
  "serde",
  "smallvec",
+ "socket2",
+ "windows-sys",
 ]
 
 [[package]]
 name = "nix"
-version = "0.30.1"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -1358,7 +1355,7 @@ checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 [[package]]
 name = "rustc_public"
 version = "0.1.0-preview"
-source = "git+https://github.com/hkalbasi/co2-rustc-public-fork.git#6db6c90914a30a23ce1d947a40de2baf197a8cc3"
+source = "git+https://github.com/hkalbasi/co2-rustc-public-fork.git#a60dcebddc8c32de272d80e17977d3d73559ea1c"
 dependencies = [
  "serde",
  "tracing",
@@ -1375,13 +1372,13 @@ dependencies = [
 [[package]]
 name = "rustdoc"
 version = "0.0.0"
-source = "git+https://github.com/hkalbasi/co2-rustdoc-fork#f06c22d583797661d1550f78086f419a17fd4fd1"
+source = "git+https://github.com/hkalbasi/co2-rustdoc-fork#4a7c3ee41f8cfc1f583bee935f21c9f0d6ec81ff"
 dependencies = [
  "arrayvec",
  "askama",
- "base64",
  "indexmap",
  "itertools 0.15.0",
+ "libc",
  "minifier",
  "proc-macro2",
  "pulldown-cmark-escape",
@@ -1403,7 +1400,7 @@ dependencies = [
 [[package]]
 name = "rustdoc-json-types"
 version = "0.1.0"
-source = "git+https://github.com/hkalbasi/co2-rustdoc-fork#f06c22d583797661d1550f78086f419a17fd4fd1"
+source = "git+https://github.com/hkalbasi/co2-rustdoc-fork#4a7c3ee41f8cfc1f583bee935f21c9f0d6ec81ff"
 dependencies = [
  "rustc-hash 2.1.3",
  "serde",
@@ -1555,6 +1552,16 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+
+[[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
 
 [[package]]
 name = "stacker"

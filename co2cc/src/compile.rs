@@ -66,10 +66,8 @@ pub(crate) fn run_co2c(args: &CcArgs) {
             .cloned()
             .expect("missing C input file for preprocess-only");
         let resolved = resolve_stdin(&input);
-        let preprocessed = co2_preprocessor::preprocess(
-            &resolved,
-            &preprocess_args(args, cpp_args),
-        );
+        let preprocessed =
+            co2_preprocessor::preprocess(&resolved, &preprocess_args(args, cpp_args));
         match &args.output {
             Some(path) => fs::write(path, preprocessed.raw_src.as_ref())
                 .expect("failed to write preprocessed output"),
@@ -288,7 +286,11 @@ fn compile_c_to_object(
         cmd.arg("-ftime-report");
     }
     if dep_args.generate {
-        cmd.arg(if dep_args.exclude_system { "-MMD" } else { "-MD" });
+        cmd.arg(if dep_args.exclude_system {
+            "-MMD"
+        } else {
+            "-MD"
+        });
     }
     if dep_args.phony {
         cmd.arg("-MP");

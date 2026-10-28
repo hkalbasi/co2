@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use crate::args::LinkOutputKind;
-use crate::rustc::{
-    build_link_rustc_args, build_link_stub_rustc_args, shared_rust_flags,
-};
+use crate::rustc::{build_link_rustc_args, build_link_stub_rustc_args, shared_rust_flags};
 
 pub(crate) fn current_invocation_path() -> Option<PathBuf> {
     std::env::args_os().next().map(PathBuf::from)

@@ -213,7 +213,9 @@ fn interpret_rust_file(rustc_args: Vec<String>, miri_config: MiriConfig) -> std:
     };
     // interpret_with_miri exits the process on success; falling through here
     // means the program failed to compile.
-    rustc_driver::catch_with_exit_code(|| rustc_driver::run_compiler(&miri_args, &mut callbacks))
+    rustc_driver::catch_with_exit_code(|| {
+        rustc_driver::compiler_entrypoint(&miri_args, &mut callbacks)
+    })
 }
 
 /// Parse `-Zmiri-*` flags from `args`, configure `MiriConfig`, and return the
@@ -243,7 +245,6 @@ fn parse_miri_config(
                 Some(BorrowTrackerMethod::TreeBorrows(TreeBorrowsParams {
                     precise_interior_mut: true,
                     implicit_writes: false,
-                    box_custom_allocator_unique: true,
                 }));
         } else if arg == "-Zmiri-tree-borrows-no-precise-interior-mut" {
             match &mut miri_config.borrow_tracker {
@@ -265,18 +266,6 @@ fn parse_miri_config(
                 _ => {
                     eprintln!(
                         "`-Zmiri-tree-borrows` is required before `-Zmiri-tree-borrows-implicit-writes`"
-                    );
-                    std::process::exit(1);
-                }
-            };
-        } else if arg == "-Zmiri-tree-borrows-relax-custom-allocator-uniqueness" {
-            match &mut miri_config.borrow_tracker {
-                Some(BorrowTrackerMethod::TreeBorrows(params)) => {
-                    params.box_custom_allocator_unique = false;
-                }
-                _ => {
-                    eprintln!(
-                        "`-Zmiri-tree-borrows` is required before `-Zmiri-tree-borrows-relax-custom-allocator-uniqueness`"
                     );
                     std::process::exit(1);
                 }

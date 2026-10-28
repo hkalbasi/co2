@@ -78,7 +78,7 @@ if ($multiple_inputs.stdout | str trim) != "" {
 assert-snapshot "multiple_inputs" $multiple_inputs.stderr ($expected_dir | path join "multiple_inputs.stderr.snapshot")
 
 # ---- non-existing .rs file ----
-let non_existing_rs = (do { ^$co2rustc ./non-existing.rs } | complete)
+let non_existing_rs = (do { ^$co2rustc --edition 2024 ./non-existing.rs } | complete)
 if $non_existing_rs.exit_code != 1 {
     print $"FAIL: co2rustc ./non-existing.rs exit code expected 1, got ($non_existing_rs.exit_code)"
     exit 1

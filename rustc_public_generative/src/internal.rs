@@ -29,7 +29,15 @@ use rustc_data_structures::packed::Pu128;
 use rustc_data_structures::smallvec::SmallVec;
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::thin_vec::ThinVec;
-use rustc_hir as hir;
+// Upstream moved `Attribute` and `attrs` out of `rustc_hir`; re-export them under `hir`.
+mod hir {
+    pub use rustc_attr_ir::Attribute;
+    pub use rustc_hir::*;
+
+    pub mod attrs {
+        pub use rustc_attr_ir::*;
+    }
+}
 use rustc_hir::def::{CtorKind, DefKind, Namespace, Res};
 use rustc_hir::def_id::{
     CRATE_DEF_ID, DefId as RustcDefId, LocalDefId, LocalDefIdMap, LocalModId, ModId,
@@ -53,9 +61,10 @@ use rustc_middle::ty::{
 };
 use rustc_middle::util::Providers as UtilProviders;
 use rustc_public::rustc_internal::internal;
-use rustc_session::config::{CrateType, EntryFnType};
+use rustc_session::config::EntryFnType;
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{BytePos, DUMMY_SP, Span as RustcSpan, SyntaxContext};
+use rustc_structures::CrateType;
 use rustc_target::asm::{InlineAsmReg, InlineAsmRegClass, InlineAsmRegOrRegClass};
 use rustc_target::asm::{X86InlineAsmReg, X86InlineAsmRegClass};
 use rustc_trait_selection::infer::{InferCtxtExt as _, TyCtxtInferExt as _};
@@ -1201,7 +1210,7 @@ impl DefinedCrateInfo {
                     Ident::from_str(name),
                     hir::Generics::empty(),
                     leak(hir_ty_to_rustc(tcx, def_id, const_ty, &mut item_allocator)),
-                    rustc_hir::ConstItemRhs::TypeConst(const_arg),
+                    rustc_hir::ConstItemRhs::Direct(const_arg),
                 ),
                 span,
                 vis_span: vis_span(my_def_id, span),
@@ -1800,9 +1809,7 @@ impl DefinedCrateState {
             DefinedItemKind::Module(_) => DefKind::Mod,
             DefinedItemKind::Function { .. } | DefinedItemKind::ForeignFunction(_) => DefKind::Fn,
             DefinedItemKind::ForeignType(_) => DefKind::ForeignTy,
-            DefinedItemKind::Const(_) => DefKind::Const {
-                is_type_const: true,
-            },
+            DefinedItemKind::Const(_) => DefKind::Const,
             DefinedItemKind::AnonConst(_) => DefKind::AnonConst,
             DefinedItemKind::Static { .. } => DefKind::Static {
                 safety: hir::Safety::Safe,
@@ -1923,7 +1930,7 @@ pub fn generate_with_args<S: CrateGeneratorState>(mut args: Vec<String>) {
         args.push(String::from("/dev/null"));
     }
     let mut callbacks = GenerateCallbacks::<S>::new();
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    rustc_driver::compiler_entrypoint(&args, &mut callbacks);
 }
 
 struct GenerateCallbacks<S: CrateGeneratorState> {
@@ -1956,7 +1963,8 @@ struct GenerateGate {
 #[derive(Copy, Clone)]
 struct OriginalProviders {
     lower_to_hir: for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> hir::MaybeOwner<'tcx>,
-    resolutions: for<'tcx> fn(TyCtxt<'tcx>, ()) -> &'tcx rustc_middle::ty::ResolverGlobalCtxt,
+    resolutions:
+        for<'tcx> fn(TyCtxt<'tcx>, ()) -> &'tcx rustc_middle::middle::resolve::ResolverGlobalCtxt,
     effective_visibilities:
         for<'tcx> fn(
             TyCtxt<'tcx>,
@@ -2215,9 +2223,15 @@ impl<S: CrateGeneratorState> InterfaceCallbacks<S> {
             });
         }
 
-        for (idx, feature) in ["extern_types", "linkage", "thread_local", "complex_numbers"]
-            .into_iter()
-            .enumerate()
+        for (idx, feature) in [
+            "extern_types",
+            "linkage",
+            "thread_local",
+            "complex_numbers",
+            "f128",
+        ]
+        .into_iter()
+        .enumerate()
         {
             krate.attrs.push(Attribute {
                 kind: rustc_ast::AttrKind::Normal(Box::new(rustc_ast::NormalAttr {
@@ -2239,7 +2253,7 @@ impl<S: CrateGeneratorState> InterfaceCallbacks<S> {
                                 Token {
                                     kind: rustc_ast::token::TokenKind::Ident(
                                         Symbol::intern(feature),
-                                        rustc_ast::token::IdentIsRaw::No,
+                                        rustc_ast::token::IdentKind::Normal,
                                     ),
                                     span: DUMMY_SP,
                                 },
@@ -2353,7 +2367,7 @@ pub fn generate_with_args_and_after_analysis<S: CrateGeneratorState>(
         args.push(String::from("/dev/null"));
     }
     let mut callbacks = GenerateCallbacks::<S>::new().with_after_analysis(hook);
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    rustc_driver::compiler_entrypoint(&args, &mut callbacks);
 }
 
 pub fn dependency_roots(tcx: TyCtxt<'_>) -> Vec<(DependencyCrate, DefId)> {
@@ -2395,7 +2409,7 @@ fn child_kind_from_def_kind(kind: DefKind) -> DependencyChildKind {
         DefKind::Enum => DependencyChildKind::Enum,
         DefKind::Union => DependencyChildKind::Union,
         DefKind::Trait => DependencyChildKind::Trait,
-        DefKind::Const { is_type_const: _ } => DependencyChildKind::Const,
+        DefKind::Const => DependencyChildKind::Const,
         DefKind::Static { .. } => DependencyChildKind::Static,
         DefKind::TyAlias { .. } => DependencyChildKind::TypeAlias,
         _ => DependencyChildKind::Other,
@@ -2664,12 +2678,12 @@ pub fn dependency_is_intrinsic(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 
 fn is_dependency_const_value(tcx: TyCtxt<'_>, def_id: RustcDefId) -> bool {
     let kind = tcx.def_kind(def_id);
-    matches!(kind, DefKind::Const { is_type_const: _ }) && !def_id.is_local()
+    matches!(kind, DefKind::Const) && !def_id.is_local()
 }
 
 fn dependency_const_value(tcx: TyCtxt<'_>, def_id: RustcDefId) -> Option<DependencyConstValue> {
     let kind = tcx.def_kind(def_id);
-    if !matches!(kind, DefKind::Const { is_type_const: _ }) {
+    if !matches!(kind, DefKind::Const) {
         return None;
     }
 
@@ -3579,7 +3593,7 @@ fn probe_method_sig_and_obligations<'tcx>(
 ) -> Option<ResolvedMethod> {
     let sig = tcx.fn_sig(method_def_id).instantiate(tcx, method_args);
     let sig = tcx.instantiate_bound_regions_with_erased(sig.skip_normalization());
-    let sig = infcx.resolve_vars_if_possible(sig);
+    let sig = infcx.deeply_resolve_ignoring_regions(sig);
     let self_input = sig.inputs().first().copied()?;
     let _ = infcx
         .at(cause, param_env)
@@ -3652,9 +3666,9 @@ fn probe_method_sig_and_obligations<'tcx>(
     let resolved_args = tcx.mk_args_from_iter(
         method_args
             .iter()
-            .map(|arg| infcx.resolve_vars_if_possible(arg)),
+            .map(|arg| infcx.deeply_resolve_ignoring_regions(arg)),
     );
-    let resolved_sig = infcx.resolve_vars_if_possible(sig);
+    let resolved_sig = infcx.deeply_resolve_ignoring_regions(sig);
     Some(ResolvedMethod {
         def_id: rustc_def_to_my_def(tcx, method_def_id),
         generic_args: stable_generic_args(tcx, resolved_args),
@@ -3672,7 +3686,7 @@ fn method_args_for_impl<'tcx>(
     ty::GenericArgs::for_item(tcx, method_def_id, |param, _| {
         let index = param.index as usize;
         if index < impl_args.len() {
-            return infcx.resolve_vars_if_possible(impl_args[index]);
+            return infcx.deeply_resolve_ignoring_regions(impl_args[index]);
         }
         match param.kind {
             GenericParamDefKind::Lifetime => tcx.lifetimes.re_erased.into(),
@@ -3692,7 +3706,7 @@ fn method_args_for_trait<'tcx>(
     ty::GenericArgs::for_item(tcx, method_def_id, |param, _| {
         let index = param.index as usize;
         if index < trait_args.len() {
-            return infcx.resolve_vars_if_possible(trait_args[index]);
+            return infcx.deeply_resolve_ignoring_regions(trait_args[index]);
         }
         match param.kind {
             GenericParamDefKind::Lifetime => tcx.lifetimes.re_erased.into(),
@@ -3804,7 +3818,7 @@ pub(crate) fn infer_fn_args(
     // Process — errors are ignored; check_fn_predicates catches them later.
     let _ = ocx.try_evaluate_obligations();
 
-    let resolved_args = infcx.resolve_vars_if_possible(rustc_args);
+    let resolved_args = infcx.deeply_resolve_ignoring_regions(rustc_args);
 
     // For any param that was originally a Param type and is still an inference var
     // (i.e., not resolved by unification), convert it back to the original Param type.
@@ -3813,7 +3827,7 @@ pub(crate) fn infer_fn_args(
         .enumerate()
         .map(|(idx, arg)| {
             if let Some(infer_ty) = infer_for_param[idx] {
-                let resolved = infcx.resolve_vars_if_possible(infer_ty);
+                let resolved = infcx.deeply_resolve_ignoring_regions(infer_ty);
                 if matches!(resolved.kind(), ty::TyKind::Infer(_)) {
                     // Not resolved — use the original Param type
                     let orig = &fn_generic_args.0[idx];
@@ -3839,7 +3853,7 @@ pub(crate) fn infer_fn_args(
     // Re-derive sig with the final args so inferences that did resolve are reflected
     let final_sig = tcx.fn_sig(rustc_fn_def_id).instantiate(tcx, final_args);
     let final_sig = tcx.instantiate_bound_regions_with_erased(final_sig.skip_normalization());
-    let resolved_sig = infcx.resolve_vars_if_possible(final_sig);
+    let resolved_sig = infcx.deeply_resolve_ignoring_regions(final_sig);
 
     // Check if any generic params that were originally Param are still unresolved.
     // If ALL such params remain unresolved, inference failed entirely.
@@ -3956,9 +3970,9 @@ pub(crate) fn fn_once_output_params(tcx: TyCtxt<'_>, fn_def_id: DefId) -> Vec<(u
 pub(crate) fn normalize_ty_for_owner(tcx: TyCtxt<'_>, owner: DefId, ty: MirTy) -> MirTy {
     let owner = my_def_id_to_rustc_def_id(tcx, owner);
     let ty = mir_ty_to_rustc(tcx, &ty);
-    let typing_env =
-        ty::TypingEnv::non_body_analysis(tcx, owner).with_post_analysis_normalized(tcx);
-    tcx.try_normalize_erasing_regions(typing_env, ty::Unnormalized::dummy(ty))
+    let input = ty::TypingEnv::non_body_analysis(tcx, owner)
+        .with_post_analysis_normalized_invalidating_rigid_aliases(tcx, ty);
+    tcx.try_normalize_erasing_regions(input.typing_env, ty::Unnormalized::dummy(input.value))
         .map_or_else(
             |_| rustc_public::rustc_internal::stable(ty),
             rustc_public::rustc_internal::stable,
@@ -3988,9 +4002,9 @@ pub(crate) fn normalize_ty_for_owner_with_self(
             ct_op: |ct| ct,
         },
     );
-    let typing_env =
-        ty::TypingEnv::non_body_analysis(tcx, owner).with_post_analysis_normalized(tcx);
-    tcx.try_normalize_erasing_regions(typing_env, ty::Unnormalized::dummy(ty))
+    let input = ty::TypingEnv::non_body_analysis(tcx, owner)
+        .with_post_analysis_normalized_invalidating_rigid_aliases(tcx, ty);
+    tcx.try_normalize_erasing_regions(input.typing_env, ty::Unnormalized::dummy(input.value))
         .map_or_else(
             |_| rustc_public::rustc_internal::stable(ty),
             rustc_public::rustc_internal::stable,
@@ -4216,7 +4230,10 @@ fn generated_owner_for(_tcx: TyCtxt<'_>, def_id: LocalDefId) -> hir::MaybeOwner<
     unsafe { std::mem::transmute::<hir::MaybeOwner<'static>, hir::MaybeOwner<'_>>(owner) }
 }
 
-fn generated_resolutions(tcx: TyCtxt<'_>, (): ()) -> &rustc_middle::ty::ResolverGlobalCtxt {
+fn generated_resolutions(
+    tcx: TyCtxt<'_>,
+    (): (),
+) -> &rustc_middle::middle::resolve::ResolverGlobalCtxt {
     let (original, items) = {
         let state = GENERATE_STATE
             .get()
@@ -4243,7 +4260,7 @@ fn generated_resolutions(tcx: TyCtxt<'_>, (): ()) -> &rustc_middle::ty::Resolver
 fn generated_doc_link_resolutions(
     tcx: TyCtxt<'_>,
     def_id: LocalModId,
-) -> &rustc_hir::def::DocLinkResMap {
+) -> &rustc_middle::middle::resolve::DocLinkResMap {
     if let Some(map) = tcx.resolutions(()).doc_link_resolutions.get(&def_id) {
         return map;
     }
@@ -4303,7 +4320,8 @@ fn augment_cached_generated_resolutions(tcx: TyCtxt<'_>) {
     }
     let resolutions = tcx.resolutions(());
     let resolutions = unsafe {
-        &mut *std::ptr::from_ref::<rustc_middle::ty::ResolverGlobalCtxt>(resolutions).cast_mut()
+        &mut *std::ptr::from_ref::<rustc_middle::middle::resolve::ResolverGlobalCtxt>(resolutions)
+            .cast_mut()
     };
     augment_resolutions_with_items(resolutions, &items, tcx);
 }
@@ -4315,11 +4333,11 @@ fn should_patch_cached_resolutions(tcx: TyCtxt<'_>) -> bool {
 }
 
 fn augment_resolutions_with_items(
-    resolutions: &mut rustc_middle::ty::ResolverGlobalCtxt,
+    resolutions: &mut rustc_middle::middle::resolve::ResolverGlobalCtxt,
     items: &[DefinedItemInfo],
     tcx: TyCtxt<'_>,
 ) {
-    let mut module_children: FxHashMap<LocalDefId, Vec<rustc_middle::metadata::ModChild>> =
+    let mut module_children: FxHashMap<LocalDefId, Vec<rustc_middle::middle::resolve::ModChild>> =
         FxHashMap::default();
     for item in items {
         let Some(local_def_id) = my_def_id_to_rustc_def_id(tcx, item.def_id()).as_local() else {
@@ -4341,15 +4359,10 @@ fn augment_resolutions_with_items(
                 },
                 local_def_id.to_def_id(),
             ),
-            DefinedItemKind::Const(_) => Res::Def(
-                DefKind::Const {
-                    is_type_const: true,
-                },
-                local_def_id.to_def_id(),
-            ),
+            DefinedItemKind::Const(_) => Res::Def(DefKind::Const, local_def_id.to_def_id()),
             _ => continue,
         };
-        let child = rustc_middle::metadata::ModChild {
+        let child = rustc_middle::middle::resolve::ModChild {
             ident: Ident::from_str(&item.name),
             res,
             vis: ty::Visibility::Public,
@@ -4409,9 +4422,7 @@ fn augment_resolutions_with_items(
                 mutability: ty::Mutability::Mut,
                 nested: false,
             },
-            DefinedItemKind::Const(_) => DefKind::Const {
-                is_type_const: true,
-            },
+            DefinedItemKind::Const(_) => DefKind::Const,
             _ => continue,
         };
         let parent = item
@@ -4492,9 +4503,7 @@ fn augment_resolutions_with_items(
                                 if name == &prefix
                                     && matches!(
                                         kind,
-                                        DefKind::Fn
-                                            | DefKind::Const { is_type_const: _ }
-                                            | DefKind::Static { .. }
+                                        DefKind::Fn | DefKind::Const | DefKind::Static { .. }
                                     )
                                 {
                                     Some(Res::Def(*kind, id.to_def_id()))
@@ -4532,10 +4541,7 @@ fn augment_resolutions_with_items(
                     Some(Res::Def(*kind, id.to_def_id())),
                 );
             }
-            if matches!(
-                kind,
-                DefKind::Fn | DefKind::Const { is_type_const: _ } | DefKind::Static { .. }
-            ) {
+            if matches!(kind, DefKind::Fn | DefKind::Const | DefKind::Static { .. }) {
                 map.insert(
                     (sym, Namespace::ValueNS),
                     Some(Res::Def(*kind, id.to_def_id())),
@@ -4673,9 +4679,9 @@ fn resolve_multi_segment_path(
 }
 
 fn clone_resolver_global_ctxt(
-    original: &rustc_middle::ty::ResolverGlobalCtxt,
-) -> rustc_middle::ty::ResolverGlobalCtxt {
-    rustc_middle::ty::ResolverGlobalCtxt {
+    original: &rustc_middle::middle::resolve::ResolverGlobalCtxt,
+) -> rustc_middle::middle::resolve::ResolverGlobalCtxt {
+    rustc_middle::middle::resolve::ResolverGlobalCtxt {
         visibilities_for_hashing: original.visibilities_for_hashing.clone(),
         expn_that_defined: original.expn_that_defined.clone(),
         effective_visibilities: original.effective_visibilities.clone(),
@@ -4699,7 +4705,7 @@ fn clone_resolver_global_ctxt(
                     *def_id,
                     children
                         .iter()
-                        .map(|child| rustc_middle::metadata::AmbigModChild {
+                        .map(|child| rustc_middle::middle::resolve::AmbigModChild {
                             main: clone_mod_child(&child.main),
                             second: clone_mod_child(&child.second),
                         })
@@ -4723,17 +4729,46 @@ fn clone_resolver_global_ctxt(
             .map(|(k, v)| {
                 (
                     *k,
-                    rustc_middle::ty::DelegationInfo {
-                        resolution_id: v.resolution_id,
+                    rustc_middle::middle::resolve::DelegationInfo {
+                        resolution: v.resolution,
                     },
                 )
             })
             .collect(),
+        delegation_inherent_fn_map: original
+            .delegation_inherent_fn_map
+            .iter()
+            .map(|(def_id, fns)| {
+                (
+                    *def_id,
+                    fns.iter()
+                        .map(|(ident, kind)| {
+                            let kind = match kind {
+                                rustc_middle::middle::resolve::DelegationInherentFnKind::Single(
+                                    id,
+                                ) => {
+                                    rustc_middle::middle::resolve::DelegationInherentFnKind::Single(
+                                        *id,
+                                    )
+                                }
+                                rustc_middle::middle::resolve::DelegationInherentFnKind::Ambig => {
+                                    rustc_middle::middle::resolve::DelegationInherentFnKind::Ambig
+                                }
+                            };
+                            (*ident, kind)
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+        paths_matching_assoc_types: original.paths_matching_assoc_types.clone(),
     }
 }
 
-fn clone_mod_child(child: &rustc_middle::metadata::ModChild) -> rustc_middle::metadata::ModChild {
-    rustc_middle::metadata::ModChild {
+fn clone_mod_child(
+    child: &rustc_middle::middle::resolve::ModChild,
+) -> rustc_middle::middle::resolve::ModChild {
+    rustc_middle::middle::resolve::ModChild {
         ident: child.ident,
         res: child.res,
         vis: child.vis,
@@ -5247,7 +5282,6 @@ fn build_error_mir_body<'tcx>(
         Vec::new(),
         Some(rustc_middle::mir::Terminator {
             source_info,
-            attributes: ThinVec::new(),
             kind: rustc_middle::mir::TerminatorKind::Unreachable,
         }),
         false,
@@ -5420,10 +5454,10 @@ fn build_mir_body<'tcx>(
                 ),
                 scope: block_scope,
             },
-            attributes: ThinVec::new(),
             kind: match &block.terminator.kind {
                 MirTerminatorKind::Goto { target } => rustc_middle::mir::TerminatorKind::Goto {
                     target: rustc_middle::mir::BasicBlock::from_usize(*target),
+                    loop_hint_attrs: ThinVec::new(),
                 },
                 MirTerminatorKind::SwitchInt { discr, targets } => {
                     let discr = mir_operand_to_rustc(tcx, discr);
@@ -5714,7 +5748,7 @@ fn mir_rvalue_to_rustc<'tcx>(
             let def_id = internal(tcx, *item);
             // Skip thread-local checks for Const DefKinds - they shouldn't have MIR bodies
             let def_kind = tcx.def_kind(def_id);
-            if matches!(def_kind, DefKind::Const { is_type_const: _ }) {
+            if matches!(def_kind, DefKind::Const) {
                 // For Const items, just emit a placeholder - the actual value is in the AnonConst
                 let ty = tcx.type_of(def_id).instantiate_identity();
                 let ptr_ty = rustc_middle::ty::Ty::new_mut_ptr(tcx, ty.skip_normalization());
@@ -6128,10 +6162,7 @@ fn make_ptr_ty(
     hir::Ty {
         hir_id: HirId::make_owner(owner),
         span,
-        kind: hir::TyKind::Ptr(hir::MutTy {
-            ty: pointee,
-            mutbl: mutability,
-        }),
+        kind: hir::TyKind::Ptr(pointee, mutability),
     }
 }
 
@@ -6425,12 +6456,10 @@ fn hir_ty_to_rustc(
                 span,
                 kind: hir::TyKind::Ref(
                     lifetime,
-                    hir::MutTy {
-                        ty: pointee,
-                        mutbl: match mutability {
-                            rustc_public::mir::Mutability::Not => hir::Mutability::Not,
-                            rustc_public::mir::Mutability::Mut => hir::Mutability::Mut,
-                        },
+                    pointee,
+                    match mutability {
+                        rustc_public::mir::Mutability::Not => hir::Mutability::Not,
+                        rustc_public::mir::Mutability::Mut => hir::Mutability::Mut,
                     },
                 ),
             }

@@ -7,6 +7,7 @@
       "kind": "module",
       "visibility": "public",
       "filename": "src/lib.rs",
+      "docs": "Crate docs",
       "items": [
         "demo::Counter",
         "demo::MAGIC",

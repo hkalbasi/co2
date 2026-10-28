@@ -114,8 +114,9 @@ pub enum DetectResult {
 pub fn detect_co2(args: &[String]) -> DetectResult {
     let mut callbacks = DetectCallbacks::new();
 
-    let exit_code =
-        rustc_driver::catch_with_exit_code(|| rustc_driver::run_compiler(args, &mut callbacks));
+    let exit_code = rustc_driver::catch_with_exit_code(|| {
+        rustc_driver::compiler_entrypoint(args, &mut callbacks)
+    });
 
     if !callbacks.enabled {
         co2_driver_lib::fix_prealign_in_asm_output(args);

@@ -36,7 +36,7 @@ let cases = [
 ]
 
 for case in $cases {
-    let status = (do { ^co2rustc $case.source -Z unpretty=ast-tree } | complete)
+    let status = (do { ^co2rustc $case.source --edition 2024 -Z unpretty=ast-tree } | complete)
     if $status.exit_code != 0 {
         print $"co2rustc -Z unpretty=ast-tree failed for ($case.name): ($status | to json -r)"
         exit 1

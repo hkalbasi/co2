@@ -29,6 +29,7 @@ pub extern crate rustc_public;
 extern crate rustc_public_bridge;
 extern crate rustc_session;
 extern crate rustc_span;
+extern crate rustc_structures;
 extern crate rustc_target;
 extern crate rustc_trait_selection;
 

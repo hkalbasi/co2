@@ -6,7 +6,13 @@ use crate::args::CcArgs;
 pub(crate) fn sanitize_crate_name(stem: &str) -> String {
     let sanitized: String = stem
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if sanitized.is_empty() {
         "co2c_out".to_owned()
@@ -99,7 +105,11 @@ pub(crate) fn build_rustc_object_args(
     build_rustc_emit_args(
         input,
         output,
-        if emit_llvm { "--emit=llvm-bc" } else { "--emit=obj" },
+        if emit_llvm {
+            "--emit=llvm-bc"
+        } else {
+            "--emit=obj"
+        },
         opt_level,
         debuginfo,
         pic,
@@ -268,13 +278,6 @@ fn push_arch_rustc_args(rustc_args: &mut Vec<String>, args: &CcArgs) {
     if !args.target_features.is_empty() {
         rustc_args.push("-C".to_owned());
         rustc_args.push(format!("target-feature={}", args.target_features.join(",")));
-    }
-    if args.target_cpu.is_some() || !args.target_features.is_empty() {
-        // C SIMD code passes vectors by value over extern "C" (exactly what
-        // GCC/Clang accept); rustc's FFI-safety lint does not understand the
-        // x86 vector ABI.
-        rustc_args.push("-A".to_owned());
-        rustc_args.push("improper-ctypes-definitions".to_owned());
     }
 }
 

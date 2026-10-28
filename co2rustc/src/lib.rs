@@ -168,8 +168,8 @@ fn write_test_host(
             test.host_fn, test.symbol
         );
     }
-    source.push_str("fn main() {\n");
-    source.push_str("    test::test_main_static(&[\n");
+    source.push_str("fn main() -> std::process::ExitCode {\n");
+    source.push_str("    test::test_main_env_args(&[\n");
     for test in tests {
         let _ = writeln!(
             source,
@@ -177,7 +177,7 @@ fn write_test_host(
             test.display_name, test.host_fn
         );
     }
-    source.push_str("    ]);\n");
+    source.push_str("    ])\n");
     source.push_str("}\n");
 
     let path = std::env::temp_dir().join(format!(

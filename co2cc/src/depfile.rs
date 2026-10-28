@@ -36,10 +36,7 @@ pub(crate) fn write_dep_file(
     }
 
     let target = dep_args.target.as_deref().map_or_else(
-        || {
-            obj_output
-                .map_or_else(|| "a.out".to_owned(), |p| p.to_string_lossy().into_owned())
-        },
+        || obj_output.map_or_else(|| "a.out".to_owned(), |p| p.to_string_lossy().into_owned()),
         |t| {
             if dep_args.target_quoted {
                 quote_for_make(t)

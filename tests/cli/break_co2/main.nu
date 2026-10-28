@@ -43,15 +43,15 @@ let co2_src = ($test_dir | path join "host.co2")
 fn main() {}
 " | save -f $co2_src
 
-let co2rustc_result = (do { ^co2rustc $host_rs -o ($test_dir | path join "out2") } | complete)
+let co2rustc_result = (do { ^co2rustc $host_rs --edition 2024 -o ($test_dir | path join "out2") } | complete)
 let co2rustc_stderr = (normalize $co2rustc_result.stderr)
 let co2rustc_status = $co2rustc_result.exit_code
 
-let co2rustdoc_result = (do { ^co2rustdoc $host_rs --crate-name test } | complete)
+let co2rustdoc_result = (do { ^co2rustdoc $host_rs --edition 2024 --crate-name test } | complete)
 let co2rustdoc_stderr = (normalize $co2rustdoc_result.stderr)
 let co2rustdoc_status = $co2rustdoc_result.exit_code
 
-let co2miri_result = (do { ^co2miri $host_rs } | complete)
+let co2miri_result = (do { ^co2miri $host_rs --edition 2024 } | complete)
 let co2miri_stderr = (normalize $co2miri_result.stderr)
 let co2miri_status = $co2miri_result.exit_code
 
