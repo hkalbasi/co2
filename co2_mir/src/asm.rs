@@ -82,19 +82,40 @@ enum InputKind {
     Match(usize),
 }
 
+const OUTPUT_CONSTRAINTS: &[&str] = &["r", "m", "g", "a"];
+const INPUT_CONSTRAINTS: &[&str] = &["r", "m", "i", "g", "a"];
+
+fn format_constraint_list(constraints: &[&str]) -> String {
+    constraints
+        .iter()
+        .map(|c| format!("`{c}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 struct ClassifiedOperand {
     /// GNU operand index (outputs first, then inputs).
     gnu_index: usize,
+    constraint: String,
     is_output: bool,
     is_inout: bool,
     late: bool,
-    /// `true` for `"m"` (memory round-trip through a temp).
-    is_mem: bool,
-    is_const: bool,
     size: usize,
     /// For matching inputs (`"0"`): the output GNU index they copy into.
     matches: Option<usize>,
     expr: HirExpr,
+}
+
+impl ClassifiedOperand {
+    /// `"m"` operands round-trip through a memory temp.
+    fn is_mem(&self) -> bool {
+        self.constraint == "m"
+    }
+
+    /// `"i"` operands stay immediates when their value is a constant.
+    fn is_const(&self) -> bool {
+        self.constraint == "i"
+    }
 }
 
 impl Builder<'_, '_> {
@@ -182,11 +203,10 @@ impl Builder<'_, '_> {
             let size = self.asm_operand_size(op.expr.ty, span);
             ops.push(ClassifiedOperand {
                 gnu_index,
+                constraint,
                 is_output: true,
                 is_inout,
                 late,
-                is_mem: constraint == "m",
-                is_const: false,
                 size,
                 matches: None,
                 expr: op.expr.clone(),
@@ -205,11 +225,10 @@ impl Builder<'_, '_> {
                     }
                     ops.push(ClassifiedOperand {
                         gnu_index,
+                        constraint,
                         is_output: false,
                         is_inout: false,
                         late: false,
-                        is_mem: constraint == "m",
-                        is_const: constraint == "i",
                         size,
                         matches: None,
                         expr: op.expr.clone(),
@@ -224,11 +243,10 @@ impl Builder<'_, '_> {
                     }
                     ops.push(ClassifiedOperand {
                         gnu_index,
+                        constraint: String::new(),
                         is_output: false,
                         is_inout: false,
                         late: false,
-                        is_mem: false,
-                        is_const: false,
                         size: 0,
                         matches: Some(out_gnu),
                         expr: op.expr.clone(),
@@ -293,10 +311,11 @@ impl Builder<'_, '_> {
                         }
                         None => self.asm_value_for_reg(&op.expr, span),
                     };
-                    if op.is_mem {
+                    if op.is_mem() {
                         let tmp = self.new_temp(op.expr.ty, Mutability::Mut, span);
                         self.emit_assign_use(place(tmp), in_value, span);
                         mir_operands.push(self.mk_inout(
+                            &op.constraint,
                             op.late,
                             op.size,
                             MirOperand::Copy(place(tmp)),
@@ -304,16 +323,27 @@ impl Builder<'_, '_> {
                         ));
                         store_backs.push((place(tmp), dst));
                     } else {
-                        mir_operands.push(self.mk_inout(op.late, op.size, in_value, dst));
+                        mir_operands.push(self.mk_inout(
+                            &op.constraint,
+                            op.late,
+                            op.size,
+                            in_value,
+                            dst,
+                        ));
                     }
-                } else if op.is_mem {
+                } else if op.is_mem() {
                     let tmp = self.new_temp(op.expr.ty, Mutability::Mut, span);
-                    mir_operands.push(self.mk_out(op.late, op.size, Some(place(tmp))));
+                    mir_operands.push(self.mk_out(
+                        &op.constraint,
+                        op.late,
+                        op.size,
+                        Some(place(tmp)),
+                    ));
                     store_backs.push((place(tmp), dst));
                 } else {
-                    mir_operands.push(self.mk_out(op.late, op.size, Some(dst)));
+                    mir_operands.push(self.mk_out(&op.constraint, op.late, op.size, Some(dst)));
                 }
-            } else if op.is_const {
+            } else if op.is_const() {
                 // `"i"` immediates stay immediates when the lowered operand
                 // is already a constant; otherwise (e.g. signed types, which
                 // lower through a cast) the value rides in a register, which
@@ -333,14 +363,14 @@ impl Builder<'_, '_> {
                         let size = op.size;
                         let ty = op.expr.ty;
                         let in_value = self.asm_spill_to_reg(in_value, ty, span);
-                        mir_operands.push(self.mk_in(size, in_value));
+                        mir_operands.push(self.mk_in(&op.constraint, size, in_value));
                     }
                 }
             } else {
                 // `"m"` inputs ride in a register too: observationally
                 // identical values, and every GPR remains addressable.
                 let in_value = self.asm_value_for_reg(&op.expr, span);
-                mir_operands.push(self.mk_in(op.size, in_value));
+                mir_operands.push(self.mk_in(&op.constraint, op.size, in_value));
             }
         }
 
@@ -430,11 +460,12 @@ impl Builder<'_, '_> {
             late = true;
             c = rest;
         }
-        if c != "r" && c != "m" && c != "g" {
+        if !OUTPUT_CONSTRAINTS.contains(&c) {
             self.terminate_with_error(
                 span,
                 &format!(
-                    "unsupported asm output constraint `{constraint}` (only `r`, `m`, `g` are supported)"
+                    "unsupported asm output constraint `{constraint}` (only {} are supported)",
+                    format_constraint_list(OUTPUT_CONSTRAINTS)
                 ),
             );
         }
@@ -479,11 +510,12 @@ impl Builder<'_, '_> {
             }
             return InputKind::Match(idx);
         }
-        if constraint != "r" && constraint != "m" && constraint != "i" && constraint != "g" {
+        if !INPUT_CONSTRAINTS.contains(&constraint) {
             self.terminate_with_error(
                 span,
                 &format!(
-                    "unsupported asm input constraint `{constraint}` (only `r`, `m`, `i`, `g` are supported)"
+                    "unsupported asm input constraint `{constraint}` (only {} are supported)",
+                    format_constraint_list(INPUT_CONSTRAINTS)
                 ),
             );
         }
@@ -599,24 +631,31 @@ impl Builder<'_, '_> {
         }
     }
 
-    fn mk_in(&self, size: usize, in_value: MirOperand) -> InlineAsmOperand {
+    fn mk_in(&self, constraint: &str, size: usize, in_value: MirOperand) -> InlineAsmOperand {
         InlineAsmOperand {
             in_value: Some(in_value),
             out_place: None,
-            raw_rpr: format!("I:{}", self.asm_reg_spec(size)),
+            raw_rpr: format!("I:{}", self.asm_reg_spec(constraint, size)),
         }
     }
 
-    fn mk_out(&self, late: bool, size: usize, out_place: Option<MirPlace>) -> InlineAsmOperand {
+    fn mk_out(
+        &self,
+        constraint: &str,
+        late: bool,
+        size: usize,
+        out_place: Option<MirPlace>,
+    ) -> InlineAsmOperand {
         InlineAsmOperand {
             in_value: None,
             out_place,
-            raw_rpr: format!("O:{}:{}", late as u8, self.asm_reg_spec(size)),
+            raw_rpr: format!("O:{}:{}", late as u8, self.asm_reg_spec(constraint, size)),
         }
     }
 
     fn mk_inout(
         &self,
+        constraint: &str,
         late: bool,
         size: usize,
         in_value: MirOperand,
@@ -625,14 +664,25 @@ impl Builder<'_, '_> {
         InlineAsmOperand {
             in_value: Some(in_value),
             out_place: Some(out_place),
-            raw_rpr: format!("N:{}:{}", late as u8, self.asm_reg_spec(size)),
+            raw_rpr: format!("N:{}:{}", late as u8, self.asm_reg_spec(constraint, size)),
         }
     }
 
-    fn asm_reg_spec(&self, size: usize) -> &'static str {
-        match size {
-            1 => "q",
-            _ => "r",
+    fn asm_reg_spec(&self, constraint: &str, size: usize) -> String {
+        if constraint == "a" {
+            let reg = match size {
+                1 => "al",
+                2 => "ax",
+                4 => "eax",
+                8 => "rax",
+                _ => unreachable!("asm operand sizes are integer widths"),
+            };
+            format!("={reg}")
+        } else {
+            match size {
+                1 => "q".to_string(),
+                _ => "r".to_string(),
+            }
         }
     }
 
