@@ -11,7 +11,9 @@ int x = 0;
 void *worker(void *arg)
 {
     (void)arg;
-    x = 1;
+    for (int i = 0; i < 100000; i += 1) {
+        x += 1;
+    }
     return 0;
 }
 
@@ -19,7 +21,9 @@ int main(void)
 {
     pthread_t t;
     pthread_create(&t, 0, worker, 0);
-    x = 2;
+    for (int i = 0; i < 100000; i += 1) {
+        x += 2;
+    }
     pthread_join(t, 0);
     return 0;
 }
