@@ -493,6 +493,14 @@ fn validate_module_attrs_recursive(
     errors
 }
 
+fn c_struct_cfi_attrs(tag: Option<&str>) -> Vec<GeneratedAttr> {
+    // Tagged C structs match by tag; all untagged C structs share one fixed encoding.
+    let tag = tag.unwrap_or(ANON_STRUCT_CFI_TAG);
+    vec![GeneratedAttr::CfiEncoding(format!("{}{}", tag.len(), tag))]
+}
+
+const ANON_STRUCT_CFI_TAG: &str = "__co2_anon_struct";
+
 fn has_word_attr(attrs: &[Co2Attr], word: &str) -> bool {
     attrs
         .iter()
@@ -1432,6 +1440,7 @@ fn lower_translation_unit_items(
                 name: name.clone(),
                 id: AdtDef(type_def),
                 kind: adt_kind,
+                attrs: c_struct_cfi_attrs(None),
                 span,
                 repr: adt_repr,
                 visibility: Visibility::Public,
@@ -1510,6 +1519,7 @@ fn lower_translation_unit_items(
                     name,
                     id: AdtDef(id),
                     kind: HirAdtKind::Struct { fields },
+                    attrs: co2_attrs_to_generated(&lower_generated_attrs(&attrs)),
                     visibility: match ast_vis {
                         AstVisibility::Public => Visibility::Public,
                         AstVisibility::Crate => Visibility::Crate,
@@ -2544,7 +2554,7 @@ pub fn lower_crate_sig(
     for StructData {
         def_id: def,
         name,
-        tag_name: _,
+        tag_name,
         kind,
         emitted_fields: fields,
         logical_fields: _,
@@ -2594,7 +2604,11 @@ pub fn lower_crate_sig(
             None => AdtRepr::C,
         };
 
+        // The CFI encoding must use the C tag (e.g. `Foo`), not the generated Rust name,
+        // so that equivalent C structs in different crates compare equal.
+        let attrs = c_struct_cfi_attrs(tag_name.as_deref());
         ctx.hir_items.push(HirModuleItem::Adt {
+            attrs,
             name,
             id: AdtDef(def),
             kind,

@@ -19,6 +19,7 @@ pub enum InlineHint {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeneratedAttr {
+    CfiEncoding(String),
     Word {
         path: Vec<String>,
     },
@@ -67,6 +68,7 @@ pub enum HirModuleItem {
         id: AdtDef,
         repr: AdtRepr,
         kind: HirAdtKind,
+        attrs: Vec<GeneratedAttr>,
         visibility: Visibility,
         span: Span,
     },

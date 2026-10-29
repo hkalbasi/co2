@@ -240,6 +240,7 @@ impl ItemSignatureInfo {
                         repr: _,
                         id,
                         kind,
+                        attrs: _,
                         span,
                         ..
                     } => match kind {
@@ -1365,11 +1366,13 @@ impl DefinedCrateInfo {
                         no_mangle,
                     },
                     crate::HirModuleItem::Adt {
-                        name: _,
+                        name,
                         id,
                         kind,
-                        span: _,
+                        attrs,
+                        span,
                         repr,
+                        visibility,
                         ..
                     } => {
                         let result = match kind {
@@ -1380,6 +1383,7 @@ impl DefinedCrateInfo {
                                 DefinedItemKind::Union(id, repr)
                             }
                         };
+                        let attrs = attrs;
                         match kind {
                             crate::HirAdtKind::Struct { fields }
                             | crate::HirAdtKind::Union { fields } => {
@@ -1396,7 +1400,16 @@ impl DefinedCrateInfo {
                                 }
                             }
                         }
-                        result
+                        items.push(DefinedItemInfo {
+                            name,
+                            kind: result,
+                            attrs,
+                            span: internal(tcx, span),
+                            ident_span: None,
+                            parent,
+                            visibility,
+                        });
+                        continue;
                     }
                     crate::HirModuleItem::Impl {
                         id,
@@ -4925,6 +4938,9 @@ fn generated_attr(attr: &GeneratedAttr) -> Option<hir::Attribute> {
             kind: DocFragmentKind::Sugared(CommentKind::Line),
             span: DUMMY_SP,
             comment: Symbol::intern(comment),
+        },
+        GeneratedAttr::CfiEncoding(encoding) => hir::attrs::AttributeKind::CfiEncoding {
+            encoding: Symbol::intern(encoding),
         },
         GeneratedAttr::Word { path } if path.as_slice() == ["no_main"] => {
             hir::attrs::AttributeKind::NoMain

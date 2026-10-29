@@ -1,0 +1,94 @@
+#include <stdio.h>
+
+typedef struct Foo { int value; } Bar;
+
+typedef struct Line { struct Point { int x; int y; } start; struct Point end; } Seg;
+
+int increment(Bar value);
+
+struct Point make_point(int x, int y);
+
+int point_sum(struct Point *p);
+
+int line_span(Seg line);
+
+int area(struct Size { int w; int h; } size);
+
+typedef struct { int x; int y; } AnonPoint;
+
+typedef struct { struct { int x; int y; } start; AnonPoint end; } AnonLine;
+
+typedef struct { int w; int h; } AnonSize;
+
+AnonPoint make_anon_point(int x, int y);
+
+int anon_point_sum(AnonPoint *p);
+
+int anon_line_span(AnonLine line);
+
+int anon_area(AnonSize size);
+
+fn main() {
+    if (increment(Bar { value: 3 }) != 4) {
+        printf("increment(Bar { value: 3 }) != 4\n");
+        std::process::exit(1);
+    }
+
+    struct Point p = make_point(2, 5);
+    if (p.x != 2 || p.y != 5) {
+        printf("make_point(2, 5) returned the wrong value\n");
+        std::process::exit(1);
+    }
+
+    if (point_sum(&p) != 7) {
+        printf("point_sum(&p) != 7\n");
+        std::process::exit(1);
+    }
+
+    Seg seg;
+    seg.start.x = 1;
+    seg.start.y = 1;
+    seg.end.x = 4;
+    seg.end.y = 5;
+    if (line_span(seg) != 7) {
+        printf("line_span(seg) != 7\n");
+        std::process::exit(1);
+    }
+
+    struct Size size;
+    size.w = 3;
+    size.h = 4;
+    if (area(size) != 12) {
+        printf("area(size) != 12\n");
+        std::process::exit(1);
+    }
+
+    AnonPoint ap = make_anon_point(2, 5);
+    if (ap.x != 2 || ap.y != 5) {
+        printf("make_anon_point(2, 5) returned the wrong value\n");
+        std::process::exit(1);
+    }
+
+    if (anon_point_sum(&ap) != 7) {
+        printf("anon_point_sum(&ap) != 7\n");
+        std::process::exit(1);
+    }
+
+    AnonLine al;
+    al.start.x = 1;
+    al.start.y = 1;
+    al.end.x = 4;
+    al.end.y = 5;
+    if (anon_line_span(al) != 7) {
+        printf("anon_line_span(al) != 7\n");
+        std::process::exit(1);
+    }
+
+    AnonSize as;
+    as.w = 3;
+    as.h = 4;
+    if (anon_area(as) != 12) {
+        printf("anon_area(as) != 12\n");
+        std::process::exit(1);
+    }
+}

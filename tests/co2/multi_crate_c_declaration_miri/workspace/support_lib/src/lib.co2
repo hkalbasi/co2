@@ -1,0 +1,49 @@
+int increment(struct Foo { int value; } arg) {
+    return arg.value + 1;
+}
+
+struct Point { int x; int y; };
+
+struct Line { struct Point start; struct Point end; };
+
+struct Point make_point(int x, int y) {
+    struct Point p;
+    p.x = x;
+    p.y = y;
+    return p;
+}
+
+int point_sum(struct Point *p) {
+    return p->x + p->y;
+}
+
+int line_span(struct Line line) {
+    return (line.end.x - line.start.x) + (line.end.y - line.start.y);
+}
+
+int area(struct Size { int w; int h; } size) {
+    return size.w * size.h;
+}
+
+typedef struct { int x; int y; } AnonyPoint;
+
+typedef struct { AnonyPoint start; AnonyPoint end; } AnonyLine;
+
+AnonyPoint make_anon_point(int x, int y) {
+    AnonyPoint p;
+    p.x = x;
+    p.y = y;
+    return p;
+}
+
+int anon_point_sum(AnonyPoint *p) {
+    return p->x + p->y;
+}
+
+int anon_line_span(AnonyLine line) {
+    return (line.end.x - line.start.x) + (line.end.y - line.start.y);
+}
+
+int anon_area(struct { int w; int h; } size) {
+    return size.w * size.h;
+}
