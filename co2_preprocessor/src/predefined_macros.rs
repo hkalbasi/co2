@@ -389,6 +389,9 @@ impl Preprocessor {
                 &[],
                 "({ extern void abort(void); (abort)(); })",
             ),
+            // Cache hint only: the address is evaluated, the optional
+            // rw/locality arguments are ignored.
+            ("__builtin_prefetch", &["addr", "..."], "((void)(addr))"),
         ];
 
         // Library builtins (https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html):
@@ -1042,6 +1045,10 @@ impl Preprocessor {
         }
 
         for &(name, params, body) in PREDEFINED_FUNC_MACROS {
+            let (params, is_variadic) = match params.split_last() {
+                Some((&"...", fixed)) => (fixed, true),
+                _ => (params, false),
+            };
             self.macros.define(macro_def_from_parts(
                 name.to_string(),
                 true,
@@ -1049,7 +1056,7 @@ impl Preprocessor {
                     .iter()
                     .map(std::string::ToString::to_string)
                     .collect(),
-                false,
+                is_variadic,
                 false,
                 body.to_string(),
             ));

@@ -47,10 +47,19 @@ int test_ctzll() {
     return 0;
 }
 
+// Test __builtin_prefetch (zstd uses it for match-finder cache hints)
+int test_prefetch() {
+    int v[2] = {1, 2};
+    __builtin_prefetch(v);
+    __builtin_prefetch(v + 1, 1, 3);
+    return 0;
+}
+
 int main() {
     if (test_clz()) return 1;
     if (test_clzll()) return 2;
     if (test_ctz()) return 3;
     if (test_ctzll()) return 4;
+    if (test_prefetch()) return 5;
     return 0;
 }
