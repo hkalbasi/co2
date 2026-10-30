@@ -1497,10 +1497,30 @@ impl HirCtx<'_> {
                     _ => Err(spanned_error(*span, "unsupported unary op in array size")),
                 }
             }
-            Expression::BinOp(lhs, op, rhs) => {
-                let lhs = self.eval_const_expr_in_scope(lhs, locals, local_map)?;
-                let rhs = self.eval_const_expr_in_scope(rhs, locals, local_map)?;
-                match op {
+            Expression::BinOp(lhs_expr, op, rhs_expr) => {
+                let lhs = self.eval_const_expr_in_scope(lhs_expr, locals, local_map)?;
+                let rhs = self.eval_const_expr_in_scope(rhs_expr, locals, local_map)?;
+                let (lhs, rhs) = match op {
+                    co2_ast::BinOp::Add
+                    | co2_ast::BinOp::Sub
+                    | co2_ast::BinOp::Mul
+                    | co2_ast::BinOp::Div
+                    | co2_ast::BinOp::Rem
+                    | co2_ast::BinOp::BitOr
+                    | co2_ast::BinOp::BitXor
+                    | co2_ast::BinOp::BitAnd
+                    | co2_ast::BinOp::Eq
+                    | co2_ast::BinOp::Ne
+                    | co2_ast::BinOp::Lt
+                    | co2_ast::BinOp::Le
+                    | co2_ast::BinOp::Gt
+                    | co2_ast::BinOp::Ge => {
+                        self.decl_resolver
+                            .usual_arithmetic_converted(lhs_expr, rhs_expr, lhs, rhs)
+                    }
+                    _ => (lhs, rhs),
+                };
+                let value = match op {
                     co2_ast::BinOp::Add => lhs
                         .checked_add(rhs)
                         .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
@@ -1554,7 +1574,20 @@ impl HirCtx<'_> {
                     co2_ast::BinOp::Comma | co2_ast::BinOp::Assign => {
                         Err(spanned_error(*span, "unsupported binary op in array size"))
                     }
-                }
+                }?;
+                Ok(match op {
+                    co2_ast::BinOp::Add
+                    | co2_ast::BinOp::Sub
+                    | co2_ast::BinOp::Mul
+                    | co2_ast::BinOp::Div
+                    | co2_ast::BinOp::Rem
+                    | co2_ast::BinOp::BitOr
+                    | co2_ast::BinOp::BitXor
+                    | co2_ast::BinOp::BitAnd => self
+                        .decl_resolver
+                        .wrap_to_usual_arithmetic_ty(lhs_expr, rhs_expr, value),
+                    _ => value,
+                })
             }
             Expression::Conditional {
                 cond,

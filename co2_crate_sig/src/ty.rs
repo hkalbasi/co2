@@ -1299,7 +1299,25 @@ impl LocalResolverBase {
             Expression::BinOp(lhs_expr, op, rhs_expr) => {
                 let lhs = self.eval_const_expr(lhs_expr)?;
                 let rhs = self.eval_const_expr(rhs_expr)?;
-                match op {
+                let arith_ty = match op {
+                    BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::Div
+                    | BinOp::Rem
+                    | BinOp::BitOr
+                    | BinOp::BitXor
+                    | BinOp::BitAnd => self.common_const_int_ty_of_operands(lhs_expr, rhs_expr),
+                    _ => None,
+                };
+                let (lhs, rhs) = match arith_ty {
+                    Some(ty) => (
+                        convert_const_int_value(lhs, ty),
+                        convert_const_int_value(rhs, ty),
+                    ),
+                    None => (lhs, rhs),
+                };
+                let value = match op {
                     BinOp::Add => lhs
                         .checked_add(rhs)
                         .ok_or_else(|| spanned_error(*span, "integer overflow in const eval")),
@@ -1371,7 +1389,8 @@ impl LocalResolverBase {
                     BinOp::Comma | BinOp::Assign => {
                         Err(spanned_error(*span, "unsupported binary op in array size"))
                     }
-                }
+                };
+                value.map(|v| arith_ty.map_or(v, |ty| convert_const_int_value(v, ty)))
             }
             Expression::Conditional {
                 cond,
@@ -1501,7 +1520,17 @@ impl LocalResolverBase {
     /// Applies C's usual arithmetic conversions (integer part, C11 §6.3.1.8)
     /// to the two operand values, using the integer types of the operands.
     /// Falls back to the raw values when either operand type is not known.
-    fn usual_arithmetic_converted(
+    fn common_const_int_ty_of_operands(
+        &mut self,
+        lhs_expr: &Spanned<Expression<LocalResolver>>,
+        rhs_expr: &Spanned<Expression<LocalResolver>>,
+    ) -> Option<ConstIntTy> {
+        let lhs_ty = self.const_int_ty_of_expr(lhs_expr)?;
+        let rhs_ty = self.const_int_ty_of_expr(rhs_expr)?;
+        Some(common_const_int_ty(lhs_ty, rhs_ty))
+    }
+
+    pub(crate) fn usual_arithmetic_converted(
         &mut self,
         lhs_expr: &Spanned<Expression<LocalResolver>>,
         rhs_expr: &Spanned<Expression<LocalResolver>>,
@@ -1521,6 +1550,24 @@ impl LocalResolverBase {
         )
     }
 
+    /// Wraps a binary operation's result to the common operand type.
+    pub(crate) fn wrap_to_usual_arithmetic_ty(
+        &mut self,
+        lhs_expr: &Spanned<Expression<LocalResolver>>,
+        rhs_expr: &Spanned<Expression<LocalResolver>>,
+        value: i128,
+    ) -> i128 {
+        match (
+            self.const_int_ty_of_expr(lhs_expr),
+            self.const_int_ty_of_expr(rhs_expr),
+        ) {
+            (Some(lhs_ty), Some(rhs_ty)) => {
+                convert_const_int_value(value, common_const_int_ty(lhs_ty, rhs_ty))
+            }
+            _ => value,
+        }
+    }
+
     /// Computes the integer type of a constant expression, when it can be
     /// determined statically. Returns `None` for non-integer or unresolvable
     /// expressions, in which case callers fall back to raw i128 semantics.
@@ -1533,10 +1580,10 @@ impl LocalResolverBase {
                 let kind = match suffix {
                     IntegerSuffix::None | IntegerSuffix::NoneDecimal => HirTyKind::Int(IntTy::I32),
                     IntegerSuffix::Long => HirTyKind::Int(IntTy::I64),
-                    IntegerSuffix::LongLong => HirTyKind::Int(IntTy::I128),
+                    IntegerSuffix::LongLong => HirTyKind::Int(IntTy::I64),
                     IntegerSuffix::Unsigned => HirTyKind::Uint(UintTy::U32),
                     IntegerSuffix::UnsignedLong => HirTyKind::Uint(UintTy::U64),
-                    IntegerSuffix::UnsignedLongLong => HirTyKind::Uint(UintTy::U128),
+                    IntegerSuffix::UnsignedLongLong => HirTyKind::Uint(UintTy::U64),
                     IntegerSuffix::Usize => HirTyKind::Uint(UintTy::Usize),
                     IntegerSuffix::Isize => HirTyKind::Int(IntTy::Isize),
                     IntegerSuffix::U8 => HirTyKind::Uint(UintTy::U8),
@@ -1913,10 +1960,10 @@ impl LocalResolverBase {
                 let kind = match suffix {
                     IntegerSuffix::None | IntegerSuffix::NoneDecimal => HirTyKind::Int(IntTy::I32),
                     IntegerSuffix::Long => HirTyKind::Int(IntTy::I64),
-                    IntegerSuffix::LongLong => HirTyKind::Int(IntTy::I128),
+                    IntegerSuffix::LongLong => HirTyKind::Int(IntTy::I64),
                     IntegerSuffix::Unsigned => HirTyKind::Uint(UintTy::U32),
                     IntegerSuffix::UnsignedLong => HirTyKind::Uint(UintTy::U64),
-                    IntegerSuffix::UnsignedLongLong => HirTyKind::Uint(UintTy::U128),
+                    IntegerSuffix::UnsignedLongLong => HirTyKind::Uint(UintTy::U64),
                     IntegerSuffix::Usize => HirTyKind::Uint(UintTy::Usize),
                     IntegerSuffix::Isize => HirTyKind::Int(IntTy::Isize),
                     IntegerSuffix::U8 => HirTyKind::Uint(UintTy::U8),
