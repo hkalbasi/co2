@@ -501,6 +501,11 @@ impl Preprocessor {
                 &["void *", "const void *", "unsigned long"],
             ),
             (
+                "memmove",
+                "void *",
+                &["void *", "const void *", "unsigned long"],
+            ),
+            (
                 "mempcpy",
                 "void *",
                 &["void *", "const void *", "unsigned long"],

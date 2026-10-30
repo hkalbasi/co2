@@ -55,11 +55,20 @@ int test_prefetch() {
     return 0;
 }
 
+// Test __builtin_memmove (zstd's ZSTD_memmove expands to it)
+int test_memmove() {
+    int a[4] = {1, 2, 3, 4};
+    __builtin_memmove(a + 1, a, 3 * sizeof(int));
+    if (a[1] != 1 || a[3] != 3) return 1;
+    return 0;
+}
+
 int main() {
     if (test_clz()) return 1;
     if (test_clzll()) return 2;
     if (test_ctz()) return 3;
     if (test_ctzll()) return 4;
     if (test_prefetch()) return 5;
+    if (test_memmove()) return 6;
     return 0;
 }
