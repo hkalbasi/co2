@@ -1,0 +1,22 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-miri
+
+enum Param { P_A = 100, P_B = 101 };
+
+int take_param(enum Param p)
+{
+    return p == P_B ? 1 : 0;
+}
+
+int call_through(int (*f)(int), enum Param p)
+{
+    return f(p);
+}
+
+fn main() {
+    int (*fp)(enum Param) = take_param;
+    if (call_through((int (*)(int))fp, P_B) != 1) {
+        std::process::exit(1);
+    }
+}

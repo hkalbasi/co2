@@ -269,6 +269,6 @@ pub enum FunctionAbi {
 pub enum AdtRepr {
     Rust,
     C,
-    /// `#[repr(C, packed(n))]` — C layout with maximum field alignment of `n` bytes.
     CPacked(u32),
+    Transparent,
 }
