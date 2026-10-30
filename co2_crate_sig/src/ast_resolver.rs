@@ -713,6 +713,29 @@ impl LocalResolver {
         self.base.borrow_mut().eval_const_expr(expr)
     }
 
+    pub fn usual_arithmetic_converted(
+        &self,
+        lhs_expr: &Spanned<Expression<LocalResolver>>,
+        rhs_expr: &Spanned<Expression<LocalResolver>>,
+        lhs_val: i128,
+        rhs_val: i128,
+    ) -> (i128, i128) {
+        self.base
+            .borrow_mut()
+            .usual_arithmetic_converted(lhs_expr, rhs_expr, lhs_val, rhs_val)
+    }
+
+    pub fn wrap_to_usual_arithmetic_ty(
+        &self,
+        lhs_expr: &Spanned<Expression<LocalResolver>>,
+        rhs_expr: &Spanned<Expression<LocalResolver>>,
+        value: i128,
+    ) -> i128 {
+        self.base
+            .borrow_mut()
+            .wrap_to_usual_arithmetic_ty(lhs_expr, rhs_expr, value)
+    }
+
     pub fn normalize_ty_for_current_owner(&self, ty: Ty) -> Ty {
         self.base
             .borrow()

@@ -104,6 +104,10 @@ int the_ar[] = {
     [100 - Var5] = 32,
 };
 
+// zstd's ZSTD_CONTENTSIZE_UNKNOWN is (0ULL - 1), checked with a negative array size.
+#define CONTENTSIZE_UNKNOWN (0ULL - 1)
+typedef char zstd_static_assert_contentsize[(CONTENTSIZE_UNKNOWN == (unsigned long long)-1) ? 1 : -1];
+
 int main() {
   if (sizeof(ar1) / sizeof(int) != 12)
     return 1;
@@ -201,6 +205,13 @@ int main() {
       the_ar[sizeof("hello") - 1] == 24 && the_ar[5 == 5] == 22 &&
       the_ar[5 << 2] == 14) {
     return 33;
+  }
+
+  // Same zstd check as above, but inside a function body: currently fails to evaluate.
+  {
+    char contentsize_in_fn[(CONTENTSIZE_UNKNOWN == (unsigned long long)-1) ? 1 : -1];
+    if (sizeof(contentsize_in_fn) != 1)
+      return 34;
   }
 
   return 0;
