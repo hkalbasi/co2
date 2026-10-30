@@ -13,6 +13,14 @@ unsigned max_cpuid_leaf(void) {
     return n;
 }
 
+void test_cpuid_outputs(void) {
+    unsigned a, c, d;
+    __asm__("cpuid" : "=a"(a), "=c"(c), "=d"(d) : "a"(1) : "ebx");
+    assert(a != 0);
+    assert(c == c);
+    assert(d == d);
+}
+
 void test_output_widths(void) {
     uint64_t q;
     __asm__("movabsq $0x1122334455667788, %0" : "=a"(q));
@@ -59,6 +67,7 @@ void test_input_pinned(void) {
 
 int main(void) {
     assert(max_cpuid_leaf() > 0);
+    test_cpuid_outputs();
     test_output_widths();
     test_inout();
     test_input_pinned();

@@ -82,8 +82,16 @@ enum InputKind {
     Match(usize),
 }
 
-const OUTPUT_CONSTRAINTS: &[&str] = &["r", "m", "g", "a"];
-const INPUT_CONSTRAINTS: &[&str] = &["r", "m", "i", "g", "a"];
+const OUTPUT_CONSTRAINTS: &[&str] = &["r", "m", "g", "a", "b", "c", "d"];
+const INPUT_CONSTRAINTS: &[&str] = &["r", "m", "i", "g", "a", "b", "c", "d"];
+
+/// Pinned x86 registers, as `(constraint, [8-bit, 16-bit, 32-bit, 64-bit])`.
+const PINNED_GPRS: &[(&str, [&str; 4])] = &[
+    ("a", ["al", "ax", "eax", "rax"]),
+    ("b", ["bl", "bx", "ebx", "rbx"]),
+    ("c", ["cl", "cx", "ecx", "rcx"]),
+    ("d", ["dl", "dx", "edx", "rdx"]),
+];
 
 fn format_constraint_list(constraints: &[&str]) -> String {
     constraints
@@ -669,12 +677,12 @@ impl Builder<'_, '_> {
     }
 
     fn asm_reg_spec(&self, constraint: &str, size: usize) -> String {
-        if constraint == "a" {
+        if let Some((_, regs)) = PINNED_GPRS.iter().find(|(c, _)| *c == constraint) {
             let reg = match size {
-                1 => "al",
-                2 => "ax",
-                4 => "eax",
-                8 => "rax",
+                1 => regs[0],
+                2 => regs[1],
+                4 => regs[2],
+                8 => regs[3],
                 _ => unreachable!("asm operand sizes are integer widths"),
             };
             format!("={reg}")
