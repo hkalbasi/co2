@@ -4902,6 +4902,9 @@ fn generated_builtin_item_attr(kind: DefinedItemKind) -> Option<hir::attrs::Attr
             let reprs = match repr {
                 AdtRepr::Rust => ThinVec::from_iter([(hir::attrs::ReprAttr::ReprRust, DUMMY_SP)]),
                 AdtRepr::C => ThinVec::from_iter([(hir::attrs::ReprAttr::ReprC, DUMMY_SP)]),
+                AdtRepr::Transparent => {
+                    ThinVec::from_iter([(hir::attrs::ReprAttr::ReprTransparent, DUMMY_SP)])
+                }
                 AdtRepr::CPacked(n) => ThinVec::from_iter([
                     (hir::attrs::ReprAttr::ReprC, DUMMY_SP),
                     (

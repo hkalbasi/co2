@@ -2599,9 +2599,13 @@ pub fn lower_crate_sig(
             StructOrUnionKind::Union if !fields.is_empty() => HirAdtKind::Union { fields },
             StructOrUnionKind::Struct | StructOrUnionKind::Union => HirAdtKind::Struct { fields },
         };
-        let repr = match pack_align {
-            Some(n) => AdtRepr::CPacked(n),
-            None => AdtRepr::C,
+        let repr = if ctx.resolver.borrow().is_enum_def(def) {
+            AdtRepr::Transparent
+        } else {
+            match pack_align {
+                Some(n) => AdtRepr::CPacked(n),
+                None => AdtRepr::C,
+            }
         };
 
         // The CFI encoding must use the C tag (e.g. `Foo`), not the generated Rust name,
