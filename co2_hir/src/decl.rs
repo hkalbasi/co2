@@ -247,6 +247,7 @@ fn validate_local_constexpr_decl(
         matches!(
             spec.0,
             DeclarationSpecifier::TypeQualifier((TypeQualifier::Atomic, _))
+                | DeclarationSpecifier::TypeSpecifier((co2_ast::TypeSpecifier::AtomicType(_), _))
         )
     }) {
         return Err(spanned_error(

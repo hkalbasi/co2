@@ -553,6 +553,7 @@ pub enum TypeSpecifier<R: TypeResolver> {
     TypedefName(Spanned<R::ResolvedRustPath>),
     TypeofType(Box<TypeName<R>>),
     TypeofExpr(Box<Spanned<Expression<R>>>),
+    AtomicType(Box<TypeName<R>>),
 }
 
 #[derive(Debug, Clone)]

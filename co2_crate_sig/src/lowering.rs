@@ -647,7 +647,8 @@ fn type_name_contains_local(type_name: &co2_ast::TypeName<LocalResolver>) -> boo
         .any(|(specifier, _)| match specifier {
             co2_ast::SpecifierQualifier::TypeSpecifier((ty, _)) => match ty {
                 co2_ast::TypeSpecifier::TypeofExpr(expr) => expr_contains_local(&expr.0),
-                co2_ast::TypeSpecifier::TypeofType(type_name) => {
+                co2_ast::TypeSpecifier::TypeofType(type_name)
+                | co2_ast::TypeSpecifier::AtomicType(type_name) => {
                     type_name_contains_local(type_name)
                 }
                 _ => false,
@@ -851,7 +852,7 @@ fn deduplicate_tu_items(
                         matches!(
                             &spec.0,
                             co2_ast::DeclarationSpecifier::TypeSpecifier(ts)
-                                if matches!(&ts.0, co2_ast::TypeSpecifier::TypedefName(..) | co2_ast::TypeSpecifier::TypeofExpr(..) | co2_ast::TypeSpecifier::TypeofType(..))
+                                if matches!(&ts.0, co2_ast::TypeSpecifier::TypedefName(..) | co2_ast::TypeSpecifier::TypeofExpr(..) | co2_ast::TypeSpecifier::TypeofType(..) | co2_ast::TypeSpecifier::AtomicType(..))
                         )
                     });
                 for decl in declarators {

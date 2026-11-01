@@ -1073,6 +1073,67 @@ fn is_type_qualifier(tok: Option<&Token>) -> bool {
 }
 
 impl<'a, R: TypeResolver> P<'a, R> {
+    /// `_Atomic (` followed by a type-name start is the atomic type specifier;
+    /// otherwise `_Atomic` is a qualifier (e.g. `_Atomic (*p)`).
+    fn at_atomic_type_specifier(&self) -> bool {
+        if !matches!(self.peek(0), Some(Token::Atomic))
+            || !matches!(self.peek(1), Some(Token::LParen))
+        {
+            return false;
+        }
+        match self.peek(2) {
+            Some(Token::Ident(_) | Token::ColonColon | Token::Lt) => true,
+            tok => {
+                is_type_qualifier(tok)
+                    || matches!(
+                        tok,
+                        Some(
+                            Token::Int
+                                | Token::Int128
+                                | Token::Bool
+                                | Token::Void
+                                | Token::Char
+                                | Token::Short
+                                | Token::Long
+                                | Token::Float
+                                | Token::Double
+                                | Token::Float16
+                                | Token::Float32
+                                | Token::Float64
+                                | Token::Float128
+                                | Token::Float32x
+                                | Token::Float64x
+                                | Token::Float128x
+                                | Token::GnuFloat128
+                                | Token::Complex
+                                | Token::Signed
+                                | Token::Unsigned
+                                | Token::Struct
+                                | Token::Union
+                                | Token::Enum
+                                | Token::Typeof
+                        )
+                    )
+            }
+        }
+    }
+
+    fn at_type_qualifier(&self) -> bool {
+        is_type_qualifier(self.peek(0)) && !self.at_atomic_type_specifier()
+    }
+
+    fn parse_atomic_type_specifier(&mut self) -> PR<Spanned<TypeSpecifier<R>>> {
+        let start = self.pos;
+        self.expect(&Token::Atomic, "_Atomic")?;
+        self.expect(&Token::LParen, "(")?;
+        let ty = self.parse_type_name()?;
+        self.expect(&Token::RParen, ")")?;
+        Ok((
+            TypeSpecifier::AtomicType(Box::new(ty)),
+            self.span_since(start),
+        ))
+    }
+
     fn parse_type_qualifier(&mut self) -> PR<Spanned<TypeQualifier>> {
         let start = self.pos;
         let q = match self.peek(0) {
@@ -1150,6 +1211,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                     Some(Token::Struct) | Some(Token::Union) => self.parse_struct_or_union(),
                     Some(Token::Enum) => self.parse_enum_specifier(),
                     Some(Token::Typeof) => self.parse_typeof_specifier(),
+                    Some(Token::Atomic) => self.parse_atomic_type_specifier(),
                     Some(Token::Ident(_)) | Some(Token::ColonColon) | Some(Token::Lt) => {
                         self.parse_typedef_name()
                     }
@@ -1371,7 +1433,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
 
     fn parse_spec_qualifier(&mut self) -> PR<Spanned<SpecifierQualifier<R>>> {
         let start = self.pos;
-        if is_type_qualifier(self.peek(0)) {
+        if self.at_type_qualifier() {
             let q = self.parse_type_qualifier()?;
             return Ok((SpecifierQualifier::TypeQualifier(q), self.span_since(start)));
         }
@@ -1404,7 +1466,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 let mut list = Vec::new();
                 loop {
                     let sstart = self.pos;
-                    if is_type_qualifier(self.peek(0)) {
+                    if self.at_type_qualifier() {
                         let q = self.parse_type_qualifier()?;
                         list.push((
                             SpecifierQualifier::TypeQualifier(q),
@@ -1506,7 +1568,8 @@ impl<'a, R: TypeResolver> P<'a, R> {
     }
 
     fn peek_is_type_spec_start(&self) -> bool {
-        matches!(
+        self.at_atomic_type_specifier()
+            || matches!(
             self.peek(0),
             Some(
                 Token::Int
@@ -1575,7 +1638,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 // becomes a `#[...]` marker; it carries no type meaning, so
                 // skip it.
                 self.parse_attr_list()?;
-            } else if is_type_qualifier(self.peek(0)) {
+            } else if self.at_type_qualifier() {
                 let q = self.parse_type_qualifier()?;
                 list.push((
                     SpecifierQualifier::TypeQualifier(q),
@@ -1698,7 +1761,7 @@ impl<'a, R: TypeResolver> P<'a, R> {
                 let span = self.span_since(start);
                 Ok((DeclarationSpecifier::GNUAttribute(attrs), span))
             }
-            _ if is_type_qualifier(self.peek(0)) => {
+            _ if self.at_type_qualifier() => {
                 let q = self.parse_type_qualifier()?;
                 Ok((
                     DeclarationSpecifier::TypeQualifier(q),

@@ -114,6 +114,11 @@ impl CompressedTypeSpecifier {
                     TypeSpecifier::TypeofType(type_name) => {
                         CompressedTypeSpecifier::TypeofType((**type_name).clone())
                     }
+                    // Atomicity doesn't change the lowered type; it is only
+                    // checked by the `constexpr` rules, so lower like `typeof(T)`.
+                    TypeSpecifier::AtomicType(type_name) => {
+                        CompressedTypeSpecifier::TypeofType((**type_name).clone())
+                    }
                     TypeSpecifier::TypeofExpr(expr) => {
                         CompressedTypeSpecifier::TypeofExpr((**expr).clone())
                     }
@@ -182,7 +187,8 @@ impl CompressedTypeSpecifier {
                 | TypeSpecifier::Enum(_)
                 | TypeSpecifier::TypedefName(_)
                 | TypeSpecifier::TypeofType(_)
-                | TypeSpecifier::TypeofExpr(_) => {
+                | TypeSpecifier::TypeofExpr(_)
+                | TypeSpecifier::AtomicType(_) => {
                     return Err(spanned_error(span, "This specifier should be used alone"));
                 }
             }
@@ -326,6 +332,7 @@ fn has_atomic_storage_specifier(
                 spec,
                 DeclarationSpecifier::StorageSpecifier((StorageClassSpecifier::Atomic, _))
                     | DeclarationSpecifier::TypeQualifier((TypeQualifier::Atomic, _))
+                    | DeclarationSpecifier::TypeSpecifier((TypeSpecifier::AtomicType(_), _))
             )
         })
         .map(|x| x.1)

@@ -202,6 +202,9 @@ impl<A: TypeResolver> DoTransform for TypeSpecifier<A> {
                 TypeSpecifier::TypeofType(type_name.transform(b))
             }
             TypeSpecifier::TypeofExpr(expr) => TypeSpecifier::TypeofExpr(expr.transform(b)),
+            TypeSpecifier::AtomicType(type_name) => {
+                TypeSpecifier::AtomicType(type_name.transform(b))
+            }
         }
     }
 }

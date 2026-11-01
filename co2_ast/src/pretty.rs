@@ -443,6 +443,9 @@ impl<R: TypeResolver> PrettyPrint for Spanned<TypeSpecifier<R>> {
             TypeSpecifier::TypeofExpr(expr) => {
                 pp.node("TypeofExpr", &sp, |pp| expr.pretty_print(pp));
             }
+            TypeSpecifier::AtomicType(ty) => {
+                pp.node("AtomicType", &sp, |pp| ty.pretty_print(pp));
+            }
         }
     }
 }
