@@ -4646,6 +4646,13 @@ impl HirCtx<'_> {
         }
     }
 
+    /// Function pointers have no `AtomicPrimitive` impl, so atomics on them
+    /// operate on `usize` with the same width and convert at the boundary.
+    fn is_fn_ptr_like(&self, ty: Ty) -> bool {
+        self.is_maybe_uninit_fn_ptr_ty(ty).is_some()
+            || matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
+    }
+
     fn lower_atomic(
         &self,
         op: Spanned<String>,
@@ -4655,7 +4662,6 @@ impl HirCtx<'_> {
         locals: &mut Arena<HirLocal>,
         local_map: &mut FxHashMap<usize, LocalId>,
     ) -> Result<HirExpr, (co2_ast::Span, String)> {
-        let err = |msg: String| spanned_error(parser_span, msg);
         // Lower every arg (order args become plain ints); ops pick what they need.
         let mut lowered = Vec::with_capacity(args.len());
         for arg in args {
@@ -4664,6 +4670,41 @@ impl HirCtx<'_> {
             self.fn_def_to_c_fn_ptr_decay_if_fn_def(&mut e);
             lowered.push(e);
         }
+        let Some(fn_val_ty) = lowered
+            .first()
+            .and_then(|p| Self::atomic_pointee_ty(p.ty))
+            .filter(|t| self.is_fn_ptr_like(*t))
+        else {
+            return self.lower_atomic_lowered(op, lowered, parser_span, span, locals);
+        };
+        let usize_ty = Ty::unsigned_ty(UintTy::Usize);
+        let usize_ptr_ty = Ty::new_ptr(usize_ty, Mutability::Mut);
+        for arg in lowered.iter_mut() {
+            if let Some(pointee) = Self::atomic_pointee_ty(arg.ty) {
+                if self.is_fn_ptr_like(pointee) {
+                    *arg = self.emit_cast(arg.clone(), usize_ptr_ty);
+                }
+            } else if self.is_fn_ptr_like(arg.ty) {
+                *arg = self.emit_cast(arg.clone(), usize_ty);
+            }
+        }
+        let result = self.lower_atomic_lowered(op, lowered, parser_span, span, locals)?;
+        if result.ty == usize_ty {
+            Ok(self.emit_cast(result, fn_val_ty))
+        } else {
+            Ok(result)
+        }
+    }
+
+    fn lower_atomic_lowered(
+        &self,
+        op: Spanned<String>,
+        lowered: Vec<HirExpr>,
+        parser_span: co2_ast::Span,
+        span: RustSpan,
+        locals: &mut Arena<HirLocal>,
+    ) -> Result<HirExpr, (co2_ast::Span, String)> {
+        let err = |msg: String| spanned_error(parser_span, msg);
         let need = |n: usize| {
             if lowered.len() < n {
                 Err(err(format!(
