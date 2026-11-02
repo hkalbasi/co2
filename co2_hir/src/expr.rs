@@ -1052,6 +1052,9 @@ impl HirCtx<'_> {
             let expected = if let Some(ty) = sig.inputs().get(idx) {
                 *ty
             } else {
+                self.fn_def_to_c_fn_ptr_decay_if_fn_def(actual);
+                // GCC supports arbitrary structs over va_args, to support that in Rust MIR,
+                // we take the pointer ourself (which is what calling convension does anyway).
                 if actual.ty.kind().is_adt() && enum_payload_ty(actual.ty).is_none() {
                     *actual = HirExpr {
                         kind: HirExprKind::AddrOf(Box::new(actual.clone())),

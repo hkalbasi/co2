@@ -1,0 +1,31 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-miri
+
+#include <stdarg.h>
+
+typedef void (*LOGFUNC_t)(void *, int, const char *);
+
+static void log_fn(void *arg, int code, const char *msg) {}
+
+void configure(int op, ...)
+{
+    va_list ap;
+    va_start(ap, op);
+
+    LOGFUNC_t xLog = va_arg(ap, LOGFUNC_t);
+    void *pLogArg = va_arg(ap, void *);
+
+    if (xLog) {
+        xLog(pLogArg, 5, "foo");
+    }
+
+    va_end(ap);
+    (void)xLog;
+    (void)pLogArg;
+}
+
+fn main() {
+    configure(0, log_fn, (void *)0);
+    configure(0, (LOGFUNC_t)0, (void *)0);
+}
