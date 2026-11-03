@@ -26,7 +26,7 @@ pub enum UiAnnotationLevel {
 }
 
 impl UiAnnotationLevel {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Error => "error",
             Self::Warning => "warning",
@@ -423,7 +423,10 @@ fn parse_annotation_message(trailing: &str) -> (Option<UiAnnotationLevel>, Optio
     (None, Some(trailing.to_owned()))
 }
 
-fn diagnostic_matches_expected(expected: &UiSpanExpectation, diagnostic: &UiDiagnostic) -> bool {
+pub fn diagnostic_matches_expected(
+    expected: &UiSpanExpectation,
+    diagnostic: &UiDiagnostic,
+) -> bool {
     if let Some(level) = expected.level
         && diagnostic.level != level.as_str()
     {

@@ -1,0 +1,19 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-miri
+
+#include <assert.h>
+#include <stdatomic.h>
+
+static void cb(void *arg, int code) {
+    *(int *)arg += code;
+}
+
+fn main() {
+    int x = 1;
+    int *arg = &x;
+    void (*xLog)(void *, int) = 0;
+    atomic_store_explicit(&xLog, cb, memory_order_relaxed);
+    xLog(arg, 2);
+    assert(x == 3);
+}

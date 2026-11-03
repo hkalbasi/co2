@@ -1570,37 +1570,37 @@ impl<'a, R: TypeResolver> P<'a, R> {
     fn peek_is_type_spec_start(&self) -> bool {
         self.at_atomic_type_specifier()
             || matches!(
-            self.peek(0),
-            Some(
-                Token::Int
-                    | Token::Int128
-                    | Token::Bool
-                    | Token::Void
-                    | Token::Char
-                    | Token::Short
-                    | Token::Long
-                    | Token::Float
-                    | Token::Double
-                    | Token::Float16
-                    | Token::Float32
-                    | Token::Float64
-                    | Token::Float128
-                    | Token::Float32x
-                    | Token::Float64x
-                    | Token::Float128x
-                    | Token::GnuFloat128
-                    | Token::Complex
-                    | Token::Signed
-                    | Token::Unsigned
-                    | Token::Struct
-                    | Token::Union
-                    | Token::Enum
-                    | Token::Typeof
-                    | Token::Ident(_)
-                    | Token::ColonColon
-                    | Token::Lt,
+                self.peek(0),
+                Some(
+                    Token::Int
+                        | Token::Int128
+                        | Token::Bool
+                        | Token::Void
+                        | Token::Char
+                        | Token::Short
+                        | Token::Long
+                        | Token::Float
+                        | Token::Double
+                        | Token::Float16
+                        | Token::Float32
+                        | Token::Float64
+                        | Token::Float128
+                        | Token::Float32x
+                        | Token::Float64x
+                        | Token::Float128x
+                        | Token::GnuFloat128
+                        | Token::Complex
+                        | Token::Signed
+                        | Token::Unsigned
+                        | Token::Struct
+                        | Token::Union
+                        | Token::Enum
+                        | Token::Typeof
+                        | Token::Ident(_)
+                        | Token::ColonColon
+                        | Token::Lt,
+                )
             )
-        )
     }
 
     fn parse_typeof_specifier(&mut self) -> PR<Spanned<TypeSpecifier<R>>> {

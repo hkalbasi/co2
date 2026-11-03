@@ -4650,7 +4650,8 @@ impl HirCtx<'_> {
     }
 
     /// Function pointers have no `AtomicPrimitive` impl, so atomics on them
-    /// operate on `usize` with the same width and convert at the boundary.
+    /// operate on a `*mut i8` with the same width and convert at the boundary.
+    /// A pointer (rather than `usize`) keeps the function's provenance.
     fn is_fn_ptr_like(&self, ty: Ty) -> bool {
         self.is_maybe_uninit_fn_ptr_ty(ty).is_some()
             || matches!(ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
@@ -4680,19 +4681,19 @@ impl HirCtx<'_> {
         else {
             return self.lower_atomic_lowered(op, lowered, parser_span, span, locals);
         };
-        let usize_ty = Ty::unsigned_ty(UintTy::Usize);
-        let usize_ptr_ty = Ty::new_ptr(usize_ty, Mutability::Mut);
+        let ptr_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut);
+        let ptr_ptr_ty = Ty::new_ptr(ptr_ty, Mutability::Mut);
         for arg in lowered.iter_mut() {
             if let Some(pointee) = Self::atomic_pointee_ty(arg.ty) {
                 if self.is_fn_ptr_like(pointee) {
-                    *arg = self.emit_cast(arg.clone(), usize_ptr_ty);
+                    *arg = self.emit_cast(arg.clone(), ptr_ptr_ty);
                 }
             } else if self.is_fn_ptr_like(arg.ty) {
-                *arg = self.emit_cast(arg.clone(), usize_ty);
+                *arg = self.emit_cast(arg.clone(), ptr_ty);
             }
         }
         let result = self.lower_atomic_lowered(op, lowered, parser_span, span, locals)?;
-        if result.ty == usize_ty {
+        if result.ty == ptr_ty {
             Ok(self.emit_cast(result, fn_val_ty))
         } else {
             Ok(result)

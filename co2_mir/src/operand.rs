@@ -1206,12 +1206,37 @@ impl Builder<'_, '_> {
                 MirOperand::Copy(place)
             }
             HirExprKind::Cast(inner) => {
+                let dst_ty = expr.ty;
+                if let HirExprKind::ConstInt(0) = inner.kind {
+                    if matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::RawPtr(_, _))) {
+                        return self.emit_null_ptr(dst_ty, expr.span);
+                    }
+                    if matches!(dst_ty.kind(), TyKind::RigidTy(RigidTy::FnPtr(_)))
+                        || self.maybe_uninit_fn_ptr_inner(dst_ty).is_some()
+                    {
+                        let middle_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut);
+                        let null_op = self.emit_null_ptr(middle_ty, expr.span);
+                        return self.lower_cast(null_op, middle_ty, dst_ty, expr.span);
+                    }
+                }
                 let inner_op = self.lower_expr_to_operand(inner);
                 let src_ty = inner.ty;
-                let dst_ty = expr.ty;
                 self.lower_cast(inner_op, src_ty, dst_ty, expr.span)
             }
         }
+    }
+
+    fn emit_null_ptr(&mut self, ptr_ty: Ty, span: RustSpan) -> MirOperand {
+        let TyKind::RigidTy(RigidTy::RawPtr(_, mutability)) = ptr_ty.kind() else {
+            unreachable!("emit_null_ptr requires a raw pointer type");
+        };
+        let func = match mutability {
+            Mutability::Not => self.wellknown_defs.ptr_null,
+            Mutability::Mut => self.wellknown_defs.ptr_null_mut,
+        };
+        let tmp = self.new_temp(ptr_ty, Mutability::Mut, span);
+        self.emit_nullary_call(func, ptr_ty, place(tmp), span);
+        MirOperand::Copy(place(tmp))
     }
 
     pub(crate) fn lower_cast(
@@ -1526,12 +1551,9 @@ impl Builder<'_, '_> {
             return self.emit_cast_copy(CastKind::IntToInt, usize_op, dst_ty, span);
         }
         if src_mu_fn_ptr.is_some() && dst_is_int {
-            let usize_ty = Ty::usize_ty();
-            let usize_op = self.read_maybe_uninit_as(inner_op, src_ty, usize_ty, span);
-            if dst_ty == usize_ty {
-                return usize_op;
-            }
-            return self.emit_cast_copy(CastKind::IntToInt, usize_op, dst_ty, span);
+            let middle_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut);
+            let middle_op = self.read_maybe_uninit_as(inner_op, src_ty, middle_ty, span);
+            return self.lower_cast(middle_op, middle_ty, dst_ty, span);
         }
         if src_is_int && dst_is_ptr {
             let usize_ty = Ty::usize_ty();
@@ -1551,13 +1573,9 @@ impl Builder<'_, '_> {
             return self.write_value_into_maybe_uninit_storage(dst_ty, inner_op, src_ty, span);
         }
         if src_is_int && dst_mu_fn_ptr.is_some() {
-            let usize_ty = Ty::usize_ty();
-            let usize_op = if src_ty == usize_ty {
-                inner_op
-            } else {
-                self.emit_cast_copy(CastKind::IntToInt, inner_op, usize_ty, span)
-            };
-            return self.write_value_into_maybe_uninit_storage(dst_ty, usize_op, usize_ty, span);
+            let middle_ty = Ty::new_ptr(Ty::signed_ty(IntTy::I8), Mutability::Mut);
+            let middle_op = self.lower_cast(inner_op, src_ty, middle_ty, span);
+            return self.lower_cast(middle_op, middle_ty, dst_ty, span);
         }
         if src_mu_fn_ptr.is_some() && dst_is_fn_ptr {
             return self.read_maybe_uninit_as(inner_op, src_ty, dst_ty, span);

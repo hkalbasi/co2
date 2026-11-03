@@ -67,6 +67,8 @@ pub struct WellknownDefs {
     pub offset_const: FnDef,
     pub offset_from: FnDef,
     pub zeroed: FnDef,
+    pub ptr_null: FnDef,
+    pub ptr_null_mut: FnDef,
     pub drop: FnDef,
     /// The generic `core::sync::atomic::Atomic` ADT, for enumerating its
     /// inherent impls during atomic method resolution (impls are matched
@@ -2761,6 +2763,8 @@ pub fn lower_crate_sig(
         c_void: AdtDef(ctx.resolve("core::ffi::c_void").unwrap().0),
         clone: FnDef(ctx.resolve("core::clone::Clone::clone").unwrap().0),
         zeroed: FnDef(ctx.resolve("core::mem::zeroed").unwrap().0),
+        ptr_null: FnDef(ctx.resolve("core::ptr::null").unwrap().0),
+        ptr_null_mut: FnDef(ctx.resolve("core::ptr::null_mut").unwrap().0),
         drop: FnDef(ctx.resolve("core::mem::drop").unwrap().0),
         transmute: FnDef(ctx.resolve("core::intrinsics::transmute").unwrap().0),
         transmute_copy: FnDef(ctx.resolve("core::mem::transmute_copy").unwrap().0),

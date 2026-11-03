@@ -1,0 +1,17 @@
+//@ mode: co2
+//@ run-status: 0
+//@ run-miri
+
+int foo() {
+    return 5;
+}
+
+fn main() {
+    int (*x)() = foo;
+    x();
+    usize y = x;
+    int (*z)() = y;
+               //^ warning: integer-to-pointer cast
+    z();
+    x();
+}

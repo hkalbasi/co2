@@ -17,7 +17,8 @@ use crate::test_case::{
     directive_i32, directive_text,
 };
 use crate::ui::{
-    UiAnnotationLevel, UiSpanExpectation, check_compile_warnings, check_ui, format_named_output,
+    UiAnnotationLevel, UiSpanExpectation, check_compile_warnings, check_ui,
+    diagnostic_matches_expected, format_named_output, parse_compile_diagnostics,
     parse_ui_span_expectations,
 };
 use crate::util::{copy_dir_all, line_start_offsets, normalize, unescape_text};
@@ -151,6 +152,33 @@ fn run_test(
         return Ok(TestOutcome::Pass);
     }
 
+    let is_miri =
+        test.directives.contains_key("run-miri") || test.directives.contains_key("miri-error");
+    let compile_diagnostics =
+        parse_compile_diagnostics(&String::from_utf8_lossy(&compile.output.stderr));
+    let (compile_annotations, miri_warning_annotations, miri_optional_warning_annotations) =
+        if is_miri {
+            let mut compile = Vec::new();
+            let mut required = Vec::new();
+            let mut optional = Vec::new();
+            for expected in compile_annotations {
+                if expected.level != Some(UiAnnotationLevel::Warning) {
+                    compile.push(expected);
+                } else if compile_diagnostics.iter().any(|diagnostic| {
+                    diagnostic.level == UiAnnotationLevel::Warning.as_str()
+                        && diagnostic_matches_expected(&expected, diagnostic)
+                }) {
+                    optional.push(expected.clone());
+                    compile.push(expected);
+                } else {
+                    required.push(expected);
+                }
+            }
+            (compile, required, optional)
+        } else {
+            (compile_annotations, Vec::new(), Vec::new())
+        };
+
     check_compile_warnings(
         test,
         &compile.output,
@@ -185,9 +213,25 @@ fn run_test(
     if test.directives.contains_key("run-miri") || test.directives.contains_key("miri-error") {
         match run_miri_test(root, bin_dir, mode, test)? {
             MiriRun::Ran(output) if test.directives.contains_key("miri-error") => {
+                check_miri_warnings(
+                    test,
+                    &output,
+                    &miri_warning_annotations,
+                    &miri_optional_warning_annotations,
+                    sources.clone(),
+                )?;
                 check_miri_error(test, &output, &compile_annotations, sources)?;
             }
-            MiriRun::Ran(output) => check_run_output(test, &output, "miri")?,
+            MiriRun::Ran(output) => {
+                check_run_output(test, &output, "miri")?;
+                check_miri_warnings(
+                    test,
+                    &output,
+                    &miri_warning_annotations,
+                    &miri_optional_warning_annotations,
+                    sources,
+                )?;
+            }
             MiriRun::Unavailable(reason) => return Ok(TestOutcome::Skip(reason)),
         }
     }
@@ -656,7 +700,10 @@ fn check_miri_error(
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let diagnostics = parse_miri_rendered_diagnostics(&stderr);
+    let diagnostics = parse_miri_rendered_diagnostics(&stderr)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.level == UiAnnotationLevel::Error)
+        .collect::<Vec<_>>();
 
     let span_expectations = span_expectations
         .iter()
@@ -721,36 +768,10 @@ fn check_miri_error(
         }
     }
 
-    for (i, diagnostic) in diagnostics.into_iter().enumerate() {
-        if matched[i] {
-            continue;
+    for (i, diagnostic) in diagnostics.iter().enumerate() {
+        if !matched[i] {
+            issues.push(unexpected_miri_diagnostic_issue(test, &sources, diagnostic));
         }
-        let file_name = test.path.file_name().unwrap().to_string_lossy().to_string();
-        let (byte_start, byte_end) = if let Some(source) = sources.get(&file_name) {
-            let offsets = crate::util::line_start_offsets(source);
-            if diagnostic.line > 0 && diagnostic.line <= offsets.len() {
-                let line_start = offsets[diagnostic.line - 1];
-                (
-                    line_start + diagnostic.column_start.saturating_sub(1),
-                    line_start + diagnostic.column_end.saturating_sub(1),
-                )
-            } else {
-                (0, 0)
-            }
-        } else {
-            (0, 0)
-        };
-
-        issues.push(crate::error::UiTestIssue {
-            span: Some(UiSpanExpectation {
-                file_name,
-                byte_start,
-                byte_end,
-                level: Some(UiAnnotationLevel::Error),
-                message: Some(diagnostic.message.clone()),
-            }),
-            reason: format!("Unexpected miri error: {}", diagnostic.message),
-        });
     }
 
     if !issues.is_empty() {
@@ -765,12 +786,120 @@ fn check_miri_error(
     Ok(())
 }
 
+fn check_miri_warnings(
+    test: &TestCase,
+    output: &Output,
+    required: &[UiSpanExpectation],
+    optional: &[UiSpanExpectation],
+    sources: FxHashMap<String, String>,
+) -> Result<()> {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let diagnostics = parse_miri_rendered_diagnostics(&stderr)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.level == UiAnnotationLevel::Warning)
+        .collect::<Vec<_>>();
+
+    let mut issues = Vec::new();
+    let mut matched = vec![false; diagnostics.len()];
+    for expected in required {
+        let found = diagnostics
+            .iter()
+            .enumerate()
+            .find(|(i, diagnostic)| {
+                !matched[*i] && miri_diagnostic_matches_expected(test, expected, diagnostic)
+            })
+            .map(|(i, _)| i);
+        match found {
+            Some(i) => matched[i] = true,
+            None => issues.push(crate::error::UiTestIssue {
+                span: Some(expected.clone()),
+                reason: expected.message.as_ref().map_or_else(
+                    || "Missing miri warning".to_owned(),
+                    |message| format!("Missing miri warning: {message}"),
+                ),
+            }),
+        }
+    }
+
+    for expected in optional {
+        if let Some(i) = diagnostics.iter().enumerate().position(|(i, diagnostic)| {
+            !matched[i] && miri_diagnostic_matches_expected(test, expected, diagnostic)
+        }) {
+            matched[i] = true;
+        }
+    }
+
+    for (i, diagnostic) in diagnostics.iter().enumerate() {
+        if !matched[i] {
+            issues.push(unexpected_miri_diagnostic_issue(test, &sources, diagnostic));
+        }
+    }
+
+    if !issues.is_empty() {
+        return Err(UiTestError {
+            path: test.path.clone(),
+            sources,
+            issues,
+        }
+        .into());
+    }
+
+    Ok(())
+}
+
+fn unexpected_miri_diagnostic_issue(
+    test: &TestCase,
+    sources: &FxHashMap<String, String>,
+    diagnostic: &MiriRenderedDiagnostic,
+) -> crate::error::UiTestIssue {
+    let file_name = test.path.file_name().unwrap().to_string_lossy().to_string();
+    let (byte_start, byte_end) = if let Some(source) = sources.get(&file_name) {
+        let offsets = crate::util::line_start_offsets(source);
+        if diagnostic.line > 0 && diagnostic.line <= offsets.len() {
+            let line_start = offsets[diagnostic.line - 1];
+            (
+                line_start + diagnostic.column_start.saturating_sub(1),
+                line_start + diagnostic.column_end.saturating_sub(1),
+            )
+        } else {
+            (0, 0)
+        }
+    } else {
+        (0, 0)
+    };
+    let kind = match diagnostic.level {
+        UiAnnotationLevel::Warning => "warning",
+        _ => "error",
+    };
+
+    crate::error::UiTestIssue {
+        span: Some(UiSpanExpectation {
+            file_name,
+            byte_start,
+            byte_end,
+            level: Some(diagnostic.level),
+            message: Some(diagnostic.message.clone()),
+        }),
+        reason: format!("Unexpected miri {kind}: {}", diagnostic.message),
+    }
+}
+
 #[derive(Debug)]
 struct MiriRenderedDiagnostic {
+    level: UiAnnotationLevel,
     message: String,
     line: usize,
     column_start: usize,
     column_end: usize,
+}
+
+fn parse_miri_diagnostic_header(line: &str) -> Option<(UiAnnotationLevel, &str)> {
+    if let Some(message) = line.strip_prefix("error: ") {
+        Some((UiAnnotationLevel::Error, message))
+    } else {
+        line.strip_prefix("warning:")
+            .map(|message| (UiAnnotationLevel::Warning, message))
+    }
 }
 
 fn parse_miri_rendered_diagnostics(stderr: &str) -> Vec<MiriRenderedDiagnostic> {
@@ -779,7 +908,7 @@ fn parse_miri_rendered_diagnostics(stderr: &str) -> Vec<MiriRenderedDiagnostic> 
     let mut idx = 0;
 
     while idx < lines.len() {
-        let Some(message) = lines[idx].strip_prefix("error: ") else {
+        let Some((level, message)) = parse_miri_diagnostic_header(lines[idx]) else {
             idx += 1;
             continue;
         };
@@ -789,7 +918,7 @@ fn parse_miri_rendered_diagnostics(stderr: &str) -> Vec<MiriRenderedDiagnostic> 
         let mut cursor = idx + 1;
         while cursor < lines.len() {
             let line = lines[cursor];
-            if cursor != idx + 1 && line.starts_with("error: ") {
+            if cursor != idx + 1 && parse_miri_diagnostic_header(line).is_some() {
                 break;
             }
             if let Some(line_no) = parse_miri_location(line) {
@@ -807,6 +936,7 @@ fn parse_miri_rendered_diagnostics(stderr: &str) -> Vec<MiriRenderedDiagnostic> 
 
         if let (Some(line_no), Some((caret_start, caret_end))) = (location, caret) {
             diagnostics.push(MiriRenderedDiagnostic {
+                level,
                 message: message.trim().to_owned(),
                 line: line_no,
                 column_start: caret_start,
