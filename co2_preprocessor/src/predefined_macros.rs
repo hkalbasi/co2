@@ -387,7 +387,7 @@ impl Preprocessor {
             (
                 "__builtin_trap",
                 &[],
-                "({ extern void abort(void); (abort)(); })",
+                "({ extern __attribute__((noreturn)) void abort(void); abort(); })",
             ),
             // Cache hint only: the address is evaluated, the optional
             // rw/locality arguments are ignored.
@@ -408,7 +408,7 @@ impl Preprocessor {
         // __builtin_va_*, __builtin_offsetof, __builtin_*_overflow, and the
         // fp-comparison/classification builtins defined just below).
         const LIBC_FORWARD: &[(&str, &str, &[&str])] = &[
-            ("abort", "void", &[]),
+            ("abort", "__attribute__((noreturn)) void", &[]),
             ("abs", "int", &["int"]),
             (
                 "bcmp",
@@ -423,9 +423,9 @@ impl Preprocessor {
                 &["const char *", "const char *", "int"],
             ),
             ("dgettext", "char *", &["const char *", "const char *"]),
-            ("exit", "void", &["int"]),
-            ("_Exit", "void", &["int"]),
-            ("_exit", "void", &["int"]),
+            ("exit", "__attribute__((noreturn)) void", &["int"]),
+            ("_Exit", "__attribute__((noreturn)) void", &["int"]),
+            ("_exit", "__attribute__((noreturn)) void", &["int"]),
             ("feclearexcept", "int", &["int"]),
             ("fegetround", "int", &[]),
             ("feraiseexcept", "int", &["int"]),

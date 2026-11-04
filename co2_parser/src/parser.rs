@@ -1787,9 +1787,11 @@ impl<'a, R: TypeResolver> P<'a, R> {
         // carries no layout meaning here; drop it like other attributes.
         while self.eat(&Token::PackedAttr).is_some() {}
         if self.at(&Token::Hash) {
-            // `__attribute__((...))` before a declarator (e.g. `int (ATTR *)`)
-            // becomes a `#[...]` marker; skip it, the attribute is ignored.
-            self.parse_attr_list()?;
+            // `__attribute__((...))` before a declarator (e.g. `void
+            // __attribute__((noreturn)) f()`) belongs to the declaration;
+            // keep it for `parse_declaration` to fold in.
+            let mut attrs = self.parse_attr_list()?;
+            self.pending_decl_attrs.append(&mut attrs);
         }
         let mut pointers: Vec<(Vec<Spanned<TypeQualifier>>, Span)> = Vec::new();
         while self.at(&Token::Star) {

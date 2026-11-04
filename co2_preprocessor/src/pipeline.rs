@@ -1559,6 +1559,7 @@ impl Preprocessor {
             [(Token::Ident(name), _, _)] if name == "weak" || name == "__weak__" => true,
             [(Token::Ident(name), _, _)] if Self::is_noinline_name(name) => true,
             [(Token::Ident(name), _, _)] if Self::is_always_inline_name(name) => true,
+            [(Token::Ident(name), _, _)] if Self::is_noreturn_name(name) => true,
             [
                 (Token::Ident(name), _, _),
                 (Token::LParen, _, _),
@@ -1602,6 +1603,9 @@ impl Preprocessor {
                 Token::Ident(name) if Self::is_always_inline_name(name) => {
                     i += 1;
                 }
+                Token::Ident(name) if Self::is_noreturn_name(name) => {
+                    i += 1;
+                }
                 Token::Ident(name) if name == "alias" || name == "__alias__" => {
                     // Expect `alias ( "name" )`.
                     if let [
@@ -1633,6 +1637,12 @@ impl Preprocessor {
     /// `noinline` and its reserved-word spellings.
     fn is_noinline_name(name: &str) -> bool {
         matches!(name, "noinline" | "__noinline__" | "__noinline")
+    }
+
+    /// `noreturn` and its reserved-word spelling. Kept so the signature
+    /// lowering can give the function a `!` return type.
+    fn is_noreturn_name(name: &str) -> bool {
+        matches!(name, "noreturn" | "__noreturn__")
     }
 
     /// `always_inline` and its reserved-word spellings.

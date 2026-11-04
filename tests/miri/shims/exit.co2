@@ -1,0 +1,9 @@
+//@ mode: co2
+//@ run-status: 12
+//@ run-miri
+
+#include <stdlib.h>
+
+fn main() {
+    exit(12);
+}

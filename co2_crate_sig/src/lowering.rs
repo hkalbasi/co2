@@ -183,7 +183,9 @@ fn lower_generated_attrs(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> 
                     s.to_string()
                 })
                 .collect::<Vec<_>>();
-            if path == ["doc"] {
+            if path == ["noreturn"] {
+                None
+            } else if path == ["doc"] {
                 let doc_text = match attr.args.as_slice() {
                     [(co2_ast::Token::StringLit(lit), _)]
                     | [
@@ -273,7 +275,7 @@ fn is_known_fn_word_attr(name: &str) -> bool {
     let name = name.trim_matches('_');
     matches!(
         name,
-        "test" | "ignore" | "should_panic" | "no_mangle" | "inline" | "weak" | "naked"
+        "test" | "ignore" | "should_panic" | "no_mangle" | "inline" | "weak" | "naked" | "noreturn"
     )
 }
 
@@ -507,6 +509,32 @@ fn has_word_attr(attrs: &[Co2Attr], word: &str) -> bool {
     attrs
         .iter()
         .any(|attr| matches!(attr, Co2Attr::Word { path } if path.as_slice() == [word]))
+}
+
+/// `[[noreturn]]` / `__attribute__((noreturn))` (the preprocessor keeps both
+/// as a bare `noreturn` attribute).
+fn is_noreturn_attr(attrs: &[co2_ast::Spanned<co2_ast::RustAttribute>]) -> bool {
+    attrs.iter().any(|(attr, _)| {
+        attr.args.is_empty()
+            && matches!(attr.path.as_slice(), [(name, _)] if name.trim_matches('_') == "noreturn")
+    })
+}
+
+/// True for a declarator that names a function directly (`f(...)`), where a
+/// noreturn attribute applies to the function's return type.
+fn is_plain_fn_declarator<R: TypeResolver>(declarator: &Declarator<R>) -> bool {
+    matches!(
+        declarator,
+        Declarator::FunctionDeclarator { declarator, .. }
+            if matches!(declarator.0, Declarator::Identifier(_))
+    )
+}
+
+fn never_base_ty(span: Span) -> CTy {
+    CTy::Ty(HirTy {
+        kind: HirTyKind::Never,
+        span,
+    })
 }
 
 fn constexpr_decl_span(
@@ -1575,9 +1603,17 @@ fn lower_translation_unit_items(
                                 attrs.extend(lower_generated_attrs(gattrs));
                             }
                         }
+                        let is_noreturn = is_noreturn_attr(&decl_attrs)
+                            || declaration_specifiers.iter().any(|spec| {
+                                matches!(&spec.0, DeclarationSpecifier::GNUAttribute(g) if is_noreturn_attr(g))
+                            });
                         let transformed_specs = declaration_specifiers;
                         let base_const = has_const_qualifier_in_decl_specs(&transformed_specs);
-                        let base = ctx.base_ty_of_decl(transformed_specs, parser_span);
+                        let base = if is_noreturn && is_plain_fn_declarator(&declarator.0) {
+                            never_base_ty(ctx.co2_span_to_rustc(parser_span))
+                        } else {
+                            ctx.base_ty_of_decl(transformed_specs, parser_span)
+                        };
                         if let Some(star_span) =
                             crate::ast_resolver::function_param_unspecified_vla_span(&declarator.0)
                         {
@@ -1722,6 +1758,7 @@ fn lower_translation_unit_items(
                 declaration_specifiers,
                 declarators,
             } => {
+                let is_noreturn = is_noreturn_attr(&attrs);
                 let attrs = lower_generated_attrs(&attrs);
                 let mut gen_attrs = co2_attrs_to_generated(&attrs);
                 let original_specs = declaration_specifiers.clone();
@@ -1790,8 +1827,12 @@ fn lower_translation_unit_items(
                     let declarator_for_checks = declarator.clone();
 
                     ctx.disallow_vla = true;
-                    let lowered =
-                        ctx.try_lower_value_decl_ctype(base.clone(), base_const, declarator);
+                    let decl_base = if is_noreturn && is_plain_fn_declarator(&declarator.0) {
+                        never_base_ty(ctx.co2_span_to_rustc(parser_span))
+                    } else {
+                        base.clone()
+                    };
+                    let lowered = ctx.try_lower_value_decl_ctype(decl_base, base_const, declarator);
                     ctx.disallow_vla = false;
                     let (name, ty, array_len) = match lowered {
                         Ok(value) => value,
@@ -2533,9 +2574,16 @@ pub fn lower_crate_sig(
                     )]);
                     continue;
                 }
+                let is_noreturn = specifiers.iter().any(|spec| {
+                    matches!(&spec.0, DeclarationSpecifier::GNUAttribute(g) if is_noreturn_attr(g))
+                });
                 let cleaned = strip_storage_specs(specifiers);
                 let base_const = has_const_qualifier_in_decl_specs(&cleaned);
-                let base = ctx.base_ty_of_decl(cleaned, parser_span);
+                let base = if is_noreturn && is_plain_fn_declarator(&declarator) {
+                    never_base_ty(span)
+                } else {
+                    ctx.base_ty_of_decl(cleaned, parser_span)
+                };
                 let (decl_name, ty, _array_len) =
                     ctx.lower_value_decl_ctype(base.clone(), base_const, (declarator, parser_span));
                 // `decl_name` should match `name`; use `id` directly.
